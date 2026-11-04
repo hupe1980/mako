@@ -1,0 +1,1217 @@
+[
+  {
+    "name": "approve_queue_entry",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the approval queue entry to approve or reject.",
+          "type": "string"
+        },
+        "decided_by": {
+          "description": "Who decided, as **verified by the MCP middleware** — never the caller.\n\n`mcp_auth_middleware` overwrites whatever arrives here with the identity\nbehind the presented token, so a caller cannot name someone else. It is\n`Option` because the middleware leaves it unset when nothing identifies\na caller (dev mode, no Cedar), and an unattributable decision is refused\nrather than recorded against a placeholder: this value becomes § 20\nAbs. 1 EnWG parity evidence and a GoBD record.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "antwort_code": {
+          "description": "The EBD Antwortcode, when the entry does not carry a frozen answer —\nan escalated entry, or any refusal.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "antwort_tree": {
+          "description": "The Entscheidungsbaum the code is resolved in (e.g. `E_0622`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "antwort_codeliste": {
+          "description": "The Codeliste DE 1131, where the MIG carries one.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bemerkung": {
+          "description": "`FTX+ACB` Erläuterung; also the Begründung of a refusal with no code.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "count_open_processes",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "pids": {
+          "description": "Prüfidentifikatoren to keep (any when empty).",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "default": []
+        },
+        "malos": {
+          "description": "MaLo-IDs to keep, at most 200 (any when empty). `pids` or `malos`\nnames at least one.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "offen",
+        "heute_faellig"
+      ],
+      "properties": {
+        "offen": {
+          "description": "Open processes the filter keeps.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "heute_faellig": {
+          "description": "Of those, the ones whose Frist ends from now to the end of the\nEurope/Berlin day; a Frist already past is `list_overdue_processes`'.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "heute_frueheste": {
+          "description": "The earliest of those Fristen, RFC 3339 in UTC.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_decision",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "process_id"
+      ],
+      "type": "object",
+      "properties": {
+        "process_id": {
+          "description": "UUID of the process (from the `subject` field of the CloudEvent).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_kpi_report",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "pid"
+      ],
+      "type": "object",
+      "properties": {
+        "pid": {
+          "description": "Prüfidentifikator (e.g. 55001 for GPKE Lieferbeginn).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "period": {
+          "description": "Billing month in `YYYY-MM` format (default: current month).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_parity_report",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "days": {
+          "description": "Rolling window in days (default: 90).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_process",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "process_id"
+      ],
+      "type": "object",
+      "properties": {
+        "process_id": {
+          "description": "UUID of the process projection.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_process_stp_rate",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "days": {
+          "description": "Rolling window in days (default: 30).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_queue_entry",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "FreigabeArt": {
+          "description": "Whether the answer is already decided.",
+          "oneOf": [
+            {
+              "description": "The module decided the answer and froze it; approving dispatches exactly\n[`Freigabe::antwort`], and a code stated beside it is refused.",
+              "type": "string",
+              "const": "gehalten"
+            },
+            {
+              "description": "No answer was decided: the person states it, from\n[`Freigabe::codes_freigeben`] or [`Freigabe::codes_ablehnen`].",
+              "type": "string",
+              "const": "eskaliert"
+            }
+          ]
+        },
+        "Antwort": {
+          "description": "The decided answer a held entry is approved with.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "DE 9013 — the frozen Antwortcode.",
+              "type": "string"
+            },
+            "ebd": {
+              "description": "The tree the code was resolved in, when one is known.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bedeutung": {
+              "description": "The BDEW's wording for `code` in `ebd`; `None` when the tree does not\npublish it — never a guess from another tree.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "code"
+          ]
+        },
+        "CodeAuswahl": {
+          "description": "The codes an answer of one cluster may carry, and the tree they come from.",
+          "type": "object",
+          "properties": {
+            "ebd": {
+              "description": "The Entscheidungsbaum (`E_0623`, …); state it as `antwort_tree`.",
+              "type": "string"
+            },
+            "codes": {
+              "description": "Every code of that tree in the cluster, in the catalogue's order.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CodeBedeutung"
+              }
+            }
+          },
+          "required": [
+            "ebd",
+            "codes"
+          ]
+        },
+        "CodeBedeutung": {
+          "description": "One code with the BDEW's own wording for it in its tree.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "DE 9013 — the Antwortcode.",
+              "type": "string"
+            },
+            "bedeutung": {
+              "description": "The wording the Entscheidungsbaum prints beside it.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "bedeutung"
+          ]
+        },
+        "QueueStatus": {
+          "type": "string",
+          "enum": [
+            "Pending",
+            "Approved",
+            "Rejected",
+            "Expired"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "process_id",
+        "pid",
+        "grund",
+        "art",
+        "kann_freigeben",
+        "kann_ablehnen",
+        "status",
+        "expires_at",
+        "created_at"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The queue entry — what approve / reject address.",
+          "type": "string"
+        },
+        "process_id": {
+          "description": "The market process the decision answers.",
+          "type": "string"
+        },
+        "pid": {
+          "description": "BDEW Prüfidentifikator of the inbound message.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "malo_id": {
+          "description": "The Marktlokation (the location for an ESA order), where there is one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "marktrolle": {
+          "description": "The Marktrolle the answer is dispatched under (`NB`, `LF`, `MSB`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grund": {
+          "description": "Why the entry needs a person, with the Antwortfrist it runs against.",
+          "type": "string"
+        },
+        "art": {
+          "description": "Held answer or escalation.",
+          "$ref": "#/$defs/FreigabeArt"
+        },
+        "antwort": {
+          "description": "The frozen answer of a held entry.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Antwort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "codes_freigeben": {
+          "description": "The codes approving is stated with — an escalation's Zustimmungen.\n`None` when approving needs no code: a held entry goes as frozen.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodeAuswahl"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "codes_ablehnen": {
+          "description": "The codes rejecting is stated with: the Ablehnungen, or — overriding a\nheld Ablehnung — the Zustimmungen, because rejecting a held answer\nsends the other cluster. `None` when the refusal carries no code.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodeAuswahl"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kann_freigeben": {
+          "description": "Approving sends a market message.",
+          "type": "boolean"
+        },
+        "kann_ablehnen": {
+          "description": "Rejecting sends a market message.",
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/QueueStatus"
+        },
+        "expires_at": {
+          "description": "The business Antwortfrist less an hour of headroom, RFC 3339 in UTC.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "created_at": {
+          "description": "RFC 3339 in UTC.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "decided_by": {
+          "description": "`sub` of the principal who decided.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decided_at": {
+          "description": "RFC 3339 in UTC.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_stp_breakdown_by_erc",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "days": {
+          "description": "Number of days to look back (default 30).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_stp_rate",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "days": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_affiliate_decisions",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "days": {
+          "description": "Number of days to look back (default 90 — §20 EnWG audit window).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_decisions",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_open_processes",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "pids": {
+          "description": "Prüfidentifikatoren to keep (any when empty).",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "default": []
+        },
+        "malos": {
+          "description": "MaLo-IDs to keep, at most 200 (any when empty). `pids` or `malos`\nnames at least one.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "nach": {
+          "description": "The `weiter` of the previous page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Rows per page, 1–200 (default 50).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "ProcessRow": {
+          "description": "One open process with its Frist.",
+          "type": "object",
+          "properties": {
+            "process_id": {
+              "type": "string"
+            },
+            "pid": {
+              "description": "BDEW Prüfidentifikator.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "family": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "malo_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "partner_mp_id": {
+              "description": "The counterparty's MP-ID.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "started_at": {
+              "description": "RFC 3339 in UTC.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "deadline_at": {
+              "description": "When the Antwortfrist ended, RFC 3339 in UTC.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "deadline_source": {
+              "description": "The Festlegung the deadline came from.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "process_id",
+            "pid",
+            "family",
+            "state"
+          ]
+        }
+      },
+      "required": [
+        "prozesse"
+      ],
+      "type": "object",
+      "properties": {
+        "prozesse": {
+          "description": "The earliest Frist first; those without one last.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProcessRow"
+          }
+        },
+        "weiter": {
+          "description": "Pass as `nach` for the next page; absent on the last.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "list_overdue_processes",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "ProcessRow": {
+          "description": "One open process with its Frist.",
+          "type": "object",
+          "properties": {
+            "process_id": {
+              "type": "string"
+            },
+            "pid": {
+              "description": "BDEW Prüfidentifikator.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "family": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "malo_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "partner_mp_id": {
+              "description": "The counterparty's MP-ID.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "started_at": {
+              "description": "RFC 3339 in UTC.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "deadline_at": {
+              "description": "When the Antwortfrist ended, RFC 3339 in UTC.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "deadline_source": {
+              "description": "The Festlegung the deadline came from.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "process_id",
+            "pid",
+            "family",
+            "state"
+          ]
+        }
+      },
+      "required": [
+        "overdue",
+        "count",
+        "saturated",
+        "limit"
+      ],
+      "type": "object",
+      "properties": {
+        "overdue": {
+          "description": "Most urgent first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProcessRow"
+          }
+        },
+        "count": {
+          "description": "How many rows `overdue` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "At least `limit` were waiting: `count` is a floor, not the total.",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "The most rows one call returns.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_pending_approvals",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "status": {
+          "description": "`Pending` (default), `Approved`, `Rejected` or `Expired`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "At most this many entries (default 50, at most 200).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "marktrolle": {
+          "description": "Only the entries answered under this Marktrolle (`NB`, `LF`, `MSB`);\nevery role's when absent.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Freigabe": {
+          "description": "One approval-queue entry, as a person deciding it sees it.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The queue entry — what approve / reject address.",
+              "type": "string"
+            },
+            "process_id": {
+              "description": "The market process the decision answers.",
+              "type": "string"
+            },
+            "pid": {
+              "description": "BDEW Prüfidentifikator of the inbound message.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "malo_id": {
+              "description": "The Marktlokation (the location for an ESA order), where there is one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "marktrolle": {
+              "description": "The Marktrolle the answer is dispatched under (`NB`, `LF`, `MSB`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "grund": {
+              "description": "Why the entry needs a person, with the Antwortfrist it runs against.",
+              "type": "string"
+            },
+            "art": {
+              "description": "Held answer or escalation.",
+              "$ref": "#/$defs/FreigabeArt"
+            },
+            "antwort": {
+              "description": "The frozen answer of a held entry.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Antwort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "codes_freigeben": {
+              "description": "The codes approving is stated with — an escalation's Zustimmungen.\n`None` when approving needs no code: a held entry goes as frozen.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CodeAuswahl"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "codes_ablehnen": {
+              "description": "The codes rejecting is stated with: the Ablehnungen, or — overriding a\nheld Ablehnung — the Zustimmungen, because rejecting a held answer\nsends the other cluster. `None` when the refusal carries no code.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CodeAuswahl"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kann_freigeben": {
+              "description": "Approving sends a market message.",
+              "type": "boolean"
+            },
+            "kann_ablehnen": {
+              "description": "Rejecting sends a market message.",
+              "type": "boolean"
+            },
+            "status": {
+              "$ref": "#/$defs/QueueStatus"
+            },
+            "expires_at": {
+              "description": "The business Antwortfrist less an hour of headroom, RFC 3339 in UTC.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_at": {
+              "description": "RFC 3339 in UTC.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "decided_by": {
+              "description": "`sub` of the principal who decided.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decided_at": {
+              "description": "RFC 3339 in UTC.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "process_id",
+            "pid",
+            "grund",
+            "art",
+            "kann_freigeben",
+            "kann_ablehnen",
+            "status",
+            "expires_at",
+            "created_at"
+          ]
+        },
+        "FreigabeArt": {
+          "description": "Whether the answer is already decided.",
+          "oneOf": [
+            {
+              "description": "The module decided the answer and froze it; approving dispatches exactly\n[`Freigabe::antwort`], and a code stated beside it is refused.",
+              "type": "string",
+              "const": "gehalten"
+            },
+            {
+              "description": "No answer was decided: the person states it, from\n[`Freigabe::codes_freigeben`] or [`Freigabe::codes_ablehnen`].",
+              "type": "string",
+              "const": "eskaliert"
+            }
+          ]
+        },
+        "Antwort": {
+          "description": "The decided answer a held entry is approved with.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "DE 9013 — the frozen Antwortcode.",
+              "type": "string"
+            },
+            "ebd": {
+              "description": "The tree the code was resolved in, when one is known.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bedeutung": {
+              "description": "The BDEW's wording for `code` in `ebd`; `None` when the tree does not\npublish it — never a guess from another tree.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "code"
+          ]
+        },
+        "CodeAuswahl": {
+          "description": "The codes an answer of one cluster may carry, and the tree they come from.",
+          "type": "object",
+          "properties": {
+            "ebd": {
+              "description": "The Entscheidungsbaum (`E_0623`, …); state it as `antwort_tree`.",
+              "type": "string"
+            },
+            "codes": {
+              "description": "Every code of that tree in the cluster, in the catalogue's order.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CodeBedeutung"
+              }
+            }
+          },
+          "required": [
+            "ebd",
+            "codes"
+          ]
+        },
+        "CodeBedeutung": {
+          "description": "One code with the BDEW's own wording for it in its tree.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "DE 9013 — the Antwortcode.",
+              "type": "string"
+            },
+            "bedeutung": {
+              "description": "The wording the Entscheidungsbaum prints beside it.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "bedeutung"
+          ]
+        },
+        "QueueStatus": {
+          "type": "string",
+          "enum": [
+            "Pending",
+            "Approved",
+            "Rejected",
+            "Expired"
+          ]
+        }
+      },
+      "required": [
+        "freigaben",
+        "count",
+        "saturated"
+      ],
+      "type": "object",
+      "properties": {
+        "freigaben": {
+          "description": "The earliest `expires_at` first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Freigabe"
+          }
+        },
+        "count": {
+          "description": "How many entries `freigaben` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "At least `limit` entries matched: more may be waiting than were listed.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_processes_by_family",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "family",
+        "state"
+      ],
+      "type": "object",
+      "properties": {
+        "family": {
+          "description": "Process family — one of the families the projection writes.",
+          "type": "string",
+          "enum": [
+            "gpke",
+            "wim",
+            "geli-gas",
+            "wim-gas",
+            "gabi-gas",
+            "mabis",
+            "emob",
+            "redispatch",
+            "invoic-storno",
+            "unknown"
+          ]
+        },
+        "state": {
+          "description": "Optional state filter — one of the process states.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "initiated",
+            "running",
+            "aperak_timeout",
+            "completed",
+            "rejected",
+            "failed",
+            null
+          ]
+        },
+        "limit": {
+          "description": "Maximum results (default: 50, max: 500).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "reject_queue_entry",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the approval queue entry to approve or reject.",
+          "type": "string"
+        },
+        "decided_by": {
+          "description": "Who decided, as **verified by the MCP middleware** — never the caller.\n\n`mcp_auth_middleware` overwrites whatever arrives here with the identity\nbehind the presented token, so a caller cannot name someone else. It is\n`Option` because the middleware leaves it unset when nothing identifies\na caller (dev mode, no Cedar), and an unattributable decision is refused\nrather than recorded against a placeholder: this value becomes § 20\nAbs. 1 EnWG parity evidence and a GoBD record.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "antwort_code": {
+          "description": "The EBD Antwortcode, when the entry does not carry a frozen answer —\nan escalated entry, or any refusal.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "antwort_tree": {
+          "description": "The Entscheidungsbaum the code is resolved in (e.g. `E_0622`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "antwort_codeliste": {
+          "description": "The Codeliste DE 1131, where the MIG carries one.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bemerkung": {
+          "description": "`FTX+ACB` Erläuterung; also the Begründung of a refusal with no code.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "outputSchema": null
+  }
+]

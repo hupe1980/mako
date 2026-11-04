@@ -23,6 +23,7 @@ impl EdifactIngestDispatcher {
     /// `gpke-messwerte`
     /// `gpke-utilts`
     /// `gpke-datenabruf`
+    /// `gpke-geschaeftsdatenanfrage`
     /// `gpke-konfiguration-aenderung`
     pub(super) async fn dispatch_gpke(
         &self,
@@ -847,6 +848,46 @@ impl EdifactIngestDispatcher {
                         workflow_name: "gpke-datenabruf",
                         reason: "pid_not_in_dispatch_table",
                     })
+                }
+            }
+            // ── GPKE Geschäftsdatenanfrage (GPKE Teil 4 Kap. 3) ───────────────
+            // ORDERS 17132 opens the NB's side; the UTILMD 55035/55095/55060 and
+            // the ORDRSP 19101 resume the Anfragender's. Every message names the
+            // Anfrage by the ORDERS' BGM DE 1004 — the UTILMD's first LOC is the
+            // Netzlokation and would never meet the Anfrage — and the two sides
+            // are keyed apart (`adapters::gda_process_key`): the number is the
+            // sender's, so the NB's key carries the sender's MP-ID too.
+            "gpke-geschaeftsdatenanfrage" => {
+                let cmd = adapters::gpke_geschaeftsdatenanfrage_registry().dispatch(raw, &fv)?;
+                let key = adapters::gda_process_key(msg);
+                if pid == mako_gpke::GDA_ANFRAGE_PID.as_u32() {
+                    // „Unverzüglich, jedoch spätester ÜZ ist 1 WT nach dem ÜZ von
+                    // Nr. 1" (GPKE Teil 4 Kap. 3.2 Nr. 2), read from
+                    // `mako_fristen::antwort`; the APERAK runs beside it on 45
+                    // minutes (APERAK AHB 1.1 § 2.4.1).
+                    let process_due_at = antwort_due_at(pid, received_at);
+                    let aperak_due_at = fristen::aperak_strom_due_at(received_at);
+                    self.spawn_or_resume_guarded::<GpkeGeschaeftsdatenanfrageWorkflow>(
+                        &key,
+                        "gpke-geschaeftsdatenanfrage",
+                        cmd,
+                        &fv,
+                        &[
+                            (mako_gpke::GDA_ANTWORT_WINDOW_LABEL, process_due_at),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
+                        |s| !s.is_terminal(),
+                    )
+                    .await
+                } else {
+                    // An answer resumes the Anfrage this party sent; with none on
+                    // the key it is refused (`process_not_found`), never spawned.
+                    self.resume_by_key::<GpkeGeschaeftsdatenanfrageWorkflow>(
+                        &key,
+                        "gpke-geschaeftsdatenanfrage",
+                        cmd,
+                    )
+                    .await
                 }
             }
             // ── GPKE Konfigurationsänderung ORDRSP ────────────────────────────

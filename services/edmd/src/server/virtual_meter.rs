@@ -259,12 +259,65 @@ pub(crate) async fn list_virtual_meters(
     }
 }
 
+/// The Sparte a virtual meter is filed under — the `CHECK` list on
+/// `virtual_meter_configs.sparte`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum VirtualMeterSparte {
+    /// Electricity.
+    #[default]
+    Strom,
+    /// Gas.
+    Gas,
+    /// Heat.
+    Waerme,
+    /// Water.
+    Wasser,
+}
+
+impl VirtualMeterSparte {
+    /// The column value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Strom => "STROM",
+            Self::Gas => "GAS",
+            Self::Waerme => "WAERME",
+            Self::Wasser => "WASSER",
+        }
+    }
+}
+
+/// `POST /api/v1/virtual` body.
+///
+/// Read through `mako_service::Json`, so a key this struct does not declare is
+/// a `422` naming it: a misspelt `legal_basis` would otherwise be stored as
+/// absent and the community found under no regime. `rule_json` is the rule
+/// itself — a [`VirtualMeterRule`], which denies unknown keys of its own.
+#[derive(Debug, Deserialize)]
+pub struct CreateVirtualMeterRequest {
+    /// The virtual Marktlokation's own ID — the row's key. Required.
+    pub virtual_malo_id: String,
+    /// Label; the `virtual_malo_id` when absent.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// `STROM` when absent.
+    #[serde(default)]
+    pub sparte: VirtualMeterSparte,
+    /// Statutory citation the community operates under, free text
+    /// (e.g. `§42b EnWG`).
+    #[serde(default)]
+    pub legal_basis: Option<String>,
+    /// The rule; its tag becomes `rule_type`.
+    pub rule_json: VirtualMeterRule,
+}
+
 /// `POST /api/v1/virtual` — create a virtual meter configuration.
 pub(crate) async fn create_virtual_meter(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
-    Json(body): Json<serde_json::Value>,
+    Json(body): Json<CreateVirtualMeterRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(
         &claims.principal(),
@@ -277,14 +330,7 @@ pub(crate) async fn create_virtual_meter(
     // beside it. Two fields describing the same thing drift: a body claiming one
     // kind while `rule_json` held another would be evaluated as one and found by
     // the community endpoint (which filters on `rule_type`) as the other.
-    let rule = match VirtualMeterRule::from_json(
-        body.get("rule_json").unwrap_or(&serde_json::Value::Null),
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            return ApiError::bad_request(format!("invalid rule_json: {e}")).into_response();
-        }
-    };
+    let rule = &body.rule_json;
     if let Some(melo) = rule.unsourced() {
         return ApiError::unprocessable(format!(
             "rule_json reads Messlokation {melo} but names no MaLo for it in `sources`"
@@ -292,31 +338,21 @@ pub(crate) async fn create_virtual_meter(
         .into_response();
     }
     let rule_type = rule.kind();
-    let virtual_malo_id = body
-        .get("virtual_malo_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let display_name = body
-        .get("display_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or(virtual_malo_id);
-    let sparte = body
-        .get("sparte")
-        .and_then(|v| v.as_str())
-        .unwrap_or("STROM");
+    let virtual_malo_id = body.virtual_malo_id.as_str();
+    if virtual_malo_id.is_empty() {
+        return ApiError::bad_request("virtual_malo_id is required").into_response();
+    }
+    let display_name = body.display_name.as_deref().unwrap_or(virtual_malo_id);
+    let sparte = body.sparte.as_str();
     // The normalised document, so the stored JSON is the one edmd reads back.
-    let rule_json = match serde_json::to_value(&rule) {
+    let rule_json = match serde_json::to_value(rule) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "edmd: could not serialise a VirtualMeterRule");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let legal_basis: Option<&str> = body.get("legal_basis").and_then(|v| v.as_str());
-
-    if virtual_malo_id.is_empty() {
-        return ApiError::bad_request("virtual_malo_id is required").into_response();
-    }
+    let legal_basis: Option<&str> = body.legal_basis.as_deref();
 
     match sqlx::query(
         "INSERT INTO virtual_meter_configs (virtual_malo_id, display_name, rule_type, rule_json, legal_basis, sparte, valid_from, tenant)
@@ -504,5 +540,77 @@ mod tests {
         );
         let series = crate::domain::vee::energy_series(Sparte::Strom, &out).expect("one series");
         assert_eq!(series.len(), 1);
+    }
+
+    /// Reads `body` exactly as the route does: through `mako_service::Json`.
+    async fn extract(body: &serde_json::Value) -> Result<CreateVirtualMeterRequest, ApiError> {
+        use axum::extract::FromRequest as _;
+        let request = axum::http::Request::post("/api/v1/virtual")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .expect("request");
+        Json::<CreateVirtualMeterRequest>::from_request(request, &())
+            .await
+            .map(|Json(body)| body)
+    }
+
+    /// The documented `FORMULA` example — numbered Rechenschritte as map keys —
+    /// reads through the unknown-key refusal intact.
+    fn formula_body() -> serde_json::Value {
+        serde_json::json!({
+            "virtual_malo_id": "10001234558",
+            "rule_json": { "FORMULA": {
+                "formula": { "result": 3, "steps": {
+                    "1": { "PRODUCT": [ { "MELO": { "melo": "DE0001234567890000000000000000001",
+                                                    "direction": "Z72", "loss_trafo": null,
+                                                    "loss_line": null, "split": "0.5" } } ] },
+                    "2": { "SUM": [ [ "Z70", { "STEP": 1 } ],
+                                    [ "Z69", { "MELO": { "melo": "DE0001234567890000000000000000002",
+                                                         "direction": "Z71", "loss_trafo": null,
+                                                         "loss_line": null, "split": null } } ] ] },
+                    "3": { "POSITIVE": 2 } } },
+                "sources": { "DE0001234567890000000000000000001": "51238696012",
+                             "DE0001234567890000000000000000002": "51238696012" } } }
+        })
+    }
+
+    #[tokio::test]
+    async fn a_formula_request_is_read_with_its_defaults() {
+        let req = extract(&formula_body()).await.expect("a valid request");
+        assert_eq!(req.rule_json.kind(), "FORMULA");
+        assert_eq!(req.sparte, VirtualMeterSparte::Strom);
+        assert_eq!(req.display_name, None);
+        assert_eq!(req.rule_json.unsourced(), None);
+    }
+
+    /// A key the request does not declare is refused, not read as absent —
+    /// which is what an untyped `serde_json::Value` body did.
+    #[tokio::test]
+    async fn an_unknown_top_level_key_is_refused() {
+        let mut body = formula_body();
+        body["legal_bases"] = serde_json::json!("§42b EnWG");
+        let err = extract(&body).await.expect_err("an undeclared key");
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// `rule_json` and `virtual_malo_id` are mandatory: absent, the request is
+    /// refused rather than stored with a default.
+    #[tokio::test]
+    async fn a_missing_rule_or_id_is_refused() {
+        for key in ["rule_json", "virtual_malo_id"] {
+            let mut body = formula_body();
+            body.as_object_mut().expect("object").remove(key);
+            assert!(extract(&body).await.is_err(), "{key} absent");
+        }
+    }
+
+    /// A Sparte outside the column's `CHECK` list is a `422` at the door, not a
+    /// constraint violation at the insert.
+    #[tokio::test]
+    async fn an_unknown_sparte_is_refused() {
+        let mut body = formula_body();
+        body["sparte"] = serde_json::json!("FERNWAERME");
+        assert!(extract(&body).await.is_err());
     }
 }

@@ -5,6 +5,9 @@ kind: Agent
 metadata:
   name: gabi-gas-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Fehlende Gas-Allokation"
+    mako.de/zweck: "Legt einen Klärfall an, wenn die verbindliche Allokation für einen Gastag ausbleibt."
 spec:
   # No execution block and no oversight block: conduct and task creation live
   # in the registered `agentd::skills::GabiAllocationTriage` skill.

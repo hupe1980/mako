@@ -21,7 +21,9 @@
 //! | Route | What it is for |
 //! |---|---|
 //! | `POST /webhook` | CloudEvent ingest (Standard Webhooks-verified) |
-//! | `POST /api/v1/run` | Run a specialist by hand (OIDC + `api:run.start`; honours `Idempotency-Key`) |
+//! | `GET /api/v1/hinweise` | Open worklist rows the caller may answer, each under its Anker |
+//! | `GET /api/v1/runs/{run}/antwort` | A run's answer, each sentence checked against the call it cites |
+//! | `POST /api/v1/runs` | Start a specialist by hand: `202` with the run ids (OIDC + `api:run.start`; honours `Idempotency-Key`) |
 //! | `POST /api/v1/erasure` | Destroy a case key and/or forget a memory subject (OIDC + `api:erasure.execute`) |
 //! | `GET /api/v1/agents` | What this deployment activated (OIDC + `api:agent.list`) |
 //! | `GET /api/v1/agents/catalog` | Everything compiled in (OIDC + `api:agent.list`) |

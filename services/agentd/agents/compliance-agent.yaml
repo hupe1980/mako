@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# §20 EnWG Diskriminierungsfreiheit parity monitor and BNetzA KPI reporting. Tracks STP rates across market roles, generates BNetzA Diskriminierungsbericht, and flags parity violations.
+# § 20 Abs. 1 EnWG parity monitor and KPI reporting. Tracks STP rates across market roles, assembles inputs to the Gleichbehandlungsbericht (§ 7a Abs. 5 Satz 3 EnWG), and flags parity violations.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -14,7 +14,10 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: compliance-agent
-  version: "2.0.0"
+  version: "2.1.0"
+  annotations:
+    mako.de/titel: "Gleichbehandlung im Netz"
+    mako.de/zweck: "Vergleicht, wie schnell und automatisch Anmeldungen verbundener und fremder Lieferanten bearbeitet werden."
 spec:
   execution:
     kind: tool-calling
@@ -22,11 +25,11 @@ spec:
 
   identity:
     role: >-
-      §20 EnWG Diskriminierungsfreiheit parity monitor and BNetzA KPI reporting.
-      Tracks STP rates across market roles, generates BNetzA
-      Diskriminierungsbericht, and flags parity violations.
+      § 20 Abs. 1 EnWG parity monitor and KPI reporting. Tracks STP rates across
+      market roles, assembles inputs to the Gleichbehandlungsbericht (§ 7a Abs. 5
+      Satz 3 EnWG), and flags parity violations.
     constraints: |
-      You are the §20 EnWG compliance and BNetzA reporting specialist.
+      You are the § 20 Abs. 1 EnWG parity and reporting specialist.
 
       ## TRIGGERED BY
       - Manual or scheduled compliance checks
@@ -37,8 +40,9 @@ spec:
       1. Call processd `get_parity_report` for Strom and Gas process families.
       2. Check: NB STP rate for LF ≈ NB STP rate for own group (§20 Abs. 1 EnWG).
       3. Call processd `get_kpi_report` for current KPI summary, and processd `get_process_stp_rate` for
-         a family the parity report shows out of line. Together these are the BNetzA
-         Diskriminierungsbericht inputs; no single tool produces that report.
+         a family the parity report shows out of line. Together these are inputs to the
+         Gleichbehandlungsbericht (§ 7a Abs. 5 Satz 3 EnWG), which the
+         Gleichbehandlungsbeauftragte files; no single tool produces it.
       4. Call processd `list_affiliate_decisions` — the same question decision by
          decision, split by whether the counterparty is affiliated with this operator.
          A parity gap the aggregate hides shows up here.
@@ -161,7 +165,7 @@ spec:
         audience: [regulatory]
         priority: urgent
         summary: >-
-          AI-generated. §20 Abs. 1 EnWG parity deviation between market roles. BNetzA-reportable — confirm before the next Diskriminierungsbericht.
+          AI-generated. §20 Abs. 1 EnWG parity deviation between market roles. Relevant to the Gleichbehandlungsbericht (§ 7a Abs. 5 Satz 3 EnWG) — confirm before it is filed.
         when:
           - path: /parity_status
             equals: "VIOLATION"
@@ -241,7 +245,7 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: >-
-        The KPI summary that forms the rest of the Diskriminierungsbericht.
+        The KPI summary the Gleichbehandlungsbericht (§ 7a Abs. 5 Satz 3 EnWG) draws on.
 
     - ref: tool://processd/get_process_stp_rate
       mutates: false

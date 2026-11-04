@@ -1234,6 +1234,119 @@ mod tests {
         assert!(!String::from_utf8_lossy(&wire.bytes).contains("STS+Z35"));
     }
 
+    /// **The Stornierung is answered by UTILMD, end to end.** Each NB workflow's
+    /// own outbox entry — not a hand-written payload — renders, passes the AHB
+    /// profile and carries the answer's Prüfidentifikator: UTILMD AHB Strom 2.2
+    /// Kap. 9.6 answers a 55022 with 55023/55024, UTILMD AHB Gas 1.2 Kap. 5.2 a
+    /// 44022 with 44023/44024, both „zurück an den Absender" with `BGM`
+    /// repeating the Anfrage's category, `STS+7++E05`, `STS+E01` from the
+    /// Codeliste of the column (`S_0086`/`S_0087`, `G_0004`/`G_0003`) and
+    /// `RFF+TN` naming the Anfrage's Vorgangsnummer.
+    #[test]
+    fn the_stornierung_answers_render_as_utilmd_with_their_pid() {
+        use mako_engine::types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator};
+        use mako_engine::workflow::Workflow;
+
+        fn render_validated(entry: &mako_engine::outbox::PendingOutbox, own: &str) -> String {
+            let msg = fake_msg(
+                entry.message_type.as_ref(),
+                entry.recipient.as_ref(),
+                entry.payload.clone(),
+            );
+            let rendered = render_to_wire_bytes(&msg, &test_registry(own)).expect("renders");
+            let wire = String::from_utf8_lossy(&rendered.bytes).into_owned();
+            edi_energy::EdiEnergyMessage::validate(
+                &edi_energy::parse(wire.as_bytes()).expect("parse"),
+            )
+            .expect("validate")
+            .into_error_result()
+            .unwrap_or_else(|e| panic!("must be AHB-conformant: {e:#?}\n{wire}"));
+            wire
+        }
+
+        // ── Strom: 55022 → 55023 / 55024 ──
+        use mako_gpke::stornierung::{
+            GpkeStornierungCommand as C, GpkeStornierungState as S, GpkeStornierungWorkflow as W,
+            StornoAblehnung as A,
+        };
+        let nb = "9900123456789";
+        let lf = "9900987654321";
+        let received = W::handle(
+            &S::New,
+            C::ReceiveUtilmd {
+                pid: Pruefidentifikator::new(55_022).unwrap(),
+                sender: MarktpartnerCode::new(lf),
+                receiver: MarktpartnerCode::new(nb),
+                vorgang_id: MaLo::new("STORNO-4711"),
+                document_code: "E02".to_owned(),
+                document_date: "202611010800+00".to_owned(),
+                message_ref: MessageRef::new("UNH55022"),
+                validation_passed: true,
+                validation_errors: vec![],
+            },
+        )
+        .unwrap();
+        let state = received.events.iter().fold(S::New, W::apply);
+        for (ablehnung, pid, sts) in [
+            (None, "55023", "STS+E01++E15:S_0086"),
+            (Some(A::Doppelmeldung), "55024", "STS+E01++Z14:S_0087"),
+        ] {
+            let out = W::handle(&state, C::SendAntwort { ablehnung }).unwrap();
+            let wire = render_validated(&out.outbox[0], nb);
+            assert!(wire.contains(&format!("RFF+Z13:{pid}")), "{wire}");
+            assert!(wire.contains("UTILMD:D:11A:UN:S2."), "{wire}");
+            assert!(wire.contains("BGM+E02+"), "{wire}");
+            assert!(wire.contains("STS+7++E05'"), "{wire}");
+            assert!(wire.contains(sts), "{wire}");
+            assert!(wire.contains("RFF+TN:STORNO-4711"), "{wire}");
+            assert!(wire.contains(&format!("NAD+MR+{lf}::293")), "{wire}");
+        }
+
+        // ── Gas: 44022 → 44023 / 44024 ──
+        use mako_geli_gas::stornierung::{
+            GeliGasStornierungCommand as GC, GeliGasStornierungState as GS,
+            GeliGasStornierungWorkflow as GW, StornoAblehnung as GA,
+        };
+        let gnb = "9870123456789";
+        let lfg = "9870987654325";
+        let received = GW::handle(
+            &GS::New,
+            GC::ReceiveUtilmd {
+                pid: Pruefidentifikator::new(44_022).unwrap(),
+                sender: MarktpartnerCode::new(lfg),
+                receiver: MarktpartnerCode::new(gnb),
+                vorgang_id: MaLo::new("STORNO-4712"),
+                document_code: "E01".to_owned(),
+                document_date: "202611010800+00".to_owned(),
+                message_ref: MessageRef::new("UNH44022"),
+                validation_passed: true,
+                validation_errors: vec![],
+            },
+        )
+        .unwrap();
+        let state = received.events.iter().fold(GS::New, GW::apply);
+        for (ablehnung, pid, sts) in [
+            (None, "44023", "STS+E01++E15:G_0004"),
+            (
+                Some(GA::Sonstiges {
+                    bemerkung: "Vorgang unbekannt".to_owned(),
+                }),
+                "44024",
+                "STS+E01++E14:G_0003",
+            ),
+        ] {
+            let out = GW::handle(&state, GC::SendAntwort { ablehnung }).unwrap();
+            let wire = render_validated(&out.outbox[0], gnb);
+            assert!(wire.contains(&format!("RFF+Z13:{pid}")), "{wire}");
+            assert!(wire.contains("UTILMD:D:11A:UN:G1."), "{wire}");
+            assert!(wire.contains("BGM+E01+"), "{wire}");
+            assert!(wire.contains("STS+7++E05'"), "{wire}");
+            assert!(wire.contains(sts), "{wire}");
+            assert!(wire.contains("RFF+TN:STORNO-4712"), "{wire}");
+            assert!(wire.contains(&format!("NAD+MR+{lfg}::332")), "{wire}");
+        }
+    }
+
     /// Strom keeps its own three, so the Gas fix is not a global one.
     #[test]
     fn a_strom_utilmd_keeps_the_strom_code_lists() {

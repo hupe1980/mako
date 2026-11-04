@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: sperrd-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Sperraufträge"
+    mako.de/zweck: "Verfolgt Sperr- und Entsperraufträge und meldet, was über dem gewünschten Termin liegt."
 spec:
   execution:
     kind: tool-calling
@@ -55,9 +58,9 @@ spec:
          DTM+469 earliest-start only means the job is now schedulable.
       7. Diagnose: field-team backlog, makod AS4 delivery, or — the usual cause
          of a stuck IFTSTA — no makod `gpke-sperrung` process in
-         `ValidationPassed` for that MaLo. Call makod `get_process` for the MaLo the
-         order names, and makod `list_active_processes` when several orders are stuck at
-         once: one MaLo without a process is an order, and twenty is a dispatch outage.
+         `ValidationPassed` for that MaLo. Call makod `get_process` for the MaLo each
+         stuck order names: one MaLo without a process is an order, and twenty is a
+         dispatch outage.
       8. Where the queue's own counters are not enough — a dispute about one order, or a
          backlog whose shape matters — call processd `get_sperr_order` for the order and
          processd `list_sperr_orders` for the period around it.
@@ -278,8 +281,3 @@ spec:
       description: >-
         Whether a `gpke-sperrung` process reached ValidationPassed for the MaLo.
 
-    - ref: tool://makod/list_active_processes
-      mutates: false
-      max_sensitivity: internal
-      description: >-
-        Sperrung processes in flight, for a queue-wide diagnosis.

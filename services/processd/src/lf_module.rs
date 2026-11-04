@@ -430,6 +430,20 @@ pub struct LfAnfragePayload {
 }
 
 impl LfAnfragePayload {
+    /// The Entscheidungsbaum [`entscheide`] answers this request from.
+    ///
+    /// For a 55607 it is the Anwendungsfall's own tree (`E_0603`–`E_0606`,
+    /// what `mako_pruefung::pruefe_zuordnung` resolves its code in); without
+    /// a Fall the walk escalates and there is no tree to name. Every other
+    /// process answers from the tree its descriptor names.
+    #[must_use]
+    pub fn entscheidungsbaum(&self) -> Option<&'static str> {
+        match self.process.walk {
+            Walk::ZuordnungLf => self.zuordnungsfall.map(mako_pruefung::ZuordnungsFall::ebd),
+            _ => Some(self.process.ebd),
+        }
+    }
+
     /// Parse a `de.mako.process.initiated`, or `None` when the PID is not ours.
     #[must_use]
     pub fn parse(event: &serde_json::Value) -> Option<Self> {
@@ -912,6 +926,10 @@ pub async fn process_lf_antwort(
             payload.window.expires_at,
             config.tenant.clone(),
         );
+        let entry = match payload.entscheidungsbaum() {
+            Some(baum) => entry.with_ebd(baum),
+            None => entry,
+        };
         let entry = match held {
             Some((command, body)) => {
                 let other = if command == payload.process.bestaetigen {
@@ -2099,5 +2117,32 @@ mod tests {
         assert!(p.window.is_regulatory);
         assert!(p.window.expires_at < p.window.deadline);
         assert!(p.window.deadline > datetime!(2026-08-20 09:00 UTC));
+    }
+
+    /// Every tree an LF queue entry is recorded under publishes the
+    /// Ablehnungscodes an operator refuses with — a descriptor naming a tree
+    /// outside the catalogue would leave the decision view with no codes.
+    #[test]
+    fn every_lf_tree_publishes_its_ablehnungscodes() {
+        use mako_pruefung::codes::{Cluster, codes_im_cluster};
+        let mut trees: Vec<&str> = lf_antwort_processes()
+            .filter(|p| p.walk != Walk::ZuordnungLf)
+            .map(|p| p.ebd)
+            .collect();
+        trees.extend(
+            [
+                mako_pruefung::ZuordnungsFall::EegOhneDvPflicht,
+                mako_pruefung::ZuordnungsFall::EegMitDvPflicht,
+                mako_pruefung::ZuordnungsFall::KwkgNichtTranchiert,
+                mako_pruefung::ZuordnungsFall::KwkgTranchiert,
+            ]
+            .map(mako_pruefung::ZuordnungsFall::ebd),
+        );
+        for tree in trees {
+            assert!(
+                codes_im_cluster(tree, Cluster::Ablehnung).count() > 0,
+                "{tree} publishes no Ablehnungscode"
+            );
+        }
     }
 }

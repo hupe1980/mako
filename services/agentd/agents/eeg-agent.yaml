@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: eeg-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "EEG-Anlagen"
+    mako.de/zweck: "Begleitet Förderende, Anschlussvermarktung und Abrechnungsfragen der Erzeugungsanlagen."
 spec:
   execution:
     kind: tool-calling

@@ -298,6 +298,19 @@ pub async fn get_konfigurationsprodukte(
     }
 }
 
+/// `PUT /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` body.
+///
+/// An object rather than a bare array, so the body has keys of its own that
+/// `mako_service::Json` can refuse: a misspelt `konfigurationsprodukte` is a
+/// `422` naming it, never a list read as absent. The field is mandatory — `[]`
+/// clears the products, an absent list is not an empty one.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PutKonfigurationsprodukteRequest {
+    /// The full contracted list, replacing the stored one.
+    #[schema(value_type = Vec<Object>)]
+    pub konfigurationsprodukte: Vec<mako_markt::bo4e::Bo4e<rubo4e::current::Konfigurationsprodukt>>,
+}
+
 /// `PUT /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`
 ///
 /// Atomically replace the contracted iMS control products
@@ -306,14 +319,16 @@ pub async fn get_konfigurationsprodukte(
 ///
 /// ## Validation (BK6-24-174 §4.3)
 ///
-/// Every element must:
-/// 1. Parse as a valid `rubo4e::current::Konfigurationsprodukt`
+/// The body is a [`PutKonfigurationsprodukteRequest`]. Every element must:
+/// 1. Cross the BO4E gate as a `Konfigurationsprodukt`, with no key BO4E does
+///    not define
 /// 2. Carry a non-empty `produktcode` — **mandatory** per BDEW AHB
 ///
 /// ## Idempotency
 ///
 /// Supplying the same list twice is safe (version counter increments but
-/// the JSONB payload is unchanged).  Pass `[]` to clear all products.
+/// the JSONB payload is unchanged).  Pass `{"konfigurationsprodukte": []}` to
+/// clear all products.
 ///
 /// ## CloudEvent
 ///
@@ -328,10 +343,9 @@ pub async fn put_konfigurationsprodukte(
     Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
     Path(sr_id): Path<String>,
-    Json(body): Json<serde_json::Value>,
+    Json(body): Json<PutKonfigurationsprodukteRequest>,
 ) -> impl IntoResponse {
     use mako_markt::cloudevents::MarktEvent;
-    use rubo4e::current::Konfigurationsprodukt;
 
     if enforcer
         .check(&claims.principal(), "write-sr", &tenant)
@@ -340,30 +354,19 @@ pub async fn put_konfigurationsprodukte(
         return ApiError::forbidden("access denied").into_response();
     }
 
-    // Body must be a JSON array of Konfigurationsprodukt objects.
-    let arr = match body.as_array() {
-        Some(a) => a.clone(),
-        None => {
-            return ApiError::unprocessable("body must be a JSON array of Konfigurationsprodukt")
-                .into_response();
+    // Business rule (BK6-24-174 §4.3): `produktcode` MUST be non-empty.
+    let mut validated: Vec<serde_json::Value> =
+        Vec::with_capacity(body.konfigurationsprodukte.len());
+    for (i, kp) in body.konfigurationsprodukte.iter().enumerate() {
+        // An operator's list for marktd to hold: a key BO4E does not define is
+        // a misspelling, not a newer release's field.
+        if let Err(e) = kp.ensure_no_undefined_fields() {
+            return ApiError::unprocessable_with(
+                format!("element [{i}]: {e}"),
+                serde_json::Value::Object(e.detail()),
+            )
+            .into_response();
         }
-    };
-
-    // Validate each element:
-    // 1. Schema: must deserialize as Konfigurationsprodukt.
-    // 2. Business rule (BK6-24-174 §4.3): `produktcode` MUST be non-empty.
-    let mut validated: Vec<serde_json::Value> = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        let kp = match serde_json::from_value::<Konfigurationsprodukt>(item.clone()) {
-            Ok(k) => k,
-            Err(e) => {
-                return ApiError::unprocessable(format!(
-                    "element [{}] is not a valid Konfigurationsprodukt: {}",
-                    i, e
-                ))
-                .into_response();
-            }
-        };
         // BK6-24-174 §4.3: produktcode is mandatory — every contracted product
         // must be uniquely identifiable by its code.
         match kp.produktcode.as_deref() {
@@ -379,13 +382,10 @@ pub async fn put_konfigurationsprodukte(
         }
         // Re-serialize to canonical BO4E camelCase.
         //
-        // Not `unwrap_or(item.clone())`: falling back to the caller's own
-        // element would store the *unvalidated* body under a line that claims
-        // to canonicalise it, silently undoing every check above. Failure is
-        // unreachable for a generated BO4E type, which is why it is stated
-        // rather than defaulted — if it ever becomes reachable the write must
-        // not happen.
-        match super::serialise_or_500(&kp) {
+        // Failure is unreachable for a generated BO4E type, which is why it is
+        // stated rather than defaulted — if it ever becomes reachable the
+        // write must not happen.
+        match super::serialise_or_500(kp.get()) {
             Ok(v) => validated.push(v),
             Err(e) => return e.into_response(),
         }
@@ -1106,9 +1106,7 @@ use mako_markt::repository::{ZaehlzeitRegisterRecord, ZaehlzeitRepository, Zaehl
 /// `PUT /api/v1/zaehler/{zaehler_id}/register`
 ///
 /// Upsert a `ZaehlzeitRegister` for a given Zähler.  One register per tariff
-/// zone (HT/NT/EINZEL).  Populated automatically from WiM Stammdaten `ZAK+ZD`
-/// segments during MSB device handover (BK6-24-174 §5.6) when the `makod`
-/// adapter extracts them.  Also supports manual operator import.
+/// zone (HT/NT/EINZEL), written by an operator or an ERP import.
 pub async fn put_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1210,8 +1208,7 @@ pub async fn list_zaehler_saisons(
 /// `GET /api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen`
 ///
 /// Returns a **typed `rubo4e::current::Zaehlzeitdefinition` BO4E object** for the
-/// given Zähler, assembled from the `zaehler_register` + `zaehler_saisons` rows that
-/// were auto-populated from WiM Stammdatenübermittlung (ORDERS PIDs 17102–17133).
+/// given Zähler, assembled from its `zaehler_register` + `zaehler_saisons` rows.
 ///
 /// ## Why this endpoint?
 ///
@@ -1251,8 +1248,7 @@ pub async fn list_zaehler_saisons(
 /// ## §14a Modul 3 context
 ///
 /// Under §14a Modul 3 (zeitvariable Netzentgelte, BK8-22/010-A), the NB assigns ToU registers (HT/ST/NT) to
-/// controllable loads at specific switching times.  The MSB must communicate these
-/// definitions to the NB via WiM Stammdaten (ORDERS 17102–17133 ZAK+ZE segments).
+/// controllable loads at specific switching times.
 /// This endpoint exposes those definitions in BO4E form for downstream ERP + portal
 /// consumption.
 pub async fn get_zaehlzeitdefinitionen(

@@ -11,14 +11,14 @@
 //! | `list_decisions`            | List recent NB Anmeldung STP decisions |
 //! | `get_decision`              | Get a single decision by process_id |
 //! | `get_stp_rate`              | Approval rate for NB STP decisions over N days |
-//! | `get_stp_breakdown_by_erc`  | Rejection counts by ERC code (root-cause analysis) |
+//! | `get_stp_breakdown_by_erc`  | Refusal counts per Entscheidungsbaum and code, with the BDEW wording |
 //! | `list_affiliate_decisions`  | Gleichbehandlung: decisions for affiliate-initiated requests |
-//! | `list_pending_approvals`    | List LF approval-queue entries needing operator action |
-//! | `get_queue_entry`           | Get a single LF approval-queue entry by its UUID |
+//! | `list_pending_approvals`    | Freigaben of every role, earliest `expires_at` first (typed `Freigaben`) |
+//! | `get_queue_entry`           | One Freigabe by its UUID (typed `Freigabe`) |
 //! | `approve_queue_entry`       | Approve a pending queue entry (dispatch its answer) |
 //! | `reject_queue_entry`        | Reject a pending queue entry (dispatch its refusal) |
 //!
-//! The process read model adds six tools and two prompts
+//! The process read model adds seven tools and two prompts
 //! (`obs::mcp`); an NB build adds the four Sperrauftrag tools and
 //! two prompts (`sperr::mcp`). They are further routers on the one
 //! handler, so every tool sits behind the same `/mcp` door and the same
@@ -123,8 +123,14 @@ pub struct AffiliateDecisionsParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListQueueParams {
+    /// `Pending` (default), `Approved`, `Rejected` or `Expired`.
     pub status: Option<String>,
+    /// At most this many entries (default 50, at most 200).
     pub limit: Option<u32>,
+    /// Only the entries answered under this Marktrolle (`NB`, `LF`, `MSB`);
+    /// every role's when absent.
+    #[serde(default)]
+    pub marktrolle: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -225,7 +231,10 @@ impl ProcessdMcpHandler {
     }
 
     #[tool(
-        description = "Get a single NB Anmeldung decision by process_id. NB role. Returns the decision outcome, ERC code (if reject), and whether §20 EnWG affiliate check was triggered.",
+        description = "Get a single NB Anmeldung decision by process_id. NB role. Returns the \
+decision, the Antwortcode with the Entscheidungsbaum it was resolved under (`antwortcode_ebd`) and \
+the BDEW's own wording for it (`bedeutung`), and whether the initiator is an affiliate. Quote \
+`bedeutung`; never translate a code yourself — a code means something only within its tree.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_decision(
@@ -244,7 +253,7 @@ impl ProcessdMcpHandler {
             .find_by_process_id(process_id, &self.state.tenant)
             .await
         {
-            Ok(Some(rec)) => ContentBlock::json(serde_json::to_value(rec).unwrap_or_default())
+            Ok(Some(rec)) => ContentBlock::json(decision_json(&rec))
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
             Ok(None) => Err(McpError::invalid_params(
@@ -256,16 +265,11 @@ impl ProcessdMcpHandler {
     }
 
     #[tool(
-        description = "Get Anmeldung rejection breakdown by ERC code for the last N days. \
-NB role. Returns (antwortcode, count) pairs ordered by frequency. \
-Use this when STP drops below 95% to identify the root cause: \
-A02 = MaLo nimmt nicht an der MaKo teil (Stillgelegt/Ruhend), \
-A06 = andere Anmeldung in Bearbeitung (duplicate), \
-A07 (Strom) / E17 (Gas) = Datums-/Fristverletzung (LFW24 future rule; \
-Gas 6-week retroactive window for E01/E02, 10 WT lead for E03), \
-A05 = Anforderungen nicht erfüllbar (Bilanzierungsgebiet/unknown partner). \
-Escalate = data gap (grid record missing) or affiliate initiator \
-(§20 EnWG — operator must approve manually).",
+        description = "Anmeldung refusals of the last N days, counted per Entscheidungsbaum and \
+Antwortcode. NB role. Each row carries `ebd`, `antwortcode`, the BDEW's wording (`bedeutung`) and \
+`count`, most frequent first. Use it when the STP rate drops, and quote `bedeutung`: the same code \
+is a different refusal in another tree. Escalations are not refusals and are not counted; \
+affiliate-initiated ones are in `list_affiliate_decisions`.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_stp_breakdown_by_erc(
@@ -279,18 +283,12 @@ Escalate = data gap (grid record missing) or affiliate initiator \
             Ok(rows) => {
                 let breakdown: Vec<serde_json::Value> = rows
                     .into_iter()
-                    .map(|(erc, count)| {
-                        let erc_str = erc.as_deref().unwrap_or("null (internal)");
+                    .map(|(ebd, code, count)| {
                         serde_json::json!({
-                            "antwortcode": erc_str,
+                            "ebd": ebd,
+                            "antwortcode": code,
+                            "bedeutung": bedeutung(ebd.as_deref(), code.as_deref()),
                             "count": count,
-                            "remediation": match erc.as_deref() {
-                                Some("A02") => "PUT /api/v1/malos/{malo_id}/grid in marktd (NB-role grid provisioning)",
-                                Some("A05") => "PUT /api/v1/preisblaetter/{nb_mp_id} in marktd with current tariff",
-                                Some("A06") => "LF submitted a date outside the valid Vorlauffrist window",
-                                Some("A99") => "Internal error — check processd logs for details",
-                                _ => "Unknown ERC — check decision detail field",
-                            }
                         })
                     })
                     .collect();
@@ -307,10 +305,11 @@ Escalate = data gap (grid record missing) or affiliate initiator \
     }
 
     #[tool(
-        description = "List NB Anmeldung decisions where `initiator_is_affiliate = true` — §20 EnWG \
-Diskriminierungsfreiheitspflicht audit. Returns decisions where the LF MP-ID matches the operator's \
-own MP-ID. These MUST NOT be auto-accepted (§ 20 Abs. 1 EnWG; § 7a Abs. 5 EnWG Gleichbehandlung). \
-Use `get_parity_report` for the aggregated § 7a Abs. 5 EnWG parity report.",
+        description = "List NB Anmeldung decisions where `initiator_is_affiliate = true`: the LF \
+MP-ID is the operator's own. processd holds each for a person rather than accepting it \
+automatically, so an audit can show the affiliate got no faster path than any other LF \
+(§ 20 Abs. 1 Satz 1 EnWG, non-discriminatory access). Use `get_parity_report` for the \
+aggregated comparison the Gleichbehandlungsbericht (§ 7a Abs. 5 Satz 3 EnWG) draws on.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_affiliate_decisions(
@@ -329,9 +328,9 @@ Use `get_parity_report` for the aggregated § 7a Abs. 5 EnWG parity report.",
                 "window_days": days,
                 "count": records.len(),
                 "records": serde_json::to_value(records).unwrap_or_default(),
-                "regulatory_note": "§20 EnWG: affiliate-initiated Anmeldungen must not be auto-accepted. \
-Every entry here must have decision=Escalate (requiring operator review). \
-Any entry with decision=Accept indicates a §20 EnWG violation — report to BNetzA compliance team.",
+                "regulatory_note": "processd holds every affiliate-initiated Anmeldung for a person \
+(decision=Escalate). An entry with decision=Accept means that hold was bypassed — investigate \
+whether the affiliate was treated differently from other LFs (§ 20 Abs. 1 Satz 1 EnWG).",
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
@@ -362,8 +361,15 @@ Any entry with decision=Accept indicates a §20 EnWG violation — report to BNe
     }
 
     #[tool(
-        description = "List LF approval-queue entries needing operator action (status: Pending/Approved/Rejected/Expired).",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Approval-queue entries (Freigaben) of every role, the earliest `expires_at` \
+first (status: Pending by default, or Approved/Rejected/Expired; `marktrolle` narrows to one \
+role). Each is `gehalten` — a decided answer approved exactly as shown in `antwort` — or \
+`eskaliert` — the person states the answer: a code from `zustimmung` to approve, from \
+`ablehnung` to reject, each with its Entscheidungsbaum (`ebd`, state it as `antwort_tree`). \
+Quote `bedeutung`; a code means something only within its tree. `saturated` means at least \
+`limit` entries matched.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::freigabe::Freigaben>()
     )]
     async fn list_pending_approvals(
         &self,
@@ -376,18 +382,32 @@ Any entry with decision=Accept indicates a §20 EnWG violation — report to BNe
             .as_deref()
             .map(|s| s.parse().unwrap_or(QueueStatus::Pending))
             .or(Some(QueueStatus::Pending));
-        let limit = params.limit.unwrap_or(50);
-        match queue.list(&self.state.tenant, status, limit).await {
-            Ok(entries) => ContentBlock::json(serde_json::to_value(entries).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        let limit = params.limit.unwrap_or(50).clamp(1, 200);
+        let marktrolle = params.marktrolle.as_deref().filter(|r| !r.is_empty());
+        let entries = queue
+            .list(&self.state.tenant, status, marktrolle, limit)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let freigaben: Vec<crate::freigabe::Freigabe> = entries
+            .iter()
+            .map(crate::freigabe::Freigabe::from_entry)
+            .collect();
+        Ok(CallToolResult::structured(
+            serde_json::to_value(crate::freigabe::Freigaben {
+                count: freigaben.len(),
+                saturated: freigaben.len() >= usize::try_from(limit).unwrap_or(usize::MAX),
+                freigaben,
+            })
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
     }
 
     #[tool(
-        description = "Get a single LF approval queue entry by its UUID.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "One approval-queue entry (Freigabe) by its UUID, in the shape \
+`list_pending_approvals` lists: `art` gehalten/eskaliert, the frozen `antwort`, and the \
+`zustimmung` / `ablehnung` codes of its Entscheidungsbaum with the BDEW wording.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::freigabe::Freigabe>()
     )]
     async fn get_queue_entry(
         &self,
@@ -399,9 +419,10 @@ Any entry with decision=Accept indicates a §20 EnWG violation — report to BNe
         };
         let queue = PgApprovalQueue::new(self.state.pool.clone());
         match queue.find_by_id(id, &self.state.tenant).await {
-            Ok(Some(entry)) => ContentBlock::json(serde_json::to_value(entry).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(Some(entry)) => Ok(CallToolResult::structured(
+                serde_json::to_value(crate::freigabe::Freigabe::from_entry(&entry))
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+            )),
             Ok(None) => Err(McpError::invalid_params(
                 format!("approval queue entry {id} not found"),
                 None,
@@ -555,18 +576,15 @@ impl ProcessdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. Use `get_decision` with the process_id to see the ERC code.\n\
-                 2. ERC codes from `mako-pruefung`:\n\
-                    - A02: MaLo not found in marktd (malo_grid missing or bilanzierungsgebiet mismatch)\n\
-                    - A05: Preisblatt missing for the NB MP-ID + Sparte combination\n\
-                    - A06: Lieferbeginn date outside allowed range (too far future / past)\n\
-                    - A99: internal processing error (check processd logs)\n\
-                 3. AFFILIATE (not an ERC): the decision carries `initiator_is_affiliate = true` — \
-                    auto-accept was blocked under the § 20 Abs. 1 Satz 1 affiliate rule even though the checks passed. \
-                    These surface via `list_affiliate_decisions`, not the ERC breakdown.\n\
-                 4. Fix A02: PUT /api/v1/malos/{malo_id}/grid in marktd with correct netzebene/bilanzierungsgebiet.\n\
-                 5. Fix A05: PUT /api/v1/preisblaetter/{nb_mp_id} in marktd with current tariff.\n\
-                 6. Fix AFFILIATE: submit manual approval via POST /api/v1/queue/{id}/approve.",
+                "1. Call `get_decision` with the process_id. A refusal carries its Antwortcode, the \
+                    Entscheidungsbaum it was resolved under (`antwortcode_ebd`) and the BDEW's wording \
+                    (`bedeutung`); the wording names the Prüfschritt that refused.\n\
+                 2. Quote `bedeutung` — never translate a code from memory: `A02` is a different \
+                    refusal in `E_0607` and `E_0622`.\n\
+                 3. `detail` says which input the check read; correct that record at its owner \
+                    (marktd for Marktlokation and Netzgebiet data) before the LF sends again.\n\
+                 4. An affiliate-initiated Anmeldung is not refused but held for a person: \
+                    `list_affiliate_decisions`, then POST /api/v1/queue/{id}/approve.",
             ),
         ]
     }
@@ -584,26 +602,14 @@ impl ProcessdMcpHandler {
             PromptMessage::new_text(
                 Role::Assistant,
                 "1. Call `get_stp_rate(days=7)` to confirm the current rate and scope.\n\
-                 2. Call `get_stp_breakdown_by_erc(days=7)` to identify the dominant ERC code.\n\n\
-                 ## By ERC code:\n\n\
-                 **A02 (MaLo not found / grid data missing)**\n\
-                 → Provision the grid record: PUT `/api/v1/malos/{malo_id}/grid` in marktd (NB role).\n\
-                 → Verify `GET /api/v1/malos/{malo_id}/grid` returns netzebene + bilanzierungsgebiet.\n\n\
-                 **A05 (Preisblatt / NB not registered)**\n\
-                 → Check `GET /api/v1/partners/{nb_mp_id}` in marktd — partner must exist.\n\
-                 → Check `GET /api/v1/preisblaetter/{nb_mp_id}` — must have active Preisblatt.\n\
-                 → If expired: PUT /api/v1/preisblaetter/{nb_mp_id} with updated tariff.\n\n\
-                 **A06 (Lieferbeginn date out of range)**\n\
-                 → LF submitted a date outside the valid window (too far future or past).\n\
-                 → Check UTILMD AHB for the PID-specific Vorlauffrist rules.\n\
-                 → No action needed on NB side — this is an LF error.\n\n\
-                 **AFFILIATE (§ 20 Abs. 1 Satz 1 affiliate rule — not an ERC)**\n\
-                 → Affiliate-initiated Anmeldungen pass the checks but auto-accept is blocked; \
-                   they are tracked by the `initiator_is_affiliate` marker, not an ERC bucket.\n\
-                 → Call `list_affiliate_decisions(days=7)` to see affected MaLos.\n\
-                 → Each entry requires manual operator review before acceptance.\n\
-                 → Approve via POST /api/v1/queue/{id}/approve.\n\n\
-                 3. After fixing root causes, STP should recover on the next batch of Anmeldungen.",
+                 2. Call `get_stp_breakdown_by_erc(days=7)`: refusals per tree and code, each with \
+                    the BDEW's wording (`bedeutung`) naming the Prüfschritt that refused.\n\
+                 3. Take the largest row and read two of its decisions with `get_decision`: \
+                    `detail` names the input the Prüfschritt read. A refusal the request deserved \
+                    is the LF's to correct; one caused by a missing or stale record (Marktlokation, \
+                    Netzgebiet in marktd) is the NB's to fix.\n\
+                 4. Affiliate-initiated Anmeldungen are held, not refused, and lower the rate \
+                    without a code: `list_affiliate_decisions(days=7)`, each approved by a person.",
             ),
         ]
     }
@@ -620,19 +626,13 @@ impl ProcessdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. MSB-Wechsel rejections come from `processd`'s msb_module with ERC codes:\n\
-                    - A02: MeLo not found in marktd device registry — check PUT /api/v1/melos/{melo_id}/zaehler\n\
-                    - A05: nMSB not registered in partner directory — add via PUT /api/v1/partners\n\
-                 2. Escalations (not rejections) occur for:\n\
-                    - MeLo has an iMSys device (§14a mandatory MSB — requires operator eligibility check)\n\
-                    - MeLo has a SteuerbareRessource (§14a Modul check needed)\n\
-                    - MeLo has no registered meters in marktd (grid data incomplete)\n\
-                 3. For iMSys escalations: check §14a Modul eligibility in marktd:\n\
-                    GET /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte\n\
-                    If products are contracted → approve manually.\n\
-                    If not → reject with ERC A97 (not eligible for nMSB assignment).\n\
-                 4. For Kündigung (PID 55039): only A02 and A05 are valid rejection grounds.\n\
-                    If MeLo exists and nMSB is registered → Kündigung must be accepted.",
+                "1. Read the process with `get_process` (read model) by its process id: `state` \
+                    says whether it was refused. `erc_code` is set only when an APERAK refused \
+                    the message itself — an APERAK error code, not the Antwortcode of a refusal.\n\
+                 2. A WiM Antwortcode is read within the Codeliste that publishes it (`S_00xx`); \
+                    report the process, never a code's meaning from memory.\n\
+                 3. An escalation is not a refusal: it waits for a person in the queue \
+                    (`list_pending_approvals`), who answers with a code from the same Codeliste.",
             ),
         ]
     }
@@ -660,7 +660,8 @@ impl ProcessdMcpHandler {
                  - MaLo exists in marktd with correct netzebene/bilanzierungsgebiet\n\
                  - Active Preisblatt for the NB\n\
                  - Lieferbeginn date within Vorlauffrist window\n\
-                 - §20 EnWG: affiliate check (auto-accept blocked if initiator_is_affiliate)\n\n\
+                 - affiliate check: an Anmeldung of the operator's own LF is held for a person \
+                   (initiator_is_affiliate), so parity under § 20 Abs. 1 EnWG stays auditable\n\n\
                  On success: makod dispatches UTILMD 55001/44001 EDIFACT to NB.",
             ),
         ]
@@ -680,6 +681,25 @@ impl ServerHandler for ProcessdMcpHandler {
         .with_server_info(Implementation::new("processd", env!("CARGO_PKG_VERSION")))
         .with_instructions(instructions())
     }
+}
+
+/// The BDEW's wording for `code` within the tree `ebd`, from `mako-pruefung`'s
+/// catalogue — `None` where either is absent or the tree does not publish it.
+fn bedeutung(ebd: Option<&str>, code: Option<&str>) -> Option<&'static str> {
+    mako_pruefung::codes::lookup(ebd?, code?).map(|c| c.bedeutung)
+}
+
+/// A decision as `get_decision` returns it: the stored row and the wording of
+/// its Antwortcode.
+fn decision_json(rec: &crate::pg::anmeldung::AnmeldungDecisionRecord) -> serde_json::Value {
+    let mut v = serde_json::to_value(rec).unwrap_or_default();
+    if let Some(map) = v.as_object_mut() {
+        map.insert(
+            "bedeutung".into(),
+            bedeutung(rec.antwortcode_ebd.as_deref(), rec.antwortcode.as_deref()).into(),
+        );
+    }
+    v
 }
 
 /// The server instructions: processd's decision tools, then the read model's,
@@ -724,7 +744,10 @@ fn tool_action(name: &str) -> Option<&'static str> {
         // withdrawn once sent.
         "approve_queue_entry" | "reject_queue_entry" => "decide-queue",
         // The process read model — the same actions as its REST routes.
-        "get_process" | "list_processes_by_family" => "read-process",
+        "get_process"
+        | "list_processes_by_family"
+        | "list_open_processes"
+        | "count_open_processes" => "read-process",
         "get_kpi_report" | "get_parity_report" | "get_process_stp_rate" => "read-kpi",
         "list_overdue_processes" => "read-overdue",
         // The Sperrauftrag queue — dispatch data naming the household to be
@@ -950,5 +973,39 @@ mod tests {
     fn an_unusable_makod_url_yields_no_target() {
         assert_eq!(self_base_url("makod:8080"), None);
         assert_eq!(self_base_url("http://"), None);
+    }
+
+    /// A code's wording is looked up within its tree: `A02` refuses an
+    /// Anmeldung in `E_0622` for a reason `E_0607` does not share, and a code
+    /// without its tree has no wording at all.
+    /// The role-independent tool contract — decisions and the read model —
+    /// is the committed `mcp.snapshot.json` (`BLESS_MCP_SNAPSHOT=1` rewrites
+    /// it). An NB build adds the Sperrauftrag tools, which no Desk view reads.
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let router = ProcessdMcpHandler::tool_router() + ProcessdMcpHandler::obs_tool_router();
+        let tools: Vec<serde_json::Value> = router
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
+    }
+
+    #[test]
+    fn a_code_is_worded_only_within_its_tree() {
+        let anmeldung = bedeutung(Some("E_0622"), Some("A02")).expect("E_0622 publishes A02");
+        assert!(
+            anmeldung.contains("nimmt nicht an der Marktkommunikation teil"),
+            "{anmeldung}"
+        );
+        let abmeldung = bedeutung(Some("E_0607"), Some("A02")).expect("E_0607 publishes A02");
+        assert_ne!(anmeldung, abmeldung);
+        assert_eq!(bedeutung(None, Some("A02")), None);
+        assert_eq!(bedeutung(Some("E_0622"), None), None);
     }
 }

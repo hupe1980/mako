@@ -222,6 +222,33 @@ pub(crate) fn ok<T: Serialize>(v: T) -> ApiResult<Json<serde_json::Value>> {
     ))
 }
 
+/// Refuse a BO4E document an operator entered that carries a field BO4E does
+/// not define — a `422` naming every path, with the gate's
+/// `bo4e.unknown_field` code ([`Bo4e::ensure_no_undefined_fields`]).
+///
+/// [`Bo4e::ensure_no_undefined_fields`]: mako_markt::bo4e::Bo4e::ensure_no_undefined_fields
+///
+/// # Errors
+///
+/// [`ApiError`] `422` when any field, at any depth, is not one BO4E defines.
+pub(crate) fn refuse_undefined_fields<T>(bo: &mako_markt::bo4e::Bo4e<T>) -> ApiResult<()>
+where
+    T: mako_markt::bo4e::Bo4eTyped + rubo4e::json::Bo4eExtensions,
+{
+    bo.ensure_no_undefined_fields().map_err(|rejection| {
+        ApiError::unprocessable_with(rejection.to_string(), rejection.detail().into())
+    })
+}
+
+/// The canonical BO4E JSON of a gated document — what gets stored.
+pub(crate) fn canonical_bo4e<T>(bo: &mako_markt::bo4e::Bo4e<T>) -> ApiResult<serde_json::Value>
+where
+    T: mako_markt::bo4e::Bo4eTyped + Serialize,
+{
+    bo.canonical_json()
+        .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))
+}
+
 /// Load a Kunde or answer 404 — the tenant check every customer route needs.
 pub(crate) async fn require_kunde(ctx: &Ctx, id: Uuid) -> ApiResult<crate::pg::KundeRow> {
     crate::pg::fetch_kunde(&ctx.pool, id, ctx.tenant())

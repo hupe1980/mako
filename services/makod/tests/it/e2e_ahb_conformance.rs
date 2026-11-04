@@ -777,6 +777,7 @@ async fn ahb_44022_geli_gas_stornierung_validates_and_dispatches() {
         sender: cmd_sender,
         receiver: cmd_receiver,
         vorgang_id: cmd_vorgang,
+        document_code: cmd_bgm,
         message_ref: cmd_ref,
         ..
     } = adapter_cmd
@@ -805,12 +806,19 @@ async fn ahb_44022_geli_gas_stornierung_validates_and_dispatches() {
         "00001",
         "message_ref must match UNH ref in fixture"
     );
+    // The answer repeats the Anfrage's BGM category (UTILMD AHB Gas 1.2
+    // Kap. 5.2, Bedingung [500]), so the adapter must carry it.
+    assert_eq!(
+        cmd_bgm, "E01",
+        "document_code must be the fixture's BGM DE 1001"
+    );
 
     let exec_cmd = GeliGasStornierungCommand::ReceiveUtilmd {
         pid: cmd_pid,
         sender: cmd_sender,
         receiver: cmd_receiver,
         vorgang_id: cmd_vorgang,
+        document_code: cmd_bgm,
         document_date: String::new(),
         message_ref: cmd_ref,
         validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass

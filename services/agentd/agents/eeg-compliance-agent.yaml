@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: eeg-compliance-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "EEG-Pflichten"
+    mako.de/zweck: "Prüft die Pflichtzahlungen und Vermarktungspflichten der Anlagen auf Verstöße."
 spec:
   execution:
     kind: tool-calling

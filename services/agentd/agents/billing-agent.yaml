@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: billing-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Rechnungseinwände"
+    mako.de/zweck: "Prüft eine bestrittene Rechnung gegen die Zahlungsavise und schlägt die Korrektur der Abrechnung vor."
 spec:
   execution:
     kind: tool-calling

@@ -28,10 +28,7 @@ use rust_decimal::Decimal;
 use std::str::FromStr as _;
 use std::sync::Arc;
 
-use crate::pg::{
-    PgDeviceRepository, PgNeLoRepository, PgTechnischeRessourceRepository, PgTrancheRepository,
-    PgZaehlzeitRepository,
-};
+use crate::pg::{PgNeLoRepository, PgTechnischeRessourceRepository, PgTrancheRepository};
 use axum::{
     Extension,
     body::Bytes,
@@ -39,7 +36,6 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use mako_markt::repository::DeviceRepository;
 use mako_markt::{
     cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent},
     repository::{MaloRepository, MeloRepository},
@@ -64,8 +60,6 @@ pub async fn ingest_event(
     State(state): State<Arc<AppState>>,
     Extension(secret): Extension<InboundWebhookSecret>,
     Extension(pool): Extension<PgPool>,
-    Extension(device_repo): Extension<Arc<PgDeviceRepository>>,
-    Extension(zaehzeit_repo): Extension<Arc<PgZaehlzeitRepository>>,
     Extension(nelo_repo): Extension<Arc<PgNeLoRepository>>,
     Extension(tranche_repo): Extension<Arc<PgTrancheRepository>>,
     Extension(tr_repo): Extension<Arc<PgTechnischeRessourceRepository>>,
@@ -288,68 +282,6 @@ pub async fn ingest_event(
             patch_val,
         )
         .await;
-    }
-
-    // WiM Stammdaten Übermittlung (PIDs 17102–17133) — auto-update ZaehlzeitRegister.
-    //
-    // When the MSB transmits register definitions via ORDERS 17102–17133, `makod`
-    // emits a ProcessCompleted outbox entry carrying `melo_id` + `zaehlwerke`
-    // (ZAK+ZE parsed JSON).  We look up the Zähler for the MeLo and upsert all
-    // ZaehlzeitRegister + ZaehlzeitSaison records, giving `billingd` and `edmd`
-    // accurate TOU information for future reads.
-    //
-    // Non-fatal: errors are logged but never block the 202 response.
-    {
-        let is_wim_stammdaten_completed = ce_type_for_vs == mako_events::mako::PROCESS_COMPLETED
-            && pid_for_vs.is_some_and(|p| (17102u32..=17133).contains(&p));
-
-        if is_wim_stammdaten_completed {
-            let melo_id_str = data_for_vs
-                .get("melo_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
-            let zaehlwerke = data_for_vs
-                .get("zaehlwerke")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-
-            if let Some(melo_str) = melo_id_str
-                && !zaehlwerke.is_empty()
-            {
-                // Look up the Zähler associated with this MeLo.
-                match device_repo
-                    .list_zaehler_by_melo(&melo_str, &state.tenant)
-                    .await
-                {
-                    Ok(zaehler_list) => {
-                        if let Some(zaehler) = zaehler_list.first() {
-                            let zaehler_id = zaehler.zaehler_id.clone();
-                            upsert_zaehlzeitregister_from_zaehlwerke(
-                                &zaehzeit_repo,
-                                &zaehler_id,
-                                &state.tenant,
-                                &zaehlwerke,
-                            )
-                            .await;
-                        } else {
-                            tracing::debug!(
-                                melo_id = %melo_str,
-                                "event_ingest: no Zaehler found for MeLo; \
-                                 ZaehlzeitRegister update skipped"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            melo_id = %melo_str,
-                            error = %e,
-                            "event_ingest: list_zaehler_by_melo failed (non-fatal)"
-                        );
-                    }
-                }
-            }
-        }
     }
 
     StatusCode::ACCEPTED.into_response()
@@ -944,214 +876,6 @@ async fn versorgung_changed(
     }))
 }
 
-// ── ZaehlzeitRegister auto-update (WiM Stammdaten) ───────────────────────────
-
-/// Upsert `ZaehlzeitRegister` + `ZaehlzeitSaison` records from parsed ZAK+ZE
-/// JSON objects extracted from WiM ORDERS 17102–17133.
-///
-/// Called after receiving a `de.mako.process.completed` CloudEvent with
-/// `pid` in the 17102–17133 range and a non-empty `zaehlwerke` array.
-///
-/// Each entry in `zaehlwerke` has the shape produced by
-/// `makod::adapters::extract_zak_ze_zaehlwerke`:
-/// ```json
-/// {
-///   "obis_kennzahl": "1-1:1.8.0",
-///   "zaehlerauspraegung": "HT",
-///   "bezeichnung": "HT Tarif",
-///   "saisons": [
-///     { "saison": "GESAMT", "tagtypen": [
-///       { "tagtyp": "WERKTAG", "wochentage": [1,2,3,4,5],
-///         "fenster": [{"von": "07:00","bis":"22:00"},{"von":"22:00","bis":"07:00"}] }
-///     ]}
-///   ]
-/// }
-/// ```
-///
-/// Saison UUIDs are derived deterministically from
-/// `(register_id, saison, tagtyp, zeit_von)` so repeated deliveries are
-/// idempotent even with the `ON CONFLICT (id)` constraint in `zaehler_saisons`.
-async fn upsert_zaehlzeitregister_from_zaehlwerke(
-    repo: &Arc<crate::pg::PgZaehlzeitRepository>,
-    zaehler_id: &str,
-    tenant: &str,
-    zaehlwerke: &[serde_json::Value],
-) {
-    use mako_markt::repository::{
-        ZaehlzeitRegisterRecord, ZaehlzeitRepository, ZaehlzeitSaisonRecord,
-    };
-
-    let today = crate::handlers::malo::today_berlin();
-
-    for zw in zaehlwerke {
-        let obis_kennzahl = zw
-            .get("obis_kennzahl")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
-        let zaehlerauspraegung = zw
-            .get("zaehlerauspraegung")
-            .and_then(|v| v.as_str())
-            .unwrap_or("EINZEL")
-            .to_owned();
-        let bezeichnung = zw
-            .get("bezeichnung")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&zaehlerauspraegung)
-            .to_owned();
-
-        let reg = ZaehlzeitRegisterRecord {
-            id: uuid::Uuid::new_v4(),
-            zaehler_id: zaehler_id.to_owned(),
-            tenant: tenant.to_owned(),
-            bezeichnung: bezeichnung.clone(),
-            zaehlerauspraegung: zaehlerauspraegung.clone(),
-            obis_kennzahl,
-            einheit: "KWH".to_owned(),
-            valid_from: today,
-            valid_to: None,
-            updated_at: time::OffsetDateTime::now_utc(),
-        };
-
-        if let Err(e) = repo.upsert_register(&reg).await {
-            tracing::warn!(
-                zaehler_id,
-                bezeichnung = %bezeichnung,
-                error = %e,
-                "event_ingest: upsert_register failed (non-fatal)"
-            );
-            continue;
-        }
-
-        // Re-read the register to get the stable ID (upsert uses ON CONFLICT,
-        // so the server-assigned ID may differ from reg.id).
-        let register_id = match repo.list_registers_by_zaehler(zaehler_id, tenant).await {
-            Ok(regs) => regs
-                .into_iter()
-                .find(|r| {
-                    r.bezeichnung == bezeichnung
-                        && r.zaehlerauspraegung == zaehlerauspraegung
-                        && r.valid_from == today
-                })
-                .map(|r| r.id)
-                .unwrap_or(reg.id),
-            Err(_) => reg.id,
-        };
-
-        // Upsert seasonal TOU windows.
-        if let Some(saisons) = zw.get("saisons").and_then(|v| v.as_array()) {
-            for saison_val in saisons {
-                let saison = saison_val
-                    .get("saison")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("GESAMT")
-                    .to_owned();
-
-                if let Some(tagtypen) = saison_val.get("tagtypen").and_then(|v| v.as_array()) {
-                    for tt_val in tagtypen {
-                        let tagtyp = tt_val
-                            .get("tagtyp")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("WERKTAG");
-                        // ISO weekdays; anything outside 1..=7 is dropped
-                        // rather than stored, since the column rejects it and a
-                        // failed upsert would lose the whole window.
-                        let wochentage: Vec<i16> = tt_val
-                            .get("wochentage")
-                            .and_then(serde_json::Value::as_array)
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(serde_json::Value::as_i64)
-                                    .filter_map(|d| i16::try_from(d).ok())
-                                    .filter(|d| (1..=7).contains(d))
-                                    .collect()
-                            })
-                            .filter(|v: &Vec<i16>| !v.is_empty())
-                            .unwrap_or_else(|| vec![1, 2, 3, 4, 5]);
-
-                        if let Some(fenster) = tt_val.get("fenster").and_then(|v| v.as_array()) {
-                            for f in fenster {
-                                let Some(zeit_von) = f
-                                    .get("von")
-                                    .and_then(serde_json::Value::as_str)
-                                    .and_then(parse_hhmm)
-                                else {
-                                    tracing::warn!(
-                                        zaehler_id,
-                                        %register_id,
-                                        "event_ingest: ZaehlzeitSaison window has no parsable `von` — skipped"
-                                    );
-                                    continue;
-                                };
-                                let Some(zeit_bis) = f
-                                    .get("bis")
-                                    .and_then(serde_json::Value::as_str)
-                                    .and_then(parse_hhmm)
-                                else {
-                                    tracing::warn!(
-                                        zaehler_id,
-                                        %register_id,
-                                        "event_ingest: ZaehlzeitSaison window has no parsable `bis` — skipped"
-                                    );
-                                    continue;
-                                };
-                                // A zero-length or inverted window classifies no
-                                // reading at all; the table refuses it, so drop
-                                // it here with a reason rather than as a
-                                // constraint violation deep in the upsert.
-                                if zeit_von >= zeit_bis {
-                                    tracing::warn!(
-                                        zaehler_id,
-                                        %register_id,
-                                        von = %zeit_von,
-                                        bis = %zeit_bis,
-                                        "event_ingest: ZaehlzeitSaison window is empty or inverted — skipped"
-                                    );
-                                    continue;
-                                }
-
-                                // Deterministic UUID so repeated deliveries are idempotent.
-                                let saison_id = uuid::Uuid::new_v5(
-                                    &uuid::Uuid::NAMESPACE_URL,
-                                    format!("zaehlzeit:{register_id}:{saison}:{tagtyp}:{zeit_von}")
-                                        .as_bytes(),
-                                );
-
-                                let saison_rec = ZaehlzeitSaisonRecord {
-                                    id: saison_id,
-                                    register_id,
-                                    saison: saison.clone(),
-                                    wochentage: wochentage.clone(),
-                                    zeit_von,
-                                    zeit_bis,
-                                    updated_at: time::OffsetDateTime::now_utc(),
-                                };
-
-                                if let Err(e) = repo.upsert_saison(&saison_rec).await {
-                                    tracing::warn!(
-                                        zaehler_id,
-                                        %register_id,
-                                        saison = %saison,
-                                        tagtyp,
-                                        zeit_von = %zeit_von,
-                                        error = %e,
-                                        "event_ingest: upsert_saison failed (non-fatal)"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    tracing::debug!(
-        zaehler_id,
-        count = zaehlwerke.len(),
-        "event_ingest: ZaehlzeitRegister upserted from WiM Stammdaten"
-    );
-}
-
 /// Derive the canonical `marktrole` value from the `makoworkflow` CE extension.
 ///
 /// The mapping is based on the workflow naming convention (kebab-case).
@@ -1430,26 +1154,6 @@ async fn apply_object_stammdaten(
             "event_ingest: Stammdatenänderung apply for this object is source-gated (§14a AHB) — acknowledged only"
         ),
     }
-}
-
-/// Parse a `HH:MM` (or `HH:MM:SS`) wall-clock string from a market message.
-///
-/// Returns `None` rather than a default: a window that silently became
-/// `00:00–00:00` classified no reading at all, and the caller can only report
-/// that if it is told the value was unusable.
-fn parse_hhmm(raw: &str) -> Option<time::Time> {
-    let raw = raw.trim();
-    let mut parts = raw.split(':');
-    let h: u8 = parts.next()?.parse().ok()?;
-    let m: u8 = parts.next()?.parse().ok()?;
-    let sec: u8 = match parts.next() {
-        Some(s) => s.parse().ok()?,
-        None => 0,
-    };
-    if parts.next().is_some() {
-        return None;
-    }
-    time::Time::from_hms(h, m, sec).ok()
 }
 
 #[cfg(test)]

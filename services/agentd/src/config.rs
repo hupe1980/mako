@@ -141,19 +141,6 @@ pub struct AgentdConfig {
     /// When absent, all inbound webhooks are accepted (dev mode only — logs a WARNING).
     pub inbound_hmac_secret: Option<SecretString>,
 
-    /// Wall-clock ceiling in seconds for a **manual** run's fan-out (default: 300).
-    ///
-    /// `POST /api/v1/run` is the one door that waits for an answer, so it is the
-    /// one that needs a ceiling on the wait. Exceeding it abandons the wait, not
-    /// the work: each run's effects stay journaled, and a run this process stops
-    /// executing is taken over and resumed by the sweeper's recovery pass once
-    /// its lease lapses.
-    ///
-    /// `POST /webhook` does not use it. That door admits durably and returns
-    /// `202` without waiting for anything, so there is no wait to bound.
-    #[serde(default = "default_session_timeout_secs")]
-    pub session_timeout_secs: u64,
-
     /// How often the sweeper ticks, in seconds (default: 60).
     ///
     /// The tick that warns on approaching deadlines, breaches the ones that
@@ -165,7 +152,7 @@ pub struct AgentdConfig {
 
     /// OIDC configuration.
     ///
-    /// Authenticates `POST /api/v1/run` and — with no dev-mode relaxation — the
+    /// Authenticates `POST /api/v1/runs` and — with no dev-mode relaxation — the
     /// whole oversight surface. When absent, manual runs are accepted with a
     /// warning and **the worklist is not mounted at all**: an approval by an
     /// unauthenticated caller is a forged signature on a regulated dispatch, not
@@ -495,9 +482,6 @@ fn default_journal_path() -> String {
 }
 fn default_public_base_url() -> String {
     "http://localhost:9580".to_owned()
-}
-fn default_session_timeout_secs() -> u64 {
-    300
 }
 fn default_sweep_interval_secs() -> u64 {
     60

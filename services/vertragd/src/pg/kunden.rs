@@ -290,6 +290,197 @@ pub async fn list_kunden(
     .await?)
 }
 
+/// One customer the operator's search found.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, sqlx::FromRow)]
+pub struct KundeTreffer {
+    /// The Kunde's id.
+    pub id: String,
+    /// The Kundennummer, if one was assigned.
+    pub kunden_nr: Option<String>,
+    /// `B2C`, `B2B_SLP`, `B2B_RLM` or `B2B_HV`.
+    pub kundentyp: String,
+    /// The name a person recognises: „Vorname Nachname" of the BO4E `Person`
+    /// or `Geschaeftspartner`, else the Geschäftspartner's `name1`.
+    pub name: Option<String>,
+    /// How many Lieferstellen (Vertragskomponenten with a MaLo) the Kunde has.
+    pub lieferstellen: i64,
+}
+
+/// The `LIKE` pattern for „a word of `suchtext` starts with what was typed":
+/// lowercased like the column, and `\`, `%` and `_` matched literally, so
+/// typing `%` finds a name containing one and never every customer.
+fn like_word_prefix(typed: &str) -> String {
+    let mut pattern = String::with_capacity(typed.len() + 3);
+    pattern.push_str("% ");
+    for c in typed.to_lowercase().chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
+}
+
+/// Customers with a word of the name or the Kundennummer starting with
+/// `typed`, or who hold a Lieferstelle with exactly that MaLo-ID — at most
+/// `limit`, by name.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn search_kunden(
+    pool: &PgPool,
+    tenant: &str,
+    typed: &str,
+    limit: i64,
+) -> Result<Vec<KundeTreffer>> {
+    // Two indexed branches — a word of the name or the Kundennummer
+    // (`kunden_suche`, trigram) and an exact MaLo (`komp_malo`) — and the
+    // Lieferstellen counted for the page only, never for every match.
+    Ok(sqlx::query_as::<_, KundeTreffer>(
+        r"WITH treffer AS (
+            SELECT k.id FROM kunden k
+             WHERE k.tenant = $1 AND k.suchtext LIKE $2 ESCAPE '\'
+            UNION
+            SELECT v.kunden_id FROM vertragskomponenten c
+              JOIN versorgungsvertraege v ON v.id = c.vertrag_id
+             WHERE c.tenant = $1 AND c.malo_id = $3
+          ),
+          seite AS (
+            SELECT k.id, k.kunden_nr, k.kundentyp,
+                   COALESCE(
+                     NULLIF(TRIM(CONCAT_WS(' ',
+                       COALESCE(k.person->>'vorname', k.geschaeftspartner->>'vorname'),
+                       COALESCE(k.person->>'nachname', k.geschaeftspartner->>'nachname'))), ''),
+                     k.geschaeftspartner->>'name1') AS name
+              FROM kunden k JOIN treffer t ON t.id = k.id
+             WHERE k.tenant = $1
+             ORDER BY name NULLS LAST, k.kunden_nr
+             LIMIT $4
+          )
+          SELECT s.id::TEXT AS id, s.kunden_nr, s.kundentyp, s.name,
+                 (SELECT COUNT(*) FROM versorgungsvertraege v
+                    JOIN vertragskomponenten c ON c.vertrag_id = v.id
+                   WHERE v.kunden_id = s.id AND v.tenant = $1 AND c.malo_id IS NOT NULL)
+                   AS lieferstellen
+            FROM seite s
+           ORDER BY s.name NULLS LAST, s.kunden_nr",
+    )
+    .bind(tenant)
+    .bind(like_word_prefix(typed))
+    .bind(typed)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// A customer as an operator sees one: who it is and where it is supplied —
+/// no payment data, no portal identities, no JSON blobs.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct KundeView {
+    /// The Kunde's id.
+    pub id: String,
+    /// The Kundennummer, if one was assigned.
+    pub kunden_nr: Option<String>,
+    /// `B2C`, `B2B_SLP`, `B2B_RLM` or `B2B_HV`.
+    pub kundentyp: String,
+    /// § 3 Nr. 57 EnWG Haushaltskunde — it decides the customer's Fristen.
+    pub haushaltskunde: bool,
+    /// „Vorname Nachname" of the BO4E `Person` or `Geschaeftspartner`, else its `name1`.
+    pub name: Option<String>,
+    /// Lieferstellen — Vertragskomponenten with a MaLo — newest first, at most
+    /// [`LIEFERSTELLEN_SEITE`].
+    pub lieferstellen: Vec<Lieferstelle>,
+    /// How many Lieferstellen the customer has, however many are listed.
+    pub lieferstellen_gesamt: i64,
+}
+
+/// The most Lieferstellen one customer view lists — the page a caller can
+/// look up in one further call (processd takes 200 MaLos at a time).
+pub const LIEFERSTELLEN_SEITE: i64 = 200;
+
+#[derive(sqlx::FromRow)]
+struct LieferstelleRow {
+    #[sqlx(flatten)]
+    stelle: Lieferstelle,
+    gesamt: i64,
+}
+
+/// One Lieferstelle of a customer and the state of its supply.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, sqlx::FromRow)]
+pub struct Lieferstelle {
+    /// The Marktlokation.
+    pub malo_id: String,
+    /// `STROM`, `GAS`, …
+    pub sparte: String,
+    /// The Versorgungsvertrag's number.
+    pub vertrags_nr: String,
+    /// The contract's Standort, as the customer named it.
+    pub standort: Option<String>,
+    /// First day of supply.
+    #[schemars(extend("format" = "date"))]
+    pub lieferbeginn: String,
+    /// Last day of supply, when one is set.
+    #[schemars(extend("format" = "date"))]
+    pub lieferende: Option<String>,
+    /// The Vertragskomponente's state: `ANGELEGT`, `ANGEMELDET`, `BESTAETIGT`,
+    /// `AKTIV`, `BEENDET`, `ABGELEHNT` or `STORNIERT`.
+    pub status: String,
+}
+
+/// The operator's view of one customer, or `None` when the tenant has no such
+/// Kunde. Both reads fail as errors: a failed Lieferstellen read is never „no
+/// Lieferstellen".
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn fetch_kunde_view(pool: &PgPool, id: Uuid, tenant: &str) -> Result<Option<KundeView>> {
+    let Some(row) = sqlx::query(
+        r"SELECT id::TEXT AS id, kunden_nr, kundentyp, haushaltskunde,
+                 COALESCE(
+                   NULLIF(TRIM(CONCAT_WS(' ',
+                     COALESCE(person->>'vorname', geschaeftspartner->>'vorname'),
+                     COALESCE(person->>'nachname', geschaeftspartner->>'nachname'))), ''),
+                   geschaeftspartner->>'name1') AS name
+          FROM kunden WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let rows = sqlx::query_as::<_, LieferstelleRow>(
+        r"SELECT c.malo_id, c.sparte, v.vertrags_nr, v.standort_bezeichnung AS standort,
+                 c.lieferbeginn::TEXT AS lieferbeginn, c.lieferende::TEXT AS lieferende,
+                 c.status, COUNT(*) OVER () AS gesamt
+          FROM vertragskomponenten c
+          JOIN versorgungsvertraege v ON v.id = c.vertrag_id
+          WHERE v.kunden_id = $1 AND v.tenant = $2 AND c.malo_id IS NOT NULL
+          ORDER BY c.lieferbeginn DESC, c.malo_id
+          LIMIT $3",
+    )
+    .bind(id)
+    .bind(tenant)
+    .bind(LIEFERSTELLEN_SEITE)
+    .fetch_all(pool)
+    .await?;
+    let lieferstellen_gesamt = rows.first().map_or(0, |r| r.gesamt);
+    let lieferstellen = rows.into_iter().map(|r| r.stelle).collect();
+    Ok(Some(KundeView {
+        id: row.try_get("id")?,
+        kunden_nr: row.try_get("kunden_nr")?,
+        kundentyp: row.try_get("kundentyp")?,
+        haushaltskunde: row.try_get("haushaltskunde")?,
+        name: row.try_get("name")?,
+        lieferstellen,
+        lieferstellen_gesamt,
+    }))
+}
+
 // ── Person / Zahlungsinformation sub-objects ─────────────────────────────────
 
 /// Store a canonical BO4E `Person` for a Kunde. `false` when no such Kunde.
@@ -790,6 +981,14 @@ pub async fn fetch_rechnungsempfaenger_by_ggv(
 
 #[cfg(test)]
 mod buyer_tests {
+
+    #[test]
+    fn typed_wildcards_match_literally() {
+        assert_eq!(super::like_word_prefix("Muster"), "% muster%");
+        assert_eq!(super::like_word_prefix("%"), "% \\%%");
+        assert_eq!(super::like_word_prefix("a_b\\c"), "% a\\_b\\\\c%");
+    }
+
     use super::{buyer_from_geschaeftspartner, email_from_kontaktwege};
 
     /// The projection reads BO4E's own field names. A reader probing for a key

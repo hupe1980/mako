@@ -30,6 +30,7 @@
 //! | `get_partner` | Get a specific trading partner by MP-ID |
 //! | `get_health` | Query daemon health and uptime |
 //! | `get_process` | Look up an active process by business key (malo_id, melo_id, or vorgang_id) |
+//! | `get_process_history` | A process's events, oldest first, its market messages marked by direction and PID |
 //! | `list_overdue_deadlines` | List processes with expired regulatory deadlines |
 //!
 //! ## Resources
@@ -58,7 +59,6 @@ use axum::{
     response::IntoResponse,
 };
 use mako_engine::deadline::DeadlineStore as _;
-use mako_engine::registry::ProcessRegistry as _;
 use mako_engine::store_slatedb::{SlateDbDeadlineStore, SlateDbStore};
 use mako_engine::{ids::TenantId, partner::PartnerStore as _, store_slatedb::SlateDbPartnerStore};
 use rmcp::{
@@ -76,7 +76,7 @@ use rmcp::{
     },
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -216,6 +216,146 @@ pub struct GetProcessParams {
         description = "Business key: malo_id (GPKE/GeLi Gas), melo_id (WiM Strom), or vorgang_id (WiM Gas Stornierung)"
     )]
     pub business_key: String,
+}
+
+/// What `get_process` returns: every process the business key is correlated
+/// with that the caller may read. Its JSON Schema is the tool's
+/// `outputSchema`, and `mcp.snapshot.json` pins it for the Desk's generated
+/// types.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ProcessesView {
+    /// The business key the caller passed.
+    pub business_key: String,
+    /// The processes indexed under the key — concurrent ones (a Lieferbeginn
+    /// beside a Sperrung) and finished ones alike: the correlation index is
+    /// append-only, so whether a process is still running is its own state,
+    /// not the index's.
+    pub processes: Vec<ProcessView>,
+}
+
+/// Which process's history to read.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetProcessHistoryParams {
+    /// The process id, as `get_process` returns it.
+    pub process_id: String,
+}
+
+/// A process's history, oldest first, as `get_process_history` returns it.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ProcessHistory {
+    pub process_id: String,
+    /// The workflow running the process.
+    pub workflow_name: String,
+    /// Every event of the process, in the order it was recorded.
+    pub eintraege: Vec<HistoryEntry>,
+}
+
+/// One recorded event. `richtung`, `pid` and `message_ref` are present when the
+/// event is a market message, as its workflow states it — never derived from
+/// `event_type`, which is an identifier.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct HistoryEntry {
+    /// 1-based position in the process's stream.
+    pub sequence: u64,
+    /// When the event was recorded, RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub recorded_at: Option<String>,
+    /// The workflow's name for the event.
+    pub event_type: String,
+    /// `eingang` or `ausgang` for a market message.
+    pub richtung: Option<String>,
+    /// The message's Prüfidentifikator.
+    pub pid: Option<u32>,
+    /// The message's document number (`BGM` C106).
+    pub message_ref: Option<String>,
+}
+
+/// What kind of deadline a label is: a delivery window `mako_fristen` owns
+/// (`aperak`, `contrl`) or one the workflow registered (`prozess`).
+fn deadline_art(label: &str) -> &'static str {
+    if mako_fristen::discharges_delivery_window("APERAK", label) {
+        "aperak"
+    } else if mako_fristen::discharges_delivery_window("CONTRL", label) {
+        "contrl"
+    } else {
+        "prozess"
+    }
+}
+
+/// A process's events as `get_process_history` answers them: what the
+/// workflow stamped, nothing read off the event type.
+fn history(process_id: &str, events: &[mako_engine::envelope::EventEnvelope]) -> ProcessHistory {
+    use time::format_description::well_known::Rfc3339;
+    ProcessHistory {
+        process_id: process_id.to_owned(),
+        workflow_name: events
+            .first()
+            .map(|e| e.workflow_id.name.as_ref().to_owned())
+            .unwrap_or_default(),
+        eintraege: events
+            .iter()
+            .map(|e| HistoryEntry {
+                sequence: e.sequence_number,
+                recorded_at: e.timestamp.format(&Rfc3339).ok(),
+                event_type: e.event_type.to_string(),
+                richtung: e.verlauf.as_ref().map(|v| {
+                    match v.richtung {
+                        mako_engine::envelope::Richtung::Eingang => "eingang",
+                        mako_engine::envelope::Richtung::Ausgang => "ausgang",
+                    }
+                    .to_owned()
+                }),
+                pid: e.verlauf.as_ref().and_then(|v| v.pid),
+                message_ref: e.verlauf.as_ref().and_then(|v| v.message_ref.clone()),
+            })
+            .collect(),
+    }
+}
+
+/// One process under a business key, with the deadlines pending on it.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ProcessView {
+    /// The process's event stream.
+    pub stream_id: String,
+    /// The workflow running the process.
+    pub workflow_name: String,
+    /// The process identifier within its workflow.
+    pub process_id: String,
+    /// The deadlines registered on the process's stream.
+    pub deadlines: Vec<DeadlineView>,
+}
+
+/// One deadline pending on a process.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DeadlineView {
+    /// The deadline's identifier.
+    pub deadline_id: String,
+    /// The label its workflow declares in `DEADLINE_LABELS`.
+    pub label: String,
+    /// `aperak` or `contrl` for a delivery window — the labels
+    /// `mako_fristen` owns — and `prozess` for every deadline the workflow
+    /// itself registered.
+    pub art: String,
+    /// When the deadline fires, RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub due_at: Option<String>,
+}
+
+/// The processes a business key names. A process is indexed under its
+/// business key in the correlation index when it starts — from an inbound
+/// message or a command alike — while the registry holds process ids only, so
+/// the index answers a MaLo-, MeLo- or Vorgangsnummer and the registry a
+/// process id.
+async fn processes_named(
+    registry: &impl mako_engine::registry::ProcessRegistry,
+    tenant: TenantId,
+    key: &mako_engine::registry::RegistryKey,
+) -> Result<Vec<mako_engine::ids::ProcessIdentity>, mako_engine::error::EngineError> {
+    let correlated = registry.lookup_correlated(tenant, key.as_str()).await?;
+    if !correlated.is_empty() {
+        return Ok(correlated);
+    }
+    Ok(registry.lookup(tenant, key).await?.into_iter().collect())
 }
 
 /// Workflow name used when a tool reads across every workflow at once.
@@ -750,22 +890,22 @@ impl MakodMcpHandler {
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Look up an active MaKo process by its business key.
+    /// Look up the MaKo processes a business key names.
     ///
-    /// Returns the internal stream ID and any active regulatory deadlines
-    /// registered for the process. Useful for checking whether a command has
-    /// been accepted by the engine and what deadlines are pending.
-    ///
-    /// **business_key** is the same key you pass in the `payload` when submitting
-    /// the initial command:
+    /// Returns every process the key is correlated with — its stream, workflow
+    /// and pending deadlines — so a MaLo with a running Lieferbeginn and a
+    /// Sperrung answers both. The key is the one the process was indexed under
+    /// when it started, whether from an inbound message or a command:
     /// - GPKE / GeLi Gas → `malo_id` (11-digit Marktlokations-ID)
-    /// - WiM Strom → `melo_id` (11-digit Messlokations-ID)
+    /// - WiM Strom → `melo_id` (Messlokations-ID)
     /// - WiM Gas Stornierung → `vorgang_id` (Vorgangsnummer from PID 44022)
     ///
-    /// Returns `process_not_found` when no active process exists for this key.
+    /// A process id is accepted too. Returns `process_not_found` when the key
+    /// names no process the caller may read.
     #[tool(
-        description = "Look up an active MaKo process by business key (malo_id, melo_id, or vorgang_id). Returns stream ID and pending deadlines.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Look up the MaKo processes a business key names (malo_id, melo_id, vorgang_id or a process id): each process's stream, workflow and pending deadlines.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ProcessesView>()
     )]
     #[instrument(skip(self), fields(business_key = %p.business_key))]
     async fn get_process(
@@ -779,97 +919,166 @@ impl MakodMcpHandler {
 
         let key = RegistryKey::parse(&p.business_key)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        let tenant = TenantId::from_party_id(&self.state.tenant);
+        let internal =
+            |e: mako_engine::error::EngineError| McpError::internal_error(e.to_string(), None);
+        let identities = processes_named(
+            &self.state.process_store.as_process_registry(),
+            tenant,
+            &key,
+        )
+        .await
+        .map_err(internal)?;
 
-        let registry = self.state.process_store.as_process_registry();
-        let identity = registry
-            .lookup(TenantId::from_party_id(&self.state.tenant), &key)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        match identity {
-            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "process_not_found: No active process for business key '{}'. \
-                 Submit the initial command first (e.g. gpke.lieferbeginn.anmelden).",
-                p.business_key
-            ))])),
-            Some(id) => {
-                // § 6a EnWG Informatorisches Unbundling: process reads are
-                // scoped per workflow — a VIU deployment can deny an
-                // NB-scoped principal access to LF process state. Deny with
-                // the same shape as not-found to avoid an existence oracle.
-                let caller = parts
-                    .extensions
-                    .get::<crate::cedar_authz::CallerIdentity>()
-                    .cloned()
-                    .ok_or_else(|| {
-                        McpError::internal_error(
-                            "authenticated identity missing from request context".to_owned(),
-                            None,
-                        )
-                    })?;
-                if !self.state.cedar.authorize_process_read(
-                    &caller,
-                    &crate::cedar_authz::ProcessResource {
-                        tenant: &self.state.tenant,
-                        workflow: id.workflow_id.name.as_ref(),
-                    },
-                ) {
-                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                        "process_not_found: No active process for business key '{}'.",
-                        p.business_key
-                    ))]));
-                }
-                // Retrieve active deadlines for this stream.
-                let deadlines = self
-                    .state
-                    .deadline_store
-                    .for_stream(id.stream_id())
-                    .await
-                    .unwrap_or_default();
-
-                let deadline_list: Vec<serde_json::Value> = deadlines
+        // § 6a EnWG Informatorisches Unbundling: process reads are scoped per
+        // workflow, so a VIU deployment can deny an NB-scoped principal access
+        // to LF process state. A process the caller may not read is left out,
+        // and none at all answers like not-found, so the reply is no oracle.
+        let caller = parts
+            .extensions
+            .get::<crate::cedar_authz::CallerIdentity>()
+            .cloned()
+            .ok_or_else(|| {
+                McpError::internal_error(
+                    "authenticated identity missing from request context".to_owned(),
+                    None,
+                )
+            })?;
+        let mut processes = Vec::new();
+        for id in identities {
+            if !self.state.cedar.authorize_process_read(
+                &caller,
+                &crate::cedar_authz::ProcessResource {
+                    tenant: &self.state.tenant,
+                    workflow: id.workflow_id.name.as_ref(),
+                },
+            ) {
+                continue;
+            }
+            // A store failure is an error, never „no deadlines": an empty list
+            // reads as „nothing pending" on the screen a person acts from.
+            let deadlines = self
+                .state
+                .deadline_store
+                .for_stream(id.stream_id())
+                .await
+                .map_err(internal)?;
+            processes.push(ProcessView {
+                stream_id: id.stream_id().to_string(),
+                workflow_name: id.workflow_id.name.as_ref().to_owned(),
+                process_id: id.process_id.to_string(),
+                deadlines: deadlines
                     .iter()
                     .map(|d| {
                         use time::format_description::well_known::Rfc3339;
-                        serde_json::json!({
-                            "deadline_id": d.deadline_id().to_string(),
-                            "label":       d.label(),
-                            "due_at":      d.due_at().format(&Rfc3339).ok(),
-                        })
+                        DeadlineView {
+                            deadline_id: d.deadline_id().to_string(),
+                            label: d.label().to_owned(),
+                            art: deadline_art(d.label()).to_owned(),
+                            due_at: d.due_at().format(&Rfc3339).ok(),
+                        }
                     })
-                    .collect();
-
-                ContentBlock::json(serde_json::json!({
-                    "business_key":  p.business_key,
-                    "stream_id":     id.stream_id().to_string(),
-                    "workflow_name": id.workflow_id.name.as_ref(),
-                    "process_id":    id.process_id.to_string(),
-                    "active":        true,
-                    "deadlines":     deadline_list,
-                }))
-                .map(|block| CallToolResult::success(vec![block]))
-                .map_err(|e| McpError::internal_error(e.message, None))
-            }
+                    .collect(),
+            });
         }
+
+        if processes.is_empty() {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "process_not_found: No process for business key '{}'.",
+                p.business_key
+            ))]));
+        }
+        serde_json::to_value(ProcessesView {
+            business_key: p.business_key,
+            processes,
+        })
+        .map(CallToolResult::structured)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
-    /// List processes with expired regulatory deadlines (missed response windows).
+    /// A process's events, oldest first, with the market messages among them
+    /// marked by direction and PID — the thread the Desk's Verlauf draws.
+    #[tool(
+        description = "A process's recorded events, oldest first (process_id from get_process). An event that is a market message carries richtung (eingang/ausgang), pid and message_ref, as its workflow states it.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ProcessHistory>()
+    )]
+    async fn get_process_history(
+        &self,
+        Parameters(p): Parameters<GetProcessHistoryParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        use mako_engine::event_store::EventStore as _;
+
+        let not_found = || {
+            CallToolResult::error(vec![ContentBlock::text(format!(
+                "process_not_found: No process '{}'.",
+                p.process_id
+            ))])
+        };
+        let Ok(uuid) = uuid::Uuid::parse_str(p.process_id.trim()) else {
+            return Err(McpError::invalid_params(
+                "process_id is not a process id".to_owned(),
+                None,
+            ));
+        };
+        // The stream is derived from this deployment's tenant, so a process id
+        // can name no other tenant's history.
+        let tenant = TenantId::from_party_id(&self.state.tenant);
+        let stream = mako_engine::ids::StreamId::for_process(
+            tenant,
+            &mako_engine::ids::ProcessId::from_uuid(uuid),
+        );
+        let events = self
+            .state
+            .process_store
+            .load(&stream)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let Some(first) = events.first() else {
+            return Ok(not_found());
+        };
+        let caller = parts
+            .extensions
+            .get::<crate::cedar_authz::CallerIdentity>()
+            .cloned()
+            .ok_or_else(|| {
+                McpError::internal_error(
+                    "authenticated identity missing from request context".to_owned(),
+                    None,
+                )
+            })?;
+        // § 6a EnWG: the same per-workflow decision as `get_process`, and a
+        // refusal answers like not-found, so the reply is no oracle.
+        if !self.state.cedar.authorize_process_read(
+            &caller,
+            &crate::cedar_authz::ProcessResource {
+                tenant: &self.state.tenant,
+                workflow: first.workflow_id.name.as_ref(),
+            },
+        ) {
+            return Ok(not_found());
+        }
+        serde_json::to_value(history(p.process_id.trim(), &events))
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    /// List deadlines whose instant has passed and that the deadline worker has
+    /// not fired yet.
     ///
-    /// Returns up to 50 processes whose deadline has passed but the timer has not
-    /// yet been cleared. A non-empty result means APERAK or response deadlines have
-    /// been missed — these are **regulatory compliance violations** that require
-    /// immediate operator attention.
+    /// Deadlines are never cancelled: each fires into its process, whose
+    /// `window_open` decides whether the window is still open. An answered
+    /// process therefore stays listed until its timer fires, and a non-empty
+    /// result says the worker is behind or failing — not that a Frist was
+    /// missed. A missed Frist is the process's own outcome, which processd's
+    /// read model reports (`list_overdue_processes`).
     ///
-    /// Deadline labels indicate which regulatory window was missed:
-    /// - `aperak-*`: APERAK sending deadline (45 min Strom / nächster Werktag 12:00 Gas)
-    /// - `contrl-*`: CONTRL delivery window (6 h, or 15 min for a Strom UTILMD/ORDERS)
-    /// - every other label: the business Antwortfrist of its Prüfidentifikator,
-    ///   which `mako_fristen::antwort` resolves — a clock time on a Werktag in
-    ///   GPKE, Werktage in WiM and GeLi Gas, and never one flat duration
-    ///
-    /// Source: APERAK AHB 1.1 §2.3 / §2.4; CONTRL AHB 1.0 §2.3.1 / §2.4.1;
-    /// GPKE Teil 2 (BK6-24-174 Anlage 1b) and Teil 4 (BK6-22-024 Anlage 1d);
-    /// AWH GeLi Gas (BK7-24-01-009).
+    /// The label names the window: `aperak-*` the APERAK sending window,
+    /// `contrl-*` the CONTRL delivery window, every other one the business
+    /// Antwortfrist of its Prüfidentifikator — all resolved by `mako_fristen`.
     ///
     /// § 6a EnWG informatorisches Unbundling applies here exactly as it does to
     /// [`Self::get_process`]: each entry names a workflow and its timing, so an
@@ -884,7 +1093,10 @@ impl MakodMcpHandler {
     /// ([`OVERDUE_PAGE`]) — otherwise a window full of the other arm's
     /// deadlines would starve a filtered principal of its own.
     #[tool(
-        description = "List processes with expired regulatory deadlines (up to 50). Non-empty = compliance issue requiring immediate action.",
+        description = "Deadlines whose instant has passed and that the deadline worker has not fired yet (up to 50). \
+Deadlines are never cancelled, so an answered process is listed too until its timer fires: a non-empty \
+list means the worker is behind or failing, not that a Frist was missed. Whether a process missed its \
+Frist is its own outcome — processd `list_overdue_processes`.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     #[instrument(skip(self))]
@@ -951,35 +1163,38 @@ impl MakodMcpHandler {
             "has_more":      has_more,
             "alert":         !items.is_empty(),
             "items":         items,
-            "note": "Each entry is a process that missed its APERAK or response deadline. \
-                     Dispatch the pending command immediately to minimise regulatory risk.",
+            "note": "Each entry is a deadline not yet fired. The worker fires it into its \
+                     process, which decides whether the window is still open.",
         }))
         .map(|block| CallToolResult::success(vec![block]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Return the number of active process instances registered in this makod instance.
+    /// Return how many processes this makod instance has started for its
+    /// tenant — finished ones included.
     ///
-    /// Scans the process registry key-space to return a live count.  Use for
-    /// capacity planning and AI-assisted incident triage ("how many processes are
-    /// currently in-flight?").
+    /// Counts the tenant's event streams (`process/{tenant}/…`), one per
+    /// process. Whether a process is still running is its own replayed state,
+    /// which this count does not compute; use it for capacity planning, and
+    /// `list_overdue_deadlines` for what needs attention.
     #[tool(
         annotations(read_only_hint = true, open_world_hint = false),
-        description = "Return the total number of active (registered) MaKo process instances."
+        description = "Return how many MaKo processes this instance has started for its tenant, finished ones included."
     )]
     async fn list_active_processes(&self) -> Result<CallToolResult, McpError> {
-        use mako_engine::registry::ProcessRegistry as _;
-        let registry = self.state.process_store.as_process_registry();
-        let count = registry
-            .len()
+        use mako_engine::event_store::EventStore as _;
+        let prefix = format!("process/{}/", TenantId::from_party_id(&self.state.tenant));
+        let count = self
+            .state
+            .process_store
+            .list_streams(Some(&prefix))
             .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .len();
         ContentBlock::json(serde_json::json!({
-            "active_process_count": count,
+            "process_count": count,
             "tenant": self.state.tenant,
-            "note": "Count of process instances (streams) registered in the process \
-                     registry. Each entry corresponds to one MaKo workflow instance \
-                     (e.g. one Lieferantenwechsel or one Messstellenwechsel).",
+            "note": "Processes started for this tenant, finished ones included — one event stream each.",
         }))
         .map(|block| CallToolResult::success(vec![block]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -1336,13 +1551,14 @@ impl MakodMcpHandler {
                 format!(
                     "**WiM Gas MSB-Wechsel Anmeldung (AWH WiM Gas 2.0)**\n\n\
                  The GNB (Gasnetzbetreiber) answers within the PID's Frist (Saturdays, Sundays and gesetzliche Feiertage are not Werktage; German local time CET/CEST):\n{frist}\n\n\
-                 **Step 1 — Verify the process is active:**\n\
+                 **Step 1 — Find the process:**\n\
                  Call `get_process` with the gas `malo_id` from the inbound UTILMD G.\n\
-                 - If `active: true` → process exists, proceed to step 2.\n\
+                 - If `processes` lists the MSB-Wechsel workflow → proceed to step 2.\n\
                  - If `process_not_found` → the AS4 message was not yet ingested; check the AS4 inbound log.\n\n\
                  **Step 2 — Check the deadline:**\n\
-                 Inspect `deadlines` in the get_process response.\n\
-                 The `response-*` deadline must not be in the past. If it is, call `list_overdue_deadlines` to see the full picture.\n\n\
+                 Inspect that process's `deadlines` in the get_process response.\n\
+                 A pending `response-*` deadline is when the Frist ends — answer before it. One whose `due_at` has passed \
+                 has not fired yet: the deadline worker is behind (`list_overdue_deadlines`).\n\n\
                  **Step 3 — Answer.** WiM Strom and Gas run on one engine, so the \
                  answer is the Sparte-neutral MSB-Wechsel command; the Gas tree is \
                  selected from the inbound PID, not from the command name.\n\
@@ -1970,6 +2186,7 @@ mod tool_inventory_tests {
             "get_outbox_status",
             "get_partner",
             "get_process",
+            "get_process_history",
             "list_active_processes",
             "list_commands",
             "list_dead_letters",
@@ -1984,6 +2201,193 @@ mod tool_inventory_tests {
             "MCP tool inventory changed — update the tool table and the count in \
              site/content/docs/services/makod.md to match"
         );
+    }
+
+    /// `get_process` declares what it returns, and what it returns is that
+    /// shape: the schema's properties are exactly the keys of a serialized
+    /// `ProcessesView`, so the Desk's generated type and the wire cannot differ.
+    #[test]
+    fn get_process_declares_its_output_schema() {
+        let tool = MakodMcpHandler::tool_router()
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "get_process")
+            .expect("get_process is served");
+        let schema = tool.output_schema.expect("get_process has an outputSchema");
+        let mut declared: Vec<&String> = schema["properties"]
+            .as_object()
+            .expect("an object schema")
+            .keys()
+            .collect();
+        declared.sort();
+
+        let sample = serde_json::to_value(super::ProcessesView {
+            business_key: "51238696012".into(),
+            processes: vec![],
+        })
+        .expect("serializes");
+        let mut sent: Vec<&String> = sample.as_object().expect("object").keys().collect();
+        sent.sort();
+        assert_eq!(declared, sent);
+    }
+
+    /// A process spawned by an inbound message is indexed under its MaLo in
+    /// the correlation index and has no registry entry; `get_process` must
+    /// find it there. Reading the registry alone answered `process_not_found`
+    /// for every process ingest started.
+    #[tokio::test]
+    async fn a_process_is_found_by_the_business_key_it_was_indexed_under() {
+        use mako_engine::ids::{ProcessId, ProcessIdentity, TenantId};
+        use mako_engine::registry::{ProcessRegistry as _, RegistryKey};
+        use mako_engine::version::WorkflowId;
+
+        let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+            .await
+            .expect("store");
+        let registry = store.as_process_registry();
+        let tenant = TenantId::from_party_id("9900357000004");
+        let process_id = ProcessId::new();
+        let identity = ProcessIdentity::new(
+            process_id,
+            tenant,
+            WorkflowId::new("gpke-supplier-change", "FV2026-04-01"),
+        );
+        registry
+            .register_correlated(tenant, "51238696012", process_id, identity.clone())
+            .await
+            .expect("index");
+
+        let by_malo = super::processes_named(
+            &registry,
+            tenant,
+            &RegistryKey::parse("51238696012").expect("key"),
+        )
+        .await
+        .expect("lookup");
+        assert_eq!(by_malo, vec![identity]);
+
+        let unknown = super::processes_named(
+            &registry,
+            tenant,
+            &RegistryKey::parse("51238696782").expect("key"),
+        )
+        .await
+        .expect("lookup");
+        assert!(unknown.is_empty());
+    }
+
+    /// The history of a process stored in makod's own store marks the
+    /// market messages its workflow stated — a GPKE Anmeldung in, the answer
+    /// out — and leaves a state change unmarked.
+    #[tokio::test]
+    async fn a_process_history_marks_the_messages_its_workflow_stated() {
+        use mako_engine::event_store::{
+            AppendBatch, AtomicAppend as _, EventStore as _, ExpectedVersion,
+        };
+        use mako_engine::ids::{ProcessId, StreamId, TenantId};
+        use mako_engine::types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator};
+        use mako_engine::version::WorkflowId;
+        use mako_engine::workflow::CommandContext;
+        use mako_gpke::wechselprozesse::SupplierChangeEvent;
+
+        let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+            .await
+            .expect("store");
+        let tenant = TenantId::from_party_id("9900357000004");
+        let process = ProcessId::new();
+        let ctx = CommandContext::new(
+            tenant,
+            process,
+            WorkflowId::new("gpke-supplier-change", "FV2026-04-01"),
+        );
+        let initiated = SupplierChangeEvent::Initiated {
+            location_id: MaLo::new("51238696012"),
+            new_supplier: MarktpartnerCode::new("9900000000001"),
+            grid_operator: MarktpartnerCode::new("9900357000004"),
+            document_date: "20261104".to_owned(),
+            process_date: "20261201".to_owned(),
+            transaktionsgrund: None,
+            transaktionsgrund_ergaenzung: None,
+            message_ref: MessageRef::new("UTILMD-1"),
+            vorgangsnummer: String::new(),
+            produktpaket_id: None,
+            pruefidentifikator: Pruefidentifikator::const_new(55_001),
+        };
+        let answered = SupplierChangeEvent::AntwortGesendet {
+            response_pid: Some(Pruefidentifikator::const_new(55_002)),
+            accepted: true,
+            reason: None,
+        };
+        let stream = StreamId::for_process(tenant, &process);
+        let events = [
+            ctx.new_event(&initiated).expect("event"),
+            ctx.new_event(&answered).expect("event"),
+            ctx.new_event(&SupplierChangeEvent::Activated)
+                .expect("event"),
+        ];
+        store
+            .append(AppendBatch::new(&stream, ExpectedVersion::Any, &events))
+            .await
+            .expect("append");
+
+        let h = super::history(
+            &process.to_string(),
+            &store.load(&stream).await.expect("load"),
+        );
+        assert_eq!(h.workflow_name, "gpke-supplier-change");
+        let marks: Vec<(Option<&str>, Option<u32>)> = h
+            .eintraege
+            .iter()
+            .map(|e| (e.richtung.as_deref(), e.pid))
+            .collect();
+        assert_eq!(
+            marks,
+            vec![
+                (Some("eingang"), Some(55_001)),
+                (Some("ausgang"), Some(55_002)),
+                (None, None)
+            ]
+        );
+        assert_eq!(h.eintraege[0].message_ref.as_deref(), Some("UTILMD-1"));
+    }
+
+    /// A deadline's kind comes from the labels `mako_fristen` owns, never from
+    /// a workflow's name for its own Frist.
+    #[test]
+    fn a_deadline_is_a_delivery_window_only_where_mako_fristen_says_so() {
+        assert_eq!(
+            super::deadline_art(mako_fristen::APERAK_STROM_WINDOW_LABEL),
+            "aperak"
+        );
+        assert_eq!(
+            super::deadline_art(mako_fristen::APERAK_GAS_INITIALPROZESS_LABEL),
+            "aperak"
+        );
+        assert_eq!(
+            super::deadline_art(mako_fristen::CONTRL_FRIST_LABEL),
+            "contrl"
+        );
+        assert_eq!(super::deadline_art("gpke-antwortfrist"), "prozess");
+        assert_eq!(
+            super::deadline_art("esa-wertebestellung-bindungsfrist"),
+            "prozess"
+        );
+    }
+
+    /// The served tool contract is the committed `mcp.snapshot.json`
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it).
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let tools: Vec<serde_json::Value> = MakodMcpHandler::tool_router()
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
     }
 }
 

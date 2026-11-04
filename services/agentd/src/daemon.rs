@@ -468,7 +468,7 @@ impl Daemon for Agentd {
         // a forged signature on a regulated dispatch.
         let oversight = if oidc.is_disabled() {
             warn!(
-                "agentd: OIDC disabled — POST /api/v1/run, /api/v1/agents and \
+                "agentd: OIDC disabled — POST /api/v1/runs, /api/v1/agents and \
                  /api/v1/agents/catalog accept all requests (the Cedar gate in front of \
                  them reads the roles off a token nobody verified), and the oversight \
                  surface ({}) is NOT mounted. Every tool grant that requires approval \
@@ -494,7 +494,10 @@ impl Daemon for Agentd {
             // CloudEvent ingest
             .route("/webhook", post(handlers::webhook))
             // Manual trigger (OIDC-protected)
-            .route("/api/v1/run", post(handlers::manual_run))
+            .route("/api/v1/runs", post(handlers::start_runs))
+            .route("/api/v1/runs/{run}/antwort", get(handlers::answer))
+            .route("/api/v1/runs/{run}/bewertung", post(handlers::bewerten))
+            .route("/api/v1/hinweise", get(handlers::hinweise))
             .route("/api/v1/erasure", post(handlers::erase))
             // What this deployment runs, and what it could run
             .route("/api/v1/agents", get(handlers::list_agents))

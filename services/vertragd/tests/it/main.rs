@@ -3,6 +3,7 @@
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
 mod authorization_guard;
+mod bo4e_bodies;
 mod contract_tests;
 mod demo_config;
 mod demo_payloads;

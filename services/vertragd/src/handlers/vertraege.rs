@@ -7,12 +7,16 @@ use axum::{
     extract::{Path, Query},
     http::StatusCode,
 };
+use mako_markt::bo4e::Bo4e;
 use mako_service::{ApiError, ApiResult, Json, oidc::Claims};
 use serde::Deserialize;
 use time::Date;
 use uuid::Uuid;
 
-use super::{CedarEnforcer, Ctx, authorize, ok, require_kunde, require_vertrag};
+use super::{
+    CedarEnforcer, Ctx, authorize, canonical_bo4e, ok, refuse_undefined_fields, require_kunde,
+    require_vertrag,
+};
 use crate::{
     domain::{self, Kuendigungsgrund, Vertragsart},
     events::build_cloud_event,
@@ -904,24 +908,25 @@ pub async fn tarifwechsel(
 
 /// `PUT /api/v1/vertraege/{id}/preisgarantie` — store the BO4E `Preisgarantie`.
 ///
-/// `preisgarantie_bis` is derived from the COM's `zeitlicheGueltigkeit`, so the
-/// Tarifwechsel guard and the document the customer holds can never disagree.
+/// The body is a `Bo4e<Preisgarantie>`, so the gate runs as it deserialises —
+/// for a `Preisgarantie` that includes the `Zeitraum` in `zeitlicheGueltigkeit`,
+/// the very field `preisgarantie_bis` is derived from below and the one the
+/// Tarifwechsel guard reads. A key BO4E does not define is refused
+/// ([`Bo4e::ensure_no_undefined_fields`](mako_markt::bo4e::Bo4e::ensure_no_undefined_fields)): a misspelt `zeitlicheGueltigkeit`
+/// would otherwise store a guarantee with no end date.
+///
+/// Deriving `preisgarantie_bis` from the stored document means the Tarifwechsel
+/// guard and the document the customer holds can never disagree.
 pub async fn put_preisgarantie(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(vertrag_id): Path<Uuid>,
-    Json(body): Json<serde_json::Value>,
+    Json(preisgarantie): Json<Bo4e<rubo4e::current::Preisgarantie>>,
 ) -> ApiResult<StatusCode> {
     authorize(&enforcer, &claims, "write-preisgarantie", ctx.tenant())?;
-    use rubo4e::current::Preisgarantie;
-    // The BO4E gate, which for a `Preisgarantie` also checks the `Zeitraum` in
-    // `zeitlicheGueltigkeit` — the very field `preisgarantie_bis` is derived
-    // from below, and the one the Tarifwechsel guard reads.
-    let typed: Preisgarantie = mako_markt::bo4e::decode(body)
-        .map_err(|e| ApiError::unprocessable_with(e.to_string(), e.detail().into()))?;
-    let canonical =
-        serde_json::to_value(&typed).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+    refuse_undefined_fields(&preisgarantie)?;
+    let canonical = canonical_bo4e(&preisgarantie)?;
     let bis = canonical
         .pointer("/zeitlicheGueltigkeit/enddatum")
         .and_then(serde_json::Value::as_str)

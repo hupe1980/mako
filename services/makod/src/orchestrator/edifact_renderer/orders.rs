@@ -47,25 +47,6 @@ fn esa_dtm303(date: &str) -> String {
 
 // ── ORDERS ────────────────────────────────────────────────────────────────────
 
-/// Render an ORDERS (Beauftragung) message from domain-intent JSON.
-///
-/// **Sender resolution** (in priority order):
-/// 1. `payload["sender"]` — set this in the workflow for deterministic
-///    multi-MP-ID deployments.
-/// 2. [`MpIdRegistry::sender_mp_id_for_orders_pid`], narrowed by the payload's
-///    `sparte` where the PID is shared between Strom and Gas.
-/// 3. [`MpIdRegistry::primary_mp_id`] — final fallback.
-///
-/// The receiver comes from `msg.recipient`.
-///
-/// Payload fields:
-///
-/// | Field        | Required | Description                                  |
-/// |--------------|----------|----------------------------------------------|
-/// | `sender`     | no       | Sender MP-ID (overrides registry lookup)       |
-/// | `pid`        | no       | ORDERS Prüfidentifikator (e.g. 17134)        |
-/// | `orders_ref` | no       | UUID reference → 14-char UNH message ref     |
-/// | `malo`       | no       | Supply point MaLo for BGM context            |
 /// Render an ESA-originated REQOTE 35003 Werteanfrage (WiM Teil 2 UC 4.1 Nr. 1).
 ///
 /// The PID travels in BGM DE 1004 (`document_id`) and the addressed location in
@@ -177,6 +158,27 @@ pub(super) fn render_reqote(
     finish_interchange(builder.serialize(), sender, msg.recipient.as_ref(), msg)
 }
 
+/// Render an ORDERS (Beauftragung) message from domain-intent JSON.
+///
+/// **Sender resolution** (in priority order):
+/// 1. `payload["sender"]` — set this in the workflow for deterministic
+///    multi-MP-ID deployments.
+/// 2. [`MpIdRegistry::sender_mp_id_for_orders_pid`], narrowed by the payload's
+///    `sparte` where the PID is shared between Strom and Gas.
+/// 3. [`MpIdRegistry::primary_mp_id`] — final fallback.
+///
+/// The receiver comes from `msg.recipient`.
+///
+/// Payload fields:
+///
+/// | Field        | Required | Description                                  |
+/// |--------------|----------|----------------------------------------------|
+/// | `sender`     | no       | Sender MP-ID (overrides registry lookup)       |
+/// | `pid`        | no       | ORDERS Prüfidentifikator (e.g. 17134)        |
+/// | `orders_ref` | no       | UUID reference → 14-char UNH message ref     |
+/// | `document_code` | no    | BGM DE 1001 (`Z14` on 17132)                 |
+/// | `document_id` | no      | BGM DE 1004 — the Anfrage-Nummer on 17132    |
+/// | `location`   | no       | `SG2 LOC+172`, opened by `NAD+DP`            |
 pub(super) fn render_orders(
     p: &serde_json::Value,
     msg: &OutboxMessage,
@@ -229,6 +231,15 @@ pub(super) fn render_orders(
     if let Some(pv) = pid {
         // `SG1 RFF+Z13`; BGM DE 1004 keeps the Belegnummer.
         builder = builder.pruefidentifikator(pv);
+    }
+    // `BGM` DE 1001 and DE 1004 where the workflow states them — the
+    // Anfrage Stammdaten 17132 is `BGM+Z14` with the Anfrage-Nummer the NB's
+    // answer echoes (ORDERS AHB 1.1b Kap. 4.1.1.1).
+    if let Some(code) = p.get("document_code").and_then(|v| v.as_str()) {
+        builder = builder.document_code(code);
+    }
+    if let Some(id) = p.get("document_id").and_then(|v| v.as_str()) {
+        builder = builder.document_id(id);
     }
     // A `LOC` is emitted only where the AHB has one. §4.15 of the ORDERS AHB
     // lists **no** Meldepunkt segment for 17007/17008, so the ESA order PIDs
@@ -366,6 +377,9 @@ pub(super) fn render_ordchg(
 /// | `sender`       | no       | Sender MP-ID (falls back to `registry.primary_mp_id()`)|
 /// | `receiver`     | no       | Receiver MP-ID (falls back to `msg.recipient`)  |
 /// | `document_id`  | no       | BGM document identifier (Auftragsnummer)      |
+/// | `document_code`| no       | BGM DE 1001 (`Z14` on 19101)                  |
+/// | `order_reference` | no    | `SG1 RFF+ON` — the answered ORDERS' BGM DE 1004 |
+/// | `antwort_code` / `antwort_codeliste` | on an Antwortcode-PID | `SG2 AJT` DE 4465 / DE 1082 |
 /// | `document_date`| no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
 /// | `message_ref`  | no       | Derived from `causation_event_id` when absent |
 pub(super) fn render_ordrsp(
@@ -414,6 +428,19 @@ pub(super) fn render_ordrsp(
     if let Some(id) = document_id {
         builder = builder.document_id(id);
     }
+    if let Some(code) = p.get("document_code").and_then(serde_json::Value::as_str) {
+        builder = builder.document_code(code);
+    }
+    // `SG1 RFF+ON` — the ORDERS this ORDRSP answers, by its `BGM` DE 1004: the
+    // Ablehnung der Anfrage Stammdaten 19101 (ORDRSP AHB 1.1b Kap. 4.1.2,
+    // Hinweis `[521]`).
+    if let Some(order) = p
+        .get("order_reference")
+        .and_then(serde_json::Value::as_str)
+        .filter(|r| !r.is_empty())
+    {
+        builder = builder.reference("ON", order);
+    }
     // Reference the original ORDERS/ORDCHG this ORDRSP answers, under the
     // qualifier the PID's own Zuordnungsschlüssel names: `RFF+ON` for
     // 19011/19012 (the ORDERS, `ZG-T14`), `RFF+ACW` for 19013/19014 (the
@@ -446,11 +473,12 @@ pub(super) fn render_ordrsp(
     //
     // Which PIDs: 19001/19002 (Bestellung Geräteübernahme), 19003/19004
     // (Weiterverpflichtung), 19005/19006 (Messlokationsänderung), 19009/19010
-    // (Beendigung Rechnungsabwicklung), 19011–19014 (ESA Wertebestellung) and
-    // 19015/19016 (Gerätewechselabsicht).
+    // (Beendigung Rechnungsabwicklung), 19011–19014 (ESA Wertebestellung),
+    // 19015/19016 (Gerätewechselabsicht) and 19101 (Ablehnung der Anfrage
+    // Stammdaten, `E_0441` / `E_0443`).
     const ANTWORTCODE_PIDS: &[u32] = &[
         19_001, 19_002, 19_003, 19_004, 19_005, 19_006, 19_009, 19_010, 19_011, 19_012, 19_013,
-        19_014, 19_015, 19_016,
+        19_014, 19_015, 19_016, 19_101,
     ];
     if pid.is_some_and(|p| ANTWORTCODE_PIDS.contains(&p)) {
         // 19011–19014 additionally carry `BGM+Z57` and, on the Bestellung pair,

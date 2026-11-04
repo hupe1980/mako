@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: meter-data-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Messwertqualität"
+    mako.de/zweck: "Findet Lücken in Messwerten, liest ihre Qualität und nennt, welches Ersatzwertverfahren zulässig ist."
 spec:
   execution:
     kind: tool-calling

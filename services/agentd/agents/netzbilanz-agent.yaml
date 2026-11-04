@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: netzbilanz-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Netzentgeltabrechnung"
+    mako.de/zweck: "Überwacht Abrechnungsentwürfe des Netzbetreibers, überfällige Versände und Zahlungsbestätigungen."
 spec:
   execution:
     kind: tool-calling

@@ -518,13 +518,6 @@ pub(super) async fn dispatch_wim_aperak(
     .await
 }
 
-/// Dispatch `PreisanfrageCommand::SendAngebot` to an existing
-/// `WimPreisanfrageWorkflow` process looked up by `melo_id`.
-///
-/// Called for `wim.preisanfrage.angebot-senden` — the aMSB answers an inbound
-/// REQOTE Preisanfrage (35001/35002/35004/35005) with the QUOTES Angebot (15001/15002/15004/15005).
-/// The response PID is derived inside the workflow from the stored REQOTE PID;
-/// the price content comes from the aMSB's current PreisblattMessung.
 /// Dispatch the MSBA's ORDRSP answer to an inbound Weiterverpflichtungsauftrag
 /// (ORDERS 17002).
 ///
@@ -770,20 +763,160 @@ fn messtechnik_from(payload: &serde_json::Value) -> Result<Messtechnik, Dispatch
     }
 }
 
+/// Dispatch `PreisanfrageCommand::SendAngebot` to the `wim-preisanfrage`
+/// process the inbound REQOTE opened, keyed on the location it addressed.
+///
+/// The workflow queues the QUOTES under the PID that answers the stored REQOTE
+/// PID (35001 → 15001, …) and echoes the location, which is what the
+/// requester resumes its process by.
+///
+/// | Payload field | Required | Meaning |
+/// |---|---|---|
+/// | `melo_id` or `malo_id` | one of them | The REQOTE's `LOC+172` |
 pub(super) async fn dispatch_wim_preisanfrage_angebot_senden(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let melo_id = extract_melo_id(payload)?;
+    let location = extract_location(payload)?;
+    let key = location.clone();
     dispatch_to_process::<WimPreisanfrageWorkflow, _>(
         state,
-        melo_id.as_str(),
+        &key,
         mako_wim::PREISANFRAGE_WORKFLOW_NAME,
         move || PreisanfrageCommand::SendAngebot {
             message_ref: MessageRef::new(format!("WIM-QUOTES-{}", uuid::Uuid::new_v4())),
+            location,
         },
     )
     .await
+}
+
+/// The location a Preisanfrage addresses: a Messlokation (35001, 35005) or a
+/// Marktlokation (35002, 35004), whichever the payload names.
+fn extract_location(payload: &serde_json::Value) -> Result<String, DispatchError> {
+    let named = |key: &str| payload.get(key).filter(|v| !v.is_null());
+    match (named("melo_id"), named("malo_id")) {
+        (Some(_), None) => Ok(extract_melo_id(payload)?.as_str().to_owned()),
+        (None, Some(_)) => Ok(extract_malo_id(payload)?.as_str().to_owned()),
+        (Some(_), Some(_)) => Err(DispatchError::InvalidPayload(
+            "name the Preisanfrage's location once — \"melo_id\" or \"malo_id\", not both"
+                .to_owned(),
+        )),
+        (None, None) => Err(DispatchError::InvalidPayload(
+            "payload must name the location the REQOTE addresses — \"melo_id\" or \"malo_id\""
+                .to_owned(),
+        )),
+    }
+}
+
+/// Body of `wim.preisanfrage.anfragen`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreisanfrageBody {
+    /// REQOTE Prüfidentifikator: 35001, 35002, 35004 or 35005.
+    pid: u32,
+    /// MP-ID of the MSB asked for the Angebot.
+    empfaenger_mp_id: String,
+    /// The Messlokation the Anfrage addresses.
+    #[serde(default)]
+    melo_id: Option<String>,
+    /// The Marktlokation the Anfrage addresses.
+    #[serde(default)]
+    malo_id: Option<String>,
+}
+
+pub(super) fn cmd_wim_preisanfrage_anfragen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_preisanfrage_anfragen(s, p))
+}
+
+/// Send a REQOTE Preisanfrage and open the process the MSB's QUOTES resumes.
+///
+/// The process is keyed on the location the REQOTE carries in `LOC+172`, which
+/// the answering QUOTES echoes and the ingest resumes by. The MSB's answer
+/// window is registered in the same write, per PID from the table the
+/// responding side sizes its own by ([`mako_wim::preisanfrage_antwort_frist_werktage`]):
+/// 35001 4 WT, 35002 5 WT, 35005 10 WT; 35004 states none, so it carries none.
+async fn dispatch_wim_preisanfrage_anfragen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let body: PreisanfrageBody = serde_json::from_value(payload.clone())
+        .map_err(|e| DispatchError::InvalidPayload(format!("payload: {e}")))?;
+    if !mako_wim::REQOTE_PIDS.contains(&body.pid) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "\"pid\" must be a Preisanfrage REQOTE PID (35001/35002/35004/35005); got {}",
+            body.pid
+        )));
+    }
+    let pid = Pruefidentifikator::new(body.pid).map_err(DispatchError::InvalidPayload)?;
+    let receiver = body.empfaenger_mp_id.trim();
+    if receiver.is_empty() {
+        return Err(DispatchError::InvalidPayload(
+            "\"empfaenger_mp_id\" must name the MSB asked for the Angebot".to_owned(),
+        ));
+    }
+    let mut ids = serde_json::Map::new();
+    if let Some(m) = &body.melo_id {
+        ids.insert("melo_id".to_owned(), serde_json::Value::String(m.clone()));
+    }
+    if let Some(m) = &body.malo_id {
+        ids.insert("malo_id".to_owned(), serde_json::Value::String(m.clone()));
+    }
+    let location = extract_location(&serde_json::Value::Object(ids))?;
+
+    let occupancy = find_occupying_process::<WimPreisanfrageWorkflow>(
+        state,
+        &location,
+        mako_wim::PREISANFRAGE_WORKFLOW_NAME,
+    )
+    .await?;
+    if let Some(process_id) = occupancy.process {
+        return Err(DispatchError::DuplicateProcess {
+            process_id,
+            malo_id: location,
+        });
+    }
+
+    let deadlines: Vec<(&'static str, time::OffsetDateTime)> =
+        mako_wim::preisanfrage_antwort_frist_werktage(body.pid)
+            .map(|wt| {
+                (
+                    mako_wim::PREISANFRAGE_DEADLINE_LABEL,
+                    mako_fristen::deadline_at_werktage(
+                        time::OffsetDateTime::now_utc(),
+                        wt,
+                        mako_fristen::HolidayCalendar::BdewMaKo,
+                    ),
+                )
+            })
+            .into_iter()
+            .collect();
+    let command = PreisanfrageCommand::SendReqote {
+        pid,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: MarktpartnerCode::new(receiver),
+        location: location.clone(),
+        message_ref: MessageRef::new(format!("WIM-REQOTE-{}", uuid::Uuid::new_v4())),
+    };
+    let process_id = spawn_process::<WimPreisanfrageWorkflow>(
+        &state.store,
+        state.tenant_id,
+        WorkflowId::new(
+            mako_wim::PREISANFRAGE_WORKFLOW_NAME,
+            latest_format_version(),
+        ),
+        command,
+        &deadlines,
+        &[location.as_str()],
+    )
+    .await?;
+    drop(occupancy);
+    Ok(DispatchOutcome::Spawned { process_id })
 }
 
 /// Dispatch `wim.steuerungsauftrag.bestaetigen` / `.ablehnen` to an existing

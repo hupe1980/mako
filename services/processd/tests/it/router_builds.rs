@@ -86,7 +86,7 @@ async fn a_refused_start_supply_is_a_422_with_its_code() {
     let base = serve_without_a_database().await;
     let resp = reqwest::Client::new()
         .post(format!("{base}/api/v1/start-supply"))
-        .json(&serde_json::json!({ "lieferbeginn_datum": "2099-01-01" }))
+        .json(&serde_json::json!({ "malo_id": "", "lieferbeginn_datum": "2099-01-01" }))
         .send()
         .await
         .expect("answered");

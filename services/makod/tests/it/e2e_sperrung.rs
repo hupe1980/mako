@@ -326,3 +326,43 @@ async fn e2e_sperrung_validation_failure() {
         "invalid Sperrung must reach Rejected without BestaetigueSperrung; got: {final_state:?}"
     );
 }
+
+/// In a Strom+Gas deployment every Sperrung PID resolves by the recipient's
+/// Sparte, whichever module registers first: GPKE and GeLi Gas share ORDERS
+/// 17115–17117, ORDRSP 19116–19119 / 19128 / 19129 and ORDCHG 39000 / 39001,
+/// and the Sparte-agnostic table is last-wins.
+#[test]
+fn a_sperrung_pid_routes_by_sparte_in_either_registration_order() {
+    use mako_engine::builder::EngineModule;
+    use mako_engine::marktrolle::DeploymentRoles;
+    use mako_engine::pid_router::PidRouter;
+    use mako_engine::types::Sparte;
+
+    let roles = DeploymentRoles::all();
+    let gpke: &dyn EngineModule = &mako_gpke::GpkeModule;
+    let gas: &dyn EngineModule = &mako_geli_gas::GeliGasModule;
+    for order in [[gpke, gas], [gas, gpke]] {
+        let mut router = PidRouter::new();
+        for m in order {
+            m.register_pids_with_roles(&mut router, &roles);
+        }
+        for pid in [17_115, 17_116, 17_117, 39_000, 39_001, 19_118, 19_119] {
+            let strom = router.route_with_sparte(pid, Sparte::Strom).expect("Strom");
+            let gas = router.route_with_sparte(pid, Sparte::Gas).expect("Gas");
+            assert!(strom.starts_with("gpke-"), "{pid} Strom → {strom}");
+            assert!(gas.starts_with("geli-gas-"), "{pid} Gas → {gas}");
+        }
+        for pid in [19_116, 19_117, 19_128, 19_129] {
+            assert_eq!(
+                router.route_with_sparte(pid, Sparte::Strom),
+                Some("gpke-sperrung-lf"),
+                "{pid}"
+            );
+            assert_eq!(
+                router.route_with_sparte(pid, Sparte::Gas),
+                Some("geli-gas-sperrung-lf"),
+                "{pid}"
+            );
+        }
+    }
+}

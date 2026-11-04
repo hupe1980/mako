@@ -1,18 +1,17 @@
-//! HTTP handlers — CloudEvent ingest, manual runs, and inventory.
+//! HTTP handlers — CloudEvent ingest, runs a person starts, and inventory.
 //!
-//! ## Two doors, and the difference is durability
+//! ## Two doors, both admit and return
 //!
-//! `POST /webhook` **admits and returns**: the policy gate, the quota
-//! reservation, the case binding and the claim on the admission key all commit
-//! inside the transaction that writes the run's first record, and only then does
-//! this answer `202`. So a `202` means *this message will be acted on*.
-//!
-//! `POST /api/v1/run` **waits**: an operator asked for an answer, so the request
-//! is held until every run concludes or suspends, under a wall-clock ceiling.
+//! `POST /webhook` (an event) and `POST /api/v1/runs` (a person) **admit and
+//! return**: the policy gate, the quota reservation, the case binding and the
+//! claim on the admission key all commit inside the transaction that writes the
+//! run's first record, and only then does the door answer `202` with the run
+//! ids. So a `202` means *this will be acted on*; the run's state, steps and
+//! result are read at `/api/v1/oversight/runs/{run}`.
 //!
 //! ## Human doors are authorized, not just authenticated
 //!
-//! `POST /api/v1/run`, `POST /api/v1/erasure` and the two inventory reads ask the **same Cedar set** the
+//! `POST /api/v1/runs`, `POST /api/v1/erasure` and the two inventory reads ask the **same Cedar set** the
 //! runtime checks every effect against, under agentd's own `api:` verbs. A
 //! `Claims` extractor on its own proves the realm knows the caller and says
 //! nothing about whether they may spend a run on a Marktlokation, so each of
@@ -33,14 +32,14 @@
 //!
 //! [`plane::oversight`]: crate::plane::oversight
 
-use crate::plane::{AgentDecision, Envelope, EraseError, Plane, Reception};
+use crate::plane::{Accepted, Envelope, EraseError, Plane, Reception};
 use std::sync::Arc;
 
 use axum::{
     body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use mako_service::oidc::Claims;
 use mako_service::{ApiError, ApiResult, Json};
@@ -123,27 +122,6 @@ fn identify(event: &Value) -> Result<(&str, &str, &str), &'static str> {
         }
     };
     Ok((attribute("id")?, attribute("source")?, attribute("type")?))
-}
-
-/// A decision recording that dispatch exceeded its wall-clock ceiling.
-///
-/// The runs themselves are unaffected: their effects are journaled and they
-/// resume from where they were. What timed out is our *wait* for them.
-fn timed_out(event_id: &str, event_type: &str, secs: u64) -> AgentDecision {
-    AgentDecision {
-        agent_name: "timeout".to_owned(),
-        run_id: String::new(),
-        event_id: event_id.to_owned(),
-        event_type: event_type.to_owned(),
-        outcome: "timeout".to_owned(),
-        summary: format!(
-            "Waiting for this event's specialists exceeded {secs}s. Their runs are journaled \
-             and continue; look them up under /api/v1/oversight/runs."
-        ),
-        admitted: None,
-        waiting_for: None,
-        tokens: 0,
-    }
 }
 
 pub async fn webhook(
@@ -248,18 +226,23 @@ pub async fn webhook(
     };
     let accepted = state.plane.accept(envelope, data).await;
 
-    // ── The status code is a retry instruction ───────────────────────────
-    //
-    // mako's own emitter treats **429 and 5xx as transient and every other 4xx
-    // as permanent** (`post_ce_with_retry`), so the code chosen here decides
-    // whether a message is resent or dead-lettered — and both mistakes cost.
-    // A permanent refusal answered `429` burns the retry schedule and lands in
-    // the dead-letter list anyway, five attempts later; a transient one
-    // answered `422` is dead-lettered at once, on a market message.
-    //
-    // Partial success is success: a retry is answered with the runs already
-    // holding those keys, so nothing is duplicated and nothing is lost.
-    match Plane::reception(&accepted) {
+    admission_response(&event_id, &event_type, &accepted)
+}
+
+/// The answer to an admission — `202` with the run ids, or why not.
+///
+/// The status code is a retry instruction. mako's own emitter treats **429 and
+/// 5xx as transient and every other 4xx as permanent** (`post_ce_with_retry`),
+/// so the code chosen here decides whether a message is resent or
+/// dead-lettered — and both mistakes cost. A permanent refusal answered `429`
+/// burns the retry schedule and lands in the dead-letter list anyway, five
+/// attempts later; a transient one answered `422` is dead-lettered at once, on
+/// a market message. A person starting a run reads the same codes.
+///
+/// Partial success is success: a retry is answered with the runs already
+/// holding those keys, so nothing is duplicated and nothing is lost.
+fn admission_response(event_id: &str, event_type: &str, accepted: &[Accepted]) -> Response {
+    match Plane::reception(accepted) {
         Reception::Admitted => {
             // The run ids, in the body. A bare `202` tells a caller the message
             // was taken and gives them nothing to follow; these are the journal
@@ -303,11 +286,26 @@ pub async fn webhook(
     }
 }
 
-pub async fn manual_run(
+/// What a person asks a run for. Every field is named: an unknown one is a
+/// `422`, because a misspelt `agent` read as absent would start every
+/// subscribing specialist instead of the one named.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunRequest {
+    /// The specialist to run; absent, every one subscribed to `event_type`.
+    pub agent: Option<String>,
+    /// The event type the run answers (`manual` when absent).
+    pub event_type: Option<String>,
+    /// The event's data, handed to the specialist as is.
+    #[serde(default)]
+    pub input: Value,
+}
+
+pub async fn start_runs(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     headers: HeaderMap,
-    Json(req): Json<Value>,
+    Json(req): Json<RunRequest>,
 ) -> impl IntoResponse {
     // Authenticated *and* authorized. Without the second half every principal
     // the realm issues a token to could start any specialist on any
@@ -321,9 +319,9 @@ pub async fn manual_run(
     // at admission, so it holds across instances and a refusal names the tenant
     // that reached it rather than the process that happened to receive the
     // request.
-    let agent_name = req["agent"].as_str().map(str::to_owned);
-    let event_type = req["event_type"].as_str().unwrap_or("manual").to_owned();
-    let data = req.get("input").cloned().unwrap_or_default();
+    let agent_name = req.agent;
+    let event_type = req.event_type.unwrap_or_else(|| "manual".to_owned());
+    let data = req.input;
 
     // A named agent that does not exist is a 404, not an empty list: `200 OK []`
     // is byte-identical to "the specialists ran and had nothing to say".
@@ -350,7 +348,12 @@ pub async fn manual_run(
     // The plane itself is the producer here, which keeps a manual run's key out
     // of every bus emitter's namespace.
     let event_source = mako_service::source("agentd", &state.cfg.tenant);
-    tracing::info!(event_type, event_id, ?agent_name, "agentd: manual run");
+    tracing::info!(
+        event_type,
+        event_id,
+        ?agent_name,
+        "agentd: run started by a person"
+    );
 
     let envelope = Envelope {
         id: &event_id,
@@ -358,30 +361,119 @@ pub async fn manual_run(
         event_type: &event_type,
     };
 
-    // The wall-clock timeout must wrap the dispatch FUTURE — wrapping the
-    // already-awaited value would make the timeout a no-op.
-    let timeout_secs = state.cfg.session_timeout_secs;
-    // One run per subscribing specialist, each on its own journal. A named
-    // agent bypasses routing and addresses that specialist directly.
-    let dispatch = async {
-        match agent_name.as_deref() {
-            Some(name) => state
-                .plane
-                .dispatch_one(name, envelope, data)
-                .await
-                .map(|d| vec![d])
-                .unwrap_or_default(),
-            None => state.plane.dispatch(envelope, data).await,
-        }
+    // Admitted, not awaited: the runs are journaled and leased like a
+    // webhook's, and their state, steps and result are read where every run's
+    // are — `/api/v1/oversight/runs/{run}`. A request held open for a model's
+    // answer is a request a proxy, a browser or a person gives up on.
+    let accepted = match agent_name.as_deref() {
+        Some(name) => state
+            .plane
+            .accept_named(name, envelope, data)
+            .await
+            .into_iter()
+            .collect(),
+        None => state.plane.accept(envelope, data).await,
     };
+    if accepted.is_empty() {
+        return ApiError::unprocessable(format!(
+            "no specialist subscribes to `{event_type}` — name one with `agent`"
+        ))
+        .into_response();
+    }
+    admission_response(&event_id, &event_type, &accepted)
+}
 
-    let decisions =
-        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), dispatch).await {
-            Ok(d) => d,
-            Err(_) => vec![timed_out(&event_id, &event_type, timeout_secs)],
-        };
+/// `GET /api/v1/hinweise` — the open worklist rows the caller's roles may
+/// answer, each filed under its Anker: the Desk's Hinweise. Read under the
+/// verb the oversight worklist is.
+pub async fn hinweise(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+) -> ApiResult<Json<Vec<crate::plane::Hinweis>>> {
+    if let Some(refused) = refusal(&state, &claims, agentplane::api::action::TASK_LIST) {
+        return Err(refused);
+    }
+    state
+        .plane
+        .hinweise(&claims.principal().roles)
+        .await
+        .map(Json)
+        .map_err(|e| ApiError::internal(anyhow::anyhow!("read the worklist: {e}")))
+}
 
-    (StatusCode::OK, Json(decisions)).into_response()
+/// `GET /api/v1/runs/{run}/antwort` — a run's answer, sentence by sentence,
+/// each with the call it cites and whether that call's output carries its
+/// figures. Read under the verb the oversight run view is: whoever may read a
+/// run may read its answer.
+pub async fn answer(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    axum::extract::Path(run): axum::extract::Path<String>,
+) -> ApiResult<Json<crate::plane::Answer>> {
+    if let Some(refused) = refusal(&state, &claims, agentplane::api::action::RUN_READ) {
+        return Err(refused);
+    }
+    match state.plane.answer(&run, &claims.principal().sub).await {
+        Ok(Some(answer)) => Ok(Json(answer)),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(e) => Err(ApiError::internal(anyhow::anyhow!(
+            "read the answer of run {run}: {e}"
+        ))),
+    }
+}
+
+/// A person's verdict on a run the Desk showed them: whether it helped, or
+/// what became of its proposal — one of the two per request.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BewertungRequest {
+    pub hilfreich: Option<bool>,
+    /// Why, in their words — sealed with the run's data, and erased with it.
+    pub begruendung: Option<String>,
+    pub vorschlag: Option<crate::plane::VorschlagSchicksal>,
+}
+
+impl BewertungRequest {
+    fn urteil(self) -> Result<crate::plane::Urteil, &'static str> {
+        match (self.hilfreich, self.vorschlag) {
+            (Some(hilfreich), None) => Ok(crate::plane::Urteil::Hilfreich {
+                hilfreich,
+                begruendung: self.begruendung,
+            }),
+            (None, Some(schicksal)) if self.begruendung.is_none() => {
+                Ok(crate::plane::Urteil::Vorschlag(schicksal))
+            }
+            (None, Some(_)) => Err("a Begründung goes with `hilfreich`, not with `vorschlag`"),
+            _ => Err("state exactly one of `hilfreich` or `vorschlag`"),
+        }
+    }
+}
+
+/// `POST /api/v1/runs/{run}/bewertung` — record whether an answer or a
+/// Hinweis helped, or what became of a proposal, under the caller's own name. A later verdict by the same
+/// person replaces theirs; the judged run is never changed.
+pub async fn bewerten(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    axum::extract::Path(run): axum::extract::Path<String>,
+    Json(req): Json<BewertungRequest>,
+) -> ApiResult<StatusCode> {
+    if let Some(refused) = refusal(&state, &claims, agentplane::api::action::RUN_ASSESS) {
+        return Err(refused);
+    }
+    let urteil = req.urteil().map_err(ApiError::unprocessable)?;
+    match state
+        .plane
+        .bewerten(&run, &claims.principal().sub, urteil)
+        .await
+    {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(crate::plane::BewertungError::NichtBewertbar(why)) => Err(ApiError::conflict(why)),
+        Err(crate::plane::BewertungError::Ungueltig(why)) => Err(ApiError::unprocessable(why)),
+        Err(crate::plane::BewertungError::Journal(e)) => Err(ApiError::internal(anyhow::anyhow!(
+            "record the verdict on run {run}: {e}"
+        ))),
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -505,7 +597,7 @@ pub async fn agent_card(
     let manifest = embedded;
 
     let url = format!(
-        "{}/api/v1/run",
+        "{}/api/v1/runs",
         state.cfg.public_base_url.trim_end_matches('/')
     );
     agentplane::peers::AgentCard::derive(manifest, url)
@@ -530,58 +622,98 @@ pub async fn agents_catalog(
     if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::AGENT_LIST) {
         return refused.into_response();
     }
-    let catalog: Vec<serde_json::Value> = crate::builtin::all()
-        .map(|def| {
-            let manifest = crate::plane::find_manifest(def.name);
-
-            let (model, max_turns, tools, approvals) =
-                manifest.as_ref().map_or((None, None, 0, 0), |m| {
-                    (
-                        m.spec
-                            .models
-                            .as_ref()
-                            .and_then(|x| x.privileged.as_ref())
-                            .map(|p| format!("{}/{}", p.provider, p.model)),
-                        m.spec.execution.as_ref().map(|e| e.max_turns),
-                        m.spec.tools.len(),
-                        m.spec.tools.iter().filter(|t| t.requires_approval).count(),
-                    )
-                });
-
-            let declaration = crate::plane::declaration(def.name);
-
-            serde_json::json!({
-                "name": def.name,
-                // Which revision this binary embeds. The journal records the
-                // same identity on every run, so a decision can be traced to a
-                // declaration; this is the only way to ask the *running* plane.
-                "version": declaration.as_ref().map(|d| d.version.clone()),
-                "digest": declaration.as_ref().and_then(|d| d.digest.clone()),
-                // The manifest's own `identity.role` — the sentence the model
-                // is given. A second copy in Rust drifted from it, so the
-                // catalogue reads the one the agent actually runs on.
-                "specialty": manifest
-                    .as_ref()
-                    .and_then(|m| m.spec.identity.as_ref())
-                    .map(|i| i.role.as_str()),
-                "trigger_patterns": def.trigger_patterns,
-                "model": model,
-                "max_turns": max_turns,
-                "tool_grants": tools,
-                // How many of those grants stop for a human. A specialist with
-                // none acts unattended; one where every grant needs approval is
-                // usually a manifest that mislabelled its reads.
-                "grants_needing_approval": approvals,
-            })
-        })
+    let active: Vec<String> = state
+        .plane
+        .router()
+        .routes()
+        .iter()
+        .map(|r| r.name.to_owned())
         .collect();
-    Json(serde_json::json!({
-        "total": catalog.len(),
-        "note": "Activate via [bundled_agents] enable = [\"name\"] (or enable_all) in agentd.toml. \
-                 Prompts, models, tool grants and ceilings are declared in each agent's manifest.",
-        "agents": catalog
-    }))
-    .into_response()
+    let faehigkeiten: Vec<Faehigkeit> = crate::builtin::all()
+        .map(|def| faehigkeit(def, active.iter().any(|n| n == def.name)))
+        .collect();
+    Json(Katalog { faehigkeiten }).into_response()
+}
+
+/// Every specialist compiled into this binary, as the Desk's Beipackzettel
+/// shows it.
+#[derive(Debug, serde::Serialize)]
+pub struct Katalog {
+    pub faehigkeiten: Vec<Faehigkeit>,
+}
+
+/// One specialist, read off its manifest — never a second copy beside it.
+#[derive(Debug, serde::Serialize)]
+pub struct Faehigkeit {
+    pub name: String,
+    /// `mako.de/titel`: what an operator calls it.
+    pub titel: Option<String>,
+    /// `mako.de/zweck`: what it is for, in one sentence.
+    pub zweck: Option<String>,
+    pub version: Option<String>,
+    /// The digest over the canonical manifest the journal records on every run.
+    pub digest: Option<String>,
+    /// Activated in this deployment.
+    pub aktiv: bool,
+    /// The event types that start it; empty when only a person or a schedule does.
+    pub ausloeser: Vec<String>,
+    /// `provider/model`, or `None` for a skill that runs no model at all.
+    pub modell: Option<String>,
+    /// Each tool it may call, `server/tool`, with the manifest's reason.
+    pub liest: Vec<Lesezugriff>,
+    /// No grant can change anything: every one is declared non-mutating.
+    pub nur_lesend: bool,
+    /// Grants that stop for a person's approval.
+    pub mit_freigabe: usize,
+}
+
+/// One tool a specialist may call.
+#[derive(Debug, serde::Serialize)]
+pub struct Lesezugriff {
+    /// `server/tool`.
+    pub werkzeug: String,
+    pub wozu: Option<String>,
+}
+
+fn faehigkeit(def: &crate::builtin::Specialist, aktiv: bool) -> Faehigkeit {
+    let manifest = crate::plane::find_manifest(def.name);
+    let declaration = crate::plane::declaration(def.name);
+    let annotation = |key: &str| {
+        manifest
+            .as_ref()
+            .and_then(|m| m.metadata.annotations.get(key).cloned())
+    };
+    let tools = manifest
+        .as_ref()
+        .map(|m| m.spec.tools.as_slice())
+        .unwrap_or_default();
+    Faehigkeit {
+        name: def.name.to_owned(),
+        titel: annotation("mako.de/titel"),
+        zweck: annotation("mako.de/zweck"),
+        version: declaration.as_ref().map(|d| d.version.clone()),
+        digest: declaration.as_ref().and_then(|d| d.digest.clone()),
+        aktiv,
+        ausloeser: def
+            .trigger_patterns
+            .iter()
+            .map(|t| (*t).to_owned())
+            .collect(),
+        modell: manifest
+            .as_ref()
+            .and_then(|m| m.spec.models.as_ref())
+            .and_then(|x| x.privileged.as_ref())
+            .map(|p| format!("{}/{}", p.provider, p.model)),
+        liest: tools
+            .iter()
+            .map(|t| Lesezugriff {
+                werkzeug: t.reference.trim_start_matches("tool://").to_owned(),
+                wozu: t.description.clone(),
+            })
+            .collect(),
+        nur_lesend: tools.iter().all(|t| !t.mutates),
+        mit_freigabe: tools.iter().filter(|t| t.requires_approval).count(),
+    }
 }
 
 #[cfg(test)]
@@ -620,6 +752,54 @@ mod tests {
         assert_eq!(
             body["detail"],
             "case erasure requires a configured key ring"
+        );
+    }
+
+    /// A misspelt field is refused: read as absent, `agnet` would leave the
+    /// run unaddressed and start every subscribing specialist.
+    #[test]
+    fn a_misspelt_run_field_is_refused_not_ignored() {
+        let typo = serde_json::json!({ "agnet": "billing-anomaly-agent", "input": {} });
+        assert!(serde_json::from_value::<super::RunRequest>(typo).is_err());
+        let named: super::RunRequest =
+            serde_json::from_value(serde_json::json!({ "agent": "billing-anomaly-agent" }))
+                .expect("a named agent");
+        assert_eq!(named.agent.as_deref(), Some("billing-anomaly-agent"));
+        assert_eq!(named.input, serde_json::Value::Null);
+    }
+
+    /// Every specialist names itself for an operator — a Beipackzettel entry
+    /// without a title or a purpose would show a crate-style name instead.
+    #[test]
+    fn every_specialist_carries_a_title_and_a_purpose() {
+        let missing: Vec<&str> = crate::builtin::all()
+            .map(|d| (d.name, super::faehigkeit(d, true)))
+            .filter(|(_, f)| {
+                f.titel.as_deref().is_none_or(str::is_empty)
+                    || f.zweck.as_deref().is_none_or(str::is_empty)
+            })
+            .map(|(n, _)| n)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "add mako.de/titel and mako.de/zweck: {missing:?}"
+        );
+
+        let desk = crate::builtin::all()
+            .find(|d| d.name == "desk-assistant")
+            .map(|d| super::faehigkeit(d, true))
+            .expect("the desk assistant is compiled in");
+        assert!(
+            desk.ausloeser.is_empty(),
+            "started by a question, never an event"
+        );
+        assert!(desk.nur_lesend);
+        assert!(desk.modell.is_some());
+        assert_eq!(desk.liest.len(), 5);
+        assert!(
+            desk.liest
+                .iter()
+                .any(|l| l.werkzeug == "makod/get_process_history")
         );
     }
 }

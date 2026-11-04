@@ -145,7 +145,7 @@ permit(
 //   when { context.workflow like "gpke-sperrung*" };
 //
 // This governs both MCP `get_process` and `list_overdue_deadlines`, which name
-// workflows and their missed regulatory windows.  Without the flag the grant
+// workflows and their pending deadlines.  Without the flag the grant
 // above adds nothing and both tools stay fully readable by every principal.
 permit(
   principal == MaKo::Principal::"mcp-agent",

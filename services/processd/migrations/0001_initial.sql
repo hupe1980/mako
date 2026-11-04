@@ -54,6 +54,11 @@ CREATE TABLE approval_queue (
     -- on approve or reject. `makod` refuses an answer command without one.
     answer_payload JSONB,
     reject_payload JSONB,
+    -- The Entscheidungsbaum the enqueuing module decided with (`E_0622`, …):
+    -- an operator's Antwortcode is checked against it, because a code means
+    -- something only inside its tree. NULL where the answer carries no EBD
+    -- code (ESA Werteanfrage refusal, REQOTE Preisanfrage, Steuerungsauftrag).
+    ablehnung_ebd TEXT,
     expires_at  TIMESTAMPTZ NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     decided_at  TIMESTAMPTZ,
@@ -370,6 +375,12 @@ CREATE INDEX pp_partner      ON process_projections (partner_mp_id)
     WHERE partner_mp_id IS NOT NULL;
 CREATE INDEX pp_deadline     ON process_projections (deadline_at)
     WHERE deadline_at IS NOT NULL;
+-- Open processes by Frist (`open_processes`): a keyset page on
+-- (Frist, process_id), so a worklist page is one index range at any depth.
+-- The predicate must stay TERMINAL_STATE_SQL's list.
+CREATE INDEX pp_open_frist   ON process_projections
+    (tenant, (COALESCE(deadline_at, 'infinity'::timestamptz)), process_id)
+    WHERE state NOT IN ('completed', 'rejected', 'failed');
 -- Deadline sweep: open, not-yet-alerted rows ordered by deadline.
 CREATE INDEX pp_deadline_unalerted ON process_projections (deadline_at)
     WHERE deadline_at IS NOT NULL AND deadline_alerted_at IS NULL;

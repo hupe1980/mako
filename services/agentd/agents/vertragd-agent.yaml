@@ -14,7 +14,10 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: vertragd-agent
-  version: "2.0.0"
+  version: "2.1.0"
+  annotations:
+    mako.de/titel: "Verträge und Kunden"
+    mako.de/zweck: "Wacht über Preisgarantien, Preisänderungsmitteilungen, auslaufende Verträge und hängende Anmeldungen."
 spec:
   execution:
     kind: tool-calling
@@ -40,15 +43,19 @@ spec:
       ### On contract lifecycle event (de.vertrag.*)
       1. Extract `vertrag_id`, `malo_id`, and `kunden_id` from payload.
       2. Call vertragd `get_vertrag_status` — check all Vertragskomponenten.
-      3. For ANGEMELDET > 5 WT (Strom) or 10 WT (Gas): call `find_stuck_workflows`.
-      4. For ABGELEHNT: call processd `get_decision` for the refusal code behind it
-         (A02 = MaLo not in the NB's grid, A05 = LF not registered).
-         - A02: call marktd `get_malo` to verify NB assignment.
-         - A05: check lf_mp_id published in bdew-codes.de.
+      3. For ANGEMELDET: call vertragd `list_anmeldungen`, then makod `get_process`
+         for the MaLo — a deadline past its `due_at` is the escalation; never
+         judge lateness by a count of days.
+      4. For ABGELEHNT: call processd `get_process` with the component's
+         `mako_process_id` and report the MaLo, the process and its state. Never
+         name or explain a refusal code: none of your tools carries the NB's
+         Antwortcode, and a code means something only within its
+         Entscheidungsbaum.
       5. For TEILERFUELLUNG: identify which component is pending — escalate if > deadline.
 
       ### On process rejection (de.mako.aperak.rejected)
-      1. Call processd `get_decision` for the refusal and the check behind it.
+      1. Call processd `get_process` for the rejected process: its state and
+         `erc_code`, the APERAK error code that refused the message.
       2. Call vertragd `get_vertrag_status` to identify the affected Vertragskomponente,
          and vertragd `get_kunde` where the correction touches customer master data.
       3. Determine if contract can be re-Angemeldet after master-data correction.
@@ -73,7 +80,7 @@ spec:
 
       ## §20 EnWG PARITY MONITORING
       Check stuck ANGEMELDET components for correlation with LF-affiliated vs. non-affiliated
-      customer segments — report to processd for BNetzA Diskriminierungsbericht.
+      customer segments — processd's parity figures feed the Gleichbehandlungsbericht (§ 7a Abs. 5 Satz 3 EnWG).
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -170,11 +177,18 @@ spec:
       description: >-
         Every Vertragskomponente and its state, including `preisgarantie_bis`.
 
-    - ref: tool://vertragd/find_stuck_workflows
+    - ref: tool://vertragd/list_anmeldungen
       mutates: false
       max_sensitivity: confidential
       description: >-
-        Components stuck in ANGEMELDET past the Vorlauffrist.
+        Every Lieferstelle still ANGEMELDET, with its customer and makod process.
+
+    - ref: tool://makod/get_process
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        The processes under a MaLo with their pending deadlines — whether an
+        Anmeldung is late.
 
     - ref: tool://vertragd/list_expiring_contracts
       mutates: false
@@ -200,17 +214,11 @@ spec:
       description: >-
         The customer behind the contract, for the notice obligations.
 
-    - ref: tool://processd/get_decision
+    - ref: tool://processd/get_process
       mutates: false
       max_sensitivity: internal
       description: >-
-        The refusal code behind a rejected Anmeldung.
-
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: >-
-        The NB assignment an A02 refusal points at.
+        A process's state and the Antwortcode its answer carried.
 
     - ref: tool://productd/list_products
       mutates: false

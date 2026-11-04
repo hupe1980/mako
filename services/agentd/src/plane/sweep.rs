@@ -131,7 +131,7 @@ pub fn spawn(runtime: Arc<Runtime>, every: Duration, shutdown: CancellationToken
 
 /// Retire admission keys older than `retention`, on a slow tick.
 ///
-/// The index `run_correlated_once` claims into only grows, and nothing retires a
+/// The index a keyed admission (`RunRequest::once`) claims into only grows, and nothing retires a
 /// row by default — deliberately, upstream and here: **retiring a key reopens
 /// the door it closed**, so the window is the operator's to choose and absent a
 /// choice keys are kept. This loop exists so that a deployment which *has*

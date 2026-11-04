@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: replacement-value-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Ersatzwerte"
+    mako.de/zweck: "Empfiehlt für fehlende Messwerte das Ersatzwertverfahren, mit Begründung."
 spec:
   execution:
     kind: tool-calling

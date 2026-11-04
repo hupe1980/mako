@@ -25,6 +25,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use mako_markt::bo4e::Bo4e;
 use mako_service::ApiError;
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
@@ -384,6 +385,20 @@ pub async fn get_abschlaege(
     Json(out).into_response()
 }
 
+/// Body of `PUT /api/v1/accounts/{malo_id}/abschlag`.
+#[derive(Debug, Deserialize)]
+pub struct PutAbschlagRequest {
+    /// The new monthly Abschlag in ct (× 10⁻² EUR). Required.
+    pub abschlag_ct: i64,
+}
+
+/// The `422` for a BO4E document an operator entered with a key BO4E does not
+/// define: the gate keeps such a key under `_additional`, where the field it
+/// was meant to fill would read back absent.
+fn bo4e_refusal(r: &mako_markt::bo4e::Bo4eRejection) -> ApiError {
+    ApiError::unprocessable_with(r.to_string(), serde_json::Value::Object(r.detail()))
+}
+
 /// `PUT /api/v1/accounts/{malo_id}/abschlag`  — update monthly advance payment
 pub async fn put_abschlag(
     claims: Claims,
@@ -391,34 +406,29 @@ pub async fn put_abschlag(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
-    Json(body): Json<serde_json::Value>,
+    Json(body): Json<PutAbschlagRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    let abschlag_ct = body.get("abschlag_ct").and_then(|v| v.as_i64());
-    if let Some(ct) = abschlag_ct {
-        match update_account_tenanted(
-            &pool,
-            &malo_id,
-            &cfg.tenant, // lf_mp_id defaults to tenant when not specified
-            &cfg.tenant,
-            None,
-            crate::pg::UpdateAccountRequest {
-                iban: None,
-                mandatsref: None,
-                abschlag_ct: Some(ct),
-                billing_day: None,
-                address: Default::default(),
-            },
-        )
-        .await
-        {
-            Ok(()) => StatusCode::NO_CONTENT.into_response(),
-            Err(e) => refusal(e).into_response(),
-        }
-    } else {
-        ApiError::bad_request("abschlag_ct required").into_response()
+    match update_account_tenanted(
+        &pool,
+        &malo_id,
+        &cfg.tenant, // lf_mp_id defaults to tenant when not specified
+        &cfg.tenant,
+        None,
+        crate::pg::UpdateAccountRequest {
+            iban: None,
+            mandatsref: None,
+            abschlag_ct: Some(body.abschlag_ct),
+            billing_day: None,
+            address: Default::default(),
+        },
+    )
+    .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -2098,6 +2108,13 @@ pub async fn metrics(
 
 // ── Business partner (Geschäftspartner) aggregation ───────────────────────────
 
+/// Body of `PUT /api/v1/accounts/{malo_id}/business-partner`.
+#[derive(Debug, Deserialize)]
+pub struct PutBusinessPartnerRequest {
+    /// The vertragd `kunden_nr` the account belongs to. Required, non-blank.
+    pub kunden_nr: String,
+}
+
 /// `PUT /api/v1/accounts/{malo_id}/business-partner` — link an account to a
 /// vertragd `kunden_nr` so its balance/dunning aggregate with the customer's
 /// other market locations (FI-CA contract-account model).
@@ -2108,15 +2125,16 @@ pub async fn put_account_business_partner(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
-    Json(body): Json<serde_json::Value>,
+    Json(body): Json<PutBusinessPartnerRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    let Some(kunden_nr) = body.get("kunden_nr").and_then(|v| v.as_str()) else {
-        return ApiError::bad_request("kunden_nr required").into_response();
-    };
+    let kunden_nr = body.kunden_nr.trim();
+    if kunden_nr.is_empty() {
+        return ApiError::unprocessable("kunden_nr must not be blank").into_response();
+    }
     match crate::pg::set_account_kunden_nr(&pool, &malo_id, lf_mp_id, &cfg.tenant, kunden_nr).await
     {
         Ok(0) => StatusCode::NOT_FOUND.into_response(),
@@ -2236,6 +2254,47 @@ pub async fn get_dunning(
     }
 }
 
+/// Body of `POST /api/v1/dunning/{account_id}/escalate`.
+///
+/// Both fields are required. The Mahnstufe and the Zahlungsfrist are what the
+/// Mahnung tells the customer, and accountingd has no configured policy for a
+/// manual escalation's Zahlungsfrist — so a value the operator did not send is
+/// refused rather than substituted.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct EscalateDunningRequest {
+    /// Mahnstufe, 1–3 (the `dunning_cases.stufe` range).
+    pub stufe: i16,
+    /// Zahlungsfrist in calendar days from today (Europe/Berlin), at least 1.
+    pub due_days: u16,
+}
+
+impl EscalateDunningRequest {
+    /// The Mahnstufe and the Zahlungsfrist's date, counted from `today` (the
+    /// Europe/Berlin business date).
+    ///
+    /// # Errors
+    ///
+    /// `422` for a `stufe` outside 1–3, a `due_days` of 0, or a due date past
+    /// the calendar's range.
+    pub fn resolve(&self, today: time::Date) -> Result<(i16, time::Date), ApiError> {
+        let Self { stufe, due_days } = *self;
+        if !(1..=3).contains(&stufe) {
+            return Err(ApiError::unprocessable(format!(
+                "stufe must be 1, 2 or 3, got {stufe}"
+            )));
+        }
+        if due_days == 0 {
+            return Err(ApiError::unprocessable("due_days must be at least 1"));
+        }
+        today
+            .checked_add(time::Duration::days(i64::from(due_days)))
+            .map(|due| (stufe, due))
+            .ok_or_else(|| {
+                ApiError::unprocessable(format!("due_days {due_days} is out of the date range"))
+            })
+    }
+}
+
 /// `POST /api/v1/dunning/{account_id}/escalate`  — manual dunning escalation
 pub async fn escalate_dunning(
     claims: Claims,
@@ -2243,20 +2302,21 @@ pub async fn escalate_dunning(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(account_id): Path<Uuid>,
-    Json(body): Json<serde_json::Value>,
+    Json(body): Json<EscalateDunningRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
+    let (stufe, due_date) = match body.resolve(mako_fristen::heute()) {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
     let account = match fetch_account_by_id(&pool, account_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return ApiError::internal(e).into_response(),
     };
-    let stufe: i16 = body.get("stufe").and_then(|v| v.as_i64()).unwrap_or(1) as i16;
     let amount_due_ct = account.balance_ct.max(0);
-    let due_days: i64 = body.get("due_days").and_then(|v| v.as_i64()).unwrap_or(14);
-    let due_date = mako_fristen::heute() + time::Duration::days(due_days);
 
     // Manual escalation announces the Mahnstufe exactly like the auto-dunning
     // worker — a case opened by an operator is no less material to the ERP or
@@ -3029,8 +3089,8 @@ pub async fn run_sepa(
 /// Body: `rubo4e::current::Vorauszahlung` JSON (camelCase).
 ///
 /// Validation:
-/// - Deserialized via `rubo4e::current::Vorauszahlung` to validate all fields.
-/// - Re-serialised to canonical camelCase before storage.
+/// - Read as `Bo4e<rubo4e::current::Vorauszahlung>`, so the BO4E gate runs as
+///   the body deserialises; the canonical round-trip is what is stored.
 /// - `abschlag_ct` is updated atomically from `betrag.wert` (EUR → ct × 100)
 ///   so the existing Abschlagslauf scheduler continues to work.
 ///
@@ -3046,47 +3106,50 @@ pub async fn put_vorauszahlung(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<VorauszahlungQuery>,
-    Json(body): Json<serde_json::Value>,
+    Json(typed): Json<Bo4e<rubo4e::current::Vorauszahlung>>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    use rubo4e::current::Vorauszahlung;
+    if let Err(r) = typed.ensure_no_undefined_fields() {
+        return bo4e_refusal(&r).into_response();
+    }
     use rust_decimal::Decimal;
 
-    // The BO4E gate — the same four stages every BO4E endpoint in mako runs.
-    let typed: Vorauszahlung = match mako_markt::bo4e::decode(body) {
+    // The BO4E gate — the same four stages every BO4E endpoint in mako runs —
+    // ran while `Bo4e` deserialised the body; what is stored is its canonical
+    // round-trip, not the request.
+    let canonical = match typed.canonical_json() {
         Ok(v) => v,
-        Err(e) => {
-            return ApiError::unprocessable_with(
-                e.to_string(),
-                serde_json::Value::Object(e.detail()),
-            )
-            .into_response();
-        }
-    };
-    let canonical = match serde_json::to_value(&typed) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!(error = %e, "validated Vorauszahlung is not serialisable");
-            return ApiError::internal(anyhow::anyhow!("could not serialise Vorauszahlung"))
-                .into_response();
-        }
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
-    // Derive abschlag_ct from betrag.wert (EUR → ct).
-    let abschlag_ct: Option<i64> =
-        typed
-            .betrag
-            .as_ref()
-            .and_then(|b| b.wert)
-            .map(|eur: Decimal| {
-                use rust_decimal::prelude::ToPrimitive as _;
-                let ct = eur * Decimal::from(100);
-                ct.round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
-                    .to_i64()
-                    .unwrap_or(0)
-            });
+    // Derive abschlag_ct from betrag.wert (EUR → ct, kaufmännisch gerundet). A
+    // Betrag that does not fit in ct is refused, never stored as 0.
+    let abschlag_ct: Option<i64> = match typed.betrag.as_ref().and_then(|b| b.wert) {
+        None => None,
+        Some(eur) => {
+            use rust_decimal::prelude::ToPrimitive as _;
+            let ct = eur
+                .checked_mul(Decimal::from(100))
+                .map(|ct| {
+                    ct.round_dp_with_strategy(
+                        0,
+                        rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+                    )
+                })
+                .and_then(|ct| ct.to_i64());
+            match ct {
+                Some(ct) => Some(ct),
+                None => {
+                    return ApiError::unprocessable(format!(
+                        "betrag.wert {eur} is out of range for an Abschlag in ct"
+                    ))
+                    .into_response();
+                }
+            }
+        }
+    };
 
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
 
@@ -3885,27 +3948,20 @@ pub async fn put_zahlungsinformation(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<ZahlungsQuery>,
-    Json(body): Json<serde_json::Value>,
+    Json(typed): Json<Bo4e<rubo4e::current::Zahlungsinformation>>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    use rubo4e::current::Zahlungsinformation;
+    if let Err(r) = typed.ensure_no_undefined_fields() {
+        return bo4e_refusal(&r).into_response();
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
 
-    // The BO4E gate. Its strict-enum stage is what keeps `zahlungsart` — which
-    // drives the SEPA collection path — from degrading to `Unknown` and being
-    // stored as a mandate instruction nobody can act on.
-    let typed: Zahlungsinformation = match mako_markt::bo4e::decode(body) {
-        Ok(z) => z,
-        Err(e) => {
-            return ApiError::unprocessable_with(
-                e.to_string(),
-                serde_json::Value::Object(e.detail()),
-            )
-            .into_response();
-        }
-    };
+    // The BO4E gate ran while `Bo4e` deserialised the body. Its strict-enum
+    // stage is what keeps `zahlungsart` — which drives the SEPA collection path
+    // — from degrading to `Unknown` and being stored as a mandate instruction
+    // nobody can act on.
 
     // Validate IBAN when present.
     if let Some(ref iban) = typed.iban
@@ -3914,13 +3970,9 @@ pub async fn put_zahlungsinformation(
         return ApiError::unprocessable(format!("invalid IBAN: {msg}")).into_response();
     }
 
-    let canonical = match serde_json::to_value(&typed) {
+    let canonical = match typed.canonical_json() {
         Ok(v) => v,
-        Err(e) => {
-            tracing::error!(error = %e, "validated Zahlungsinformation is not serialisable");
-            return ApiError::internal(anyhow::anyhow!("could not serialise Zahlungsinformation"))
-                .into_response();
-        }
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Ensure account row exists.

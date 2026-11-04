@@ -118,7 +118,8 @@ pub(super) fn render_utilmd(
         Some(id) if !id.is_empty() => Some(id),
         _ => match u.mabis_zaehlpunkt.as_deref() {
             Some(zp) if !zp.is_empty() => Some(zp),
-            _ if utilmd_carries_sg5_loc(&release, pid) => {
+            // Stammdaten carried whole name their own Lokationen.
+            _ if utilmd_carries_sg5_loc(&release, pid) && u.stammdaten.lokationen.is_empty() => {
                 return Err(RenderError::MissingField {
                     message_type: mt.into(),
                     field: format!("{location_id_key} or mabis_zaehlpunkt").into(),
@@ -249,6 +250,13 @@ pub(super) fn render_utilmd(
         .filter(|s| !s.is_empty())
     {
         tx = tx.referenz_vorgangsnummer(referenz);
+    }
+
+    // `SG6 RFF+AAV` „Nummer der Anfrage" — Muss on the answers to a
+    // Geschäftsdatenanfrage (UTILMD AHB Strom 2.2 Kap. 9.5): the ORDERS 17132's
+    // `BGM` DE 1004, the only thing that ties the Stammdaten to the Anfrage.
+    if let Some(anfrage) = u.anfrage_referenz.as_deref().filter(|s| !s.is_empty()) {
+        tx = tx.reference(edi_energy::utilmd_codes::rff::NUMMER_DER_ANFRAGE, anfrage);
     }
 
     // `SG6 RFF+Z60` — Muss on a Bestätigung Anmeldung. Without it the LFN is
@@ -538,6 +546,33 @@ pub(super) fn render_utilmd(
         None => tx,
     };
 
+    // Stammdaten carried whole: every `SG5 LOC`, `SG8` block and `SG12`
+    // segment as the sender holds them — the answer to a Geschäftsdatenanfrage.
+    let mut tx = tx;
+    for lokation in &u.stammdaten.lokationen {
+        let typ = edi_energy::Lokationstyp::from_qualifier_code(&lokation.qualifier).ok_or_else(
+            || RenderError::MissingField {
+                message_type: mt.into(),
+                field: format!(
+                    "stammdaten.lokationen: {:?} is not a LOC DE 3227 qualifier",
+                    lokation.qualifier
+                )
+                .into(),
+            },
+        )?;
+        tx = tx.location(typ, &lokation.id);
+    }
+    for block in &u.stammdaten.bloecke {
+        let mut sg8 = tx.stammdaten(&block.seq);
+        for segment in &block.segmente {
+            sg8 = sg8.segment(&segment.tag, segment.elemente.clone());
+        }
+        tx = sg8.done();
+    }
+    for segment in &u.stammdaten.sg12 {
+        tx = tx.sg12_segment(&segment.tag, segment.elemente.clone());
+    }
+
     // `SG5 LOC+Z17` — every Messlokation the Marktlokation's Energiemenge is
     // computed from (Bedingung `[623]`), and with them the `SG8 SEQ+Z98`
     // „Daten der Marktlokation" and `SEQ+ZF3` „Daten der Messlokation" blocks.
@@ -557,7 +592,6 @@ pub(super) fn render_utilmd(
                 .into(),
         });
     }
-    let mut tx = tx;
     for melo in melos.iter().filter(|m| !m.melo_id.is_empty()) {
         tx = tx.messlokation(&melo.melo_id);
     }

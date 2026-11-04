@@ -181,10 +181,7 @@ async fn a_breach_opens_a_worklist_row_and_does_not_suspend_the_run() {
          window rather than an open-ended item"
     );
     assert!(
-        task.justification
-            .summary
-            .peek()
-            .contains("past their Frist"),
+        task.justification.summary.peek().contains("nach der Frist"),
         "a reviewer must be able to act on the row without opening the journal: {}",
         task.justification.summary.peek()
     );
@@ -195,6 +192,47 @@ async fn a_breach_opens_a_worklist_row_and_does_not_suspend_the_run() {
         task.justification.summary.label().trust,
         Trust::Trusted,
         "the triage summary is the skill's own sentence and must carry a trusted label"
+    );
+}
+
+/// The breach reaches the Desk as a Hinweis: filed under the MaLo its run's
+/// case is about, named for the skill that opened it, with the row's own
+/// sentence and its deadline — and nobody outside the audience sees it.
+#[tokio::test]
+async fn a_breach_is_a_hinweis_filed_under_its_malo() {
+    let plane = plane(Arc::new(ProcessdWith {
+        offset_secs: -90 * 60,
+    }));
+    plane
+        .dispatch_one(AGENT, ce("ce-hinweis-1"), event(-90 * 60))
+        .await
+        .expect("the specialist is activated");
+
+    let hinweise = plane
+        .hinweise(&[AUDIENCE.to_owned()])
+        .await
+        .expect("the worklist is readable");
+    assert_eq!(hinweise.len(), 1, "{hinweise:#?}");
+    let h = &hinweise[0];
+    assert_eq!(h.skill.as_deref(), Some(AGENT));
+    assert_eq!(h.titel.as_deref(), Some("Fristen-Wächter"));
+    assert_eq!(h.prioritaet, "urgent");
+    assert!(h.faellig.is_some());
+    assert!(h.text.contains("nach der Frist"), "{}", h.text);
+    let anker: Vec<(&str, &str)> = h
+        .anker
+        .iter()
+        .map(|a| (a.art.as_str(), a.wert.as_str()))
+        .collect();
+    assert_eq!(anker, vec![("malo", "51238696012")]);
+
+    assert!(
+        plane
+            .hinweise(&["somebody-else".to_owned()])
+            .await
+            .expect("readable")
+            .is_empty(),
+        "a role outside the audience sees no row"
     );
 }
 

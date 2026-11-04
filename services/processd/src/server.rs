@@ -751,6 +751,79 @@ mod rest {
         server::ProcessdState,
     };
 
+    // ── Request bodies ────────────────────────────────────────────────────────
+    //
+    // Each body is a typed struct read through `mako_service::Json`, which
+    // refuses a key the struct does not declare: a misspelt `malo_id` is a 422
+    // naming the key, never a request read as if the field were absent. A
+    // mandatory field is a non-`Option`, so leaving it out is serde's 422; an
+    // empty string is the handler's `MISSING_*` refusal.
+
+    /// `PUT /api/v1/neuanlage/{id}/identifikation`.
+    #[derive(Debug, serde::Deserialize)]
+    pub struct NeuanlageIdentifikationRequest {
+        /// The Marktlokation the NB identified for this Neuanlage.
+        pub malo_id: String,
+    }
+
+    /// `POST /api/v1/start-supply` — GPKE Lieferbeginn (Strom, 55001).
+    #[derive(Debug, serde::Deserialize)]
+    pub struct StartSupplyRequest {
+        /// 11-digit Strom Marktlokations-ID.
+        pub malo_id: String,
+        /// Lieferbeginn, ISO-8601 date (`YYYY-MM-DD`).
+        pub lieferbeginn_datum: String,
+        /// SG4 STS Transaktionsgrund, forwarded onto the outbound UTILMD.
+        #[serde(default)]
+        pub transaktionsgrund: Option<String>,
+        /// `SG8 SEQ+Z79` Bilanzkreis; falls back to the single configured
+        /// `[[lf.bilanzkreise]] standard` entry.
+        #[serde(default)]
+        pub bilanzkreis: Option<String>,
+    }
+
+    /// `POST /api/v1/start-supply-gas` — GeLi Gas Lieferbeginn (44001).
+    #[derive(Debug, serde::Deserialize)]
+    pub struct StartSupplyGasRequest {
+        /// Gas-MaLo-ID — `SG5 LOC+Z16`.
+        pub malo_id: String,
+        /// Zählpunktbezeichnung — `RFF+Z13`.
+        pub zaehlpunkt: String,
+        /// Lieferbeginn, `YYYYMMDD` (gesetzliche deutsche Zeit).
+        pub process_date: String,
+        /// SG4 STS Transaktionsgrund: `E03` Wechsel when absent, `E01`/`E02`
+        /// Einzug.
+        #[serde(default)]
+        pub transaktionsgrund: Option<String>,
+        /// `SG10 CCI+Z19` Bilanzkreis; falls back to the single configured
+        /// `[[lf.bilanzkreise]] standard` entry.
+        #[serde(default)]
+        pub bilanzkreis: Option<String>,
+    }
+
+    /// `POST /api/v1/end-supply` — GPKE Lieferende (Strom, 55004).
+    #[derive(Debug, serde::Deserialize)]
+    pub struct EndSupplyRequest {
+        /// 11-digit Strom Marktlokations-ID.
+        pub malo_id: String,
+        /// Lieferende, ISO-8601 date (`YYYY-MM-DD`).
+        pub lieferende_datum: String,
+    }
+
+    /// `POST /api/v1/end-supply-gas` — GeLi Gas Lieferende (44004).
+    ///
+    /// The fields `makod`'s `geli.lieferende.anmelden` reads: the same
+    /// `zaehlpunkt` and `YYYYMMDD` `process_date` as the Gas Lieferbeginn.
+    #[derive(Debug, serde::Deserialize)]
+    pub struct EndSupplyGasRequest {
+        /// Gas-MaLo-ID — `SG5 LOC+Z16`.
+        pub malo_id: String,
+        /// Zählpunktbezeichnung — `RFF+Z13`.
+        pub zaehlpunkt: String,
+        /// Lieferende, `YYYYMMDD` (gesetzliche deutsche Zeit).
+        pub process_date: String,
+    }
+
     /// Authorize `action` for the caller, or produce the `403`.
     ///
     /// processd does not merely report decisions, it makes them: approving a
@@ -901,7 +974,7 @@ mod rest {
         authorize(&enforcer, &claims, "read-queue", &state.tenant)?;
         let queue = PgApprovalQueue::new(pool);
         let entries = queue
-            .list(&state.tenant, None, 100)
+            .list(&state.tenant, None, None, 100)
             .await
             .map_err(ApiError::internal)?;
         Ok(Json(
@@ -984,18 +1057,19 @@ mod rest {
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
         Path(id): Path<uuid::Uuid>,
-        Json(body): Json<serde_json::Value>,
+        Json(body): Json<NeuanlageIdentifikationRequest>,
     ) -> ApiResult<StatusCode> {
         authorize(&enforcer, &claims, "identify-neuanlage", &state.tenant)?;
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         {
-            let Some(malo_id) = body.get("malo_id").and_then(|v| v.as_str()) else {
+            let malo_id = body.malo_id.as_str();
+            if malo_id.is_empty() {
                 return Err(refuse(
                     "MISSING_MALO_ID",
-                    "body must contain \"malo_id\" — the Marktlokation the NB identified \
+                    "\"malo_id\" must name the Marktlokation the NB identified \
                      for this Neuanlage",
                 ));
-            };
+            }
             // No open case with that id in this tenant: absent or already decided.
             if crate::pg::neuanlage::set_identifikation(&pool, id, &state.tenant, malo_id)
                 .await
@@ -1008,7 +1082,7 @@ mod rest {
         }
         #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
         {
-            let _ = (pool, state, id, body);
+            let _ = (pool, state, id, body.malo_id);
             Err(nb_role_not_compiled_in())
         }
     }
@@ -1081,7 +1155,13 @@ mod rest {
         } else {
             entry.reject_payload.as_ref()
         };
-        let payload = match crate::pg::approval::decision_body(&entry, command, frozen, &operator) {
+        // The body first — a frozen answer refuses an edit before any code is
+        // judged — then the stated code against the tree the entry was decided
+        // in: a code means something only inside its tree.
+        let payload = match crate::pg::approval::decision_body(&entry, command, frozen, &operator)
+            .and_then(|body| {
+                crate::pg::approval::check_operator_code(&entry, approve, &operator).map(|()| body)
+            }) {
             Ok(mut p) => {
                 let by = if approve {
                     "approved_by"
@@ -1278,46 +1358,34 @@ mod rest {
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
-        axum::Json(body): axum::Json<serde_json::Value>,
+        Json(body): Json<StartSupplyRequest>,
     ) -> ApiResult<axum::response::Response> {
         authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
         use mako_fristen::{self as fristen, HolidayCalendar};
 
-        let malo_id = match body
-            .get("malo_id")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            Some(id) => id.to_owned(),
-            None => {
-                return Err(refuse(
-                    "MISSING_MALO_ID",
-                    "\"malo_id\" is required (11-digit Strom Marktlokations-ID)",
-                ));
-            }
-        };
+        // `transaktionsgrund` is the optional SG4 STS Transaktionsgrund,
+        // forwarded onto the outbound UTILMD. Under LFW24 the Strom date rule is
+        // Transaktionsgrund-independent, so it does not alter the validation
+        // below.
+        let StartSupplyRequest {
+            malo_id,
+            lieferbeginn_datum: lieferbeginn_str,
+            transaktionsgrund,
+            bilanzkreis,
+        } = body;
 
-        let lieferbeginn_str = match body
-            .get("lieferbeginn_datum")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            Some(d) => d.to_owned(),
-            None => {
-                return Err(refuse(
-                    "MISSING_LIEFERBEGINN",
-                    "\"lieferbeginn_datum\" is required (ISO-8601 date, e.g. \"2026-10-01\")",
-                ));
-            }
-        };
-
-        // Optional SG4 STS Transaktionsgrund — forwarded onto the outbound
-        // UTILMD. Under LFW24 the Strom date rule is Transaktionsgrund-
-        // independent, so it does not alter the validation below.
-        let transaktionsgrund = body
-            .get("transaktionsgrund")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
+        if malo_id.is_empty() {
+            return Err(refuse(
+                "MISSING_MALO_ID",
+                "\"malo_id\" is required (11-digit Strom Marktlokations-ID)",
+            ));
+        }
+        if lieferbeginn_str.is_empty() {
+            return Err(refuse(
+                "MISSING_LIEFERBEGINN",
+                "\"lieferbeginn_datum\" is required (ISO-8601 date, e.g. \"2026-10-01\")",
+            ));
+        }
 
         // `SG8 SEQ+Z79` Produktpaket — **Muss** on a 55001 (UTILMD AHB Strom
         // 2.2 Kap. 5.3): „ohne die Angabe eines für den LF gültigen
@@ -1330,11 +1398,8 @@ mod rest {
         // otherwise it is the caller's to name, because MaBiS § 10.2.1 grants the
         // Zuordnungsermächtigung per (ZRT, BG, BK, LF) and the supplier picks
         // among those.
-        let bilanzkreis = body
-            .get("bilanzkreis")
-            .and_then(|v| v.as_str())
+        let bilanzkreis = bilanzkreis
             .filter(|s| !s.is_empty())
-            .map(str::to_owned)
             .or_else(|| configured_standard_bilanzkreis(&state));
         if bilanzkreis.is_none() {
             return Err(refuse(
@@ -1470,51 +1535,53 @@ mod rest {
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
-        axum::Json(body): axum::Json<serde_json::Value>,
+        Json(body): Json<StartSupplyGasRequest>,
     ) -> ApiResult<axum::response::Response> {
         authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
+        let StartSupplyGasRequest {
+            malo_id,
+            zaehlpunkt,
+            process_date,
+            transaktionsgrund,
+            bilanzkreis,
+        } = body;
         // Validate mandatory Gas fields before forwarding.
-        let malo_id = match body.get("malo_id").and_then(|v| v.as_str()) {
-            Some(id) if !id.is_empty() => id.to_owned(),
-            _ => {
-                return Err(refuse(
-                    "MISSING_MALO_ID",
-                    "\"malo_id\" is required (11-digit Gas-MaLo-ID)",
-                ));
-            }
-        };
-        if body
-            .get("zaehlpunkt")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .is_none()
-        {
+        if malo_id.is_empty() {
+            return Err(refuse(
+                "MISSING_MALO_ID",
+                "\"malo_id\" is required (11-digit Gas-MaLo-ID)",
+            ));
+        }
+        if zaehlpunkt.is_empty() {
             return Err(refuse(
                 "MISSING_ZAEHLPUNKT",
                 "\"zaehlpunkt\" is required (Zählpunktbezeichnung, RFF+Z13) — mandatory per BK7-24-01-009 AHB",
             ));
         }
-        if body
-            .get("process_date")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .is_none()
-        {
+        if process_date.is_empty() {
             return Err(refuse(
                 "MISSING_PROCESS_DATE",
                 "\"process_date\" is required (Lieferbeginn date, YYYYMMDD in CET/CEST)",
             ));
         }
+        // An unreadable date cannot be held against the Mindestvorlauffrist,
+        // so it is refused rather than forwarded unchecked.
+        let Ok(lieferbeginn) = time::Date::parse(
+            &process_date,
+            time::macros::format_description!("[year][month][day]"),
+        ) else {
+            return Err(refuse(
+                "INVALID_DATE",
+                format!("\"process_date\" is not a YYYYMMDD date: {process_date:?}"),
+            ));
+        };
 
         // `SG10 CCI+Z19` DE 7037 — **Muss** on a 44001 (UTILMD AHB Gas 1.2).
         // GeLi Gas states the Bilanzkreis in one segment; the Strom `SG8
         // SEQ+Z79` Produktpaket does not exist here. `makod` refuses an
         // Anmeldung without one, so the caller learns at the edge.
-        let bilanzkreis = body
-            .get("bilanzkreis")
-            .and_then(|v| v.as_str())
+        let bilanzkreis = bilanzkreis
             .filter(|s| !s.is_empty())
-            .map(str::to_owned)
             .or_else(|| configured_standard_bilanzkreis(&state));
         let Some(bilanzkreis) = bilanzkreis else {
             return Err(refuse(
@@ -1538,21 +1605,14 @@ mod rest {
         //   date to „den zweiten, auf das Bestätigungsdatum folgenden WT"
         //   instead. Refusing those would block an Anmeldung the market
         //   accepts, so they pass with the correction flagged.
-        let transaktionsgrund = body
-            .get("transaktionsgrund")
-            .and_then(|v| v.as_str())
-            .unwrap_or("E03");
-        let ist_wechsel = transaktionsgrund == "E03";
-
-        let lieferbeginn = body
-            .get("process_date")
-            .and_then(|v| v.as_str())
-            .and_then(|d| {
-                time::Date::parse(d, time::macros::format_description!("[year][month][day]")).ok()
-            });
+        //
+        // An absent Transaktionsgrund reads as `E03`, the documented default:
+        // it is the reading that holds the request to the binding lead time,
+        // so leaving it out can only refuse more, never send short.
+        let ist_wechsel = transaktionsgrund.as_deref().unwrap_or("E03") == "E03";
 
         let mut vorlauf_hinweis = None;
-        if let Some(lieferbeginn) = lieferbeginn {
+        {
             use mako_fristen::{HolidayCalendar, add_werktage};
 
             let today_berlin = mako_fristen::heute();
@@ -1572,7 +1632,7 @@ mod rest {
                         ),
                         serde_json::json!({ "earliest_lieferbeginn": fruehestens.to_string(),
                             "berlin_date": today_berlin.to_string(),
-                            "transaktionsgrund": transaktionsgrund }),
+                            "transaktionsgrund": transaktionsgrund.as_deref().unwrap_or("E03") }),
                     ));
                 }
                 vorlauf_hinweis = Some(format!(
@@ -1591,12 +1651,7 @@ mod rest {
         // have more than one Lieferbeginn over its life (move-out then move-back-in,
         // or a corrected date after a GNB rejection), so a MaLo-only key would name
         // two genuinely different commands identically.
-        let idempotency_key = format!(
-            "processd-start-supply-gas-{malo_id}-{}",
-            body.get("process_date")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-        );
+        let idempotency_key = format!("processd-start-supply-gas-{malo_id}-{process_date}");
         let cmd = mako_markt::makod_client::ForwardCommand {
             // `geli.lieferbeginn.anmelden` is licensed to the **Gas** supplier;
             // the generic `LF` fails makod's role check.
@@ -1604,13 +1659,14 @@ mod rest {
             command: mako_markt::commands::GELI_LIEFERBEGINN_ANMELDEN.to_owned(),
             malo_id: Some(malo_id.clone()),
             melo_id: None,
-            payload: {
-                let mut body = body;
-                if let Some(obj) = body.as_object_mut() {
-                    obj.insert("bilanzkreis".to_owned(), bilanzkreis.into());
-                }
-                body
-            },
+            // The fields `dispatch_geli_lf_anmeldung` reads, and no others.
+            payload: serde_json::json!({
+                "malo_id": malo_id,
+                "zaehlpunkt": zaehlpunkt,
+                "process_date": process_date,
+                "transaktionsgrund": transaktionsgrund,
+                "bilanzkreis": bilanzkreis,
+            }),
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
             Ok(accepted) => Ok((
@@ -1646,78 +1702,141 @@ mod rest {
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
-        axum::Json(body): axum::Json<serde_json::Value>,
+        Json(body): Json<EndSupplyRequest>,
     ) -> ApiResult<axum::response::Response> {
         authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
+        let EndSupplyRequest {
+            malo_id,
+            lieferende_datum,
+        } = body;
+        if malo_id.is_empty() {
+            return Err(refuse("MISSING_MALO_ID", "\"malo_id\" is required"));
+        }
+        if lieferende_datum.is_empty() {
+            return Err(refuse(
+                "MISSING_LIEFERENDE",
+                "\"lieferende_datum\" is required (ISO-8601 date)",
+            ));
+        }
+        let payload = serde_json::json!({
+            "malo_id": malo_id,
+            "lieferende_datum": lieferende_datum,
+        });
         end_supply_inner(
             state,
-            &body,
-            mako_markt::commands::GPKE_LIEFERENDE_ANMELDEN,
-            "processd-end-supply",
+            Lieferende {
+                command: mako_markt::commands::GPKE_LIEFERENDE_ANMELDEN,
+                key_prefix: "processd-end-supply",
+                marktrolle: "LF",
+                malo_id,
+                date_key: "lieferende_datum",
+                date: lieferende_datum,
+                payload,
+            },
         )
         .await
     }
 
-    /// `POST /api/v1/end-supply-gas` — ERP initiates a GeLi Gas Lieferende (44002).
+    /// `POST /api/v1/end-supply-gas` — ERP initiates a GeLi Gas Lieferende (44004).
+    ///
+    /// Forwards to makod `geli.lieferende.anmelden`, which is licensed to the
+    /// **Gas** supplier (`LFG`) and reads the same `zaehlpunkt` and `YYYYMMDD`
+    /// `process_date` as the Gas Lieferbeginn.
     pub async fn end_supply_gas(
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
-        axum::Json(body): axum::Json<serde_json::Value>,
+        Json(body): Json<EndSupplyGasRequest>,
     ) -> ApiResult<axum::response::Response> {
         authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
+        let EndSupplyGasRequest {
+            malo_id,
+            zaehlpunkt,
+            process_date,
+        } = body;
+        if malo_id.is_empty() {
+            return Err(refuse("MISSING_MALO_ID", "\"malo_id\" is required"));
+        }
+        if zaehlpunkt.is_empty() {
+            return Err(refuse(
+                "MISSING_ZAEHLPUNKT",
+                "\"zaehlpunkt\" is required (Zählpunktbezeichnung, RFF+Z13)",
+            ));
+        }
+        if process_date.is_empty() {
+            return Err(refuse(
+                "MISSING_PROCESS_DATE",
+                "\"process_date\" is required (Lieferende date, YYYYMMDD in CET/CEST)",
+            ));
+        }
+        if time::Date::parse(
+            &process_date,
+            time::macros::format_description!("[year][month][day]"),
+        )
+        .is_err()
+        {
+            return Err(refuse(
+                "INVALID_DATE",
+                format!("\"process_date\" is not a YYYYMMDD date: {process_date:?}"),
+            ));
+        }
+        // The fields `dispatch_geli_lf_anmeldung` reads, and no others.
+        let payload = serde_json::json!({
+            "malo_id": malo_id,
+            "zaehlpunkt": zaehlpunkt,
+            "process_date": process_date,
+        });
         end_supply_inner(
             state,
-            &body,
-            mako_markt::commands::GELI_LIEFERENDE_ANMELDEN,
-            "processd-end-supply-gas",
+            Lieferende {
+                command: mako_markt::commands::GELI_LIEFERENDE_ANMELDEN,
+                key_prefix: "processd-end-supply-gas",
+                // `geli.lieferende.anmelden` is licensed to the Gas supplier
+                // alone; the generic `LF` fails makod's role check.
+                marktrolle: "LFG",
+                malo_id,
+                date_key: "process_date",
+                date: process_date,
+                payload,
+            },
         )
         .await
+    }
+    /// One Lieferende, validated and ready to forward to `makod`.
+    struct Lieferende {
+        command: &'static str,
+        key_prefix: &'static str,
+        marktrolle: &'static str,
+        malo_id: String,
+        /// The key the date travels under in the `202` answer.
+        date_key: &'static str,
+        date: String,
+        payload: serde_json::Value,
     }
 
     /// Shared Lieferende dispatch for Strom and Gas.
     async fn end_supply_inner(
         state: ProcessdState,
-        body: &serde_json::Value,
-        command: &str,
-        key_prefix: &str,
+        lieferende: Lieferende,
     ) -> ApiResult<axum::response::Response> {
-        let malo_id = match body
-            .get("malo_id")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            Some(id) => id.to_owned(),
-            None => {
-                return Err(refuse("MISSING_MALO_ID", "\"malo_id\" is required"));
-            }
-        };
-        let lieferende_str = match body
-            .get("lieferende_datum")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            Some(d) => d.to_owned(),
-            None => {
-                return Err(refuse(
-                    "MISSING_LIEFERENDE",
-                    "\"lieferende_datum\" is required (ISO-8601 date)",
-                ));
-            }
-        };
-
+        let Lieferende {
+            command,
+            key_prefix,
+            marktrolle,
+            malo_id,
+            date_key,
+            date,
+            payload,
+        } = lieferende;
         // Idempotent on (malo, date): a redelivered Kündigung must not open a
         // second Lieferende process at makod.
-        let idempotency_key = format!("{key_prefix}-{malo_id}-{lieferende_str}");
+        let idempotency_key = format!("{key_prefix}-{malo_id}-{date}");
         let cmd = mako_markt::makod_client::ForwardCommand {
-            marktrolle: Some("LF".to_owned()),
+            marktrolle: Some(marktrolle.to_owned()),
             command: command.to_owned(),
             malo_id: Some(malo_id.clone()),
             melo_id: None,
-            payload: serde_json::json!({
-                "malo_id": malo_id,
-                "lieferende_datum": lieferende_str,
-            }),
+            payload,
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
             Ok(accepted) => Ok((
@@ -1726,7 +1845,7 @@ mod rest {
                     "process_id": accepted.process_id,
                     "command": command,
                     "malo_id": malo_id,
-                    "lieferende_datum": lieferende_str,
+                    date_key: date,
                     "status": "initiated",
                 })),
             )

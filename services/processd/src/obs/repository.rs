@@ -59,4 +59,49 @@ pub trait ProcessProjectionRepository: Send + Sync + 'static {
         now: time::OffsetDateTime,
         tenant: &str,
     ) -> Result<Vec<ProcessProjection>, ObsError>;
+
+    /// One page of the tenant's open processes with one of `pids` (any when
+    /// empty) on one of `malos` (any when empty), the
+    /// earliest Frist first and those without one last, strictly after
+    /// `after` — a keyset page, so a page costs the same at any depth and a
+    /// process closing between two pages shifts none.
+    async fn open_processes(
+        &self,
+        tenant: &str,
+        pids: &[u32],
+        malos: &[String],
+        after: Option<&OpenCursor>,
+        limit: i64,
+    ) -> Result<Vec<ProcessProjection>, ObsError>;
+
+    /// What [`Self::open_processes`]'s filter covers in total, and how many of
+    /// those Fristen fall in `[von, bis)` — counted by the store, so the
+    /// figure holds however many processes are open.
+    async fn count_open_processes(
+        &self,
+        tenant: &str,
+        pids: &[u32],
+        malos: &[String],
+        von: time::OffsetDateTime,
+        bis: time::OffsetDateTime,
+    ) -> Result<OpenCount, ObsError>;
+}
+
+/// The answer of [`ProcessProjectionRepository::count_open_processes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCount {
+    /// Open processes the filter keeps.
+    pub offen: i64,
+    /// Of those, the ones whose Frist falls in the window.
+    pub faellig: i64,
+    /// The earliest such Frist.
+    pub frueheste: Option<time::OffsetDateTime>,
+}
+
+/// Where a page of [`ProcessProjectionRepository::open_processes`] ends: the
+/// last row's Frist (`None` sorts last) and its id as the tiebreak.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCursor {
+    pub frist: Option<time::OffsetDateTime>,
+    pub process_id: uuid::Uuid,
 }

@@ -19,6 +19,7 @@
 //! deterministic engine still dispatches.
 
 pub mod attest;
+pub mod beleg;
 pub mod calendar;
 pub mod keys;
 pub mod label;
@@ -32,8 +33,9 @@ pub mod sweep;
 pub mod tools;
 pub mod witness;
 pub use runtime::{
-    Accepted, Activation, Admitted, AgentDecision, Envelope, EraseError, Plane, PlaneConfig,
-    Reception, Route, Router, Stores,
+    Accepted, Activation, Admitted, AgentDecision, Anker, Answer, AnswerSentence, BewertungError,
+    Envelope, EraseError, HILFREICH, Hinweis, Plane, PlaneConfig, Reception, Route, Router,
+    Schritt, Stores, Urteil, VORSCHLAG, Vorschlag, VorschlagSchicksal,
 };
 
 use std::collections::BTreeMap;
@@ -93,6 +95,7 @@ pub fn manifests() -> &'static BTreeMap<String, Manifest> {
             "../../agents/billing-regulatory-guard-agent.yaml",
             "../../agents/compliance-agent.yaml",
             "../../agents/deadline-alert-agent.yaml",
+            "../../agents/desk-assistant.yaml",
             "../../agents/eeg-agent.yaml",
             "../../agents/eeg-compliance-agent.yaml",
             "../../agents/einsd-batch-agent.yaml",
@@ -197,7 +200,7 @@ mod tests {
     /// does not exist fails here rather than at first dispatch.
     #[test]
     fn every_specialist_manifest_parses() {
-        assert_eq!(manifests().len(), 28, "one manifest per specialist");
+        assert_eq!(manifests().len(), 29, "one manifest per specialist");
         for embedded in manifests() {
             let (name, m) = embedded;
             {
@@ -489,9 +492,11 @@ mod tests {
     fn specialists_grant_the_knowledge_their_service_publishes() {
         // Coded specialists have no model to read a prompt. Billingd publishes
         // no VPP-specific prompt, and importing its EEG prompt is worse than
-        // keeping the VPP procedure explicit.
+        // keeping the VPP procedure explicit. The Desk's assistant answers a
+        // person's question across services; no service publishes that.
         const NO_PROMPT_NEEDED: &[&str] = &[
             "deadline-alert-agent",
+            "desk-assistant",
             "gabi-gas-agent",
             "vpp-billing-agent",
         ];
@@ -829,7 +834,7 @@ mod tests {
     /// **Every model a manifest names is one this deployment reviewed.**
     ///
     /// The model answering a regulated decision is part of what a reviewer
-    /// approves, and it is declared in 28 separate strings. Two spellings of one
+    /// approves, and it is declared in 29 separate strings. Two spellings of one
     /// model both resolve, so nothing fails — and a fleet answering from two
     /// models is not the fleet anybody reviewed.
     ///

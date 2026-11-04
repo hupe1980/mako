@@ -78,7 +78,8 @@ impl Skill for GabiAllocationTriage {
             "gabi.final-allocation.missing",
             Justification::new(
                 Tainted::trusted(
-                    "A binding final ALOCAT is missing. Open and track the clearing case."
+                    "Die verbindliche finale Allokation (ALOCAT) fehlt. Klärfall anlegen und \
+                     verfolgen."
                         .to_owned(),
                 ),
                 justification,

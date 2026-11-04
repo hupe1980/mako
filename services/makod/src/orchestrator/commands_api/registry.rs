@@ -288,6 +288,47 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(17115),
         dispatch: cmd_gpke_sperrung_fehlgeschlagen,
     },
+    // ── GPKE Stornierung, NB side (inbound 55022 → UTILMD 55023/55024) ───────
+    // The NB answers „zurück an den Absender" with a UTILMD of its own (UTILMD
+    // AHB Strom 2.2 Kap. 9.6): 55023 with `E15` (`S_0086`), 55024 with an
+    // `S_0087` code. The process is keyed on the 55022's `IDE+24`
+    // Vorgangsnummer, which the payload names as `vorgang_id`.
+    CommandDescriptor {
+        name: "gpke.stornierung.bestaetigen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55023),
+        dispatch: cmd_gpke_stornierung_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "gpke.stornierung.ablehnen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55024),
+        dispatch: cmd_gpke_stornierung_ablehnen,
+    },
+    // ── GPKE Geschäftsdatenanfrage (ORDERS 17132 → UTILMD / ORDRSP 19101) ─────
+    // GPKE Teil 4 Kap. 3: a LF or MSB asks the NB for the Stammdaten of a
+    // Markt- or Messlokation (ORDERS AHB 1.1b Kap. 4.1.1.1, „LF, MSB an NB");
+    // the NB answers with UTILMD 55035/55095 (to a LF) or 55060 (to a MSB),
+    // UTILMD AHB Strom 2.2 Kap. 9.5, or refuses with ORDRSP 19101 (ORDRSP AHB
+    // 1.1b Kap. 4.1.2, „NB an LF, MSB").
+    CommandDescriptor {
+        name: "gpke.geschaeftsdatenanfrage.anfragen",
+        permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
+        primary_pid: pid(17132),
+        dispatch: cmd_gpke_geschaeftsdatenanfrage_anfragen,
+    },
+    CommandDescriptor {
+        name: "gpke.geschaeftsdatenanfrage.beantworten",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55035),
+        dispatch: cmd_gpke_geschaeftsdatenanfrage_beantworten,
+    },
+    CommandDescriptor {
+        name: "gpke.geschaeftsdatenanfrage.ablehnen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(19101),
+        dispatch: cmd_gpke_geschaeftsdatenanfrage_ablehnen,
+    },
     // ── GPKE Netznutzungsabrechnung — LF-payer side ───────────────────────────
     // The LF receives an INVOIC from the NB and settles or disputes it.
     // Routing key: `invoice_ref` (INVOIC message-reference) from the payload.
@@ -483,6 +524,23 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44022),
         dispatch: cmd_geli_gas_stornierung_initiieren,
+    },
+    // ── GeLi Gas Stornierung, GNB side (inbound 44022 → UTILMD 44023/44024) ──
+    // The GNB answers „zurück an den Absender" with a UTILMD of its own
+    // (UTILMD AHB Gas 1.2 Kap. 5.2): 44023 with `E15` (`G_0004`), 44024 with a
+    // `G_0003` code. The process is keyed on the 44022's `IDE+24`
+    // Vorgangsnummer, which the payload names as `vorgang_id`.
+    CommandDescriptor {
+        name: "geli.stornierung.bestaetigen",
+        permitted_roles: &[Marktrolle::Gnb],
+        primary_pid: pid(44023),
+        dispatch: cmd_geli_stornierung_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "geli.stornierung.ablehnen",
+        permitted_roles: &[Marktrolle::Gnb],
+        primary_pid: pid(44024),
+        dispatch: cmd_geli_stornierung_ablehnen,
     },
     // ── GeLi Gas Datenabruf (ORDERS 17103 — LF requests Brennwert/Zustandszahl) ─
     // LF sends ORDERS 17103 outbound to NB/MSB requesting Gas quality data.
@@ -740,6 +798,39 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(15001),
         dispatch: cmd_wim_preisanfrage_angebot_senden,
+    },
+    // The requester's side: MSBN (35001), LF (35002), NB or LF (35004/35005)
+    // sends the REQOTE and the MSB's QUOTES resumes the process by the
+    // location the REQOTE carried (REQOTE AHB 1.2 Kap. 4).
+    CommandDescriptor {
+        name: "wim.preisanfrage.anfragen",
+        permitted_roles: &[
+            Marktrolle::Nmsb,
+            Marktrolle::Msb,
+            Marktrolle::Lf,
+            Marktrolle::Nb,
+        ],
+        primary_pid: pid(35001),
+        dispatch: cmd_wim_preisanfrage_anfragen,
+    },
+    // ── WiM Ersteinbau eines iMS (IFTSTA 21029 → 21030/21031, `E_0233`) ───────
+    //
+    // WiM Strom Teil 1 Kap. 3.5. The gMSB announces the rollout, the wMSB
+    // answers within 3 WT; both are MSBs, and the workflow's side — set by
+    // whether the Vorgang was opened by sending or by receiving the 21029 —
+    // refuses an answer from the side that does not owe it. One answer
+    // command: the `E_0233` code's cluster picks 21030 or 21031.
+    CommandDescriptor {
+        name: "wim.ersteinbau.vorabinformation-senden",
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(21029),
+        dispatch: cmd_wim_ersteinbau_vorabinformation_senden,
+    },
+    CommandDescriptor {
+        name: "wim.ersteinbau.beantworten",
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(21030),
+        dispatch: cmd_wim_ersteinbau_beantworten,
     },
     // ── WiM Steuerungsauftrag ─────────────────────────────────────────────────
     CommandDescriptor {

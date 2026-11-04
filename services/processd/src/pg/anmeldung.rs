@@ -215,20 +215,23 @@ impl PgAnmeldungRepository {
         rows.iter().map(map_decision).collect()
     }
 
-    /// STP breakdown by ERC code — for root-cause analysis when STP drops.
+    /// Refusals over the last `days`, counted per Entscheidungsbaum and code.
     ///
-    /// Returns rows: `(antwortcode, count)` ordered by count descending.
+    /// Returns rows `(antwortcode_ebd, antwortcode, count)`, most frequent
+    /// first. The tree is part of the key: a code means nothing without the
+    /// tree that publishes it (`A02` is a different refusal in `E_0607` and in
+    /// `E_0622`), so two trees' `A02` are two rows.
     pub async fn stp_breakdown_by_erc(
         &self,
         tenant: &str,
         days: u32,
-    ) -> Result<Vec<(Option<String>, i64)>, sqlx::Error> {
-        let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
-            "SELECT antwortcode, COUNT(*)::bigint AS cnt \
+    ) -> Result<Vec<(Option<String>, Option<String>, i64)>, sqlx::Error> {
+        let rows: Vec<(Option<String>, Option<String>, i64)> = sqlx::query_as(
+            "SELECT antwortcode_ebd, antwortcode, COUNT(*)::bigint AS cnt \
              FROM anmeldung_decisions \
              WHERE tenant = $1 AND decision = 'Reject' \
                AND decided_at >= now() - ($2::int * INTERVAL '1 day') \
-             GROUP BY antwortcode ORDER BY cnt DESC",
+             GROUP BY antwortcode_ebd, antwortcode ORDER BY cnt DESC",
         )
         .bind(tenant)
         .bind(days as i32)

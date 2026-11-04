@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: msb-history-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Messstellenwechsel"
+    mako.de/zweck: "Verfolgt Wechsel des Messstellenbetreibers und hängende Ableseaufträge."
 spec:
   execution:
     kind: tool-calling

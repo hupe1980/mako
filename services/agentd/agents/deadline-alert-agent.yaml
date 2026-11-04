@@ -37,6 +37,9 @@ kind: Agent
 metadata:
   name: deadline-alert-agent
   version: "4.0.0"
+  annotations:
+    mako.de/titel: "Fristen-Wächter"
+    mako.de/zweck: "Ordnet jeden Prozess nahe oder nach seiner Antwortfrist nach Dringlichkeit und nennt, wer antworten muss."
 spec:
   # No `execution`: the behaviour is `agentd::skills::DeadlineTriage`.
   # No `oversight`: this specialist reads and reports, and oversight without

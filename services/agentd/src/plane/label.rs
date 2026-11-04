@@ -3,7 +3,7 @@
 //! A CloudEvent payload is emitted by one of mako's own services, but almost
 //! everything in it originated on the wire: a MaLo came out of a counterparty's
 //! UTILMD, an amount came off their INVOIC, a `reference` is free text they
-//! wrote. Handing that to [`Runtime::run`](agentplane::runtime::Runtime::run)
+//! wrote. Handing that to [`Runtime::start`](agentplane::runtime::Runtime::start)
 //! labels the whole value **trusted**, which is the one label it must not have —
 //! `protected_fields` with `require_trusted` would then accept a MaLo a
 //! counterparty chose, and the egress ceilings would see no counterparty

@@ -165,16 +165,17 @@ use mako_geli_gas::{
 use mako_gpke::{
     AbrechnungsdatenCommand as GpkeAbrechnungsdatenCommand, AllokationslisteCommand,
     AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand, BeendigungZuordnungCommand,
-    DatenabrufCommand, GpkeAbrechnungWorkflow, GpkeAbrechnungsdatenWorkflow,
-    GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
+    DatenabrufCommand, GdaAnfrage, GdaCommand, GpkeAbrechnungWorkflow,
+    GpkeAbrechnungsdatenWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
     GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatenabrufWorkflow,
-    GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
-    GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
-    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow,
-    KommunikationsdatenCommand, KonfigurationAenderungCommand, KonfigurationCommand,
-    LfAbmeldungCommand, LfAnmeldungCommand, MesswerteLieferungCommand, NeuanlageCommand,
-    SperrungCommand, SperrungLfCommand, SupplierChangeCommand, UtiltsKonfigCommand,
+    GpkeGeschaeftsdatenanfrageWorkflow, GpkeKonfigurationAenderungWorkflow,
+    GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
+    GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow, GpkePartinWorkflow,
+    GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand, GpkeStornierungWorkflow,
+    GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow, KommunikationsdatenCommand,
+    KonfigurationAenderungCommand, KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand,
+    MesswerteLieferungCommand, NeuanlageCommand, SperrungCommand, SperrungLfCommand,
+    SupplierChangeCommand, UtiltsKonfigCommand,
 };
 use mako_mabis::{
     BillingCommand, ClearinglisteCommand, Datenstatus, IFTSTA_ABWEISUNG_PID,
@@ -183,10 +184,9 @@ use mako_mabis::{
 };
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, PreisanfrageCommand, PreislisteCommand,
-    StammdatenCommand, TechnikAenderungCommand, WeiterverpflichtungCommand,
-    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicWorkflow,
-    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
-    WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
+    TechnikAenderungCommand, WeiterverpflichtungCommand, WimDeviceChangeWorkflow,
+    WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicWorkflow, WimPreisanfrageWorkflow,
+    WimPreislisteWorkflow, WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
     esa_wertebestellung::EsaWertebestellungWorkflow, insrpt::StoerungsmeldungCommand,
     wertebestellung::WimWertebestellungWorkflow,
 };
@@ -534,10 +534,11 @@ fn iftsta_antwortcode(i: &edi_energy::messages::iftsta::IftstaMessage) -> Option
         .iter()
         .filter(|s| s.tag == "STS")
         .find_map(|s| {
-            // `STS+E01++<code>:<Codeliste>` — the code is the third composite.
-            s.component_str(2, 0)
-                .or_else(|| s.component_str(1, 0))
-                .filter(|v| !v.is_empty())
+            // `STS+E01++<code>:<Codeliste>` — the code is the third composite,
+            // DE 9013. The second is DE 4405, a status from another catalogue:
+            // reading it when 9013 is absent would pass a status off as an
+            // `E_0233` answer.
+            s.component_str(2, 0).filter(|v| !v.is_empty())
         })
         .map(ToOwned::to_owned)
 }
@@ -774,6 +775,7 @@ coverage_table! {
     gpke_beendigung_zuordnung_registry,
     gpke_kuendigung_registry,
     gpke_datenabruf_registry,
+    gpke_geschaeftsdatenanfrage_registry,
     gpke_eog_registry,
     gpke_konfiguration_aenderung_registry,
     gpke_konfiguration_registry,
@@ -810,8 +812,6 @@ coverage_table! {
     wim_preisliste_registry,
     wim_rechnungsabwicklung_registry,
     wim_registry,
-    wim_stammdaten_registry,
-    wim_stammdaten_uebermittlung_registry,
     wim_technik_aenderung_registry,
     wim_weiterverpflichtung_registry(mako_engine::types::Sparte::Strom),
     wim_ersteinbau_registry(),

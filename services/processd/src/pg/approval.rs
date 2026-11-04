@@ -5,7 +5,7 @@ use sqlx::{PgPool, Row, postgres::PgRow};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 #[serde(rename_all = "PascalCase")]
 pub enum QueueStatus {
     Pending,
@@ -77,6 +77,16 @@ pub struct ApprovalQueueEntry {
     /// at enqueue — the business key the answer is addressed by. The
     /// Antwortcode of a refusal is always the operator's.
     pub reject_payload: Option<serde_json::Value>,
+    /// The Entscheidungsbaum the enqueuing module decided this process with,
+    /// recorded at enqueue — the tree whose Codeliste a refusal (and, through
+    /// [`mako_pruefung::codes::zustimmung_tree_of`], an operator's Bestätigung)
+    /// must draw its Antwortcode from. A code means something only inside its
+    /// tree, so the decision routes check an operator's code against it.
+    ///
+    /// `None` where the answer carries no EBD code at all: the ESA Werteanfrage
+    /// refusal (a QUOTES Begründung), the REQOTE Preisanfrage, the
+    /// API-Webdienste Steuerungsauftrag.
+    pub ablehnung_ebd: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -114,6 +124,7 @@ impl ApprovalQueueEntry {
             followup_payload: None,
             answer_payload: None,
             reject_payload: None,
+            ablehnung_ebd: None,
             expires_at,
             created_at: OffsetDateTime::now_utc(),
             decided_at: None,
@@ -157,6 +168,14 @@ impl ApprovalQueueEntry {
         self
     }
 
+    /// Record the Entscheidungsbaum the module decided with. See
+    /// [`Self::ablehnung_ebd`].
+    #[must_use]
+    pub fn with_ebd(mut self, ebd: &str) -> Self {
+        self.ablehnung_ebd = Some(ebd.to_owned());
+        self
+    }
+
     /// A decision where only *rejecting* sends a market message — the refusal
     /// is dispatchable from the queue, the positive answer is not (an ESA
     /// Angebot needs prices the queue does not hold).
@@ -187,7 +206,7 @@ impl ApprovalQueueEntry {
 /// Every column `map_entry` reads.
 const ENTRY_COLUMNS: &str = "id, process_id, pid, malo_id, reason, status, approve_command, \
                              reject_command, marktrolle, followup_command, followup_payload, \
-                             answer_payload, reject_payload, \
+                             answer_payload, reject_payload, ablehnung_ebd, \
                              expires_at, created_at, decided_at, decided_by, tenant";
 
 fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
@@ -212,6 +231,7 @@ fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
         followup_payload: row.try_get("followup_payload")?,
         answer_payload: row.try_get("answer_payload")?,
         reject_payload: row.try_get("reject_payload")?,
+        ablehnung_ebd: row.try_get("ablehnung_ebd")?,
         expires_at: row.try_get("expires_at")?,
         created_at: row.try_get("created_at")?,
         decided_at: row.try_get("decided_at")?,
@@ -232,13 +252,14 @@ impl PgApprovalQueue {
 
     pub async fn enqueue(&self, entry: &ApprovalQueueEntry) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO approval_queue (id, process_id, pid, malo_id, reason, status, approve_command, reject_command, marktrolle, followup_command, followup_payload, answer_payload, reject_payload, expires_at, created_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT (process_id, tenant) DO NOTHING",
+            "INSERT INTO approval_queue (id, process_id, pid, malo_id, reason, status, approve_command, reject_command, marktrolle, followup_command, followup_payload, answer_payload, reject_payload, ablehnung_ebd, expires_at, created_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (process_id, tenant) DO NOTHING",
         )
         .bind(entry.id).bind(entry.process_id).bind(entry.pid).bind(&entry.malo_id)
         .bind(&entry.reason).bind(entry.status.to_string())
         .bind(&entry.approve_command).bind(&entry.reject_command).bind(&entry.marktrolle)
         .bind(&entry.followup_command).bind(&entry.followup_payload)
         .bind(&entry.answer_payload).bind(&entry.reject_payload)
+        .bind(&entry.ablehnung_ebd)
         .bind(entry.expires_at).bind(entry.created_at).bind(&entry.tenant)
         .execute(&self.pool).await?;
         Ok(())
@@ -290,18 +311,28 @@ impl PgApprovalQueue {
         Ok(r.rows_affected())
     }
 
+    /// Entries of `tenant`, optionally of one `status` and one `marktrolle`,
+    /// the **earliest `expires_at` first** — the order an operator has to work
+    /// them in, since `expires_at` is the business Antwortfrist less headroom.
     pub async fn list(
         &self,
         tenant: &str,
         status: Option<QueueStatus>,
+        marktrolle: Option<&str>,
         limit: u32,
     ) -> Result<Vec<ApprovalQueueEntry>, sqlx::Error> {
         let status_str = status.map(|s| s.to_string());
         let rows = sqlx::query(&format!(
-            "SELECT {ENTRY_COLUMNS} FROM approval_queue WHERE tenant = $1 AND ($2::text IS NULL OR status = $2) ORDER BY created_at DESC LIMIT $3"
+            "SELECT {ENTRY_COLUMNS} FROM approval_queue WHERE tenant = $1 \
+             AND ($2::text IS NULL OR status = $2) AND ($3::text IS NULL OR marktrolle = $3) \
+             ORDER BY expires_at ASC, created_at ASC, id ASC LIMIT $4"
         ))
-        .bind(tenant).bind(status_str).bind(limit as i64)
-        .fetch_all(&self.pool).await?;
+        .bind(tenant)
+        .bind(status_str)
+        .bind(marktrolle)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter().map(map_entry).collect()
     }
 
@@ -492,6 +523,23 @@ pub enum DecisionRefusal {
         /// What is missing.
         fields: Vec<&'static str>,
     },
+    /// The stated `antwort_tree` is not the tree this decision answers from.
+    WrongTree {
+        /// What the operator stated.
+        stated: String,
+        /// The tree the entry was decided in, for this direction.
+        expected: String,
+    },
+    /// The stated Antwortcode is not in the tree's cluster for this decision —
+    /// a refusal with a Zustimmungscode, or a code the tree does not publish.
+    CodeOutsideTree {
+        /// The stated code.
+        code: String,
+        /// The tree it was checked in.
+        ebd: String,
+        /// The cluster the decision requires.
+        cluster: &'static str,
+    },
 }
 
 impl std::fmt::Display for DecisionRefusal {
@@ -508,6 +556,16 @@ impl std::fmt::Display for DecisionRefusal {
                 f,
                 "{command} needs {} — state it on the decision",
                 fields.join(", ")
+            ),
+            Self::WrongTree { stated, expected } => write!(
+                f,
+                "antwort_tree {stated:?} is not the Entscheidungsbaum this decision answers \
+                 from; state a code of {expected}"
+            ),
+            Self::CodeOutsideTree { code, ebd, cluster } => write!(
+                f,
+                "Antwortcode {code:?} is not in the {cluster}-Cluster of {ebd} — a code means \
+                 something only inside its tree"
             ),
         }
     }
@@ -575,6 +633,67 @@ pub fn decision_body(
         });
     }
     Ok(serde_json::Value::Object(body))
+}
+
+/// Check the Antwortcode an operator states against the tree `entry` was
+/// decided in ([`ApprovalQueueEntry::ablehnung_ebd`]).
+///
+/// The code must sit in the cluster of the answer the decision dispatches:
+///
+/// | Entry | Decision | Cluster |
+/// |---|---|---|
+/// | escalated | approve | Zustimmung |
+/// | escalated | reject | Ablehnung |
+/// | held | reject | the **other** cluster than the held answer's — rejecting a held answer overrides it (the LF and ESA queues dispatch the opposite command) |
+///
+/// A held answer's approval is frozen, and [`decision_body`] already refuses
+/// a code stated on it. A Zustimmung is drawn from the tree the Bestätigung
+/// comes from — the same tree, or for a Vorprüfung the tree it hands over to
+/// ([`mako_pruefung::codes::zustimmung_tree_of`]); an Ablehnung from the
+/// recorded tree itself.
+///
+/// Each answer is restricted to one cluster — ORDRSP AHB 1.1b §4.15
+/// conditions \[17\]/\[18\]: the code „muss im EBD dem Cluster Zustimmung /
+/// Ablehnung zugeordnet sein"; the UTILMD side is set out in
+/// [`mako_pruefung::codes`] — and `makod` derives the answer PID from the
+/// code's cluster, so a code of the wrong cluster would send the other answer.
+///
+/// Nothing is checked where the entry recorded no tree (an answer that carries
+/// no EBD code), the operator states no code, or the held answer's cluster
+/// cannot be read.
+///
+/// # Errors
+///
+/// [`DecisionRefusal::WrongTree`] or [`DecisionRefusal::CodeOutsideTree`].
+pub fn check_operator_code(
+    entry: &ApprovalQueueEntry,
+    approve: bool,
+    operator: &OperatorAnswer,
+) -> Result<(), DecisionRefusal> {
+    use mako_pruefung::codes::codes_im_cluster;
+    let Some(code) = operator.antwort_code.as_deref().filter(|c| !c.is_empty()) else {
+        return Ok(());
+    };
+    let Some((tree, cluster)) = crate::freigabe::erwarteter_code(entry, approve) else {
+        return Ok(());
+    };
+    if let Some(stated) = operator.antwort_tree.as_deref().filter(|t| !t.is_empty())
+        && stated != tree
+    {
+        return Err(DecisionRefusal::WrongTree {
+            stated: stated.to_owned(),
+            expected: tree.to_owned(),
+        });
+    }
+    if codes_im_cluster(tree, cluster).any(|c| c.code == code) {
+        Ok(())
+    } else {
+        Err(DecisionRefusal::CodeOutsideTree {
+            code: code.to_owned(),
+            ebd: tree.to_owned(),
+            cluster: cluster.label(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -700,5 +819,109 @@ mod decision_tests {
             ),
             Err(DecisionRefusal::AnswerFrozen)
         );
+    }
+
+    /// A refusal's code must be one of the recorded tree's Ablehnungen.
+    #[test]
+    fn a_reject_code_outside_the_trees_ablehnungen_is_refused() {
+        let e = entry(
+            mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN,
+            mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN,
+        )
+        .with_ebd(mako_pruefung::codes::EBD_LIEFERBEGINN);
+        let said = |code: &str| OperatorAnswer {
+            antwort_code: Some(code.into()),
+            ..OperatorAnswer::default()
+        };
+        // `A51` is the Zustimmung of `E_0623`: no refusal can carry it.
+        assert!(matches!(
+            check_operator_code(&e, false, &said("A51")),
+            Err(DecisionRefusal::CodeOutsideTree { .. })
+        ));
+        // `A32` is an `E_0622` and an `E_0624` Ablehnung — not an `E_0623` one,
+        // so a refusal answering from `E_0623` cannot carry it.
+        assert!(matches!(
+            check_operator_code(&e, false, &said("A32")),
+            Err(DecisionRefusal::CodeOutsideTree { .. })
+        ));
+        let ablehnung = mako_pruefung::codes::codes_im_cluster(
+            mako_pruefung::codes::EBD_LIEFERBEGINN,
+            mako_pruefung::codes::Cluster::Ablehnung,
+        )
+        .next()
+        .expect("E_0623 publishes an Ablehnung");
+        assert_eq!(
+            check_operator_code(&e, false, &said(ablehnung.code)),
+            Ok(())
+        );
+        // …and the same code on an approval is the wrong cluster.
+        assert!(check_operator_code(&e, true, &said(ablehnung.code)).is_err());
+        assert_eq!(check_operator_code(&e, true, &said("A51")), Ok(()));
+        // A tree the decision was not taken in is refused by name.
+        let elsewhere = OperatorAnswer {
+            antwort_tree: Some("E_0607".into()),
+            ..said(ablehnung.code)
+        };
+        assert!(matches!(
+            check_operator_code(&e, false, &elsewhere),
+            Err(DecisionRefusal::WrongTree { .. })
+        ));
+        // No recorded tree: nothing to check against.
+        let untyped = entry(
+            mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN,
+            mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN,
+        );
+        assert_eq!(check_operator_code(&untyped, false, &said("A32")), Ok(()));
+    }
+
+    /// An escalated Vorprüfung is approved out of the tree it hands over to.
+    #[test]
+    fn a_vorpruefung_escalation_is_approved_from_its_zustimmungs_tree() {
+        let e = entry(
+            mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN,
+            mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN,
+        )
+        .with_ebd(mako_pruefung::codes::EBD_ANMELDUNG_DIREKT_ABLEHNBAR);
+        let answer = OperatorAnswer {
+            antwort_code: Some("A51".into()),
+            antwort_tree: Some(mako_pruefung::codes::EBD_LIEFERBEGINN.into()),
+            ..OperatorAnswer::default()
+        };
+        assert_eq!(check_operator_code(&e, true, &answer), Ok(()));
+    }
+
+    /// Rejecting a held answer overrides it with the other cluster: a held
+    /// Ablehnung (the LF queue holds both) is rejected with a Zustimmung.
+    #[test]
+    fn rejecting_a_held_answer_states_the_other_cluster() {
+        let ablehnung = mako_pruefung::codes::codes_im_cluster(
+            mako_pruefung::codes::EBD_LIEFERBEGINN,
+            mako_pruefung::codes::Cluster::Ablehnung,
+        )
+        .next()
+        .expect("E_0623 publishes an Ablehnung");
+        let held_accept = entry(
+            mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN,
+            mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN,
+        )
+        .with_ebd(mako_pruefung::codes::EBD_LIEFERBEGINN)
+        .with_answer_payload(serde_json::json!({ "antwort_code": "A51" }));
+        let said = |code: &str| OperatorAnswer {
+            antwort_code: Some(code.into()),
+            ..OperatorAnswer::default()
+        };
+        assert_eq!(
+            check_operator_code(&held_accept, false, &said(ablehnung.code)),
+            Ok(())
+        );
+        assert!(check_operator_code(&held_accept, false, &said("A51")).is_err());
+
+        let held_refusal =
+            held_accept.with_answer_payload(serde_json::json!({ "antwort_code": ablehnung.code }));
+        assert_eq!(
+            check_operator_code(&held_refusal, false, &said("A51")),
+            Ok(())
+        );
+        assert!(check_operator_code(&held_refusal, false, &said(ablehnung.code)).is_err());
     }
 }

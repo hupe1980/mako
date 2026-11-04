@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: einsd-batch-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Monatliche EEG-Abrechnung"
+    mako.de/zweck: "Startet die monatliche Abrechnung aller Anlagen und meldet, was dabei auffällt."
 spec:
   execution:
     kind: tool-calling

@@ -117,6 +117,7 @@ fn completion(structured: Value) -> Completion {
         stop_reason: Some("end_turn".to_owned()),
         truncated: false,
         continuation: None,
+        ..Completion::default()
     }
 }
 
@@ -194,6 +195,46 @@ async fn accepting_an_event_admits_a_run_that_is_already_in_the_journal() {
             .expect("readable")
             .is_some(),
         "an admitted run belongs to a case the moment it is admitted"
+    );
+}
+
+/// A person names one specialist: it is admitted at once and its run is in
+/// the journal before the call returns — the `202` of `POST /api/v1/runs`,
+/// which never waits for the model. A name no activated specialist answers to
+/// admits nothing.
+#[tokio::test]
+async fn naming_a_specialist_admits_its_run_without_waiting_for_it() {
+    let provider = FakeProvider::new();
+    script(&provider);
+    let plane = plane(&provider);
+
+    let started = std::time::Instant::now();
+    let entry = plane
+        .accept_named(AGENT, ce("ce-named"), event())
+        .await
+        .expect("the specialist is activated");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(300),
+        "admission returns before the run works: {:?}",
+        started.elapsed()
+    );
+    assert!(entry.refused.is_none(), "{:?}", entry.refused);
+    let run = agentplane::core::RunId::parse(&entry.run_id).expect("a run id");
+    assert!(
+        plane
+            .runtime()
+            .case_of(run)
+            .await
+            .expect("readable")
+            .is_some(),
+        "the run is addressable the moment it is admitted"
+    );
+
+    assert!(
+        plane
+            .accept_named("no-such-agent", ce("ce-unknown"), event())
+            .await
+            .is_none()
     );
 }
 

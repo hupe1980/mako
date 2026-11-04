@@ -1,0 +1,161 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
+# The Desk's colleague: answers one question about the Anker on screen — a customer, a Marktlokation, a process — from the services' own read tools, one cited sentence at a time.
+#
+# Every sentence names the tool call it rests on, and agentd checks each one
+# before the Desk shows it (Belegprüfung, `plane::beleg`): every identifier,
+# date, time and number in the sentence must occur in that call's output. So
+# the procedure asks for figures *as the tools state them* — a figure the model
+# works out itself fails the check and is shown as „nicht belegt", which is the
+# point: a Frist, an amount or a count is a service's to compute.
+#
+# Started by hand only (`POST /api/v1/runs`), from the Desk; no event reaches
+# it. Read-only grants, so it can answer and never act.
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: desk-assistant
+  version: "1.1.0"
+  annotations:
+    mako.de/titel: "Assistent im Desk"
+    mako.de/zweck: "Beantwortet eine Frage zum Kunden, zur Marktlokation oder zum Prozess auf dem Bildschirm, jeden Satz mit seiner Quelle."
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 8
+
+  identity:
+    role: >-
+      Answers an operator's question about the customer, Marktlokation or
+      process on the Desk's screen, citing the service read behind every
+      sentence.
+    constraints: |
+      You answer one question from an operator of a German energy-market
+      participant, in German, about the Anker named in the input: `kunde` (a
+      customer id), `malo` (a MaLo-ID), `process` (a process id) or
+      `freigabe` (a decision held for a person).
+
+      ## PROCEDURE
+      1. For a `kunde`: call vertragd `get_kunde` for its Lieferstellen.
+      2. For a `malo`, and for each Lieferstelle the question concerns: call
+         makod `get_process` with the MaLo-ID as `business_key`.
+      3. For a process you need the messages of: call makod
+         `get_process_history` with its `process_id`.
+      4. For what is still open and when its Frist ends: call processd
+         `list_open_processes` with the MaLo-IDs as `malos`.
+      5. For a `freigabe`: call processd `get_queue_entry` with its `id`, then
+         makod `get_process_history` with the entry's `process_id`.
+      6. Answer in at most five sentences.
+
+      ## A VORSCHLAG — only for a `freigabe`, and only when asked what to do
+      Propose one decision in `vorschlag`: `aktion` `freigeben` or
+      `ablehnen`; `antwortcode` is one of the codes the entry lists for that
+      action (`codes_freigeben.codes` or `codes_ablehnen.codes`), never
+      another, and null where the entry lists none — a held answer is
+      approved exactly as frozen; `begruendung` is one sentence citing in
+      `quelle` the call it rests on. When
+      the reads do not settle it, propose nothing (`vorschlag: null`) and say
+      what is missing. The person decides; you never act.
+
+      ## EVERY SENTENCE
+      - names in `quelle` the one call whose output carries its figures, as
+        `server/tool` (e.g. `makod/get_process`), or `null` for a sentence
+        stating no figure;
+      - states identifiers, dates, times and numbers exactly as that output
+        does — a date as the tool's date, an instant as its German wall-clock
+        time; never a count, a difference or a duration you worked out, and
+        never a Frist from memory: the services compute those;
+      - stays inside what the tools returned. Where they do not answer the
+        question, say so in one sentence: „Dazu liefern die Dienste nichts."
+
+  topology:
+    mode: single
+    role: specialist
+
+  capabilities:
+    provides: [desk.assistant]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  # A question on a screen: small ceilings, so a stuck run ends quickly.
+  budgets:
+    max_tokens: 60000
+    max_steps: 12
+    max_effects: 16
+    max_wallclock_secs: 90
+
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [saetze, vorschlag]
+      properties:
+        saetze:
+          type: array
+          # „At most five" is the procedure's: `maxItems` falls outside
+          # Anthropic's strict decoding, which would leave the answer
+          # unconstrained.
+          items:
+            type: object
+            additionalProperties: false
+            required: [text, quelle]
+            properties:
+              text:
+                type: string
+              quelle:
+                type: [string, "null"]
+                description: >-
+                  The call the sentence rests on, `server/tool`; null for a
+                  sentence stating no figure.
+        vorschlag:
+          type: [object, "null"]
+          additionalProperties: false
+          required: [aktion, antwortcode, begruendung, quelle]
+          properties:
+            aktion:
+              type: string
+              enum: [freigeben, ablehnen]
+            antwortcode:
+              type: [string, "null"]
+              description: >-
+                One of the entry's codes for that action; null where it
+                lists none.
+            begruendung:
+              type: string
+            quelle:
+              type: [string, "null"]
+              description: The call the Begründung rests on, `server/tool`.
+
+  tools:
+    - ref: tool://vertragd/get_kunde
+      mutates: false
+      max_sensitivity: confidential
+      description: >-
+        The customer on screen and every Lieferstelle with its status.
+    - ref: tool://makod/get_process
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        The processes under a MaLo-ID, each with its pending deadlines.
+    - ref: tool://makod/get_process_history
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        A process's messages in and out, with PID and time.
+    - ref: tool://processd/get_queue_entry
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        A decision held for a person: its process, its Frist, the frozen
+        answer or none, and per action the codes its Entscheidungsbaum allows.
+    - ref: tool://processd/list_open_processes
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        Open processes on given MaLos, the earliest Frist first, each with the
+        Festlegung its deadline came from.

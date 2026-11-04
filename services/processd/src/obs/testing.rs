@@ -145,6 +145,59 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
             .cloned()
             .collect())
     }
+
+    async fn open_processes(
+        &self,
+        _tenant: &str,
+        pids: &[u32],
+        malos: &[String],
+        after: Option<&crate::obs::repository::OpenCursor>,
+        limit: i64,
+    ) -> Result<Vec<ProcessProjection>, ObsError> {
+        let key =
+            |frist: Option<time::OffsetDateTime>, id: uuid::Uuid| (frist.is_none(), frist, id);
+        let guard = self.projections.lock().unwrap();
+        let mut open: Vec<ProcessProjection> = guard
+            .values()
+            .filter(|p| !p.state.is_terminal())
+            .filter(|p| pids.is_empty() || pids.contains(&p.pid))
+            .filter(|p| malos.is_empty() || p.malo_id.as_ref().is_some_and(|m| malos.contains(m)))
+            .filter(|p| {
+                after.is_none_or(|c| key(p.deadline_at, p.process_id) > key(c.frist, c.process_id))
+            })
+            .cloned()
+            .collect();
+        open.sort_by_key(|p| key(p.deadline_at, p.process_id));
+        open.truncate(usize::try_from(limit).unwrap_or(0));
+        Ok(open)
+    }
+
+    async fn count_open_processes(
+        &self,
+        _tenant: &str,
+        pids: &[u32],
+        malos: &[String],
+        von: time::OffsetDateTime,
+        bis: time::OffsetDateTime,
+    ) -> Result<crate::obs::repository::OpenCount, ObsError> {
+        let guard = self.projections.lock().unwrap();
+        let open: Vec<&ProcessProjection> = guard
+            .values()
+            .filter(|p| !p.state.is_terminal())
+            .filter(|p| pids.is_empty() || pids.contains(&p.pid))
+            .filter(|p| malos.is_empty() || p.malo_id.as_ref().is_some_and(|m| malos.contains(m)))
+            .collect();
+        let due: Vec<time::OffsetDateTime> = open
+            .iter()
+            .filter_map(|p| p.deadline_at)
+            .filter(|d| *d >= von && *d < bis)
+            .collect();
+        Ok(crate::obs::repository::OpenCount {
+            offen: i64::try_from(open.len()).unwrap_or(i64::MAX),
+            faellig: i64::try_from(due.len()).unwrap_or(i64::MAX),
+            frueheste: due.into_iter().min(),
+        })
+    }
 }
 
 #[cfg(test)]

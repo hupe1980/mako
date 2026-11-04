@@ -7,11 +7,14 @@ use axum::{
     extract::{Path, Query},
     http::StatusCode,
 };
+use mako_markt::bo4e::Bo4e;
 use mako_service::{ApiError, ApiResult, Json, oidc::Claims};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::{CedarEnforcer, Ctx, authorize, ok, require_kunde};
+use super::{
+    CedarEnforcer, Ctx, authorize, canonical_bo4e, ok, refuse_undefined_fields, require_kunde,
+};
 use crate::pg;
 
 // ── Kunde ─────────────────────────────────────────────────────────────────────
@@ -333,27 +336,24 @@ pub async fn delete_identitaet(
 
 /// `PUT /api/v1/kunden/{id}/person` — store the BO4E `Person` of a B2C customer.
 ///
-/// The payload is validated by round-tripping through `rubo4e`, so `anrede` and
-/// `titel` are real enum members and the stored JSON is canonical camelCase —
+/// The body is a `Bo4e<Person>`, so the gate — `_typ`, schema, strict enums,
+/// BO4E rules — runs as `serde` deserialises it: `anrede` and `titel` are real
+/// enum members, and the stored JSON is the canonical camelCase round-trip,
 /// which is what makes a DSGVO Art. 15 disclosure structured rather than a
-/// free-text blob.
+/// free-text blob. The strict-enum stage matters because the round-trip, not
+/// the request, is stored, and a BO4E enum decoding to its `Unknown` catch-all
+/// serialises back as the literal `"UNKNOWN"`, replacing what the caller sent.
+/// A key BO4E does not define is refused ([`Bo4e::ensure_no_undefined_fields`](mako_markt::bo4e::Bo4e::ensure_no_undefined_fields)).
 pub async fn put_person(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
-    Json(body): Json<serde_json::Value>,
+    Json(person): Json<Bo4e<rubo4e::current::Person>>,
 ) -> ApiResult<StatusCode> {
     authorize(&enforcer, &claims, "write-kunde", ctx.tenant())?;
-    use rubo4e::current::Person;
-    // The BO4E gate. Its strict-enum stage matters because `canonical` — the
-    // round-trip, not the request — is what gets stored, and a BO4E enum
-    // decoding to the `Unknown` catch-all serialises back as the literal
-    // `"UNKNOWN"`, replacing what the caller sent.
-    let typed: Person = mako_markt::bo4e::decode(body)
-        .map_err(|e| ApiError::unprocessable_with(e.to_string(), e.detail().into()))?;
-    let canonical =
-        serde_json::to_value(&typed).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+    refuse_undefined_fields(&person)?;
+    let canonical = canonical_bo4e(&person)?;
     if pg::upsert_person(&ctx.pool, id, ctx.tenant(), canonical)
         .await
         .map_err(ApiError::Internal)?
@@ -391,13 +391,17 @@ pub async fn get_person(
 ///   is a shape check and nothing more, but a mistyped BIC still routes a
 ///   transfer nowhere and the shape catches most of them.
 ///
+/// The body is a `Bo4e<Zahlungsinformation>`: the gate runs as it
+/// deserialises, and a key BO4E does not define — `ibn` for `iban` — is refused
+/// rather than stored under `_additional` beside an absent IBAN.
+///
 /// [`Bic`]: rubo4e::identifiers::Bic
 pub async fn put_zahlungsinformation(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
-    Json(body): Json<serde_json::Value>,
+    Json(zahlungsinformation): Json<Bo4e<rubo4e::current::Zahlungsinformation>>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(
         &enforcer,
@@ -405,20 +409,17 @@ pub async fn put_zahlungsinformation(
         "write-zahlungsinformation",
         ctx.tenant(),
     )?;
-    use rubo4e::current::Zahlungsinformation;
+    refuse_undefined_fields(&zahlungsinformation)?;
     require_kunde(&ctx, kunden_id).await?;
-    let typed: Zahlungsinformation = mako_markt::bo4e::decode(body)
-        .map_err(|e| ApiError::unprocessable_with(e.to_string(), e.detail().into()))?;
-    if let Some(ref iban) = typed.iban
+    if let Some(ref iban) = zahlungsinformation.iban
         && let Err(msg) = sepa::validate_iban(iban)
     {
         return Err(ApiError::unprocessable(format!("invalid IBAN: {msg}")));
     }
-    if let Some(Err(e)) = typed.bic_checked() {
+    if let Some(Err(e)) = zahlungsinformation.bic_checked() {
         return Err(ApiError::unprocessable(format!("invalid BIC: {e}")));
     }
-    let canonical =
-        serde_json::to_value(&typed).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+    let canonical = canonical_bo4e(&zahlungsinformation)?;
     if !pg::upsert_zahlungsinformation(&ctx.pool, kunden_id, ctx.tenant(), &canonical)
         .await
         .map_err(ApiError::Internal)?

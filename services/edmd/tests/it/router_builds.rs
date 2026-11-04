@@ -126,3 +126,131 @@ async fn a_smgw_typ2_push_with_an_unknown_field_is_stored() {
     .await;
     assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
 }
+
+fn json_request(
+    method: &str,
+    uri: &str,
+    body: &serde_json::Value,
+) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("request")
+}
+
+/// An `SmgwSession` the compliance check finds nothing wrong with.
+fn smgw_session() -> serde_json::Value {
+    serde_json::json!({
+        "device_id": "SMGW-2026-001", "firmware_version": "3.1.2",
+        "msb_mp_id": "9900000000003", "malo_id": "51238696012", "status": "OPERATIONAL",
+        "certificates": [], "cls_channels": [],
+        "last_contact_at": null, "installed_at": "2025-06-01",
+    })
+}
+
+/// `PUT /api/v1/smgw/{malo_id}` reads a typed `SmgwSession`: a key the session
+/// does not declare is a `422` naming it, never a field silently read as
+/// absent. Read as an untyped `serde_json::Value` the misspelt key would pass
+/// through and the session would be stored.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_smgw_session_with_an_unknown_key_is_refused() {
+    let Some((app, pool, _pg)) = app().await else {
+        return;
+    };
+    let mut body = smgw_session();
+    body["firmware_versoin"] = serde_json::json!("3.1.3");
+    let (status, problem) = call(
+        app.clone(),
+        json_request("PUT", "/api/v1/smgw/51238696012", &body),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "{problem}"
+    );
+    assert!(
+        problem.to_string().contains("firmware_versoin"),
+        "{problem}"
+    );
+    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM smgw_sessions")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(stored, 0, "a refused session is not stored");
+
+    let (status, answer) = call(
+        app,
+        json_request("PUT", "/api/v1/smgw/51238696012", &smgw_session()),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {answer}");
+    let gateway_status: String = sqlx::query_scalar(
+        "SELECT gateway_status FROM smgw_sessions WHERE malo_id = '51238696012'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the session is stored");
+    assert_eq!(gateway_status, "OPERATIONAL");
+}
+
+/// A `COMMUNITY_SHARE` rule whose plant and tenant both have a source.
+fn virtual_meter() -> serde_json::Value {
+    serde_json::json!({
+        "virtual_malo_id": "10001234558",
+        "display_name": "GGV MaLo2",
+        "sparte": "STROM",
+        "legal_basis": "§42b EnWG",
+        "rule_json": { "COMMUNITY_SHARE": {
+            "plant": "DE0001234567890000000000000000001",
+            "tenant": "DE0001234567890000000000000000002",
+            "key": { "kind": "EQUAL_SHARES" },
+            "sources": {
+                "DE0001234567890000000000000000001": "51238696012",
+                "DE0001234567890000000000000000002": "51238696012",
+            },
+        } },
+    })
+}
+
+/// `POST /api/v1/virtual` reads a typed request: a misspelt top-level key is a
+/// `422`, not a `legal_basis` stored as absent.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_virtual_meter_with_an_unknown_key_is_refused() {
+    let Some((app, pool, _pg)) = app().await else {
+        return;
+    };
+    let mut body = virtual_meter();
+    let legal_basis = body
+        .as_object_mut()
+        .expect("an object")
+        .remove("legal_basis")
+        .expect("legal_basis");
+    body["legal_bases"] = legal_basis;
+    let (status, problem) = call(app.clone(), json_request("POST", "/api/v1/virtual", &body)).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "{problem}"
+    );
+    assert!(problem.to_string().contains("legal_bases"), "{problem}");
+
+    let (status, answer) = call(
+        app,
+        json_request("POST", "/api/v1/virtual", &virtual_meter()),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED, "{answer}");
+    assert_eq!(answer["rule_type"], "COMMUNITY_SHARE", "{answer}");
+    let legal_basis: Option<String> = sqlx::query_scalar(
+        "SELECT legal_basis FROM virtual_meter_configs WHERE virtual_malo_id = '10001234558'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the configuration is stored");
+    assert_eq!(legal_basis.as_deref(), Some("§42b EnWG"));
+}

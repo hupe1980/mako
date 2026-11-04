@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use marktd::handlers::{
-    device::{PutKonfigurationenRequest, UpsertZaehlerRequest},
+    device::{PutKonfigurationenRequest, PutKonfigurationsprodukteRequest, UpsertZaehlerRequest},
     mmma_preise::{MmmStromUpsertRequest, MmmaGasUpsertRequest},
     partner::PartnerUpsertRequest,
     preisblatt::PreisblattMessungUpsertRequest,
@@ -177,12 +177,13 @@ fn parses<T: serde::de::DeserializeOwned>(body: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// `PUT …/konfigurationsprodukte` takes a bare array the handler checks itself:
-/// each element a BO4E `Konfigurationsprodukt` with a non-empty `produktcode`.
+/// `PUT …/konfigurationsprodukte` — the typed body, then the check the handler
+/// runs: each element carries a non-empty `produktcode`.
 fn konfigurationsprodukte(body: &str) -> Result<(), String> {
-    let items: Vec<rubo4e::current::Konfigurationsprodukt> =
+    let req: PutKonfigurationsprodukteRequest =
         serde_json::from_str(body).map_err(|e| e.to_string())?;
-    match items
+    match req
+        .konfigurationsprodukte
         .iter()
         .position(|k| k.produktcode.as_deref().is_none_or(str::is_empty))
     {

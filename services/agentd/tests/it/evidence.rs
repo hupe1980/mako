@@ -126,6 +126,7 @@ fn completion(structured: Value) -> Completion {
         stop_reason: Some("end_turn".to_owned()),
         truncated: false,
         continuation: None,
+        ..Completion::default()
     }
 }
 

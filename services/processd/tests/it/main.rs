@@ -11,6 +11,7 @@ mod mcp_route_contract;
 mod obs;
 mod pid_contract;
 mod published_config;
+mod request_bodies;
 mod role_separation;
 mod router_builds;
 mod schema_enum_guard;

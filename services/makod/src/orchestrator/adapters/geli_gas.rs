@@ -593,12 +593,16 @@ pub fn geli_gas_stornierung_lf_registry() -> AdapterRegistry<GeliGasLfStornierun
 
 /// Build an [`AdapterRegistry`] for [`GeliGasStornierungWorkflow`].
 ///
-/// Routes UTILMD G messages with PIDs 44022–44024 (GeLi Gas Stornierung):
-/// - 44022 — Anfrage nach Stornierung (LFN/LFA → GNB)
-/// - 44023 — Bestätigung Stornierung  (GNB response — accepted)
-/// - 44024 — Ablehnung Stornierung    (GNB response — rejected)
+/// Routes UTILMD G 44022 „Anfrage nach Stornierung" (LFN/LFA → GNB). The
+/// GNB's answer is a UTILMD of its own — 44023 Bestätigung / 44024 Ablehnung
+/// Anfrage Stornierung, „zurück an den Absender" (UTILMD AHB Gas 1.2 Kap. 5.2)
+/// — which the workflow queues and the UTILMD renderer writes.
 ///
-/// **APERAK Frist:** 10 Werktage (BNetzA BK7-24-01-009).
+/// `BGM` DE 1001 is read into the command because the answer repeats it
+/// (Bedingung `[500]`: the category of the cancelled message).
+///
+/// **APERAK:** only a Verarbeitbarkeitsfehlermeldung, nächster Werktag 12 Uhr
+/// for a Folgeprozess (APERAK AHB 1.1 § 2.3 / § 2.3.1).
 #[must_use]
 pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -658,6 +662,10 @@ pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWork
                         .and_then(|t| t.vorgangsnummer())
                         .unwrap_or(""),
                 ),
+                document_code: u
+                    .bgm()
+                    .map(|b| b.document_code.clone())
+                    .unwrap_or_default(),
                 document_date: u
                     .dtm()
                     .iter()

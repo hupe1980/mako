@@ -11,7 +11,6 @@ impl EdifactIngestDispatcher {
     /// `wim-geraeteubernahme`
     /// `wim-invoic`
     /// `wim-insrpt`
-    /// `wim-stammdaten`
     /// `wim-preisanfrage`
     /// `wim-preisliste`
     /// `wim-technik-aenderung`
@@ -283,59 +282,6 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
-            // ── WiM Stammdaten ORDERS (PID 17132 inbound, 17102–17133 inbound) ──────
-            "wim-stammdaten" => match pid {
-                17132 => {
-                    let cmd = adapters::wim_stammdaten_registry().dispatch(raw, &fv)?;
-                    let melo_id = extract_melo_from_orders(msg);
-                    // The Geschäftsdatenanfrage is answered „spätester ÜZ ist
-                    // 1 WT nach dem ÜZ" (GPKE Teil 4 § 3.2 Nr. 2). The APERAK
-                    // runs beside it on 45 minutes (APERAK AHB 1.1 §2.4.1).
-                    let process_due_at = fristen::deadline_at_werktage(
-                        received_at,
-                        fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE,
-                        HolidayCalendar::BdewMaKo,
-                    );
-                    let aperak_due_at = fristen::aperak_strom_due_at(received_at);
-                    self.spawn_or_resume_guarded::<WimStammdatenWorkflow>(
-                        &melo_id,
-                        "wim-stammdaten",
-                        cmd,
-                        &fv,
-                        &[
-                            (
-                                mako_wim::stammdaten::STAMMDATEN_DEADLINE_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
-                        |s| !s.is_terminal(),
-                    )
-                    .await
-                }
-                // PIDs 17102–17133: Stammdatenübermittlung response (MSB → NB).
-                // Extract ZAK+ZE+ZD register definitions and resume the existing
-                // wim-stammdaten process started by PID 17132.
-                // No new deadline — this message resolves the 5-Werktage window.
-                17102..=17133 => {
-                    let cmd =
-                        adapters::wim_stammdaten_uebermittlung_registry().dispatch(raw, &fv)?;
-                    let melo_id = extract_melo_from_orders(msg);
-                    self.spawn_or_resume::<WimStammdatenWorkflow>(
-                        &melo_id,
-                        "wim-stammdaten",
-                        cmd,
-                        &fv,
-                        &[], // no new deadlines — resolves the existing 5WT window
-                    )
-                    .await
-                }
-                _ => Ok(IngestOutcome::Skipped {
-                    workflow_name: "wim-stammdaten",
-                    reason: "pid_not_in_dispatch_table",
-                }),
-            },
-
             // ── WiM ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────
             //
             // ORDERS 17007 (Bestellung), 17008 (Abbestellung) and ORDCHG 39002

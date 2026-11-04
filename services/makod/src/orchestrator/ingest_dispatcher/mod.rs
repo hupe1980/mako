@@ -67,16 +67,17 @@ use mako_geli_gas::{
 use mako_gpke::{
     GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
     GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatenabrufWorkflow,
-    GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
-    GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungWorkflow,
+    GpkeGeschaeftsdatenanfrageWorkflow, GpkeKonfigurationAenderungWorkflow,
+    GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
+    GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow, GpkePartinWorkflow,
+    GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungWorkflow,
     GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow,
 };
 use mako_mabis::{MabisBillingWorkflow, MabisClearinglisteWorkflow};
 use mako_wim::{
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicWorkflow,
-    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
-    WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
+    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimTechnikAenderungWorkflow,
+    WimWeiterverpflichtungWorkflow,
 };
 use time::OffsetDateTime;
 
@@ -312,6 +313,7 @@ impl EdifactIngestDispatcher {
         "gpke-beendigung-zuordnung",
         "gpke-datenabruf",
         "gpke-eog",
+        "gpke-geschaeftsdatenanfrage",
         "gpke-konfiguration",
         "gpke-konfiguration-aenderung",
         "gpke-kuendigung",
@@ -342,7 +344,6 @@ impl EdifactIngestDispatcher {
         "wim-preisanfrage",
         "wim-preisliste",
         "wim-rechnungsabwicklung",
-        "wim-stammdaten",
         "wim-technik-aenderung",
         mako_wim::weiterverpflichtung::WORKFLOW_NAME,
         mako_wim::wertebestellung::WORKFLOW_NAME,
@@ -1320,7 +1321,7 @@ pub fn esa_korrelation_key(msg: &AnyMessage, pid: u32) -> String {
 
 /// Extract the Messlokations-ID from an ORDERS/ORDRSP/ORDCHG message's IDE segment.
 ///
-/// WiM ORDERS messages (Geräteübernahme, Stammdaten, Stornierung) identify the
+/// WiM ORDERS messages (Geräteübernahme, Stornierung) identify the
 /// Messlokation in the `IDE` segment (element 1, component 0 = object ID).
 /// Returns an empty string when the message is not an ORDERS/ORDRSP/ORDCHG or
 /// when the IDE segment is absent.

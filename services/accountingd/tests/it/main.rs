@@ -8,6 +8,7 @@ mod demo_config;
 mod demo_payloads;
 mod dev_config;
 mod integration_tests;
+mod request_bodies;
 mod router_builds;
 mod startup_posture;
 mod unit_tests;

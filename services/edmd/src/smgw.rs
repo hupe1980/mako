@@ -1026,7 +1026,10 @@ pub fn spawn_smgw_cert_expiry_worker(
 ///
 /// Register or update a `SmgwSession` for a MaLo.
 ///
-/// The full `metering::SmgwSession` is stored as JSONB. The caller is the MSB's
+/// The body is a [`SmgwSession`], read through `mako_service::Json`: a key the
+/// session does not declare — at any depth — is a `422` naming it, so a
+/// misspelt field is refused rather than read as absent. The session is stored
+/// as JSONB in its own serialisation. The caller is the MSB's
 /// GWA (Gateway-Administrator) system after a BSI TR-03109-4 Admin session;
 /// edmd subscribes to no `de.markt.*` event, so a Gerätekonfiguration changed
 /// in marktd reaches this table only through such a call.
@@ -1046,20 +1049,12 @@ pub async fn put_smgw_session(
     Extension(pool): Extension<Arc<PgPool>>,
     State(state): State<HandlerState>,
     Path(malo_id): Path<String>,
-    Json(req): Json<serde_json::Value>,
+    Json(session): Json<SmgwSession>,
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-
-    // Parse and validate the session payload.
-    let session: SmgwSession = match serde_json::from_value(req.clone()) {
-        Ok(s) => s,
-        Err(e) => {
-            return ApiError::unprocessable(format!("invalid SmgwSession: {e}")).into_response();
-        }
-    };
 
     let gateway_status = match session.status {
         crate::smgw_model::GatewayStatus::Provisioned => "PROVISIONED",

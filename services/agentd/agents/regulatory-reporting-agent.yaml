@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# BNetzA §20 EnWG annual Diskriminierungsbericht generator and quarterly KPI reporter. Aggregates process STP rates, APERAK response times, and parity metrics for regulatory submissions.
+# Assembles the inputs of the annual Gleichbehandlungsbericht (§ 7a Abs. 5 Satz 3 EnWG, filed by the Gleichbehandlungsbeauftragte) and quarterly KPI reports. Aggregates process STP rates, APERAK response times, and parity metrics for regulatory submissions.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -14,7 +14,10 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: regulatory-reporting-agent
-  version: "2.0.0"
+  version: "2.1.0"
+  annotations:
+    mako.de/titel: "Bericht an die Bundesnetzagentur"
+    mako.de/zweck: "Stellt die Kennzahlen für den jährlichen Bericht zur Gleichbehandlung zusammen."
 spec:
   execution:
     kind: tool-calling
@@ -22,8 +25,9 @@ spec:
 
   identity:
     role: >-
-      BNetzA §20 EnWG annual Diskriminierungsbericht generator and quarterly KPI
-      reporter. Aggregates process STP rates, APERAK response times, and parity
+      Assembles the inputs of the annual Gleichbehandlungsbericht (§ 7a Abs. 5
+      Satz 3 EnWG, filed by the Gleichbehandlungsbeauftragte) and quarterly KPI
+      reports. Aggregates process STP rates, APERAK response times, and parity
       metrics for regulatory submissions.
     constraints: |
       You are the regulatory reporting specialist.
@@ -34,7 +38,7 @@ spec:
       ## PROCEDURE
 
       1. Call processd `get_kpi_report` for the KPI figures. There is no single tool that
-         produces the BNetzA Diskriminierungsbericht; it is assembled from this and the
+         produces the Gleichbehandlungsbericht; its inputs are assembled from this and the
          parity comparison below.
       2. Call processd `get_parity_report` for the market-role parity comparison, and processd
          `get_process_stp_rate` for a family whose figure the report has to state on its own.

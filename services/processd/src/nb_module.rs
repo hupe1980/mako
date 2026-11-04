@@ -476,11 +476,13 @@ pub async fn evaluate_and_decide(
         .as_str()
         .and_then(|s| OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
-    let payload_meta = AnmeldungMeta {
+    let mut payload_meta = AnmeldungMeta {
         pid,
         process_id,
         malo_id: malo_id.clone(),
         received_at,
+        // Set once the walk has run: the tree it stopped in.
+        baum: None,
     };
 
     info!(
@@ -645,7 +647,7 @@ pub async fn evaluate_and_decide(
     };
     let grid_ref = grid_nc.as_ref();
 
-    let result = decide_anmeldung(
+    let (result, baum) = decide_anmeldung_im_baum(
         &anfrage,
         vs_ref,
         grid_ref,
@@ -653,6 +655,7 @@ pub async fn evaluate_and_decide(
         received_at,
         &config.netz_check_config(),
     );
+    payload_meta.baum = Some(baum);
 
     info!(
         %process_id, pid, %malo_id,
@@ -1235,6 +1238,8 @@ pub async fn resume_after_lfa_antwort(
         // The Anmeldung's own 11:00 window, which runs from *its* arrival — not
         // from the LFA's answer, which lands two hours before it closes.
         received_at: waiting.received_at,
+        // The Vorprüfung is behind it; this phase walks `E_0623` / `E_3007`.
+        baum: Some(mako_pruefung::nb::baum::lieferbeginn(anfrage.sparte)),
     };
 
     match &result {
@@ -1588,6 +1593,9 @@ struct AnmeldungMeta {
     process_id: Uuid,
     malo_id: String,
     received_at: OffsetDateTime,
+    /// The Entscheidungsbaum the walk decided in — recorded on the queue entry
+    /// as the tree an operator's Antwortcode must come from.
+    baum: Option<&'static str>,
 }
 
 /// Put a decision the NB may not dispatch automatically in front of an operator,
@@ -1646,6 +1654,26 @@ async fn enqueue_entry(
     followup: Option<(&'static str, serde_json::Value)>,
     answer: Option<serde_json::Value>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let entry = queue_entry(config, meta, reason, followup, answer);
+    queue.enqueue(&entry).await?;
+    info!(
+        process_id = %meta.process_id,
+        pid = meta.pid,
+        malo_id = %meta.malo_id,
+        expires_at = %entry.expires_at,
+        "processd NB: queued for operator decision"
+    );
+    Ok(())
+}
+
+/// The queue entry [`enqueue_entry`] writes.
+fn queue_entry(
+    config: &NbModuleConfig,
+    meta: &AnmeldungMeta,
+    reason: &str,
+    followup: Option<(&'static str, serde_json::Value)>,
+    answer: Option<serde_json::Value>,
+) -> ApprovalQueueEntry {
     let window = mako_fristen::antwort::operator_window(meta.pid, meta.received_at);
     let (accept, reject) = answer_commands(meta.pid);
     let mut entry = ApprovalQueueEntry::pending(
@@ -1660,21 +1688,16 @@ async fn enqueue_entry(
         config.tenant.clone(),
     )
     .with_commands(accept, reject, Some("NB"));
+    if let Some(baum) = meta.baum {
+        entry = entry.with_ebd(baum);
+    }
     if let Some((command, payload)) = followup {
         entry = entry.with_followup(command, payload);
     }
     if let Some(answer) = answer {
         entry = entry.with_answer_payload(answer);
     }
-    queue.enqueue(&entry).await?;
-    info!(
-        process_id = %meta.process_id,
-        pid = meta.pid,
-        malo_id = %meta.malo_id,
-        deadline = %window.deadline,
-        "processd NB: queued for operator decision"
-    );
-    Ok(())
+    entry
 }
 
 /// The `makod` command pair that answers an inbound NB PID.
@@ -1851,6 +1874,7 @@ async fn decide_abmeldung(
         .inspect_err(|e| warn!(%e, %malo_id, "processd NB: marktd versorgung fetch failed"))?;
 
     let anfrage = payload.into_anfrage();
+    let baum = mako_pruefung::nb::baum::abmeldung(anfrage.sparte);
     let now = OffsetDateTime::now_utc();
     // Judged on the receipt instant, as the Anmeldung is (`decide_anmeldung`):
     // the Frist runs from the ÜT, the „Tag des Empfangs der Übertragungsdatei"
@@ -1888,6 +1912,7 @@ async fn decide_abmeldung(
         process_id,
         malo_id: malo_id.clone(),
         received_at,
+        baum: Some(baum),
     };
 
     match &result {
@@ -1974,6 +1999,7 @@ async fn decide_abmeldung(
 /// *directly* refusable. What the NB answers comes from `E_0623` / `E_3007`,
 /// which reads the LFA's answer to the Anfrage zur Beendigung der Zuordnung.
 /// Answering out of `E_0622` alone can only ever say `A51`.
+#[cfg(test)]
 fn decide_anmeldung(
     anfrage: &AnmeldungAnfrage,
     versorgung: Option<&mako_markt::repository::VersorgungsStatusRecord>,
@@ -1982,6 +2008,29 @@ fn decide_anmeldung(
     received_at: OffsetDateTime,
     config: &mako_pruefung::NetzCheckConfig,
 ) -> NbEntscheidung {
+    decide_anmeldung_im_baum(
+        anfrage,
+        versorgung,
+        grid,
+        partner_known,
+        received_at,
+        config,
+    )
+    .0
+}
+
+/// [`decide_anmeldung`], together with the Entscheidungsbaum the walk stopped
+/// in: the Vorprüfung (`E_0622` / `E_3005`) when it refused or escalated, the
+/// Lieferbeginn tree (`E_0623` / `E_3007`) otherwise. That is the tree an
+/// operator answering the queued decision draws a code from.
+fn decide_anmeldung_im_baum(
+    anfrage: &AnmeldungAnfrage,
+    versorgung: Option<&mako_markt::repository::VersorgungsStatusRecord>,
+    grid: Option<&mako_pruefung::MaloGridRecord>,
+    partner_known: bool,
+    received_at: OffsetDateTime,
+    config: &mako_pruefung::NetzCheckConfig,
+) -> (NbEntscheidung, &'static str) {
     let vorpruefung = mako_pruefung::evaluate(
         anfrage,
         versorgung,
@@ -1995,9 +2044,15 @@ fn decide_anmeldung(
         // Tranchen-Zuordnung `marktd` does not project — the tree escalates on
         // its own rather than guessing between two Ablehnungen and two
         // Zustimmungen.
-        mako_pruefung::evaluate_lieferbeginn(anfrage, None)
+        (
+            mako_pruefung::evaluate_lieferbeginn(anfrage, None),
+            mako_pruefung::nb::baum::lieferbeginn(anfrage.sparte),
+        )
     } else {
-        vorpruefung
+        (
+            vorpruefung,
+            mako_pruefung::nb::baum::vorpruefung(anfrage.sparte),
+        )
     }
 }
 
@@ -3184,5 +3239,65 @@ mod tests {
             );
         }
         assert_eq!(share(serde_json::Value::Null), None);
+    }
+
+    // ── The tree a queued decision is answered from ──────────────────────────
+
+    fn nb_config() -> NbModuleConfig {
+        NbModuleConfig {
+            marktd_url: "http://marktd.invalid".into(),
+            marktd_api_key: SecretString::from("k"),
+            own_mp_id: "9900357000004".into(),
+            tenant: "t".into(),
+            auto_accept: false,
+            gas_bearbeitungsfrist_wt: 3,
+        }
+    }
+
+    /// An escalation in the Vorprüfung is queued under `E_0622`, and an Accept
+    /// held after it under `E_0623` — the tree each walk stopped in, read from
+    /// the walk and not from a PID table.
+    #[test]
+    fn an_enqueued_nb_entry_carries_the_ebd_its_walk_decided_with() {
+        let a = anmeldung(Marktlokationsart::Verbrauchend);
+        let cfg = mako_pruefung::NetzCheckConfig::default();
+        let received_at = time::macros::datetime!(2026-07-08 08:00 UTC);
+
+        // No grid record: the Vorprüfung escalates before any Prüfschritt.
+        let (escalated, baum) = decide_anmeldung_im_baum(&a, None, None, true, received_at, &cfg);
+        assert!(escalated.is_escalate(), "{escalated:?}");
+        assert_eq!(baum, mako_pruefung::codes::EBD_ANMELDUNG_DIREKT_ABLEHNBAR);
+
+        let meta = AnmeldungMeta {
+            pid: 55_001,
+            process_id: Uuid::nil(),
+            malo_id: a.malo_id.clone(),
+            received_at,
+            baum: Some(baum),
+        };
+        let entry = queue_entry(&nb_config(), &meta, "escalated", None, None);
+        assert_eq!(entry.ablehnung_ebd.as_deref(), Some("E_0622"));
+        assert!(entry.answer_payload.is_none());
+
+        // Through the Vorprüfung, the answer comes out of `E_0623`.
+        let mut a = a;
+        a.process_date =
+            time::Date::from_calendar_date(2026, time::Month::July, 31).expect("valid date");
+        let grid = mako_pruefung::MaloGridRecord {
+            malo_id: a.malo_id.clone(),
+            nb_mp_id: a.grid_operator_gln.clone(),
+            bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
+            netzgebiet: None,
+        };
+        let (accepted, baum) = decide_anmeldung_im_baum(
+            &a,
+            Some(&unbeliefert()),
+            Some(&grid),
+            true,
+            received_at,
+            &cfg,
+        );
+        assert!(accepted.is_accept(), "{accepted:?}");
+        assert_eq!(baum, mako_pruefung::codes::EBD_LIEFERBEGINN);
     }
 }

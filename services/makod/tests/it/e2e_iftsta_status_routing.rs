@@ -55,9 +55,20 @@ async fn make_dispatcher() -> EdifactIngestDispatcher {
     )
 }
 
+/// An Ersteinbau answer as IFTSTA AHB 2.1 shapes it for 21030/21031:
+/// `STS+Z19+<DE 4405>+<DE 9013>:E_0233` — the status, then the answer code.
+fn ersteinbau_antwort(pid: u32, code: &str) -> String {
+    let status = if pid == 21031 { "Z31" } else { "Z30" };
+    iftsta(pid).replace("STS+Z21+Z05'", &format!("STS+Z19+{status}+{code}:E_0233'"))
+}
+
 async fn assert_reaches_resume(workflow: &str, pid: u32) {
+    assert_message_reaches_resume(workflow, pid, &iftsta(pid)).await;
+}
+
+async fn assert_message_reaches_resume(workflow: &str, pid: u32, edi: &str) {
     let dispatcher = make_dispatcher().await;
-    let msg = edi_energy::parse(iftsta(pid).as_bytes())
+    let msg = edi_energy::parse(edi.as_bytes())
         .unwrap_or_else(|e| panic!("parse IFTSTA {pid} failed: {e:?}"));
     let outcome = dispatcher
         .dispatch(&msg, workflow, pid, time::OffsetDateTime::now_utc())
@@ -114,9 +125,55 @@ async fn the_ersteinbau_vorabinformation_spawns_the_vorgang() {
 
 #[tokio::test]
 async fn the_ersteinbau_answers_reach_the_resume_path() {
-    for pid in [21030u32, 21031] {
-        assert_reaches_resume("wim-ersteinbau", pid).await;
+    for (pid, code) in [(21030u32, "A03"), (21031, "A04")] {
+        assert_message_reaches_resume("wim-ersteinbau", pid, &ersteinbau_antwort(pid, code)).await;
     }
+}
+
+/// An inbound 21030/21031 reaches this party as the **gMSB** — the answer's
+/// recipient (WiM Teil 1 Kap. 3.5.2 Nr. 2: „Das Ergebnis der Prüfung teilt der
+/// MSB dem gMSB mit"). The adapter builds the recording command, never the
+/// wMSB's `DispatchAntwort`, which would send an IFTSTA to the gMSB — to this
+/// party itself.
+#[test]
+fn an_inbound_ersteinbau_answer_is_recorded_not_answered() {
+    use mako_wim::ersteinbau::ErsteinbauCommand;
+    let fv = mako_engine::version::FormatVersion::parse("FV2026-10-01").expect("fv");
+    for (pid, code) in [(21030u32, "A03"), (21031, "A04")] {
+        let msg =
+            edi_energy::parse(ersteinbau_antwort(pid, code).as_bytes()).expect("parse IFTSTA");
+        let cmd = makod::adapters::wim_ersteinbau_registry()
+            .dispatch(&msg as &dyn std::any::Any, &fv)
+            .unwrap_or_else(|e| panic!("adapt {pid}: {e:?}"));
+        match cmd {
+            ErsteinbauCommand::ReceiveAntwort {
+                pid: got,
+                antwort_code,
+                message_ref,
+            } => {
+                assert_eq!(got.as_u32(), pid);
+                // DE 9013, not the DE 4405 status beside it.
+                assert_eq!(antwort_code, code);
+                assert_eq!(message_ref.as_str(), "1", "the UNH reference is kept");
+            }
+            _ => panic!("{pid} must adapt to ReceiveAntwort"),
+        }
+    }
+}
+
+/// An Ersteinbau answer with no `E_0233` code is refused: the code is the
+/// whole answer, and reading its absence as a Zustimmung would record one the
+/// wMSB never gave.
+#[test]
+fn an_ersteinbau_answer_without_its_code_is_refused() {
+    let fv = mako_engine::version::FormatVersion::parse("FV2026-10-01").expect("fv");
+    let edi = iftsta(21030).replace("STS+Z21+Z05'", "STS+Z19+Z30'");
+    let msg = edi_energy::parse(edi.as_bytes()).expect("parse IFTSTA");
+    assert!(
+        makod::adapters::wim_ersteinbau_registry()
+            .dispatch(&msg as &dyn std::any::Any, &fv)
+            .is_err()
+    );
 }
 
 /// 21015 is a **Gas** Informationsmeldung NB → MSBA that IFTSTA AHB 2.1

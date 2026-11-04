@@ -113,6 +113,25 @@ fn sparte_of(pid: u32) -> mako_pruefung::msb::types::Sparte {
     }
 }
 
+/// The Entscheidungsbaum the answer to `pid` is drawn from.
+///
+/// The three executable walks name their tree through
+/// [`mako_pruefung::msb::baum`], which is what `pruefe_kuendigung`,
+/// `pruefe_anmeldung` and `pruefe_abmeldung` resolve their codes in. The
+/// Verpflichtungsanfrage has no walk (WiM Teil 1 Kap. 2.4.2 Nr. 4 leaves it
+/// to the gMSB's judgement), so its tree is the one `makod` resolves the
+/// operator's code against: [`mako_wim::geraetewechsel::wim_ebd`].
+fn entscheidungsbaum(pid: u32) -> Option<&'static str> {
+    use mako_pruefung::msb::baum;
+    match pid {
+        55_039 | 44_039 => Some(baum::kuendigung(sparte_of(pid))),
+        55_042 | 44_042 => Some(baum::anmeldung(sparte_of(pid))),
+        55_051 | 44_051 => Some(baum::abmeldung(sparte_of(pid))),
+        55_168 | 44_168 => mako_wim::geraetewechsel::wim_ebd(pid),
+        _ => None,
+    }
+}
+
 /// Fields extracted from `de.mako.process.initiated` for a WiM MSB-Wechsel PID.
 #[derive(Debug, Clone)]
 pub struct MsbWechselPayload {
@@ -837,6 +856,10 @@ async fn enqueue(
         answer.unwrap_or_else(|| serde_json::json!({ "melo_id": payload.melo_id })),
     )
     .with_reject_payload(serde_json::json!({ "melo_id": payload.melo_id }));
+    let entry = match entscheidungsbaum(payload.pid) {
+        Some(baum) => entry.with_ebd(baum),
+        None => entry,
+    };
     queue.enqueue(&entry).await?;
     Ok(())
 }
@@ -1423,6 +1446,19 @@ mod tests {
                 mako_markt::commands::DISPATCHED_BY_SERVICES.contains(&name),
                 "{name:?} missing from mako_markt::commands::DISPATCHED_BY_SERVICES — \
                  makod's registry cross-check would not cover it"
+            );
+        }
+    }
+
+    /// The tree a queued MSB-Wechsel is recorded under is the one `makod`
+    /// resolves the answer code in, for every PID this module answers.
+    #[test]
+    fn the_recorded_tree_is_the_one_makod_resolves_against() {
+        for &pid in NB_ANSWERED_PIDS.iter().chain(MSB_ANSWERED_PIDS) {
+            assert_eq!(
+                entscheidungsbaum(pid),
+                mako_wim::geraetewechsel::wim_ebd(pid),
+                "PID {pid}"
             );
         }
     }

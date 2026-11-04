@@ -95,6 +95,8 @@
 
 pub mod config;
 mod daemon;
+/// The typed decision view over an approval-queue entry.
+pub mod freigabe;
 pub use daemon::Processd;
 pub mod handler;
 pub mod mcp_server;

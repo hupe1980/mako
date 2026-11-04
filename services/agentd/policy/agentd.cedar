@@ -102,7 +102,7 @@ permit(principal, action == Action::"effect:perform", resource);
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing
 // at somebody else's endpoint is a configuration error this refuses rather than
 // calls. `context.args.server` is what makes this expressible without naming the
-// 151 granted tools one by one.
+// 155 granted tools one by one.
 //
 // **This list must cover every server the manifests grant.** A granted server
 // missing from it is not a narrower policy — it is a specialist that boots, runs
@@ -193,7 +193,8 @@ forbid(principal, action == Action::"data:release", resource);
 // is a receiver that stopped acknowledging. Both present as silence otherwise.
 permit(
   principal,
-  action in [Action::"api:run.read", Action::"api:run.list", Action::"api:task.list",
+  action in [Action::"api:run.read", Action::"api:run.output", Action::"api:run.list",
+             Action::"api:task.list",
              Action::"api:task.read", Action::"api:case.read", Action::"api:case.list",
              Action::"api:deadletter.list", Action::"api:push.list"],
   resource
@@ -413,6 +414,22 @@ permit(
 )
 when {
   ["mako-operations", "mako-service", "gas-operations", "billing-operations",
+   "billing-compliance", "credit-control", "eeg-operations", "grid-operations",
+   "marktkommunikation", "metering", "netzbilanz", "regulatory"]
+    .containsAny(context.roles)
+};
+
+// Whether an answer or a Hinweis helped: a person's verdict, recorded by the
+// runtime as a sealed run of its own under the caller's name. Whoever may ask
+// may judge the answer; `mako-service` is a scheduler, not a reader, so it
+// gives no verdict.
+permit(
+  principal,
+  action in [Action::"api:run.assess", Action::"api:run.assessments"],
+  resource
+)
+when {
+  ["mako-operations", "gas-operations", "billing-operations",
    "billing-compliance", "credit-control", "eeg-operations", "grid-operations",
    "marktkommunikation", "metering", "netzbilanz", "regulatory"]
     .containsAny(context.roles)

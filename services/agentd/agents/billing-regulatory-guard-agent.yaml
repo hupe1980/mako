@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: billing-regulatory-guard-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Pflichtangaben der Rechnung"
+    mako.de/zweck: "Prüft jede versandte Endkundenrechnung auf die gesetzlichen Pflichtangaben."
 spec:
   execution:
     kind: tool-calling

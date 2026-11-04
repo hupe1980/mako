@@ -36,6 +36,7 @@ CREATE OR REPLACE FUNCTION heute() RETURNS date
     AS $$ SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$;
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ── Kunden ────────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,15 @@ CREATE TABLE kunden (
     notizen             TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- What the customer search matches: every word of the name and the
+    -- Kundennummer, lowercased, each preceded by a space, so „starts a word"
+    -- is one pattern (`LIKE '% muster%'`) a trigram index answers at any
+    -- tenant size — a search must not read every customer per keystroke.
+    suchtext            TEXT GENERATED ALWAYS AS (lower(
+                            ' ' || COALESCE(person->>'vorname', geschaeftspartner->>'vorname', '')
+                         || ' ' || COALESCE(person->>'nachname', geschaeftspartner->>'nachname', '')
+                         || ' ' || COALESCE(geschaeftspartner->>'name1', '')
+                         || ' ' || COALESCE(kunden_nr, ''))) STORED,
     UNIQUE (tenant, kunden_nr)
 );
 
@@ -96,6 +106,7 @@ COMMENT ON COLUMN kunden.zahlungsinformation IS
     'IBAN validated via ISO 13616 mod-97 on PUT. NULL = no SEPA mandate.';
 
 CREATE INDEX kunden_typ     ON kunden (tenant, kundentyp);
+CREATE INDEX kunden_suche   ON kunden USING gin (suchtext gin_trgm_ops);
 -- UNIQUE partial index for ON CONFLICT (tenant, erp_kunde_id) DO UPDATE
 CREATE UNIQUE INDEX kunden_erp_unique ON kunden (tenant, erp_kunde_id)
     WHERE erp_kunde_id IS NOT NULL;

@@ -31,7 +31,7 @@ use agentd::plane::{Activation, Envelope, Plane, PlaneConfig, Stores};
 /// CloudEvent envelope.
 ///
 /// `source` is the producer half of the admission key: an id is unique only
-/// within one emitter, so the key `run_correlated_once` claims carries both.
+/// within one emitter, so the key a keyed admission (`RunRequest::once`) claims carries both.
 fn ce<'a>(id: &'a str, event_type: &'a str) -> Envelope<'a> {
     Envelope {
         id,
@@ -191,6 +191,7 @@ fn completion(structured: Value) -> Completion {
         stop_reason: Some("end_turn".to_owned()),
         truncated: false,
         continuation: None,
+        ..Completion::default()
     }
 }
 

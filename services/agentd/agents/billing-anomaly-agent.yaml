@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: billing-anomaly-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Auffällige Rechnungen"
+    mako.de/zweck: "Sucht Rechnungen, die stark vom Verlauf der letzten Monate abweichen, und nennt die wahrscheinliche Ursache."
 spec:
   execution:
     kind: tool-calling

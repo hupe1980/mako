@@ -580,3 +580,148 @@ async fn the_kpi_period_is_bounded_by_berlin_dates() {
         "January holds no process"
     );
 }
+
+/// The worklist read pages by Frist with a keyset: every open process with a
+/// listed PID appears exactly once across the pages, the earliest Frist first
+/// and those without one last, and a closed process, another PID or another
+/// tenant never appears.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn open_processes_page_by_frist_without_gaps_or_repeats() {
+    use processd::obs::pg::PgProcessProjectionRepository;
+    use processd::obs::repository::{OpenCursor, ProcessProjectionRepository as _};
+
+    let Some((pool, _pg)) = pg_pool().await else {
+        return;
+    };
+    let now = OffsetDateTime::now_utc();
+    let mut expected = Vec::new();
+    for hours in [5_i64, 1, 3, 2, 4] {
+        expected.push((
+            Some(now + Duration::hours(hours)),
+            insert_projection(
+                &pool,
+                "t1",
+                55001,
+                "running",
+                Some(now + Duration::hours(hours)),
+                false,
+            )
+            .await,
+        ));
+    }
+    let ohne = insert_projection(&pool, "t1", 44001, "running", None, false).await;
+    insert_projection(&pool, "t1", 55001, "completed", Some(now), false).await;
+    insert_projection(&pool, "t1", 55007, "running", Some(now), false).await;
+    insert_projection(&pool, "t2", 55001, "running", Some(now), false).await;
+    expected.sort();
+    let mut expected: Vec<Uuid> = expected.into_iter().map(|(_, id)| id).collect();
+    expected.push(ohne);
+
+    let repo = PgProcessProjectionRepository::new(pool);
+    let mut seen = Vec::new();
+    let mut after: Option<OpenCursor> = None;
+    loop {
+        let page = repo
+            .open_processes("t1", &[55001, 44001], &[], after.as_ref(), 2)
+            .await
+            .expect("page");
+        let Some(last) = page.last() else { break };
+        after = Some(OpenCursor {
+            frist: last.deadline_at,
+            process_id: last.process_id,
+        });
+        seen.extend(page.iter().map(|p| p.process_id));
+    }
+    assert_eq!(seen, expected);
+
+    // A customer view asks by its Lieferstellen instead: only processes on
+    // those MaLos, whatever their PID.
+    let on_malo = expected[2];
+    sqlx::query("UPDATE process_projections SET malo_id = '51238696012' WHERE process_id = $1")
+        .bind(on_malo)
+        .execute(repo.pool())
+        .await
+        .expect("malo");
+    let by_malo = repo
+        .open_processes("t1", &[], &["51238696012".to_owned()], None, 50)
+        .await
+        .expect("by malo");
+    assert_eq!(
+        by_malo.iter().map(|p| p.process_id).collect::<Vec<_>>(),
+        vec![on_malo]
+    );
+}
+
+/// The count covers the same filter as the page, over every open process, and
+/// a Frist counts as due only inside the window — the Lage's figures are the
+/// store's, never a page's length.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn count_open_processes_counts_the_filter_and_the_window() {
+    use processd::obs::pg::PgProcessProjectionRepository;
+    use processd::obs::repository::ProcessProjectionRepository as _;
+
+    let Some((pool, _pg)) = pg_pool().await else {
+        return;
+    };
+    let now = OffsetDateTime::now_utc();
+    for hours in [1_i64, 3, 30] {
+        insert_projection(
+            &pool,
+            "t1",
+            55001,
+            "running",
+            Some(now + Duration::hours(hours)),
+            false,
+        )
+        .await;
+    }
+    insert_projection(
+        &pool,
+        "t1",
+        55001,
+        "running",
+        Some(now - Duration::hours(1)),
+        false,
+    )
+    .await;
+    insert_projection(&pool, "t1", 44001, "running", None, false).await;
+    insert_projection(
+        &pool,
+        "t1",
+        55001,
+        "completed",
+        Some(now + Duration::hours(1)),
+        false,
+    )
+    .await;
+    insert_projection(
+        &pool,
+        "t1",
+        55007,
+        "running",
+        Some(now + Duration::hours(1)),
+        false,
+    )
+    .await;
+    insert_projection(
+        &pool,
+        "t2",
+        55001,
+        "running",
+        Some(now + Duration::hours(1)),
+        false,
+    )
+    .await;
+
+    let repo = PgProcessProjectionRepository::new(pool);
+    let n = repo
+        .count_open_processes("t1", &[55001, 44001], &[], now, now + Duration::hours(12))
+        .await
+        .expect("count");
+    assert_eq!(n.offen, 5);
+    assert_eq!(n.faellig, 2);
+    let frueheste = n.frueheste.expect("earliest");
+    assert!((frueheste - (now + Duration::hours(1))).abs() < Duration::seconds(1));
+}

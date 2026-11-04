@@ -98,7 +98,7 @@ impl Activation {
 pub struct Route {
     /// Specialist name, matching its manifest's `metadata.name`.
     pub name: &'static str,
-    /// Capability the manifest provides — what `Runtime::run` is given.
+    /// Capability the manifest provides — what `Runtime::start` is given.
     pub capability: String,
     /// CloudEvent type globs this specialist subscribes to.
     pub triggers: &'static [&'static str],
@@ -331,7 +331,7 @@ pub enum Admitted {
 /// **This is not the shape an ERP subscriber receives.** `de.agent.decision.made`
 /// is delivered by the journal-backed outbox from the run's own sealed record —
 /// see [`crate::plane::sweep::spawn_delivery`]. This is the operator's
-/// "what just happened" view and the answer to a manual run.
+/// "what just happened" view of a run that has concluded.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentDecision {
     pub agent_name: String,
@@ -364,6 +364,152 @@ pub struct AgentDecision {
 
 /// What `POST /webhook` durably admitted for one specialist.
 ///
+/// An open worklist row as the Desk files it under its Anker.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Hinweis {
+    pub task: String,
+    pub run: String,
+    /// The row's kind — the triage rule that opened it.
+    pub art: String,
+    /// The skill whose run opened it, and its title for an operator.
+    pub skill: Option<String>,
+    pub titel: Option<String>,
+    /// The row's own summary; a model-written one opens with the disclosure.
+    pub text: String,
+    /// `urgent`, `high`, `normal` or `low`.
+    pub prioritaet: String,
+    /// When the row's obligation lapses, RFC 3339.
+    pub faellig: Option<String>,
+    /// What the row is about: the run's case's business keys.
+    pub anker: Vec<Anker>,
+}
+
+/// One business key of a case: `malo`, `melo` or `process`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Anker {
+    pub art: String,
+    pub wert: String,
+}
+
+/// A run's answer, sentence by sentence, as the Desk renders it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Answer {
+    pub run: String,
+    /// `running`, or the run's outcome (`succeeded`, `failed`, …).
+    pub status: String,
+    /// The disclosure every model-written text carries, shown first.
+    pub disclosure: &'static str,
+    pub saetze: Vec<AnswerSentence>,
+    /// A decision the assistant proposes for a held Freigabe — prefilled in
+    /// the Desk's form, never sent by agentd or by the Desk on its own.
+    pub vorschlag: Option<Vorschlag>,
+    /// Every service read the run made, in the order it made them — so a
+    /// reader watching a running answer sees what is being read, and a
+    /// finished one shows what was.
+    pub schritte: Vec<Schritt>,
+    /// The reader's own standing verdict on this run — `Some(true)` for
+    /// „hilfreich" — or `None` when they gave none.
+    pub hilfreich: Option<bool>,
+}
+
+/// A proposed decision: what to do, the code a refusal would carry, and the
+/// one sentence why — checked like any sentence of the answer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Vorschlag {
+    /// `freigeben` or `ablehnen`.
+    pub aktion: String,
+    /// The Antwortcode a refusal carries; `None` for an approval.
+    pub antwortcode: Option<String>,
+    pub begruendung: String,
+    /// The call the Begründung rests on, `server/tool`.
+    pub quelle: Option<String>,
+    /// Every figure of the Begründung occurs in that call's output.
+    pub belegt: bool,
+}
+
+/// One tool call of a run.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Schritt {
+    /// `server/tool`.
+    pub quelle: String,
+    /// The call has settled — answered, failed or reconciled.
+    pub fertig: bool,
+}
+
+impl Answer {
+    fn new(run: &str, status: &str, saetze: Vec<AnswerSentence>) -> Self {
+        Self {
+            run: run.to_owned(),
+            status: status.to_owned(),
+            disclosure: super::MACHINE_GENERATED.trim_end(),
+            saetze,
+            vorschlag: None,
+            schritte: Vec::new(),
+            hilfreich: None,
+        }
+    }
+}
+
+/// The metric a person's „hilfreich / nicht hilfreich" is recorded under.
+pub const HILFREICH: &str = "hilfreich";
+
+/// The metric what became of a proposed decision is recorded under.
+pub const VORSCHLAG: &str = "vorschlag";
+
+/// What a person says about a run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Urteil {
+    /// Whether the answer helped, and why not in their words.
+    Hilfreich {
+        hilfreich: bool,
+        begruendung: Option<String>,
+    },
+    /// What became of the run's proposal: `sent` as proposed, `edited` before
+    /// sending, or `dismissed`.
+    Vorschlag(VorschlagSchicksal),
+}
+
+/// What became of a proposed decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VorschlagSchicksal {
+    Sent,
+    Edited,
+    Dismissed,
+}
+
+impl VorschlagSchicksal {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Sent => "sent",
+            Self::Edited => "edited",
+            Self::Dismissed => "dismissed",
+        }
+    }
+}
+
+/// Why a verdict was not recorded.
+#[derive(Debug)]
+pub enum BewertungError {
+    /// No such run, or one that has not concluded.
+    NichtBewertbar(String),
+    /// A rationale over the limit, or an actor name that cannot be one.
+    Ungueltig(String),
+    /// The journal could not be read or written.
+    Journal(String),
+}
+
+/// One sentence of an answer.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AnswerSentence {
+    pub text: String,
+    /// The call it cites, `server/tool`.
+    pub quelle: Option<String>,
+    /// Every figure in it occurs in the cited call's output — not that its
+    /// reasoning is right.
+    pub belegt: bool,
+}
+
 /// Deliberately not an [`AgentDecision`]: this door returns **before the work
 /// happens**, so it has no outcome to report and must not carry a field shaped
 /// like one. A `summary` here would be a sentence about a run that has not
@@ -856,6 +1002,247 @@ impl Plane {
         accepted
     }
 
+    /// The open worklist rows a person in `roles` may answer, each filed under
+    /// the matter its run's case is about — the Desk's Hinweise.
+    ///
+    /// The Anker is the case's correlation key (`malo`, `melo`, `process`),
+    /// never parsed out of the summary; the skill is the one the run's
+    /// admission names; the text is the row's own summary, which already opens
+    /// with the disclosure where a model wrote it.
+    ///
+    /// # Errors
+    ///
+    /// The task, case or journal store failing.
+    pub async fn hinweise(&self, roles: &[String]) -> Result<Vec<Hinweis>, String> {
+        use agentplane::journal::RecordKind;
+        let Some(tasks) = self.runtime.tasks() else {
+            return Ok(Vec::new());
+        };
+        let queued = tasks.queue(roles, 200).await.map_err(|e| e.to_string())?;
+        let mut out = Vec::with_capacity(queued.len());
+        for task in queued {
+            let mut anker = Vec::new();
+            if let (Some(case), Some(cases)) = (task.case, self.runtime.cases())
+                && let Some(c) = cases.case(case).await.map_err(|e| e.to_string())?
+            {
+                anker = c
+                    .correlation
+                    .iter()
+                    .filter(|k| matches!(k.namespace.as_str(), "malo" | "melo" | "process"))
+                    .map(|k| Anker {
+                        art: k.namespace.clone(),
+                        wert: k.value.clone(),
+                    })
+                    .collect();
+            }
+            let skill = self
+                .runtime
+                .journal()
+                .read(task.run, 0)
+                .await
+                .map_err(|e| e.to_string())?
+                .iter()
+                .find_map(|r| match r.kind() {
+                    RecordKind::RunAdmitted { governed_by, .. } => {
+                        governed_by.as_ref().map(|g| g.name.clone())
+                    }
+                    _ => None,
+                });
+            let titel = skill
+                .as_deref()
+                .and_then(super::find_manifest)
+                .and_then(|m| m.metadata.annotations.get("mako.de/titel").cloned());
+            out.push(Hinweis {
+                task: task.id.to_string(),
+                run: task.run.to_string(),
+                art: task.kind.clone(),
+                skill,
+                titel,
+                text: task.justification.summary.peek().clone(),
+                prioritaet: serde_json::to_value(task.priority)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default(),
+                faellig: task
+                    .due_at
+                    .and_then(|t| serde_json::to_value(t).ok())
+                    .and_then(|v| v.as_str().map(str::to_owned)),
+                anker,
+            });
+        }
+        Ok(out)
+    }
+
+    /// A run's answer as the Desk shows it: each sentence with the tool call
+    /// it cites and whether that call's output carries its figures
+    /// ([`super::beleg::belegt`]).
+    ///
+    /// The answer is not stored — a declarative run's output is reconstructed
+    /// by replay — so a concluded run is replayed strictly, which performs no
+    /// effect, and each tool call's output is read from its `EffectDone`
+    /// record. A run still working answers `running` with no sentence; one
+    /// that ended otherwise answers its outcome. `None` for a run nobody has
+    /// heard of.
+    ///
+    /// # Errors
+    ///
+    /// The journal or the replay failing.
+    pub async fn answer(&self, run: &str, reader: &str) -> Result<Option<Answer>, String> {
+        use agentplane::journal::RecordKind;
+        use std::collections::BTreeMap;
+
+        let Ok(id) = agentplane::core::RunId::parse(run) else {
+            return Ok(None);
+        };
+        let records = self
+            .runtime
+            .journal()
+            .read(id, 0)
+            .await
+            .map_err(|e| e.to_string())?;
+        if records.is_empty() {
+            return Ok(None);
+        }
+        let calls = agentplane::journal::calls(&records);
+        let schritte: Vec<Schritt> = calls
+            .iter()
+            .filter_map(|c| {
+                let t = c.tool()?;
+                Some(Schritt {
+                    quelle: format!("{}/{}", t.server, t.tool),
+                    fertig: c.outcome().is_some(),
+                })
+            })
+            .collect();
+        let outcome = records.iter().find_map(|r| match r.kind() {
+            RecordKind::RunConcluded { outcome, .. } => Some(outcome.clone()),
+            _ => None,
+        });
+        let Some(outcome) = outcome else {
+            let mut running = Answer::new(run, "running", Vec::new());
+            running.schritte = schritte;
+            return Ok(Some(running));
+        };
+        let mut answer = if outcome == "succeeded" {
+            // The last output of each tool, `server/tool` — the read a
+            // sentence cites.
+            let outputs: BTreeMap<String, &Value> = calls
+                .iter()
+                .filter_map(|c| Some((c.tool()?, c.output()?)))
+                .map(|(t, o)| (format!("{}/{}", t.server, t.tool), o))
+                .collect();
+            let output = self
+                .runtime
+                .output(id)
+                .await
+                .map_err(|e| e.to_string())?
+                .map(|t| t.peek().clone())
+                .unwrap_or_default();
+            let saetze = output["saetze"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|s| {
+                    let satz = super::beleg::Satz {
+                        text: s["text"].as_str().unwrap_or_default().to_owned(),
+                        cites: s["quelle"].as_str().map(str::to_owned),
+                    };
+                    let step = satz.cites.as_ref().and_then(|q| outputs.get(q).copied());
+                    let belegt = super::beleg::belegt(&satz, step);
+                    AnswerSentence {
+                        text: satz.text,
+                        quelle: satz.cites,
+                        belegt,
+                    }
+                })
+                .collect();
+            let mut done = Answer::new(run, "succeeded", saetze);
+            done.vorschlag = vorschlag(&output["vorschlag"], &outputs);
+            done
+        } else {
+            Answer::new(run, &outcome, Vec::new())
+        };
+        answer.schritte = schritte;
+        answer.hilfreich = self.hilfreich(id, reader).await?;
+        Ok(Some(answer))
+    }
+
+    /// `reader`'s standing „hilfreich" verdict on `run`, if they gave one.
+    async fn hilfreich(
+        &self,
+        run: agentplane::core::RunId,
+        reader: &str,
+    ) -> Result<Option<bool>, String> {
+        let verdicts = self
+            .runtime
+            .assessments(run)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(verdicts
+            .current()
+            .into_iter()
+            .filter(|a| a.name() == HILFREICH && a.by().actor() == reader)
+            .find_map(|a| match a.value() {
+                agentplane::core::Score::Pass(p) => Some(*p),
+                _ => None,
+            }))
+    }
+
+    /// Record `by`'s verdict on a concluded run — the answer the Desk showed,
+    /// or the Hinweis a skill left. Written by the runtime as a sealed run of
+    /// its own, so the judged run stays untouched and a later verdict by the
+    /// same person replaces the earlier one in [`Answer::hilfreich`].
+    pub async fn bewerten(
+        &self,
+        run: &str,
+        by: &str,
+        urteil: Urteil,
+    ) -> Result<(), BewertungError> {
+        use agentplane::core::{Assessment, Operator, RuntimeError, Score};
+
+        let id = agentplane::core::RunId::parse(run)
+            .map_err(|_| BewertungError::NichtBewertbar(format!("{run} is not a run id")))?;
+        let by =
+            Operator::authenticated(by).map_err(|e| BewertungError::Ungueltig(e.to_string()))?;
+        let (metric, score, begruendung) = match urteil {
+            Urteil::Hilfreich {
+                hilfreich,
+                begruendung,
+            } => (HILFREICH, Score::Pass(hilfreich), begruendung),
+            Urteil::Vorschlag(schicksal) => {
+                (VORSCHLAG, Score::Label(schicksal.label().to_owned()), None)
+            }
+        };
+        let verdict = Assessment::new(
+            id,
+            metric,
+            score,
+            by,
+            time::OffsetDateTime::now_utc(),
+            begruendung,
+        )
+        .map_err(|e| BewertungError::Ungueltig(e.to_string()))?;
+        match self.runtime.assess(verdict).await {
+            Ok(_) => Ok(()),
+            Err(RuntimeError::NotAssessable { why, .. }) => {
+                Err(BewertungError::NichtBewertbar(why))
+            }
+            Err(e) => Err(BewertungError::Journal(e.to_string())),
+        }
+    }
+
+    /// [`Self::accept`] for one specialist named by a person, bypassing
+    /// routing; `None` when no activated specialist has that name.
+    pub async fn accept_named(
+        &self,
+        name: &str,
+        event: Envelope<'_>,
+        payload: Value,
+    ) -> Option<Accepted> {
+        let route = self.router.routes.iter().find(|r| r.name == name)?;
+        Some(self.accept_one(route, event, payload).await)
+    }
+
     /// What to tell the emitter about a whole fan-out.
     ///
     /// Any retryable refusal keeps the whole message retryable. Runs already
@@ -896,13 +1283,13 @@ impl Plane {
 
         match self
             .runtime
-            .spawn_correlated_once(
-                &route.capability,
-                input,
-                correlation.kind,
-                &correlation.keys,
-                &event.admission_key(route.name),
+            .start(route.capability.as_str(), input)
+            .terms(
+                agentplane::runtime::RunTerms::default()
+                    .correlated(correlation.kind, &correlation.keys),
             )
+            .once(event.admission_key(route.name))
+            .spawn()
             .await
         {
             Ok(spawned) => {
@@ -960,10 +1347,9 @@ impl Plane {
 
     /// Run every specialist subscribing to this event, and **wait** for them.
     ///
-    /// The door a person uses: `POST /api/v1/run` is an operator asking for an
-    /// answer, so it blocks until every run concludes or suspends. Event ingest
-    /// takes [`accept`](Self::accept) instead — waiting there would hold a
-    /// webhook open for the length of a model call and time the emitter out.
+    /// For a caller that needs the outcome in hand — the specialist suites.
+    /// Both HTTP doors take [`accept`](Self::accept) instead: holding a request
+    /// open for the length of a model call times the caller out.
     ///
     /// Each match is its own run on its own journal — independent opinions, not
     /// one run's internal concurrency. Returns one decision per specialist, in
@@ -1027,8 +1413,8 @@ impl Plane {
     /// The business keys and the labelled input one specialist is admitted with.
     ///
     /// Shared by both doors so the trust boundary is drawn in one place: the
-    /// blocking [`dispatch`](Self::dispatch) a manual run uses, and the
-    /// admit-and-continue [`accept`](Self::accept) the webhook uses. Two copies
+    /// blocking [`dispatch`](Self::dispatch) and the admit-and-continue
+    /// [`accept`](Self::accept) both doors use. Two copies
     /// of this would be two opinions about what a `planned` specialist may see.
     ///
     /// `Err` is the sentence explaining why nothing ran. A sentence rather than
@@ -1094,13 +1480,13 @@ impl Plane {
         // holds across instances and across a restart.
         let admitted = self
             .runtime
-            .run_correlated_once(
-                &route.capability,
-                input,
-                correlation.kind,
-                &correlation.keys,
-                &event.admission_key(route.name),
+            .start(route.capability.as_str(), input)
+            .terms(
+                agentplane::runtime::RunTerms::default()
+                    .correlated(correlation.kind, &correlation.keys),
             )
+            .once(event.admission_key(route.name))
+            .run()
             .await;
 
         // The answer when there is one; the *reason* when there is not. A failed
@@ -1227,6 +1613,7 @@ impl Plane {
             | RunStatus::BrokeGlass { .. }
             | RunStatus::HaltLifted { .. }
             | RunStatus::HoldReleased { .. }
+            | RunStatus::Assessed { .. }
             | RunStatus::Observed) => status.as_str(),
         };
 
@@ -1541,5 +1928,68 @@ mod tests {
         let router = Router::build(&Activation::named(Vec::new())).expect("routes");
         assert!(router.routes().is_empty());
         assert!(router.matching("de.mako.process.failed").is_empty());
+    }
+}
+
+/// The model's proposal, if it made a well-formed one: an action the Desk
+/// offers (`freigeben`, `ablehnen`), the code it would state, and a
+/// Begründung checked against the call it cites. Anything else is dropped
+/// rather than shown — a proposal the Desk cannot prefill is no proposal.
+fn vorschlag(
+    raw: &Value,
+    outputs: &std::collections::BTreeMap<String, &Value>,
+) -> Option<Vorschlag> {
+    let aktion = raw["aktion"]
+        .as_str()
+        .filter(|a| matches!(*a, "freigeben" | "ablehnen"))?;
+    // Whether the action needs a code is the entry's to say — an escalation
+    // is approved with one, a held answer without — and processd checks the
+    // code against its tree when the person sends.
+    let antwortcode = raw["antwortcode"].as_str().map(str::to_owned);
+    let satz = super::beleg::Satz {
+        text: raw["begruendung"].as_str()?.to_owned(),
+        cites: raw["quelle"].as_str().map(str::to_owned),
+    };
+    let step = satz.cites.as_ref().and_then(|q| outputs.get(q).copied());
+    let belegt = super::beleg::belegt(&satz, step);
+    Some(Vorschlag {
+        aktion: aktion.to_owned(),
+        antwortcode,
+        begruendung: satz.text,
+        quelle: satz.cites,
+        belegt,
+    })
+}
+
+#[cfg(test)]
+mod vorschlag_tests {
+    use super::vorschlag;
+    use serde_json::json;
+
+    /// Only a proposal the Desk can prefill survives: one of its two actions,
+    /// with or without a code — which one the entry needs is processd's to
+    /// say — and anything else is dropped.
+    #[test]
+    fn a_proposal_the_desk_cannot_prefill_is_dropped() {
+        let none = std::collections::BTreeMap::new();
+        let v = |raw| vorschlag(&raw, &none);
+        assert!(
+            v(json!({"aktion": "ablehnen", "antwortcode": "A02", "begruendung": "x", "quelle": null}))
+                .is_some()
+        );
+        assert!(
+            v(json!({"aktion": "freigeben", "antwortcode": "A51", "begruendung": "x", "quelle": null}))
+                .is_some()
+        );
+        assert!(
+            v(json!({"aktion": "freigeben", "antwortcode": null, "begruendung": "x", "quelle": null}))
+                .is_some()
+        );
+        assert!(
+            v(json!({"aktion": "senden", "antwortcode": null, "begruendung": "x", "quelle": null}))
+                .is_none()
+        );
+        assert!(v(json!({"aktion": "freigeben", "antwortcode": null})).is_none());
+        assert!(v(json!(null)).is_none());
     }
 }

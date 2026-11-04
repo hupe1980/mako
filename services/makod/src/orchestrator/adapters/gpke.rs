@@ -1441,14 +1441,156 @@ pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatenabrufWorkflow> {
     registry
 }
 
+// ── GPKE Geschäftsdatenanfrage (ORDERS 17132 → UTILMD / ORDRSP 19101) ────────
+
+/// The Anfrage-Nummer a Geschäftsdatenanfrage message carries.
+///
+/// The ORDERS 17132 states it in `BGM` DE 1004; the answers echo it — the
+/// UTILMD in `SG6 RFF+AAV` „Nummer der Anfrage" (UTILMD AHB Strom 2.2
+/// Kap. 9.5), the ORDRSP 19101 in `SG1 RFF+ON` (ORDRSP AHB 1.1b Kap. 4.1.2,
+/// Hinweis \[521\]). Empty when the message carries none.
+#[must_use]
+pub fn gda_anfrage_nummer(msg: &AnyMessage) -> String {
+    let (segs, qualifier) = match msg {
+        AnyMessage::Orders(o) => {
+            return o
+                .segments()
+                .iter()
+                .find(|s| s.tag == "BGM")
+                .and_then(|s| s.component_str(1, 0))
+                .unwrap_or("")
+                .to_owned();
+        }
+        AnyMessage::Utilmd(u) => (u.segments(), "AAV"),
+        AnyMessage::Ordrsp(o) => (o.segments(), "ON"),
+        _ => return String::new(),
+    };
+    segs.iter()
+        .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some(qualifier))
+        .and_then(|s| s.component_str(0, 1))
+        .unwrap_or("")
+        .to_owned()
+}
+
+/// The correlation key a Geschäftsdatenanfrage message reaches its process by.
+///
+/// An inbound ORDERS 17132 opens the NB's side, keyed on the Anfragender's
+/// `NAD+MS` with its Anfrage-Nummer
+/// ([`mako_gpke::geschaeftsdatenanfrage::netzbetreiber_key`]); an answer
+/// resumes the Anfrage this party sent, keyed on the number alone
+/// ([`mako_gpke::geschaeftsdatenanfrage::anfragender_key`]). Empty when the
+/// message names no Anfrage-Nummer.
+#[must_use]
+pub fn gda_process_key(msg: &AnyMessage) -> String {
+    let nummer = gda_anfrage_nummer(msg);
+    if nummer.is_empty() {
+        return nummer;
+    }
+    match msg {
+        AnyMessage::Orders(o) => mako_gpke::geschaeftsdatenanfrage::netzbetreiber_key(
+            o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+            &nummer,
+        ),
+        _ => mako_gpke::geschaeftsdatenanfrage::anfragender_key(&nummer),
+    }
+}
+
+/// Build an [`AdapterRegistry`] for [`GpkeGeschaeftsdatenanfrageWorkflow`].
+///
+/// - ORDERS **17132** (at the NB) → [`GdaCommand::ReceiveAnfrage`], with the
+///   AHB verdict, `NAD+MS`/`NAD+MR` and the `SG2 LOC+172` Lokation.
+/// - UTILMD **55035 / 55095 / 55060** (at the Anfragender) →
+///   [`GdaCommand::ReceiveAntwort`].
+/// - ORDRSP **19101** (at the Anfragender) → [`GdaCommand::ReceiveAblehnung`],
+///   with the `SG2 AJT` code.
+#[must_use]
+pub fn gpke_geschaeftsdatenanfrage_registry() -> AdapterRegistry<GpkeGeschaeftsdatenanfrageWorkflow>
+{
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Geschäftsdatenanfrage adapter".into(),
+                )
+            })?;
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Geschäftsdatenanfrage adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let message_ref = MessageRef::new(msg.message_ref());
+            match msg {
+                AnyMessage::Orders(o) => {
+                    let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+                    let lokation_id = o
+                        .segments()
+                        .iter()
+                        .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))
+                        .and_then(|s| s.component_str(1, 0))
+                        .unwrap_or("")
+                        .to_owned();
+                    Ok(GdaCommand::ReceiveAnfrage {
+                        pid,
+                        anfrage: GdaAnfrage {
+                            anfragender: MarktpartnerCode::new(
+                                o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                            ),
+                            netzbetreiber: MarktpartnerCode::new(
+                                o.receiver()
+                                    .and_then(|n| n.party_id.as_deref())
+                                    .unwrap_or(""),
+                            ),
+                            lokation_id,
+                            anfrage_nummer: MessageRef::new(gda_anfrage_nummer(msg)),
+                        },
+                        message_ref,
+                        validation_passed,
+                        validation_errors,
+                    })
+                }
+                AnyMessage::Utilmd(_) => Ok(GdaCommand::ReceiveAntwort {
+                    antwort_pid: pid,
+                    message_ref,
+                }),
+                AnyMessage::Ordrsp(o) => {
+                    let antwortcode = o
+                        .segments()
+                        .iter()
+                        .find(|s| s.tag == "AJT")
+                        .and_then(|s| s.component_str(0, 0))
+                        .filter(|c| !c.is_empty())
+                        .map(str::to_owned);
+                    Ok(GdaCommand::ReceiveAblehnung {
+                        pid,
+                        antwortcode,
+                        message_ref,
+                    })
+                }
+                _ => Err(EngineError::Deserialization(
+                    "GPKE Geschäftsdatenanfrage adapter: expected ORDERS, UTILMD or ORDRSP".into(),
+                )),
+            }
+        },
+    ));
+    registry
+}
+
 // ── GPKE Stornierung (PIDs 55022–55024) ───────────────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeStornierungWorkflow`].
 ///
-/// Routes UTILMD Strom messages with PIDs 55022–55024 (GPKE Stornierung):
-/// - 55022 — Anfrage nach Stornierung (LFN → NB)
-/// - 55023 — Bestätigung Stornierung  (NB response — accepted)
-/// - 55024 — Ablehnung Stornierung    (NB response — rejected)
+/// Routes UTILMD Strom 55022 „Anfrage nach Stornierung" (LF → NB). The NB's
+/// answer is a UTILMD of its own — 55023 Bestätigung / 55024 Ablehnung Anfrage
+/// Stornierung, „zurück an den Absender" (UTILMD AHB Strom 2.2 Kap. 9.6) —
+/// which the workflow queues and the UTILMD renderer writes.
+///
+/// `BGM` DE 1001 is read into the command because the answer repeats it
+/// (Bedingung `[500]`: the category of the cancelled message).
 ///
 /// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.1 § 2.4.1).
 #[must_use]
@@ -1510,6 +1652,10 @@ pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
                         .and_then(|t| t.vorgangsnummer())
                         .unwrap_or(""),
                 ),
+                document_code: u
+                    .bgm()
+                    .map(|b| b.document_code.clone())
+                    .unwrap_or_default(),
                 document_date: u
                     .dtm()
                     .iter()

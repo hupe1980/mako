@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: payment-reconciliation-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Zahlungen und Mahnwesen"
+    mako.de/zweck: "Gleicht Bankrückläufer mit dem Kundenkonto ab und nennt die nächste Mahnstufe."
 spec:
   execution:
     kind: tool-calling

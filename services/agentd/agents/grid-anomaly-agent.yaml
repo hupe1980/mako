@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: grid-anomaly-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Lücken in den Netzdaten"
+    mako.de/zweck: "Findet Marktlokationen, denen Netzzuordnung oder Netzvertrag fehlt, bevor eine Anmeldung daran scheitert."
 spec:
   execution:
     kind: tool-calling

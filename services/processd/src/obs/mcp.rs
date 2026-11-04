@@ -5,11 +5,13 @@
 //! them under the same authentication and the same per-tool Cedar actions as
 //! every other processd tool.
 //!
-//! ## Tools (6)
+//! ## Tools (8)
 //!
 //! | Tool | Description |
 //! |---|---|
 //! | `get_process`             | Read a process projection by UUID |
+//! | `list_open_processes`     | Open processes by Frist, a keyset page at a time |
+//! | `count_open_processes`    | How many are open, and how many Fristen end today |
 //! | `list_overdue_processes`  | Processes past their business Antwortfrist |
 //! | `get_kpi_report`          | Per-PID KPIs for a calendar month |
 //! | `get_parity_report`       | § 7a Abs. 5 EnWG affiliate vs third-party parity |
@@ -45,6 +47,41 @@ fn rfc3339_opt(t: Option<time::OffsetDateTime>) -> Option<String> {
     t.and_then(rfc3339)
 }
 
+/// Open processes past their business Antwortfrist, as `list_overdue_processes`
+/// returns them.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct OverdueProcesses {
+    /// Most urgent first.
+    pub overdue: Vec<ProcessRow>,
+    /// How many rows `overdue` holds.
+    pub count: usize,
+    /// At least `limit` were waiting: `count` is a floor, not the total.
+    pub saturated: bool,
+    /// The most rows one call returns.
+    pub limit: i64,
+}
+
+/// One open process with its Frist.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct ProcessRow {
+    pub process_id: String,
+    /// BDEW Prüfidentifikator.
+    pub pid: u32,
+    pub family: String,
+    pub state: String,
+    pub malo_id: Option<String>,
+    /// The counterparty's MP-ID.
+    pub partner_mp_id: Option<String>,
+    /// RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub started_at: Option<String>,
+    /// When the Antwortfrist ended, RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub deadline_at: Option<String>,
+    /// The Festlegung the deadline came from.
+    pub deadline_source: Option<String>,
+}
+
 use rmcp::{
     ErrorData as McpError, handler::server::wrapper::Parameters, model::*, prompt, prompt_router,
     schemars, tool, tool_router,
@@ -55,6 +92,109 @@ use serde::Deserialize;
 use crate::mcp_server::ProcessdMcpHandler;
 
 // ── Tool parameters ───────────────────────────────────────────────────────────
+
+impl From<&crate::obs::domain::ProcessProjection> for ProcessRow {
+    fn from(p: &crate::obs::domain::ProcessProjection) -> Self {
+        Self {
+            process_id: p.process_id.to_string(),
+            pid: p.pid,
+            family: p.family.clone(),
+            state: p.state.as_str().to_owned(),
+            malo_id: p.malo_id.clone(),
+            partner_mp_id: p.partner_mp_id.clone(),
+            started_at: rfc3339(p.started_at),
+            deadline_at: rfc3339_opt(p.deadline_at),
+            deadline_source: p.deadline_source.clone(),
+        }
+    }
+}
+
+/// One page of open processes, as `list_open_processes` returns it.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct OpenProcesses {
+    /// The earliest Frist first; those without one last.
+    pub prozesse: Vec<ProcessRow>,
+    /// Pass as `nach` for the next page; absent on the last.
+    pub weiter: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListOpenProcessesParams {
+    /// Prüfidentifikatoren to keep (any when empty).
+    #[serde(default)]
+    pub pids: Vec<u32>,
+    /// MaLo-IDs to keep, at most 200 (any when empty). `pids` or `malos`
+    /// names at least one.
+    #[serde(default)]
+    pub malos: Vec<String>,
+    /// The `weiter` of the previous page.
+    pub nach: Option<String>,
+    /// Rows per page, 1–200 (default 50).
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CountOpenProcessesParams {
+    /// Prüfidentifikatoren to keep (any when empty).
+    #[serde(default)]
+    pub pids: Vec<u32>,
+    /// MaLo-IDs to keep, at most 200 (any when empty). `pids` or `malos`
+    /// names at least one.
+    #[serde(default)]
+    pub malos: Vec<String>,
+}
+
+/// What `count_open_processes` counts — over the whole filter, not a page.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct OpenProcessCount {
+    /// Open processes the filter keeps.
+    pub offen: i64,
+    /// Of those, the ones whose Frist ends from now to the end of the
+    /// Europe/Berlin day; a Frist already past is `list_overdue_processes`'.
+    pub heute_faellig: i64,
+    /// The earliest of those Fristen, RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub heute_frueheste: Option<String>,
+}
+
+/// The filter `list_open_processes` and `count_open_processes` share: one
+/// of the two lists named, `malos` capped.
+fn check_open_filter(pids: &[u32], malos: &[String]) -> Result<(), McpError> {
+    if pids.is_empty() && malos.is_empty() {
+        return Err(McpError::invalid_params("name pids, malos or both", None));
+    }
+    if malos.len() > 200 {
+        return Err(McpError::invalid_params(
+            "malos holds at most 200 MaLo-IDs",
+            None,
+        ));
+    }
+    Ok(())
+}
+
+/// `weiter` is the last row's Frist (empty for none) and id: opaque to a
+/// caller, which only hands it back.
+fn encode_cursor(c: &crate::obs::repository::OpenCursor) -> String {
+    format!(
+        "{}~{}",
+        c.frist.and_then(rfc3339).unwrap_or_default(),
+        c.process_id
+    )
+}
+
+fn decode_cursor(s: &str) -> Option<crate::obs::repository::OpenCursor> {
+    use time::format_description::well_known::Rfc3339;
+    let (frist, id) = s.split_once('~')?;
+    let frist = if frist.is_empty() {
+        None
+    } else {
+        Some(time::OffsetDateTime::parse(frist, &Rfc3339).ok()?)
+    };
+    Some(crate::obs::repository::OpenCursor {
+        frist,
+        process_id: id.parse().ok()?,
+    })
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetProcessParams {
@@ -177,7 +317,8 @@ impl ProcessdMcpHandler {
                        carries deadline_source, the Festlegung the deadline came from. \
                        `saturated` means at least the cap was waiting, never that the cap was \
                        all there was.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<OverdueProcesses>()
     )]
     async fn list_overdue_processes(&self) -> Result<CallToolResult, McpError> {
         use crate::obs::repository::ProcessProjectionRepository as _;
@@ -190,31 +331,114 @@ impl ProcessdMcpHandler {
 
         let saturated =
             i64::try_from(rows.len()).unwrap_or(i64::MAX) >= crate::obs::pg::OVERDUE_LIMIT;
-        let overdue: Vec<serde_json::Value> = rows
-            .iter()
-            .map(|p| {
-                serde_json::json!({
-                    "process_id": p.process_id.to_string(),
-                    "pid": p.pid,
-                    "family": p.family,
-                    "state": p.state.as_str(),
-                    "malo_id": p.malo_id,
-                    "partner_mp_id": p.partner_mp_id,
-                    "started_at": rfc3339(p.started_at),
-                    "deadline_at": rfc3339_opt(p.deadline_at),
-                    "deadline_source": p.deadline_source,
+        let overdue: Vec<ProcessRow> = rows.iter().map(ProcessRow::from).collect();
+
+        Ok(CallToolResult::structured(
+            serde_json::to_value(OverdueProcesses {
+                count: overdue.len(),
+                overdue,
+                saturated,
+                limit: crate::obs::pg::OVERDUE_LIMIT,
+            })
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
+    }
+
+    /// Open processes with one of `pids`, the earliest Frist first — the
+    /// worklist read. A keyset page: `weiter` hands back where it ended, so a
+    /// page costs one index range however many processes are open.
+    #[tool(
+        description = "Open processes with one of the given PIDs and/or on one of the given MaLos \
+                       (up to 200), the earliest business Frist \
+                       first and those without one last, a page at a time (`nach` = the previous \
+                       page's `weiter`). Each row carries deadline_source.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<OpenProcesses>()
+    )]
+    async fn list_open_processes(
+        &self,
+        Parameters(p): Parameters<ListOpenProcessesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::obs::repository::ProcessProjectionRepository as _;
+
+        check_open_filter(&p.pids, &p.malos)?;
+        let after = match p.nach.as_deref() {
+            Some(c) => Some(
+                decode_cursor(c)
+                    .ok_or_else(|| McpError::invalid_params("nach is not a weiter", None))?,
+            ),
+            None => None,
+        };
+        let limit = i64::from(p.limit.unwrap_or(50).clamp(1, 200));
+        let repo = crate::obs::pg::PgProcessProjectionRepository::new(self.state.pool.clone());
+        let mut rows = repo
+            .open_processes(
+                &self.state.tenant,
+                &p.pids,
+                &p.malos,
+                after.as_ref(),
+                limit + 1,
+            )
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let mehr = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
+        rows.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        let weiter = if mehr {
+            rows.last().map(|l| {
+                encode_cursor(&crate::obs::repository::OpenCursor {
+                    frist: l.deadline_at,
+                    process_id: l.process_id,
                 })
             })
-            .collect();
+        } else {
+            None
+        };
+        Ok(CallToolResult::structured(
+            serde_json::to_value(OpenProcesses {
+                prozesse: rows.iter().map(ProcessRow::from).collect(),
+                weiter,
+            })
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
+    }
 
-        ContentBlock::json(serde_json::json!({
-            "overdue": overdue,
-            "count": overdue.len(),
-            "saturated": saturated,
-            "limit": crate::obs::pg::OVERDUE_LIMIT,
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+    /// How many open processes `list_open_processes` would page through, and
+    /// how many of their Fristen end before the Berlin day does — one
+    /// aggregate, so the Desk's Lage never counts a page.
+    #[tool(
+        description = "Counts the open processes with one of the given PIDs and/or on one of \
+                       the given MaLos (up to 200): `offen` in total, `heute_faellig` whose Frist \
+                       ends between now and the end of the Europe/Berlin day, and the earliest \
+                       of those. Overdue ones are list_overdue_processes'.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<OpenProcessCount>()
+    )]
+    async fn count_open_processes(
+        &self,
+        Parameters(p): Parameters<CountOpenProcessesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::obs::repository::ProcessProjectionRepository as _;
+
+        check_open_filter(&p.pids, &p.malos)?;
+        let now = time::OffsetDateTime::now_utc();
+        let ende = mako_fristen::berlin_midnight(
+            mako_fristen::berlin_date(now)
+                .next_day()
+                .ok_or_else(|| McpError::internal_error("no day after today", None))?,
+        );
+        let repo = crate::obs::pg::PgProcessProjectionRepository::new(self.state.pool.clone());
+        let n = repo
+            .count_open_processes(&self.state.tenant, &p.pids, &p.malos, now, ende)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::structured(
+            serde_json::to_value(OpenProcessCount {
+                offen: n.offen,
+                heute_faellig: n.faellig,
+                heute_frueheste: n.frueheste.and_then(rfc3339),
+            })
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
     }
 
     /// Process KPIs for a Prüfidentifikator and calendar month.

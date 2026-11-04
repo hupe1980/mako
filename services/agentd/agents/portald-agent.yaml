@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: portald-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Kundenbenachrichtigungen"
+    mako.de/zweck: "Stößt Benachrichtigungen im Kundenportal an, etwa zur neuen Rechnung oder zum Tarifwechsel."
 spec:
   execution:
     kind: tool-calling

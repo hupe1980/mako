@@ -258,8 +258,15 @@ pub enum EsaDecisionOutcome {
 }
 
 impl EsaDecisionOutcome {
-    fn from_entscheidung(d: mako_pruefung::msb::MsbEntscheidung, ebd: &'static str) -> Self {
+    /// Project a walk's verdict on `pid`, naming the tree it was walked in
+    /// ([`entscheidungsbaum`]).
+    fn from_entscheidung(d: mako_pruefung::msb::MsbEntscheidung, pid: u32) -> Self {
         use mako_pruefung::msb::MsbEntscheidung as E;
+        let Some(ebd) = entscheidungsbaum(pid) else {
+            return Self::Escalate {
+                reason: format!("PID {pid} ist kein ESA-Prozess mit Entscheidungsbaum"),
+            };
+        };
         match d {
             E::Accept(a) => Self::Accept {
                 antwortcode: a.antwortcode,
@@ -418,6 +425,26 @@ const fn answer_command(pid: u32) -> Option<(&'static str, &'static str)> {
             mako_markt::commands::WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN,
             "MSB",
         )),
+        _ => None,
+    }
+}
+
+/// The Entscheidungsbaum this module walks for each inbound PID — the one tree
+/// [`evaluate`] projects its verdict through and a queued decision is recorded
+/// under.
+///
+/// WiM Strom Teil 2 (BK6-24-174 Anlage 2b) Kap. 4.1–4.3 with EBD 4.3 Kap.
+/// 8.25–8.26: `E_0252` Anfrage prüfen (REQOTE 35003), `E_0256` Bestellung
+/// prüfen (ORDERS 17007), `E_0254` Beendigung prüfen (17008), `E_0257`
+/// Stornierung prüfen (39002) — the trees
+/// [`mako_pruefung::esa::wertebestellung`] walks.
+const fn entscheidungsbaum(pid: u32) -> Option<&'static str> {
+    use mako_pruefung::codes as c;
+    match pid {
+        35_003 => Some(c::EBD_ESA_ANFRAGE),
+        17_007 => Some(c::EBD_ESA_BESTELLUNG),
+        17_008 => Some(c::EBD_ESA_BEENDIGUNG),
+        39_002 => Some(c::EBD_ESA_STORNIERUNG),
         _ => None,
     }
 }
@@ -648,10 +675,7 @@ async fn evaluate(
                     ),
                 });
             }
-            Ok(EsaDecisionOutcome::from_entscheidung(
-                decision,
-                mako_pruefung::codes::EBD_ESA_BESTELLUNG,
-            ))
+            Ok(EsaDecisionOutcome::from_entscheidung(decision, payload.pid))
         }
 
         // ── Stornierung (39002) — `E_0257` ───────────────────────────────
@@ -666,7 +690,7 @@ async fn evaluate(
             };
             Ok(EsaDecisionOutcome::from_entscheidung(
                 wertebestellung::pruefe_stornierung(&anfrage),
-                mako_pruefung::codes::EBD_ESA_STORNIERUNG,
+                payload.pid,
             ))
         }
 
@@ -717,7 +741,7 @@ async fn evaluate(
             };
             Ok(EsaDecisionOutcome::from_entscheidung(
                 wertebestellung::pruefe_beendigung(&anfrage),
-                mako_pruefung::codes::EBD_ESA_BEENDIGUNG,
+                payload.pid,
             ))
         }
 
@@ -842,10 +866,7 @@ async fn evaluate_anfrage(
             ),
         });
     }
-    Ok(EsaDecisionOutcome::from_entscheidung(
-        decision,
-        mako_pruefung::codes::EBD_ESA_ANFRAGE,
-    ))
+    Ok(EsaDecisionOutcome::from_entscheidung(decision, payload.pid))
 }
 
 fn messprodukt_hinweis(code: &str) -> String {
@@ -1077,6 +1098,14 @@ async fn enqueue(
         cfg.tenant.clone(),
     );
     let address = answer_address(payload);
+    // The Werteanfrage refusal carries no Antwortcode (the QUOTES 15003 has no
+    // `AJT`; its Begründung rides `FTX+ACB`), so no tree is recorded for it.
+    let entry = match entscheidungsbaum(payload.pid) {
+        Some(baum) if payload.pid != mako_fristen::antwort::ESA_WERTEANFRAGE_PID => {
+            entry.with_ebd(baum)
+        }
+        _ => entry,
+    };
     let entry = if payload.pid == mako_fristen::antwort::ESA_WERTEANFRAGE_PID {
         let ablehnen = mako_markt::commands::WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN;
         match vorschlag {
@@ -1393,8 +1422,7 @@ mod tests {
                 art: abo.bestellart(),
                 uebermittlung_begonnen: true,
             });
-            let out =
-                EsaDecisionOutcome::from_entscheidung(d, mako_pruefung::codes::EBD_ESA_STORNIERUNG);
+            let out = EsaDecisionOutcome::from_entscheidung(d, 39_002);
             let EsaDecisionOutcome::Reject { antwortcode, .. } = out else {
                 panic!("a started delivery must refuse the Stornierung")
             };

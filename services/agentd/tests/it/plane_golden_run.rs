@@ -42,13 +42,10 @@ async fn run_gabi(
     };
     let keys = [CorrelationKey::new("event", event_id)];
     match runtime
-        .run_correlated_once(
-            "gabi.gas.balancing",
-            input,
-            "gabi-allocation",
-            &keys,
-            &event.admission_key("gabi-gas-agent"),
-        )
+        .start("gabi.gas.balancing", input)
+        .terms(agentplane::runtime::RunTerms::default().correlated("gabi-allocation", &keys))
+        .once(event.admission_key("gabi-gas-agent"))
+        .run()
         .await
         .expect("correlated run")
     {

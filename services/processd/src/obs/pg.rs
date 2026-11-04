@@ -361,7 +361,83 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             .map(|row| row_to_projection(&row))
             .collect::<Result<Vec<_>, _>>()
     }
+
+    async fn open_processes(
+        &self,
+        tenant: &str,
+        pids: &[u32],
+        malos: &[String],
+        after: Option<&crate::obs::repository::OpenCursor>,
+        limit: i64,
+    ) -> Result<Vec<ProcessProjection>, ObsError> {
+        let pids: Vec<i32> = pids.iter().filter_map(|p| i32::try_from(*p).ok()).collect();
+        let rows = sqlx::query(&format!(
+            "SELECT {PROJECTION_COLUMNS}
+              FROM process_projections
+              WHERE tenant = $1
+                AND state NOT IN ({TERMINAL_STATE_SQL})
+                AND (cardinality($2::int[]) = 0 OR pid = ANY($2))
+                AND (cardinality($6::text[]) = 0 OR malo_id = ANY($6))
+                AND ($4::uuid IS NULL
+                     OR ({FRIST_ORDER}, process_id)
+                        > (COALESCE($3::timestamptz, 'infinity'::timestamptz), $4::uuid))
+              ORDER BY {FRIST_ORDER}, process_id
+              LIMIT $5"
+        ))
+        .bind(require_tenant(tenant)?)
+        .bind(&pids)
+        .bind(after.and_then(|c| c.frist))
+        .bind(after.map(|c| c.process_id))
+        .bind(limit)
+        .bind(malos)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| ObsError::Database(e.to_string()))?;
+
+        rows.into_iter()
+            .map(|row| row_to_projection(&row))
+            .collect::<Result<Vec<_>, _>>()
+    }
+    async fn count_open_processes(
+        &self,
+        tenant: &str,
+        pids: &[u32],
+        malos: &[String],
+        von: OffsetDateTime,
+        bis: OffsetDateTime,
+    ) -> Result<crate::obs::repository::OpenCount, ObsError> {
+        use sqlx::Row;
+        let pids: Vec<i32> = pids.iter().filter_map(|p| i32::try_from(*p).ok()).collect();
+        let row = sqlx::query(&format!(
+            "SELECT count(*) AS offen,
+                    count(*) FILTER (WHERE deadline_at >= $4 AND deadline_at < $5) AS faellig,
+                    min(deadline_at) FILTER (WHERE deadline_at >= $4 AND deadline_at < $5)
+                        AS frueheste
+              FROM process_projections
+              WHERE tenant = $1
+                AND state NOT IN ({TERMINAL_STATE_SQL})
+                AND (cardinality($2::int[]) = 0 OR pid = ANY($2))
+                AND (cardinality($3::text[]) = 0 OR malo_id = ANY($3))"
+        ))
+        .bind(require_tenant(tenant)?)
+        .bind(&pids)
+        .bind(malos)
+        .bind(von)
+        .bind(bis)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| ObsError::Database(e.to_string()))?;
+        let get = |e: sqlx::Error| ObsError::Database(e.to_string());
+        Ok(crate::obs::repository::OpenCount {
+            offen: row.try_get("offen").map_err(get)?,
+            faellig: row.try_get("faellig").map_err(get)?,
+            frueheste: row.try_get("frueheste").map_err(get)?,
+        })
+    }
 }
+
+/// The Frist an open process sorts by: none sorts after every instant.
+const FRIST_ORDER: &str = "COALESCE(deadline_at, 'infinity'::timestamptz)";
 
 /// Cap on rows one overdue query returns.
 ///

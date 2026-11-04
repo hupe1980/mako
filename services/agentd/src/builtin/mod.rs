@@ -71,6 +71,7 @@ pub struct Specialist {
 static BUILTIN_AGENTS: &[Specialist] = &[
     MAKO_AGENT,
     DEADLINE_ALERT_AGENT,
+    DESK_ASSISTANT,
     #[cfg(any(
         not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
         feature = "role-lf",
@@ -263,6 +264,12 @@ const BILLING_ANOMALY_AGENT: Specialist = Specialist {
 const BILLING_REGULATORY_GUARD_AGENT: Specialist = Specialist {
     name: "billing-regulatory-guard-agent",
     trigger_patterns: &[mako_events::billing::RECHNUNG_ERSTELLT],
+};
+
+/// The Desk's colleague: started by a person's question, never by an event.
+const DESK_ASSISTANT: Specialist = Specialist {
+    name: "desk-assistant",
+    trigger_patterns: &[],
 };
 
 #[cfg(any(
@@ -633,7 +640,7 @@ mod trigger_contract_tests {
         #[cfg(not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")))]
         assert_eq!(
             names.len(),
-            28,
+            29,
             "the default build carries every specialist; update this count \
              deliberately when one is added or removed"
         );
@@ -642,11 +649,15 @@ mod trigger_contract_tests {
     /// Specialists with no event subscription, on purpose.
     ///
     /// An empty trigger array means the specialist can only be started by hand
-    /// (`POST /api/v1/run`) or by an external scheduler — a batch shape, not a
+    /// (`POST /api/v1/runs`) or by an external scheduler — a batch shape, not a
     /// reactive one. That is a legitimate design for a monthly report, and a
     /// silent bug for anything else: an unsubscribed specialist looks exactly
     /// like one that ran and found nothing.
     const MANUAL_ONLY: &[(&str, &str)] = &[
+        (
+            "desk-assistant",
+            "answers a person's question asked in the Desk; an event has no question",
+        ),
         (
             "jahresabrechnung-agent",
             "annual Schlussabrechnung is a yearly batch an operator or scheduler starts; \
@@ -654,7 +665,7 @@ mod trigger_contract_tests {
         ),
         (
             "regulatory-reporting-agent",
-            "the BNetzA Diskriminierungsbericht is an annual/quarterly report started \
+            "the Gleichbehandlungsbericht (§ 7a Abs. 5 Satz 3 EnWG) is an annual report started \
              by an operator; processd's read model emits no reporting-period event",
         ),
     ];

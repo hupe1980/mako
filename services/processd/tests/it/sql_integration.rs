@@ -112,7 +112,7 @@ async fn approval_queue_enqueue_list_approve() {
 
     // List pending
     let pending = queue
-        .list("9900357000004", Some(QueueStatus::Pending), 50)
+        .list("9900357000004", Some(QueueStatus::Pending), None, 50)
         .await
         .expect("list pending");
     assert_eq!(pending.len(), 1, "expected 1 pending entry");
@@ -203,6 +203,80 @@ async fn approval_queue_enqueue_list_approve() {
 }
 
 // ── Anmeldung decisions ───────────────────────────────────────────────────────
+
+/// The queue is listed the earliest `expires_at` first — the order an
+/// operator works it in — narrowed to one Marktrolle on request, and the
+/// Entscheidungsbaum recorded at enqueue reads back unchanged.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn approval_queue_lists_by_expires_at_and_keeps_its_ebd() {
+    use processd::freigabe::{Freigabe, FreigabeArt};
+    use processd::pg::approval::{ApprovalQueueEntry, QueueStatus};
+    let (pool, _pg) = pg_pool().await;
+    let queue = processd::pg::PgApprovalQueue::new(pool.clone());
+    let tenant = "9900357000004";
+    let now = time::OffsetDateTime::now_utc();
+
+    let entry = |hours: i64, rolle: &str| {
+        ApprovalQueueEntry::pending(
+            Uuid::new_v4(),
+            55_001,
+            Some("51238696012".to_owned()),
+            format!("expires in {hours} h"),
+            now + time::Duration::hours(hours),
+            tenant.to_owned(),
+        )
+        .with_commands(
+            "gpke.lieferbeginn.bestaetigen",
+            "gpke.lieferbeginn.ablehnen",
+            Some(rolle),
+        )
+        .with_ebd(mako_pruefung::codes::EBD_ANMELDUNG_DIREKT_ABLEHNBAR)
+    };
+    // Enqueued latest-first, so insertion order cannot pass for the answer.
+    let late = entry(30, "NB");
+    let lf = entry(20, "LF");
+    let early = entry(10, "NB");
+    for e in [&late, &lf, &early] {
+        queue.enqueue(e).await.expect("enqueue");
+    }
+
+    let all = queue
+        .list(tenant, Some(QueueStatus::Pending), None, 50)
+        .await
+        .expect("list");
+    let ids: Vec<Uuid> = all.iter().map(|e| e.id).collect();
+    assert_eq!(
+        ids,
+        vec![early.id, lf.id, late.id],
+        "earliest expires_at first"
+    );
+
+    let nb = queue
+        .list(tenant, Some(QueueStatus::Pending), Some("NB"), 50)
+        .await
+        .expect("list NB");
+    let ids: Vec<Uuid> = nb.iter().map(|e| e.id).collect();
+    assert_eq!(
+        ids,
+        vec![early.id, late.id],
+        "only the NB's, still by expires_at"
+    );
+
+    let stored = queue
+        .find_by_id(early.id, tenant)
+        .await
+        .expect("find")
+        .expect("exists");
+    assert_eq!(stored.ablehnung_ebd.as_deref(), Some("E_0622"));
+    let f = Freigabe::from_entry(&stored);
+    assert_eq!(f.art, FreigabeArt::Eskaliert);
+    assert_eq!(f.marktrolle.as_deref(), Some("NB"));
+    assert_eq!(
+        f.codes_ablehnen.as_ref().map(|a| a.ebd.as_str()),
+        Some("E_0622")
+    );
+}
 
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]

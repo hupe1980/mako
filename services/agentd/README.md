@@ -21,10 +21,10 @@ a model-backed specialist.
 
 | | |
 |---|---|
-| **Specialists** | 28 manifests in [`agents/`](agents/) — 26 `tool-calling`, 2 model-free coded skills ([`src/skills/`](src/skills/)) |
-| **Grants** | read-only only: 151 grants across 28 manifests, each named by its procedure (`cargo xtask check-tool-grants`, `check-prompt-tools`) |
+| **Specialists** | 29 manifests in [`agents/`](agents/) — 26 `tool-calling`, 2 model-free coded skills ([`src/skills/`](src/skills/)) |
+| **Grants** | read-only only: 155 grants across 29 manifests, each named by its procedure (`cargo xtask check-tool-grants`, `check-prompt-tools`) |
 | **Prompts** | mako's MCP servers publish 54 step-by-step prompts across 11 servers; specialists reference them through `context.prompts` |
-| **Answers** | All 28 specialists declare a closed `output.schema`; coded finding codes are enums |
+| **Answers** | All 29 specialists declare a closed `output.schema`; coded finding codes are enums |
 | **Oversight** | triage rules open worklist rows under `/api/v1/oversight/*`; rows escalate, never expire. Mounted only with `[oidc]` |
 | **Journal** | `redb` (single instance) or Postgres; optional sealing (`[keyring]`), workload signatures (`[attestation]`) and C2SP `tlog-witness` cosigning (`[witness]`) |
 | **Erasure** | every run joins a case keyed on its MaLo; `POST /api/v1/erasure` crypto-shreds the case key or forgets a memory subject (GDPR Art. 17) |
@@ -36,8 +36,11 @@ a model-backed specialist.
 | Route | Purpose |
 |---|---|
 | `POST /webhook` | CloudEvent ingest. Admission commits before the answer: `202` admitted, `204` no subscriber, `429` transient (quota), `422` unprocessable, dead-lettered |
-| `POST /api/v1/run` | start a run and wait for it (`session_timeout_secs`); honours `Idempotency-Key` |
-| `GET /api/v1/agents`, `/api/v1/agents/catalog` | each specialist's version and manifest digest |
+| `GET /api/v1/hinweise` | the open worklist rows the caller may answer, each filed under its Anker |
+| `GET /api/v1/runs/{run}/antwort` | the answer, sentence by sentence, each checked against the call it cites |
+| `POST /api/v1/runs/{run}/bewertung` | a person's „hilfreich" verdict on an answer or a Hinweis, kept beside the run |
+| `POST /api/v1/runs` | start a run: `202` with the run ids, read at `/api/v1/oversight/runs/{run}`; honours `Idempotency-Key`, refuses an unknown field |
+| `GET /api/v1/agents`, `/api/v1/agents/catalog` | what runs here; the catalog adds each specialist's title, purpose, model and reads for the Desk's Beipackzettel |
 | `POST /api/v1/erasure` | `case_id` and/or `memory_subject`, plus a mandatory `reason` |
 | `/api/v1/oversight/*` | agentplane's worklist, runs, cases and four-eyes decisions |
 | `GET /metrics` | agentplane's instrument catalogue as `agentd_agentplane_*` series |
@@ -53,7 +56,6 @@ Standard Webhooks.
 # Every top-level key before the first [table]: TOML binds a bare key to the latest header, and every config type denies unknown fields.
 tenant           = "9900357000004"
 public_base_url  = "https://agentd.internal:9580"   # what an A2A card advertises
-session_timeout_secs = 300   # bounds a *manual* run's wait; /webhook waits for nothing
 sweep_interval_secs  = 60    # warns, breaches, escalates, expires, wakes, recovers
 
 mcp_api_key         = "env:AGENTD_MCP_API_KEY"            # SecretString — never logged
@@ -161,7 +163,7 @@ vertragd    = "http://vertragd:9780/mcp"
 | `einsd-batch-agent` | `einsd.batch` | `tool-calling` | 8 on edmd, einsd, productd | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` |
 
 `jahresabrechnung-agent` and `regulatory-reporting-agent` have no subscription:
-an operator or scheduler starts them through `POST /api/v1/run`.
+an operator or scheduler starts them through `POST /api/v1/runs`.
 
 ## Tests
 

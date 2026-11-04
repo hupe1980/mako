@@ -50,6 +50,7 @@ const EXPECTED: &[(&str, Verdict, usize)] = &[
     ("GeliGasZuordnungsmeldungWorkflow", Verdict::Trait, 1),
     ("GpkeAbrechnungWorkflow", Verdict::OwnReference, 1),
     ("GpkeEogWorkflow", Verdict::Trait, 1),
+    ("GpkeGeschaeftsdatenanfrageWorkflow", Verdict::Closure, 1),
     ("GpkeSperrungWorkflow", Verdict::Closure, 1),
     ("GpkeZuordnungsmeldungWorkflow", Verdict::Trait, 1),
     ("MabisAnforderungWorkflow", Verdict::Trait, 1),
@@ -65,7 +66,6 @@ const EXPECTED: &[(&str, Verdict, usize)] = &[
     ("WimInsrptWorkflow", Verdict::Closure, 1),
     ("WimInvoicWorkflow", Verdict::OwnReference, 1),
     ("WimRechnungsabwicklungWorkflow", Verdict::Trait, 1),
-    ("WimStammdatenWorkflow", Verdict::Closure, 1),
     ("WimWeiterverpflichtungWorkflow", Verdict::Trait, 1),
     ("WimWertebestellungWorkflow", Verdict::None, 1),
 ];

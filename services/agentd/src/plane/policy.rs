@@ -37,7 +37,7 @@ pub const DEFAULT_POLICY: &str = include_str!("../../policy/agentd.cedar");
 /// Authentication is not authorization, and a door with only the first is open
 /// to everyone the IDP knows.
 pub mod action {
-    /// `POST /api/v1/run` — start a specialist by hand.
+    /// `POST /api/v1/runs` — start a specialist by hand.
     ///
     /// Distinct from `run:admit`, which asks whether *an agent* may be admitted
     /// at all and whose principal is the agent. This one's principal is a person
@@ -423,6 +423,25 @@ mod tests {
         assert!(!permitted(&d), "a market role could decide: {d:?}");
     }
 
+    /// A person who may ask may say whether the answer helped; the scheduler
+    /// identity, which asks on nobody's behalf, gives no verdict.
+    #[test]
+    fn a_verdict_is_a_persons() {
+        let judge = |roles: serde_json::Value| {
+            engine().authorize(&PolicyRequest {
+                principal: "user:erika",
+                principal_kind: PrincipalKind::Subject,
+                action: agentplane::api::action::RUN_ASSESS,
+                resource: "run-1",
+                context: &roles,
+            })
+        };
+        let d = judge(json!({ "roles": ["marktkommunikation"], "tenant": "9900357000004" }));
+        assert!(permitted(&d), "a Desk reader must be able to judge: {d:?}");
+        let d = judge(json!({ "roles": ["mako-service"], "tenant": "9900357000004" }));
+        assert!(!permitted(&d), "the scheduler must not judge: {d:?}");
+    }
+
     /// Cancelling a run is narrower than reading one.
     #[test]
     fn cancelling_a_run_is_operations_only() {
@@ -630,11 +649,10 @@ mod tests {
 
     /// **agentd's own doors are governed too.**
     ///
-    /// `POST /api/v1/run` and the two inventory reads took a `Claims` extractor
-    /// and nothing else, which authenticates a caller and authorizes nobody. The
-    /// consequence was not subtle: any principal the realm would issue a token
-    /// to could start any specialist on any Marktlokation and spend the tenant's
-    /// model budget doing it.
+    /// A `Claims` extractor alone authenticates a caller and authorizes nobody:
+    /// on `POST /api/v1/runs` and the two inventory reads, any principal the
+    /// realm issues a token to could start any specialist on any Marktlokation
+    /// and spend the tenant's model budget doing it.
     ///
     /// Walked over [`action::ALL`] rather than a hand-written pair, for the same
     /// reason agentplane publishes its own list: a verb this file forgets is a

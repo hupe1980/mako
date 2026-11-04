@@ -8,6 +8,7 @@ mod demo_payloads;
 mod dev_config;
 mod esa_integration;
 mod fanout_durable_integration;
+mod konfigurationsprodukte_body;
 mod mabis_zp_integration;
 mod malo_write_calls_no_makod;
 mod melo_graph_integration;

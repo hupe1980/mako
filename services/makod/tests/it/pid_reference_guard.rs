@@ -67,11 +67,9 @@ const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
         "withdrawn with FV2026-10-01; no Ablehnungs-PID exists for 44168",
     ),
     // ── Credited to `gpke-stammdatenaenderung`, but outside STAMMDATEN_PAIRS
-    //    (55615–55694, 55109/55110). These are GDA-Antwort and individual-order
-    //    processes, not Stammdatenänderung.
-    (55_035, "GDA-Antwort; outside STAMMDATEN_PAIRS"),
-    (55_060, "GDA-Antwort; outside STAMMDATEN_PAIRS"),
-    (55_095, "GDA-Antwort; outside STAMMDATEN_PAIRS"),
+    //    (55615–55694, 55109/55110). 55194 is the Antwort auf die MSB-Gas-GDA
+    //    (17104), the others Lokationsbündel-, NeLo- and individual-order
+    //    exchanges — none of them a Stammdatenänderung pair.
     (55_173, "outside STAMMDATEN_PAIRS"),
     (55_175, "outside STAMMDATEN_PAIRS"),
     (55_177, "outside STAMMDATEN_PAIRS"),

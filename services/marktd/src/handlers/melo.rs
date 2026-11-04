@@ -208,8 +208,8 @@ pub async fn put_melo(
     {
         Ok(version) => {
             // Emit de.markt.melo.updated so ERP subscribers and edmd get notified of
-            // Standorteigenschaften / zaehlwerke changes (required for WiM Stammdaten
-            // auto-update and Redispatch 2.0 NetworkConstraintDocument cross-references).
+            // Standorteigenschaften / zaehlwerke changes (required for Redispatch 2.0
+            // NetworkConstraintDocument cross-references).
             let melo_id_str = melo_id.to_string();
             let evt = MarktEvent::new(
                 &state.tenant,

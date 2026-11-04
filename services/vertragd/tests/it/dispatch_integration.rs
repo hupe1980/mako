@@ -29,7 +29,7 @@ async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
     Some((pool, container))
 }
 
-async fn make_kunde(pool: &PgPool, tenant: &str) -> Uuid {
+pub(crate) async fn make_kunde(pool: &PgPool, tenant: &str) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO kunden (id, tenant, kundentyp, haushaltskunde) VALUES ($1, $2, 'B2C', true)",
@@ -42,7 +42,7 @@ async fn make_kunde(pool: &PgPool, tenant: &str) -> Uuid {
     id
 }
 
-fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
+pub(crate) fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
     let d = time::macros::date!(2026 - 10 - 01);
     pg::CreateVersorgungsvertragInput {
         rahmenvertrag_id: None,
@@ -2090,7 +2090,257 @@ async fn a_consumer_contract_renews_into_an_open_ended_one() {
 }
 
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
-type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+/// The operator's customer search: three letters of a surname find it, a
+/// Kundennummer prefix finds it, a whole MaLo-ID of a Lieferstelle finds it,
+/// a typed `%` matches only a literal percent sign, and another tenant's
+/// customer is never a hit.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_customer_search_finds_by_name_number_and_malo_and_nothing_wider() {
+    let Some((pool, _pg)) = test_pool("customer_search").await else {
+        return;
+    };
+    let erika = make_kunde(&pool, "t1").await;
+    sqlx::query(
+        r#"UPDATE kunden SET kunden_nr = 'K-10042',
+               person = '{"vorname": "Erika", "nachname": "Mustermann"}'
+           WHERE id = $1"#,
+    )
+    .bind(erika)
+    .execute(&pool)
+    .await
+    .expect("name");
+    pg::insert_versorgungsvertrag(&pool, erika, "t1", "t1", &vertrag_input("ERP-SEARCH"))
+        .await
+        .expect("contract");
+    let other_tenant = make_kunde(&pool, "t2").await;
+    sqlx::query(r#"UPDATE kunden SET person = '{"nachname": "Mustermann"}' WHERE id = $1"#)
+        .bind(other_tenant)
+        .execute(&pool)
+        .await
+        .expect("name");
+
+    let names = |hits: &[pg::kunden::KundeTreffer]| -> Vec<Option<String>> {
+        hits.iter().map(|h| h.name.clone()).collect()
+    };
+    let by_surname = pg::kunden::search_kunden(&pool, "t1", "mus", 21)
+        .await
+        .expect("search");
+    assert_eq!(
+        names(&by_surname),
+        vec![Some("Erika Mustermann".to_owned())]
+    );
+    assert_eq!(by_surname[0].lieferstellen, 1);
+
+    let by_number = pg::kunden::search_kunden(&pool, "t1", "K-100", 21)
+        .await
+        .expect("search");
+    assert_eq!(by_number.len(), 1);
+
+    let by_malo = pg::kunden::search_kunden(&pool, "t1", MALO, 21)
+        .await
+        .expect("search");
+    assert_eq!(
+        by_malo.len(),
+        1,
+        "a Lieferstelle's MaLo-ID finds its customer"
+    );
+
+    let wildcard = pg::kunden::search_kunden(&pool, "t1", "%%%", 21)
+        .await
+        .expect("search");
+    assert!(
+        wildcard.is_empty(),
+        "a typed % is a literal, never „everyone\""
+    );
+    let any_word_any_case = pg::kunden::search_kunden(&pool, "t1", "ERI", 21)
+        .await
+        .expect("search");
+    assert_eq!(
+        any_word_any_case.len(),
+        1,
+        "the first name, typed in capitals"
+    );
+    let mid_word = pg::kunden::search_kunden(&pool, "t1", "ter", 21)
+        .await
+        .expect("search");
+    assert!(
+        mid_word.is_empty(),
+        "a match starts a word, never inside one"
+    );
+}
+
+/// The search is answered from `kunden_suche` with the pattern bound as a
+/// parameter, as sqlx sends it: a B-tree `LIKE` index needs a constant prefix
+/// at plan time, so a generic plan over one would read every customer per
+/// keystroke at two million of them.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_customer_search_is_an_index_lookup_with_a_bound_pattern() {
+    let Some((pool, _pg)) = test_pool("customer_search_plan").await else {
+        return;
+    };
+    // A tenant of 50 000 customers, analysed — on an empty table every plan
+    // is an index scan on the tenant and proves nothing.
+    sqlx::query(
+        r#"INSERT INTO kunden (tenant, kunden_nr, kundentyp, person)
+           SELECT 't1', 'K-' || g, 'B2C',
+                  jsonb_build_object('vorname', 'Vorname' || g, 'nachname', 'Nachname' || g)
+             FROM generate_series(1, 50000) g"#,
+    )
+    .execute(&pool)
+    .await
+    .expect("customers");
+    sqlx::query("ANALYZE kunden")
+        .execute(&pool)
+        .await
+        .expect("analyze");
+    let mut conn = pool.acquire().await.expect("connection");
+    sqlx::query("SET plan_cache_mode = force_generic_plan")
+        .execute(&mut *conn)
+        .await
+        .expect("set");
+    sqlx::query(
+        "PREPARE suche(text, text) AS \
+         SELECT id FROM kunden WHERE tenant = $1 AND suchtext LIKE $2 ESCAPE '\\'",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("prepare");
+    let plan: Vec<(String,)> = sqlx::query_as("EXPLAIN EXECUTE suche('t1', '% mus%')")
+        .fetch_all(&mut *conn)
+        .await
+        .expect("explain");
+    let plan = plan
+        .into_iter()
+        .map(|(l,)| l)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(plan.contains("kunden_suche"), "{plan}");
+}
+
+/// The operator's view of one customer: the card's fields, every Lieferstelle
+/// with its dates and status, and nothing from another tenant.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_kunde_view_lists_each_lieferstelle_and_stays_in_its_tenant() {
+    let Some((pool, _pg)) = test_pool("kunde_view").await else {
+        return;
+    };
+    let erika = make_kunde(&pool, "t1").await;
+    sqlx::query(
+        r#"UPDATE kunden SET kunden_nr = 'K-10042',
+               person = '{"vorname": "Erika", "nachname": "Mustermann"}'
+           WHERE id = $1"#,
+    )
+    .bind(erika)
+    .execute(&pool)
+    .await
+    .expect("name");
+    pg::insert_versorgungsvertrag(&pool, erika, "t1", "t1", &vertrag_input("ERP-VIEW"))
+        .await
+        .expect("contract");
+
+    let view = pg::kunden::fetch_kunde_view(&pool, erika, "t1")
+        .await
+        .expect("read")
+        .expect("found");
+    assert_eq!(view.name.as_deref(), Some("Erika Mustermann"));
+    assert_eq!(view.kunden_nr.as_deref(), Some("K-10042"));
+    assert_eq!(view.lieferstellen.len(), 1);
+    assert_eq!(view.lieferstellen_gesamt, 1);
+    let stelle = &view.lieferstellen[0];
+    assert_eq!(stelle.malo_id, MALO);
+    assert_eq!(
+        stelle.lieferbeginn, "2026-10-01",
+        "a business date stays YYYY-MM-DD"
+    );
+    assert_eq!(stelle.lieferende, None);
+
+    assert!(
+        pg::kunden::fetch_kunde_view(&pool, erika, "t2")
+            .await
+            .expect("read")
+            .is_none(),
+        "another tenant's customer is not found"
+    );
+}
+
+/// Every Lieferstelle in ANGEMELDET is listed with its customer, however
+/// recent: whether it is late is makod's deadline, not an age counted here —
+/// a threshold of days hid every Anmeldung younger than it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn every_anmeldung_is_listed_with_its_customer_and_no_age_filter() {
+    let Some((pool, _pg)) = test_pool("anmeldungen").await else {
+        return;
+    };
+    let erika = make_kunde(&pool, "t1").await;
+    sqlx::query(r#"UPDATE kunden SET person = '{"vorname": "Erika", "nachname": "Mustermann"}' WHERE id = $1"#)
+        .bind(erika)
+        .execute(&pool)
+        .await
+        .expect("name");
+    pg::insert_versorgungsvertrag(&pool, erika, "t1", "t1", &vertrag_input("ERP-ANM"))
+        .await
+        .expect("contract");
+    sqlx::query("UPDATE vertragskomponenten SET status = 'ANGEMELDET', updated_at = now() WHERE malo_id = $1")
+        .bind(MALO)
+        .execute(&pool)
+        .await
+        .expect("angemeldet");
+
+    let seite = pg::list_anmeldungen(&pool, "t1", false, 200)
+        .await
+        .expect("list");
+    assert_eq!(
+        seite.anmeldungen.len(),
+        1,
+        "an Anmeldung made a moment ago is listed"
+    );
+    assert_eq!(seite.gesamt, 1);
+    assert_eq!(seite.anmeldungen[0].malo_id, MALO);
+    assert_eq!(
+        seite.anmeldungen[0].name.as_deref(),
+        Some("Erika Mustermann")
+    );
+    let ohne = pg::list_anmeldungen(&pool, "t1", true, 200)
+        .await
+        .expect("list");
+    assert_eq!(ohne.gesamt, 1, "no makod process carries it yet");
+    sqlx::query("UPDATE vertragskomponenten SET mako_process_id = gen_random_uuid()::TEXT WHERE malo_id = $1")
+        .bind(MALO)
+        .execute(&pool)
+        .await
+        .expect("accepted");
+    let ohne = pg::list_anmeldungen(&pool, "t1", true, 200)
+        .await
+        .expect("list");
+    assert_eq!(ohne.gesamt, 0, "a process carries it now");
+    let andere = pg::list_anmeldungen(&pool, "t2", false, 200)
+        .await
+        .expect("list");
+    assert!(andere.anmeldungen.is_empty());
+    assert_eq!(andere.gesamt, 0, "an empty page counts nothing");
+
+    // A worklist page names its rows in one call: the known MaLo resolves, an
+    // unknown one is absent, and another tenant sees neither.
+    let namen = pg::kunden_zu_malos(&pool, "t1", &[MALO.to_owned(), "41203768152".to_owned()])
+        .await
+        .expect("names");
+    assert_eq!(namen.len(), 1);
+    assert_eq!(namen[0].name.as_deref(), Some("Erika Mustermann"));
+    assert_eq!(namen[0].status, "ANGEMELDET");
+    assert!(
+        pg::kunden_zu_malos(&pool, "t2", &[MALO.to_owned()])
+            .await
+            .expect("names")
+            .is_empty()
+    );
+}
+
+pub(crate) type PgContainer =
+    testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
 
 // ── Messstellenverträge (§ 9, § 10 MsbG) ─────────────────────────────────────
 
@@ -2367,7 +2617,7 @@ async fn the_contract_round_trips_the_three_e0200_readings() {
 
 /// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
 /// container guard. `None` when Docker is unavailable (tests skip gracefully).
-async fn pg_container() -> Option<(String, PgContainer)> {
+pub(crate) async fn pg_container() -> Option<(String, PgContainer)> {
     use testcontainers::ImageExt;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;

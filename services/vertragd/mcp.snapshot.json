@@ -1,0 +1,731 @@
+[
+  {
+    "name": "check_mako_trigger_status",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "check_preisgarantie",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "vertrag_id",
+        "wirksamkeit"
+      ],
+      "type": "object",
+      "properties": {
+        "vertrag_id": {
+          "description": "UUID of the Versorgungsvertrag to check.",
+          "type": "string"
+        },
+        "wirksamkeit": {
+          "description": "Proposed Wirksamkeit date (YYYY-MM-DD) — the day the new tariff should take effect.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "compute_kuendigungsfrist",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_customer_portfolio",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_kunde",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "kunden_id"
+      ],
+      "type": "object",
+      "properties": {
+        "kunden_id": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Lieferstelle": {
+          "description": "One Lieferstelle of a customer and the state of its supply.",
+          "type": "object",
+          "properties": {
+            "malo_id": {
+              "description": "The Marktlokation.",
+              "type": "string"
+            },
+            "sparte": {
+              "description": "`STROM`, `GAS`, …",
+              "type": "string"
+            },
+            "vertrags_nr": {
+              "description": "The Versorgungsvertrag's number.",
+              "type": "string"
+            },
+            "standort": {
+              "description": "The contract's Standort, as the customer named it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "lieferbeginn": {
+              "description": "First day of supply.",
+              "type": "string",
+              "format": "date"
+            },
+            "lieferende": {
+              "description": "Last day of supply, when one is set.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "status": {
+              "description": "The Vertragskomponente's state: `ANGELEGT`, `ANGEMELDET`, `BESTAETIGT`,\n`AKTIV`, `BEENDET`, `ABGELEHNT` or `STORNIERT`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "malo_id",
+            "sparte",
+            "vertrags_nr",
+            "lieferbeginn",
+            "status"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kundentyp",
+        "haushaltskunde",
+        "lieferstellen",
+        "lieferstellen_gesamt"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The Kunde's id.",
+          "type": "string"
+        },
+        "kunden_nr": {
+          "description": "The Kundennummer, if one was assigned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kundentyp": {
+          "description": "`B2C`, `B2B_SLP`, `B2B_RLM` or `B2B_HV`.",
+          "type": "string"
+        },
+        "haushaltskunde": {
+          "description": "§ 3 Nr. 57 EnWG Haushaltskunde — it decides the customer's Fristen.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "„Vorname Nachname\" of the BO4E `Person` or `Geschaeftspartner`, else its `name1`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lieferstellen": {
+          "description": "Lieferstellen — Vertragskomponenten with a MaLo — newest first, at most\n[`LIEFERSTELLEN_SEITE`].",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Lieferstelle"
+          }
+        },
+        "lieferstellen_gesamt": {
+          "description": "How many Lieferstellen the customer has, however many are listed.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_kunde_by_sub",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "oidc_sub"
+      ],
+      "type": "object",
+      "properties": {
+        "oidc_sub": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_malo_produkt",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        },
+        "from": {
+          "description": "Period start (YYYY-MM-DD). With `to`, returns the slices covering it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "Period end (YYYY-MM-DD), inclusive.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_policy",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_rahmenvertrag",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_vertrag_status",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_zahlungsinformation",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "kunden_id"
+      ],
+      "type": "object",
+      "properties": {
+        "kunden_id": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "kunden_zu_malos",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malos"
+      ],
+      "properties": {
+        "malos": {
+          "description": "One to 200 MaLo-IDs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "MaloKunde": {
+          "description": "Who supplies a MaLo, as a worklist row names it.",
+          "type": "object",
+          "properties": {
+            "malo_id": {
+              "description": "The Marktlokation asked about.",
+              "type": "string"
+            },
+            "kunden_id": {
+              "description": "The customer's id.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The customer's name, as `search_kunden` shows it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kunden_nr": {
+              "description": "The Kundennummer, if one was assigned.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sparte": {
+              "description": "`STROM`, `GAS`, …",
+              "type": "string"
+            },
+            "status": {
+              "description": "The Vertragskomponente's status (`ANGEMELDET`, `AKTIV`, …).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "malo_id",
+            "kunden_id",
+            "sparte",
+            "status"
+          ]
+        }
+      },
+      "required": [
+        "kunden"
+      ],
+      "type": "object",
+      "properties": {
+        "kunden": {
+          "description": "One row per MaLo with a Vertragskomponente in this tenant.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MaloKunde"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "list_alle_kunden",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "kundentyp": {
+          "description": "`PRIVAT` or `GEWERBE`; unset lists both.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Page size. Defaults to 100, clamped to 500.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_anmeldungen",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "description": "Max results (default 200, max 500).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "ohne_prozess": {
+          "description": "Only those makod has not accepted yet — no process carries them.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Anmeldung": {
+          "description": "A Lieferstelle the Lieferant has registered at the Netzbetreiber and that\nis not answered yet. Whether it is late is makod's to say — the deadline its\nworkflow registered for the MaLo — so this carries no age and no threshold.",
+          "type": "object",
+          "properties": {
+            "kunden_id": {
+              "description": "The customer's id.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The customer's name, as `search_kunden` shows it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kunden_nr": {
+              "description": "The Kundennummer, if one was assigned.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "malo_id": {
+              "description": "The Marktlokation registered.",
+              "type": "string"
+            },
+            "sparte": {
+              "description": "`STROM`, `GAS`, …",
+              "type": "string"
+            },
+            "vertrags_nr": {
+              "description": "The Versorgungsvertrag's number.",
+              "type": "string"
+            },
+            "mako_process_id": {
+              "description": "The makod process carrying the Anmeldung, once makod accepted it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kunden_id",
+            "malo_id",
+            "sparte",
+            "vertrags_nr"
+          ]
+        }
+      },
+      "required": [
+        "anmeldungen",
+        "gesamt"
+      ],
+      "type": "object",
+      "properties": {
+        "anmeldungen": {
+          "description": "Lieferstellen in `ANGEMELDET`, by customer name — at most `limit`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Anmeldung"
+          }
+        },
+        "gesamt": {
+          "description": "How many Lieferstellen are in `ANGEMELDET`, however many are listed.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_auto_renewal_due",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "days": {
+          "description": "Days ahead. Defaults to 30 and is clamped to the tool's own range.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_expiring_contracts",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "days": {
+          "description": "Days ahead. Defaults to 30 and is clamped to the tool's own range.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_offene_vertraege",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_pending_kuendigungen",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "description": "Max results (default 50, max 200).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_pending_tarifwechsel",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "search_kunden",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "description": "What the person typed: the start of any word of a name, or of a Kundennummer, or a whole\nMaLo-ID. At least three characters.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "KundeTreffer": {
+          "description": "One customer the operator's search found.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The Kunde's id.",
+              "type": "string"
+            },
+            "kunden_nr": {
+              "description": "The Kundennummer, if one was assigned.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kundentyp": {
+              "description": "`B2C`, `B2B_SLP`, `B2B_RLM` or `B2B_HV`.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The name a person recognises: „Vorname Nachname\" of the BO4E `Person`\nor `Geschaeftspartner`, else the Geschäftspartner's `name1`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "lieferstellen": {
+              "description": "How many Lieferstellen (Vertragskomponenten with a MaLo) the Kunde has.",
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "id",
+            "kundentyp",
+            "lieferstellen"
+          ]
+        }
+      },
+      "required": [
+        "query",
+        "treffer",
+        "mehr"
+      ],
+      "type": "object",
+      "properties": {
+        "query": {
+          "description": "The query, trimmed, as it was searched.",
+          "type": "string"
+        },
+        "treffer": {
+          "description": "At most twenty customers, by name.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KundeTreffer"
+          }
+        },
+        "mehr": {
+          "description": "More customers match than were returned — the person should type more.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+]

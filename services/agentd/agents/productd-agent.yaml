@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: productd-agent
   version: "2.0.0"
+  annotations:
+    mako.de/titel: "Produktkatalog"
+    mako.de/zweck: "Prüft den Produktkatalog auf fehlende Börsenpreise und eine veraltete Stromkennzeichnung."
 spec:
   execution:
     kind: tool-calling

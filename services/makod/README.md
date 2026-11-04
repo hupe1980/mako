@@ -4,7 +4,7 @@
 crates into one process engine on a durable [SlateDB](https://github.com/slatedb/slatedb)
 event store, receives and sends EDIFACT over AS4, takes ERP commands over REST,
 and serves the BDEW API-Webdienste Strom. Seven modules register
-**71 workflows** over 469 Prüfidentifikatoren in the default build.
+**71 workflows** over 472 Prüfidentifikatoren in the default build.
 
 ## Run it
 
@@ -70,7 +70,7 @@ deployment runs.
   fan-out (`de.markt.malo.updated` at `POST /webhooks/marktd`, signed with
   `[marktd] webhook_secret`) and a startup backfill that `/health/ready` waits
   for.
-- **MCP:** 12 tools and 6 prompts at `/mcp`, behind the same Cedar layer.
+- **MCP:** 13 tools and 6 prompts at `/mcp`, behind the same Cedar layer.
 
 ## Configuration
 

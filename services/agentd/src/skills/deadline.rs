@@ -376,12 +376,14 @@ impl DeadlineTriage {
         .await
         .map_err(|e| SkillError::Other(format!("register the triage obligation: {e}")))?;
 
+        // In the operator's language: the Desk shows this sentence as it is.
         let summary = format!(
-            "{} MaKo process(es) are past their Frist{}. The window has closed, so \
-             this row reports what was missed rather than gating anything.",
+            "{} Marktprozess{} nach der Frist{}. Die Frist ist abgelaufen; diese Zeile \
+             meldet, was versäumt wurde, und hält nichts an.",
             breached.len(),
+            if breached.len() == 1 { "" } else { "e" },
             if unclassifiable > 0 {
-                format!(", and {unclassifiable} more carry a deadline mako could not read")
+                format!(", {unclassifiable} weitere mit einer Frist, die mako nicht lesen konnte")
             } else {
                 String::new()
             }

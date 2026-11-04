@@ -46,14 +46,65 @@ pub struct LookAheadDaysParams {
     pub days: Option<i64>,
 }
 
-/// How long a Vertragskomponente may sit unregistered before it counts as stuck.
+/// Page size for the Anmeldungen listing.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct StuckWorkflowParams {
-    /// Threshold in days. Defaults to 5 — GPKE §20 EnWG's Strom answer window.
-    pub threshold_days: Option<i64>,
+pub struct ListAnmeldungenParams {
+    /// Max results (default 200, max 500).
+    pub limit: Option<i64>,
+    /// Only those makod has not accepted yet — no process carries them.
+    #[serde(default)]
+    pub ohne_prozess: bool,
+}
+
+/// The MaLos a worklist page names.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct KundenZuMalosParams {
+    /// One to 200 MaLo-IDs.
+    pub malos: Vec<String>,
+}
+
+/// What `kunden_zu_malos` returns.
+#[derive(Debug, serde::Serialize, JsonSchema)]
+pub struct KundenZuMalos {
+    /// One row per MaLo with a Vertragskomponente in this tenant.
+    pub kunden: Vec<crate::pg::MaloKunde>,
+}
+
+/// The most MaLos one `kunden_zu_malos` call resolves — a worklist page.
+const MALOS_PER_CALL: usize = 200;
+
+/// What `list_anmeldungen` returns.
+#[derive(Debug, serde::Serialize, JsonSchema)]
+pub struct Anmeldungen {
+    /// Lieferstellen in `ANGEMELDET`, by customer name — at most `limit`.
+    pub anmeldungen: Vec<crate::pg::Anmeldung>,
+    /// How many Lieferstellen are in `ANGEMELDET`, however many are listed.
+    pub gesamt: i64,
 }
 
 /// Filters for the customer listing.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchKundenParams {
+    /// What the person typed: the start of any word of a name, or of a Kundennummer, or a whole
+    /// MaLo-ID. At least three characters.
+    pub query: String,
+}
+
+/// What `search_kunden` returns. Its JSON Schema is the tool's `outputSchema`,
+/// pinned in `mcp.snapshot.json` for the Desk's generated types.
+#[derive(Debug, serde::Serialize, JsonSchema)]
+pub struct KundenSuche {
+    /// The query, trimmed, as it was searched.
+    pub query: String,
+    /// At most twenty customers, by name.
+    pub treffer: Vec<crate::pg::kunden::KundeTreffer>,
+    /// More customers match than were returned — the person should type more.
+    pub mehr: bool,
+}
+
+/// The most hits one search returns; a person narrows by typing, not paging.
+const SEARCH_HITS: usize = 20;
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListKundenParams {
     /// `PRIVAT` or `GEWERBE`; unset lists both.
@@ -346,31 +397,59 @@ impl VertragdMcpHandler {
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Find Vertragskomponenten stuck in ANGEMELDET status beyond MaKo deadline.
-    ///
-    /// GPKE §20 EnWG: Strom 5 WT, GeLi Gas 10 WT.
+    /// Every Lieferstelle registered at the Netzbetreiber and not answered yet,
+    /// with its customer and the makod process carrying it. Whether one is
+    /// late is makod's deadline for its MaLo (`get_process`), never an age
+    /// counted here.
     #[tool(
-        description = "Find MaKo components stuck in ANGEMELDET status. threshold_days defaults to 5 (Strom/GPKE). Set 10 for Gas/GeLi. Returns components needing operator escalation.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "List Lieferstellen in ANGEMELDET (registered at the NB, not answered yet) with customer, MaLo, Sparte, contract and makod process id, and `gesamt`, how many there are; `ohne_prozess` keeps those no makod process carries yet. Carries no age: whether one is late is the process's Frist — processd list_open_processes.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<Anmeldungen>()
     )]
-    async fn find_stuck_workflows(
+    async fn list_anmeldungen(
         &self,
-        Parameters(p): Parameters<StuckWorkflowParams>,
+        Parameters(p): Parameters<ListAnmeldungenParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::find_stuck_komponents;
-        let threshold = p.threshold_days.unwrap_or(5);
-        match find_stuck_komponents(&self.state.pool, &self.state.tenant, threshold).await {
-            Ok(rows) => ContentBlock::json(serde_json::json!({
-                "stuck_count": rows.len(),
-                "threshold_days": threshold,
-                "alert": !rows.is_empty(),
-                "components": rows,
-                "note": "threshold_days is an operating threshold, not a Frist: the NB's answer windows are per Prüfidentifikator (mako_fristen::antwort)",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        let limit = p.limit.unwrap_or(200).clamp(1, 500);
+        let seite = crate::pg::list_anmeldungen(
+            &self.state.pool,
+            &self.state.tenant,
+            p.ohne_prozess,
+            limit,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        serde_json::to_value(Anmeldungen {
+            anmeldungen: seite.anmeldungen,
+            gesamt: seite.gesamt,
+        })
+        .map(CallToolResult::structured)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    /// The customer behind each of a page of MaLos, in one statement — so a
+    /// worklist names its rows with one call per page, never one per row.
+    #[tool(
+        description = "For each of up to 200 MaLo-IDs, the customer of its latest Vertragskomponente: name, Kundennummer, Sparte and status. A MaLo without one is absent.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<KundenZuMalos>()
+    )]
+    async fn kunden_zu_malos(
+        &self,
+        Parameters(p): Parameters<KundenZuMalosParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if p.malos.is_empty() || p.malos.len() > MALOS_PER_CALL {
+            return Err(McpError::invalid_params(
+                format!("malos holds 1 to {MALOS_PER_CALL} MaLo-IDs"),
+                None,
+            ));
         }
+        let kunden = crate::pg::kunden_zu_malos(&self.state.pool, &self.state.tenant, &p.malos)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        serde_json::to_value(KundenZuMalos { kunden })
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
     /// Get full B2B portfolio for a customer (all active MaLo/Sparte combos).
@@ -399,6 +478,44 @@ impl VertragdMcpHandler {
             }
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
+    }
+
+    /// Find customers by what a person remembers.
+    ///
+    /// The start of a first or last name, a company name or a Kundennummer, or
+    /// a whole MaLo-ID of one of the customer's Lieferstellen. Returns at most
+    /// twenty, by name, and says when more match. The search runs here, in the
+    /// tenant's own table — a client keeps no index of customers.
+    #[tool(
+        description = "Find customers (Kunden) by the start of any word of their name or of their Kundennummer, or by a MaLo-ID of one of their Lieferstellen. At most 20 hits; `mehr` says more match.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<KundenSuche>()
+    )]
+    async fn search_kunden(
+        &self,
+        Parameters(p): Parameters<SearchKundenParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let query = p.query.trim().to_owned();
+        if query.chars().count() < 3 {
+            return Err(McpError::invalid_params(
+                "query: at least three characters",
+                None,
+            ));
+        }
+        let limit = i64::try_from(SEARCH_HITS + 1).unwrap_or(i64::MAX);
+        let mut treffer =
+            crate::pg::kunden::search_kunden(&self.state.pool, &self.state.tenant, &query, limit)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let mehr = treffer.len() > SEARCH_HITS;
+        treffer.truncate(SEARCH_HITS);
+        serde_json::to_value(KundenSuche {
+            query,
+            treffer,
+            mehr,
+        })
+        .map(CallToolResult::structured)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
     /// List all Kunden for this tenant (operator / CRM view).
@@ -490,39 +607,30 @@ impl VertragdMcpHandler {
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Get a Kunde profile by UUID (with active MaLo IDs and identities).
-    ///
-    /// Use this to look up customer details when you have a kunden_id from another lookup.
+    /// A customer as an operator sees one: Kundennummer, Kundentyp,
+    /// Haushaltskunde, name, and every Lieferstelle with the state of its
+    /// supply. Payment data and portal identities are not part of it.
     #[tool(
-        description = "Get a customer (Kunde) profile by UUID. Returns Geschaeftspartner data, kundentyp, active MaLo IDs, and portal identities. Use after list_alle_kunden or when you have a kunden_id from a contract.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Get a customer (Kunde) by UUID: Kundennummer, kundentyp, Haushaltskunde, name, and every Lieferstelle (MaLo, Sparte, Vertrags-Nr., Standort, Lieferbeginn/-ende, status). No payment data. Use after search_kunden or with a kunden_id from a contract.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::pg::kunden::KundeView>()
     )]
     async fn get_kunde(
         &self,
         Parameters(p): Parameters<KundeIdParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{fetch_kunde, list_aktive_malo_ids, list_identitaeten};
         let id = uuid::Uuid::parse_str(&p.kunden_id)
             .map_err(|_| McpError::invalid_params("invalid kunden_id UUID", None))?;
-        match fetch_kunde(&self.state.pool, id, &self.state.tenant).await {
-            Ok(Some(k)) => {
-                let (malo_ids, identitaeten) = tokio::join!(
-                    list_aktive_malo_ids(&self.state.pool, id, &self.state.tenant),
-                    list_identitaeten(&self.state.pool, id, &self.state.tenant),
-                );
-                ContentBlock::json(serde_json::json!({
-                    "kunde": k,
-                    "active_malo_ids": malo_ids.unwrap_or_default(),
-                    "identitaeten": identitaeten.unwrap_or_default(),
-                }))
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Ok(None) => Err(McpError::resource_not_found(
-                format!("Kunde {id} not found"),
-                None,
-            )),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        let view = crate::pg::kunden::fetch_kunde_view(&self.state.pool, id, &self.state.tenant)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        match view {
+            Some(view) => serde_json::to_value(view)
+                .map(CallToolResult::structured)
+                .map_err(|e| McpError::internal_error(e.to_string(), None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "kunde_not_found: no Kunde {id}."
+            ))])),
         }
     }
 
@@ -783,8 +891,8 @@ impl VertragdMcpHandler {
                 Role::Assistant,
                 "1. Use `list_offene_vertraege` to see all contracts IN_BEARBEITUNG or TEILERFUELLUNG.\n\
                  2. For each, use `get_vertrag_status` to see which Vertragskomponenten are stuck.\n\
-                 3. Use `find_stuck_workflows` with threshold_days=5 (Strom) or 10 (Gas) — ANGEMELDET > deadline → operator escalation.\n\
-                 4. ABGELEHNT: check abgelehnt_erc (A02=MaLo not in NB grid, A05=LF not registered).\n\
+                 3. Use `list_anmeldungen` for every Lieferstelle still ANGEMELDET, and makod `get_process` for its MaLo — a lapsed deadline there is the escalation; this server states no Frist.\n\
+                 4. ABGELEHNT: abgelehnt_erc is the NB's Antwortcode — its meaning is the Entscheidungsbaum the NB applied, not a fixed list here.\n\
                  5. Use `list_expiring_contracts` with days=30 — contracts needing renewal contact.\n\
                  6. Use `list_pending_tarifwechsel` — check preisanpassung_notif_sent=false → 6-week notice not sent.\n\
                  7. B2B customers: use `get_customer_portfolio` for full MaLo/Sparte overview.",
@@ -818,7 +926,7 @@ impl VertragdMcpHandler {
                  not rely on it to restrict an identity.\n\n\
                  **Step 5** — Set Preisgarantie if applicable:\n\
                  `PUT /api/v1/vertraege/{id}/preisgarantie` with BO4E Preisgarantie COM.\n\n\
-                 **Monitoring:** Use `find_stuck_workflows` with the operator's own threshold — ANGEMELDET = MaKo not yet confirmed.",
+                 **Monitoring:** `list_anmeldungen` lists what is not confirmed yet; makod `get_process` says whether its deadline has passed.",
             ),
         ]
     }
@@ -916,7 +1024,7 @@ impl ServerHandler for VertragdMcpHandler {
              - `list_pending_kuendigungen` — GEKÜNDIGT contracts with future lieferende\n\
              - `check_preisgarantie` — check if Tarifwechsel is blocked for a contract (§41 EnWG)\n\
              - `check_mako_trigger_status` — Lieferbeginn UTILMD dispatch status per contract\n\
-             - `find_stuck_workflows` — ANGEMELDET > 5WT (Strom) / 10WT (Gas) — §20 EnWG\n\
+             - `list_anmeldungen` — every Lieferstelle still ANGEMELDET; makod `get_process` holds its deadline\n\
              - `get_customer_portfolio` — B2B MaLo/Sparte portfolio overview\n\
              - `get_zahlungsinformation` — SEPA/IBAN payment details for accountingd reconciliation\n\
              - `list_auto_renewal_due` — auto-renewal contracts within N days (§ 309 Nr. 9 lit. b BGB)\n\
@@ -949,4 +1057,25 @@ pub fn router(state: Arc<VertragdMcpState>, _shutdown: CancellationToken) -> Rou
     Router::new()
         .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
+}
+
+#[cfg(test)]
+mod tool_contract_tests {
+    use super::VertragdMcpHandler;
+
+    /// The served tool contract is the committed `mcp.snapshot.json`
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it).
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let tools: Vec<serde_json::Value> = VertragdMcpHandler::tool_router()
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
+    }
 }

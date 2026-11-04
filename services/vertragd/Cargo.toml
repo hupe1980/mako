@@ -39,6 +39,7 @@ tracing       = "0.1"
 anyhow        = { workspace = true }
 secrecy       = { version = "0.10" }
 rmcp          = { workspace = true, features = ["transport-streamable-http-server","transport-io"] }
+schemars      = { workspace = true }
 tokio-util    = { workspace = true }
 
 [dev-dependencies]

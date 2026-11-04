@@ -15,6 +15,9 @@ kind: Agent
 metadata:
   name: mabis-agent
   version: "3.0.0"
+  annotations:
+    mako.de/titel: "Bilanzierung (MaBiS)"
+    mako.de/zweck: "Überwacht die Summenzeitreihen und ihre Clearingfenster und erklärt fehlgeschlagene Lieferungen."
 spec:
   execution:
     kind: tool-calling

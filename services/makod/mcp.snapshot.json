@@ -1,0 +1,410 @@
+[
+  {
+    "name": "get_format_version_coverage",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_health",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_malo",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID, e.g. \"10001234558\"",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_outbox_status",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_partner",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "mp_id"
+      ],
+      "properties": {
+        "mp_id": {
+          "description": "13-digit Global Location Number of the trading partner",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_process",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "business_key"
+      ],
+      "properties": {
+        "business_key": {
+          "description": "Business key: malo_id (GPKE/GeLi Gas), melo_id (WiM Strom), or vorgang_id (WiM Gas Stornierung)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "ProcessView": {
+          "description": "One process under a business key, with the deadlines pending on it.",
+          "type": "object",
+          "properties": {
+            "stream_id": {
+              "description": "The process's event stream.",
+              "type": "string"
+            },
+            "workflow_name": {
+              "description": "The workflow running the process.",
+              "type": "string"
+            },
+            "process_id": {
+              "description": "The process identifier within its workflow.",
+              "type": "string"
+            },
+            "deadlines": {
+              "description": "The deadlines registered on the process's stream.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DeadlineView"
+              }
+            }
+          },
+          "required": [
+            "stream_id",
+            "workflow_name",
+            "process_id",
+            "deadlines"
+          ]
+        },
+        "DeadlineView": {
+          "description": "One deadline pending on a process.",
+          "type": "object",
+          "properties": {
+            "deadline_id": {
+              "description": "The deadline's identifier.",
+              "type": "string"
+            },
+            "label": {
+              "description": "The label its workflow declares in `DEADLINE_LABELS`.",
+              "type": "string"
+            },
+            "art": {
+              "description": "`aperak` or `contrl` for a delivery window — the labels\n`mako_fristen` owns — and `prozess` for every deadline the workflow\nitself registered.",
+              "type": "string"
+            },
+            "due_at": {
+              "description": "When the deadline fires, RFC 3339 in UTC.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "deadline_id",
+            "label",
+            "art"
+          ]
+        }
+      },
+      "required": [
+        "business_key",
+        "processes"
+      ],
+      "type": "object",
+      "properties": {
+        "business_key": {
+          "description": "The business key the caller passed.",
+          "type": "string"
+        },
+        "processes": {
+          "description": "The processes indexed under the key — concurrent ones (a Lieferbeginn\nbeside a Sperrung) and finished ones alike: the correlation index is\nappend-only, so whether a process is still running is its own state,\nnot the index's.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProcessView"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "get_process_history",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "process_id"
+      ],
+      "properties": {
+        "process_id": {
+          "description": "The process id, as `get_process` returns it.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "HistoryEntry": {
+          "description": "One recorded event. `richtung`, `pid` and `message_ref` are present when the\nevent is a market message, as its workflow states it — never derived from\n`event_type`, which is an identifier.",
+          "type": "object",
+          "properties": {
+            "sequence": {
+              "description": "1-based position in the process's stream.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "recorded_at": {
+              "description": "When the event was recorded, RFC 3339 in UTC.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "event_type": {
+              "description": "The workflow's name for the event.",
+              "type": "string"
+            },
+            "richtung": {
+              "description": "`eingang` or `ausgang` for a market message.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pid": {
+              "description": "The message's Prüfidentifikator.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "message_ref": {
+              "description": "The message's document number (`BGM` C106).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "sequence",
+            "event_type"
+          ]
+        }
+      },
+      "required": [
+        "process_id",
+        "workflow_name",
+        "eintraege"
+      ],
+      "type": "object",
+      "properties": {
+        "process_id": {
+          "type": "string"
+        },
+        "workflow_name": {
+          "description": "The workflow running the process.",
+          "type": "string"
+        },
+        "eintraege": {
+          "description": "Every event of the process, in the order it was recorded.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryEntry"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "list_active_processes",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_commands",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_dead_letters",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_overdue_deadlines",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_partners",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "description": "Maximum number of results to return (1-500, default 100)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "cursor": {
+          "description": "Pagination cursor from a previous list_partners response",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "submit_command",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "command",
+        "payload"
+      ],
+      "properties": {
+        "command": {
+          "description": "Dotted command name in the format `<domain>.<prozess>.<aktion>`.\n\nUse `list_commands` first to discover all available commands for this\ninstance. Examples: `gpke.lieferbeginn.anmelden`,\n`wim.geraetewechsel.beauftragen`, `geli.lieferbeginn.anmelden`.\n\n**Single-role commands** (e.g. `gpke.lieferbeginn.anmelden` → always\n`LF`) do not need `marktrolle`. **Multi-role commands** (e.g.\n`wim.geraetewechsel.beauftragen` → `NB` or `MSB`) require it.",
+          "type": "string",
+          "examples": [
+            "\"gpke.lieferbeginn.anmelden\""
+          ]
+        },
+        "marktrolle": {
+          "description": "Marktrolle override — required only for multi-role commands.\n\nPermitted values: `LF`, `LFG`, `NB`, `GNB`, `MSB`, `BKV`, `ÜNB`.\nOmit for single-role commands.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "examples": [
+            "\"NB\""
+          ]
+        },
+        "payload": {
+          "description": "Command-specific payload fields.\n\n| Command | Required fields |\n|---|---|\n| `gpke.lieferbeginn.anmelden` | `malo_id` (11-digit), `lieferbeginn_datum` (YYYY-MM-DD) |\n| `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |\n| `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum` |\n| `geli.lieferbeginn.anmelden` | `malo_id` (gas), `lieferbeginn_datum` |\n| `geli.lieferende.anmelden` | `malo_id` (gas), `lieferende_datum` |\n| `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id` |\n| `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |",
+          "examples": [
+            "{\"malo_id\": \"10001234558\", \"lieferbeginn_datum\": \"2026-10-01\"}"
+          ]
+        },
+        "idempotency_key": {
+          "description": "Optional stable key identifying this business request.\n\nSupply the same value on a retry and the recorded response is replayed\ninstead of the command running twice; the record lives for 24 hours.\nReusing one key for a different command or payload is refused. When\nomitted a random UUID is echoed back and no replay record is kept.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  }
+]

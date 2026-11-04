@@ -280,49 +280,131 @@ pub async fn mark_ablauf_notified(pool: &PgPool, id: Uuid, faellig_am: Date) -> 
 
 // ── Stuck MaKo registrations ──────────────────────────────────────────────────
 
-/// A component whose registration has not been answered.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct StuckKomponenteRow {
-    pub komp_id: Uuid,
-    pub vertrag_id: Uuid,
+/// A Lieferstelle the Lieferant has registered at the Netzbetreiber and that
+/// is not answered yet. Whether it is late is makod's to say — the deadline its
+/// workflow registered for the MaLo — so this carries no age and no threshold.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, sqlx::FromRow)]
+pub struct Anmeldung {
+    /// The customer's id.
+    pub kunden_id: String,
+    /// The customer's name, as `search_kunden` shows it.
+    pub name: Option<String>,
+    /// The Kundennummer, if one was assigned.
+    pub kunden_nr: Option<String>,
+    /// The Marktlokation registered.
+    pub malo_id: String,
+    /// `STROM`, `GAS`, …
     pub sparte: String,
-    pub malo_id: Option<String>,
-    pub lf_mp_id: String,
-    pub nb_mp_id: Option<String>,
-    pub status: String,
+    /// The Versorgungsvertrag's number.
+    pub vertrags_nr: String,
+    /// The makod process carrying the Anmeldung, once makod accepted it.
     pub mako_process_id: Option<String>,
-    #[serde(with = "time::serde::rfc3339")]
-    pub angemeldet_since: time::OffsetDateTime,
-    pub days_stuck: i64,
 }
 
-/// Components registered at the NB but still unanswered after `threshold_days`.
-///
-/// GPKE gives the NB a bounded time to answer a Lieferbeginn; past it the LF
-/// has to chase it. Callers pass the Sparte's own threshold.
+/// Who supplies a MaLo, as a worklist row names it.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, sqlx::FromRow)]
+pub struct MaloKunde {
+    /// The Marktlokation asked about.
+    pub malo_id: String,
+    /// The customer's id.
+    pub kunden_id: String,
+    /// The customer's name, as `search_kunden` shows it.
+    pub name: Option<String>,
+    /// The Kundennummer, if one was assigned.
+    pub kunden_nr: Option<String>,
+    /// `STROM`, `GAS`, …
+    pub sparte: String,
+    /// The Vertragskomponente's status (`ANGEMELDET`, `AKTIV`, …).
+    pub status: String,
+}
+
+/// For each of `malos`, the customer of its latest Vertragskomponente in this
+/// tenant — one statement for a page of worklist rows, never one per row. A
+/// MaLo with no component is absent.
 ///
 /// # Errors
 ///
 /// Propagates storage errors.
-pub async fn find_stuck_komponents(
+pub async fn kunden_zu_malos(
     pool: &PgPool,
     tenant: &str,
-    threshold_days: i64,
-) -> Result<Vec<StuckKomponenteRow>> {
-    let cutoff = time::OffsetDateTime::now_utc() - time::Duration::days(threshold_days);
-    Ok(sqlx::query_as::<_, StuckKomponenteRow>(
-        r"SELECT k.id AS komp_id, k.vertrag_id, k.sparte, k.malo_id,
-                 k.lf_mp_id, k.nb_mp_id, k.status, k.mako_process_id,
-                 k.updated_at AS angemeldet_since,
-                 EXTRACT(EPOCH FROM (now() - k.updated_at))::BIGINT / 86400 AS days_stuck
+    malos: &[String],
+) -> Result<Vec<MaloKunde>> {
+    Ok(sqlx::query_as::<_, MaloKunde>(
+        r"SELECT DISTINCT ON (k.malo_id)
+                 k.malo_id, kd.id::TEXT AS kunden_id,
+                 COALESCE(
+                   NULLIF(TRIM(CONCAT_WS(' ',
+                     COALESCE(kd.person->>'vorname', kd.geschaeftspartner->>'vorname'),
+                     COALESCE(kd.person->>'nachname', kd.geschaeftspartner->>'nachname'))), ''),
+                   kd.geschaeftspartner->>'name1') AS name,
+                 kd.kunden_nr, k.sparte, k.status
           FROM vertragskomponenten k
-          WHERE k.tenant = $1
-            AND k.status = 'ANGEMELDET'
-            AND k.updated_at < $2
-          ORDER BY k.updated_at ASC",
+          JOIN versorgungsvertraege v ON v.id = k.vertrag_id
+          JOIN kunden kd ON kd.id = v.kunden_id
+          WHERE k.tenant = $1 AND k.malo_id = ANY($2)
+          ORDER BY k.malo_id, k.lieferbeginn DESC, k.id",
     )
     .bind(tenant)
-    .bind(cutoff)
+    .bind(malos)
     .fetch_all(pool)
     .await?)
+}
+
+/// One page of [`list_anmeldungen`] and how many there are in all.
+#[derive(Debug, Clone)]
+pub struct AnmeldungenSeite {
+    /// At most `limit`, by customer name.
+    pub anmeldungen: Vec<Anmeldung>,
+    /// Every Lieferstelle in `ANGEMELDET`, however many the page holds.
+    pub gesamt: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct AnmeldungRow {
+    #[sqlx(flatten)]
+    anmeldung: Anmeldung,
+    gesamt: i64,
+}
+
+/// Every Lieferstelle in `ANGEMELDET` — with `ohne_prozess`, only those no
+/// makod process carries yet — by customer name: the first `limit`
+/// and the total, counted in the same statement so the two cannot disagree.
+/// The total rides on every row, so `limit` must be at least 1.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn list_anmeldungen(
+    pool: &PgPool,
+    tenant: &str,
+    ohne_prozess: bool,
+    limit: i64,
+) -> Result<AnmeldungenSeite> {
+    let rows = sqlx::query_as::<_, AnmeldungRow>(
+        r"SELECT kd.id::TEXT AS kunden_id,
+                 COALESCE(
+                   NULLIF(TRIM(CONCAT_WS(' ',
+                     COALESCE(kd.person->>'vorname', kd.geschaeftspartner->>'vorname'),
+                     COALESCE(kd.person->>'nachname', kd.geschaeftspartner->>'nachname'))), ''),
+                   kd.geschaeftspartner->>'name1') AS name,
+                 kd.kunden_nr, k.malo_id, k.sparte, v.vertrags_nr, k.mako_process_id,
+                 COUNT(*) OVER () AS gesamt
+          FROM vertragskomponenten k
+          JOIN versorgungsvertraege v ON v.id = k.vertrag_id
+          JOIN kunden kd ON kd.id = v.kunden_id
+          WHERE k.tenant = $1 AND k.status = 'ANGEMELDET' AND k.malo_id IS NOT NULL
+            AND (NOT $3 OR k.mako_process_id IS NULL)
+          ORDER BY name NULLS LAST, k.malo_id
+          LIMIT $2",
+    )
+    .bind(tenant)
+    .bind(limit)
+    .bind(ohne_prozess)
+    .fetch_all(pool)
+    .await?;
+    Ok(AnmeldungenSeite {
+        gesamt: rows.first().map_or(0, |r| r.gesamt),
+        anmeldungen: rows.into_iter().map(|r| r.anmeldung).collect(),
+    })
 }

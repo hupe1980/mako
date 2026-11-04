@@ -3,6 +3,7 @@
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
 mod deadline_triage;
+mod desk_answer;
 mod dev_config;
 mod durability;
 mod evidence;

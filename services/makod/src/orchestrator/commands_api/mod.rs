@@ -325,9 +325,11 @@ fn remadv_antwort(payload: &serde_json::Value) -> Option<mako_invoic::RemadvAntw
 // remaining submodules hold one market-communication domain each. Everything
 // is re-exported here so the flat `crate::commands_api::*` paths keep working.
 
+mod ersteinbau;
 mod esa;
 mod gabi_gas;
 mod geli_gas;
+mod geschaeftsdatenanfrage;
 mod gpke;
 mod handler;
 pub mod idempotency;
@@ -336,11 +338,14 @@ mod mabis;
 mod netzbilanz;
 mod netzzugang;
 mod registry;
+mod stornierung;
 mod types;
 mod wim;
 
 #[cfg(test)]
 mod geli_frist_tests;
+#[cfg(test)]
+mod outbound_answer_tests;
 #[cfg(test)]
 mod spawn_tests;
 
@@ -348,14 +353,17 @@ pub use handler::*;
 pub use registry::*;
 pub use types::*;
 
+use ersteinbau::*;
 use esa::*;
 use gabi_gas::*;
 use geli_gas::*;
+use geschaeftsdatenanfrage::*;
 use gpke::*;
 use iftsta::*;
 use mabis::*;
 use netzbilanz::*;
 use netzzugang::*;
+use stornierung::*;
 use wim::*;
 
 /// Return the current BDEW format-version `WorkflowId` for `gpke-lf-anmeldung`.
