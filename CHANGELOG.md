@@ -9,6 +9,19 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.24.2] — 2026-11-05
+
+### Fixed
+
+- The release's image builds run from the checkout (`source: .`), as the
+  builder jobs do: the default git-URL context gave `COPY . .` other cache
+  keys, so the registry cache never matched and every stage recompiled.
+- The bake metadata leaves provenance out (`BUILDX_METADATA_PROVENANCE`), so
+  the digest export starts: with fifteen images it outgrew the 128 KiB an
+  environment string may hold. The provenance attestations are still pushed.
+  v0.24.0's and v0.24.1's images, `mako-desk` included, ship with this
+  release.
+
 ## [0.24.1] — 2026-11-04
 
 ### Fixed
