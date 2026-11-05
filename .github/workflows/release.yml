@@ -1104,7 +1104,23 @@ jobs:
           cargo cyclonedx --manifest-path services/processd/Cargo.toml -F integrated "${opts[@]}"
           mkdir -p sbom
           cp services/*/*_bin.cdx.json sbom/
-          ls -l sbom
+
+      # The Desk ships as an image too and its npm tree is what it contains:
+      # the production dependencies of desk/package-lock.json, under the
+      # `<service>_bin` name every image's SBOM attestation reads.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: desk/.node-version
+          cache: npm
+          cache-dependency-path: desk/package-lock.json
+      - name: The Desk's SBOM
+        working-directory: desk
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --omit dev --spec-version 1.5 \
+            --output-format JSON --output-file ../sbom/desk_bin.cdx.json
+          ls -l ../sbom
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -9,6 +9,16 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.24.3] — 2026-11-05
+
+### Fixed
+
+- The release generates a CycloneDX SBOM of the Desk's npm tree
+  (`desk_bin.cdx.json`), which `mako-desk`'s image attestation and the
+  evidence pack read: without it the Desk's manifest job failed and no GitHub
+  Release was created. `mako-desk` and the GitHub Release ship with this
+  release; the service images ship as of v0.24.2.
+
 ## [0.24.2] — 2026-11-05
 
 ### Fixed
