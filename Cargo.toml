@@ -100,7 +100,7 @@ default-members = [
 allow_attributes_without_reason = "deny"
 
 [workspace.package]
-version     = "0.24.3"
+version     = "0.24.4"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"

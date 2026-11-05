@@ -9,6 +9,19 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.24.4] — 2026-11-05
+
+### Fixed
+
+- The release builds its images from the binaries the builder jobs compiled:
+  each pushes its stage as `mako-<stage>:<sha>-<arch>`, and the Dockerfile's
+  `BUILDER_IMAGE` / `DEMO_BUILDER_IMAGE` (default: the local stages) select
+  them, so the bake compiles nothing. Its cache never matched across jobs,
+  and both platforms recompiled into the 60-minute limit. `mako-desk` and the
+  GitHub Release ship with this release.
+- `check-action-pins` judges a `FROM ${ARG}` by the arg's default: a stage of
+  the same Dockerfile passes, an external image still needs its digest.
+
 ## [0.24.3] — 2026-11-05
 
 ### Fixed

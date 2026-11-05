@@ -60,6 +60,11 @@
 # Global ARGs — available in FROM lines; must be re-declared inside a stage
 # to be visible in that stage's RUN commands.
 ARG PROFILE=release
+# Where the runtime stages take the binaries from: the compile stages below by
+# default, or — in the release — the image a docker-builder job pushed of that
+# stage, so the bake copies finished binaries and compiles nothing.
+ARG BUILDER_IMAGE=builder
+ARG DEMO_BUILDER_IMAGE=demo-builder
 
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 1 — chef  (cargo-chef + Rust toolchain + native build deps)
@@ -196,6 +201,10 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
            || { echo "${bin}: no cargo-auditable manifest after strip" >&2; exit 1; }; \
        done
 
+# The binaries the runtime stages copy, from BUILDER_IMAGE / DEMO_BUILDER_IMAGE.
+FROM ${BUILDER_IMAGE} AS service-binaries
+FROM ${DEMO_BUILDER_IMAGE} AS demo-binaries
+
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 4 — runtime-base (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
@@ -240,7 +249,7 @@ LABEL org.opencontainers.image.version="${OCI_VERSION}" \
 # Binaries are root:root 0755 and run as uid 65532 (distroless nonroot).
 
 FROM runtime-base AS marktd-runtime
-COPY --from=demo-builder --chown=root:root /usr/local/bin/marktd /usr/local/bin/marktd
+COPY --from=demo-binaries --chown=root:root /usr/local/bin/marktd /usr/local/bin/marktd
 EXPOSE 8180
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/marktd", "--check"]
@@ -249,7 +258,7 @@ LABEL org.opencontainers.image.title="marktd" \
       org.opencontainers.image.description="Market Data Hub daemon — MaLo/MeLo master data, Versorgungsstatus, Preisblätter, event fan-out"
 
 FROM runtime-base AS processd-runtime
-COPY --from=demo-builder --chown=root:root /usr/local/bin/processd /usr/local/bin/processd
+COPY --from=demo-binaries --chown=root:root /usr/local/bin/processd /usr/local/bin/processd
 EXPOSE 8580
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
     CMD ["/usr/local/bin/processd", "--check"]
@@ -258,7 +267,7 @@ LABEL org.opencontainers.image.title="processd" \
       org.opencontainers.image.description="Process Decision Engine — NB STP (mako-pruefung) and LF auto-response, process read model, Sperrauftrag queue"
 
 FROM runtime-base AS invoicd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/invoicd /usr/local/bin/invoicd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/invoicd /usr/local/bin/invoicd
 EXPOSE 8280
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/invoicd", "--check"]
@@ -267,7 +276,7 @@ LABEL org.opencontainers.image.title="invoicd" \
       org.opencontainers.image.description="INVOIC plausibility-check daemon — LF role, § 147 AO / GoBD receipt retention"
 
 FROM runtime-base AS edmd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/edmd /usr/local/bin/edmd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/edmd /usr/local/bin/edmd
 EXPOSE 8380
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/edmd", "--check"]
@@ -276,7 +285,7 @@ LABEL org.opencontainers.image.title="edmd" \
       org.opencontainers.image.description="Energy Data Management daemon — MSCONS meter readings, MeterBillingPeriod"
 
 FROM runtime-base AS netzbilanzd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/netzbilanzd /usr/local/bin/netzbilanzd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/netzbilanzd /usr/local/bin/netzbilanzd
 EXPOSE 8680
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/netzbilanzd", "--check"]
@@ -285,7 +294,7 @@ LABEL org.opencontainers.image.title="netzbilanzd" \
       org.opencontainers.image.description="NNE/KA/MMM/MSB/AWH billing and MaBiS Summenzeitreihen — NB role, GridSettlement, CalculationTrace"
 
 FROM runtime-base AS einsd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/einsd /usr/local/bin/einsd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/einsd /usr/local/bin/einsd
 EXPOSE 9180
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
     CMD ["/usr/local/bin/einsd", "--check"]
@@ -294,7 +303,7 @@ LABEL org.opencontainers.image.title="einsd" \
       org.opencontainers.image.description="Einspeiser registry and EEG/KWKG settlement daemon"
 
 FROM runtime-base AS productd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/productd /usr/local/bin/productd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/productd /usr/local/bin/productd
 EXPOSE 9080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/productd", "--check"]
@@ -303,7 +312,7 @@ LABEL org.opencontainers.image.title="productd" \
       org.opencontainers.image.description="Product & Tariff Catalog daemon — LF role, dynamic tariffs (§ 41a EnWG), B2B Angebote"
 
 FROM runtime-base AS billingd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/billingd /usr/local/bin/billingd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/billingd /usr/local/bin/billingd
 EXPOSE 9280
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/billingd", "--check"]
@@ -312,7 +321,7 @@ LABEL org.opencontainers.image.title="billingd" \
       org.opencontainers.image.description="Energy Billing Engine daemon — LF role, XRechnung, § 14a EnWG, § 41a EnWG"
 
 FROM runtime-base AS outputd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/outputd /usr/local/bin/outputd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/outputd /usr/local/bin/outputd
 EXPOSE 9880
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/outputd", "--check"]
@@ -321,7 +330,7 @@ LABEL org.opencontainers.image.title="outputd" \
       org.opencontainers.image.description="Customer-communications daemon — Typst templates, ZUGFeRD PDF/A-3, issued-document store, delivery evidence"
 
 FROM runtime-base AS accountingd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/accountingd /usr/local/bin/accountingd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/accountingd /usr/local/bin/accountingd
 EXPOSE 9380
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/accountingd", "--check"]
@@ -330,7 +339,7 @@ LABEL org.opencontainers.image.title="accountingd" \
       org.opencontainers.image.description="Customer Account Ledger daemon — LF role, SEPA pain.008/pain.001, dunning, GDPR Art. 17"
 
 FROM runtime-base AS vertragd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/vertragd /usr/local/bin/vertragd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/vertragd /usr/local/bin/vertragd
 EXPOSE 9780
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/vertragd", "--check"]
@@ -339,7 +348,7 @@ LABEL org.opencontainers.image.title="vertragd" \
       org.opencontainers.image.description="Contract & Customer Management daemon — LF role, B2C + B2B, OIDC → MaLo auth gateway"
 
 FROM runtime-base AS portald-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/portald /usr/local/bin/portald
+COPY --from=service-binaries --chown=root:root /usr/local/bin/portald /usr/local/bin/portald
 EXPOSE 9480
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/portald", "--check"]
@@ -348,7 +357,7 @@ LABEL org.opencontainers.image.title="portald" \
       org.opencontainers.image.description="Customer Portal gateway — LF role, REST + SSE customer self-service"
 
 FROM runtime-base AS agentd-runtime
-COPY --from=builder --chown=root:root /usr/local/bin/agentd /usr/local/bin/agentd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/agentd /usr/local/bin/agentd
 EXPOSE 9580
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
     CMD ["/usr/local/bin/agentd", "--check"]
@@ -385,13 +394,13 @@ LABEL org.opencontainers.image.title="desk" \
 
 # makod — last, so a plain `docker build .` builds it.
 FROM runtime-base AS runtime
-COPY --from=demo-builder --chown=root:root /usr/local/bin/makod /usr/local/bin/makod
+COPY --from=demo-binaries --chown=root:root /usr/local/bin/makod /usr/local/bin/makod
 
 # Persistent state directory — pre-created with uid 65532 ownership so that
 # SlateDB can write here even when no volume is mounted (e.g. --check mode).
 # VOLUME is declared AFTER this COPY so Docker does not discard the ownership.
 # Mount a named volume or PVC here; ensure it is writable by uid 65532.
-COPY --from=demo-builder /var/lib/makod /var/lib/makod
+COPY --from=demo-binaries /var/lib/makod /var/lib/makod
 VOLUME ["/var/lib/makod"]
 
 # makod reads its own MAKOD_* variables, not the mako-service fallbacks.

@@ -290,21 +290,39 @@ pub fn check_dockerfile(file: &str, src: &str) -> (usize, Vec<String>) {
     let mut stages: BTreeSet<String> = BTreeSet::new();
     let mut external = 0usize;
     let mut findings = Vec::new();
+    // `ARG NAME=default` before the first `FROM`: a `FROM ${NAME}` is judged by
+    // its default, which is what a plain `docker build` resolves it to.
+    let mut global_args: Vec<(String, String)> = Vec::new();
+    let mut seen_from = false;
     for (i, line) in src.lines().enumerate() {
         let t = line.trim();
+        if !seen_from
+            && let Some(decl) = t.strip_prefix("ARG ")
+            && let Some((name, default)) = decl.trim().split_once('=')
+        {
+            global_args.push((name.trim().to_owned(), default.trim().to_owned()));
+        }
         let mut words = t.split_whitespace();
         if !words.next().is_some_and(|w| w.eq_ignore_ascii_case("FROM")) {
             continue;
         }
+        seen_from = true;
         let rest: Vec<&str> = words.filter(|w| !w.starts_with("--")).collect();
         let Some(image) = rest.first() else {
             findings.push(format!("{file}:{}: `FROM` names no image", i + 1));
             continue;
         };
+        // `FROM ${ARG}` stands for its default.
+        let resolved = image
+            .strip_prefix("${")
+            .and_then(|v| v.strip_suffix('}'))
+            .or_else(|| image.strip_prefix('$'))
+            .and_then(|var| global_args.iter().find(|(n, _)| n == var))
+            .map_or(*image, |(_, default)| default.as_str());
         // A stage is known only from the lines above, so `FROM x AS x` is not
         // a stage reference.
-        let is_stage =
-            image.eq_ignore_ascii_case("scratch") || stages.contains(&image.to_ascii_lowercase());
+        let is_stage = resolved.eq_ignore_ascii_case("scratch")
+            || stages.contains(&resolved.to_ascii_lowercase());
         if let [_, kw, name, ..] = rest.as_slice() {
             if kw.eq_ignore_ascii_case("AS") {
                 stages.insert(name.to_ascii_lowercase());
@@ -314,7 +332,7 @@ pub fn check_dockerfile(file: &str, src: &str) -> (usize, Vec<String>) {
             continue;
         }
         external += 1;
-        if !has_digest(image) {
+        if !has_digest(resolved) {
             findings.push(format!(
                 "{file}:{}: `FROM {image}` is pinned by tag — a moved tag changes the image \
                  without a diff here; append `@sha256:<digest>`",
@@ -466,6 +484,17 @@ FROM scratch
         let (n, f) = check_dockerfile("Dockerfile", src);
         assert_eq!(n, 2);
         assert_eq!(f.len(), 2, "{f:?}");
+    }
+
+    /// `FROM ${ARG}` is judged by the arg's default: a stage of this file
+    /// passes, an external image still needs its digest.
+    #[test]
+    fn an_arg_from_is_judged_by_its_default() {
+        let src = "ARG BUILDER_IMAGE=builder\nARG BASE=debian:12\n\
+FROM scratch AS builder\nFROM ${BUILDER_IMAGE} AS binaries\nFROM ${BASE}\n";
+        let (_, findings) = check_dockerfile("Dockerfile", src);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].contains("${BASE}"), "{findings:?}");
     }
 
     #[test]
