@@ -90,6 +90,8 @@ Commands:
                         an enum outside a policy
   check-known-wrong      Refuse a claim AGENTS.md lists as known-wrong, and a tracked file
                         pointing into the untracked roadmap or specifications
+  check-quotations       A „…“ quotation of a mirrored Festlegung occurs in it (SKIPS
+                        without the regulatories mirror or pdftotext)
   check-rounding         Refuse banker's rounding — money rounds kaufmännisch (DIN 1333)
   check-pid-coverage     Compare the shipped AHB profiles against the published
                         Prüfidentifikator inventory (no source documents needed)
@@ -164,6 +166,7 @@ mod check_outbox_notify;
 mod check_policy_settings;
 mod check_prompt_tools;
 mod check_publish_order;
+mod check_quotations;
 mod check_release_coverage;
 mod check_request_bodies;
 mod check_rounding;
@@ -221,6 +224,7 @@ fn main() {
         Some("check-business-dates") => check_business_dates(),
         Some("check-citations") => check_citations(),
         Some("check-known-wrong") => check_known_wrong(),
+        Some("check-quotations") => root_task(check_quotations::run),
         Some("check-policy-settings") => root_task(check_policy_settings::run),
         Some("policy-inventory") => {
             let (workspace_root, _) = workspace_info();

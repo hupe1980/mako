@@ -38,6 +38,11 @@ fn refusal(e: impl Into<anyhow::Error>) -> ApiError {
     }
 }
 
+/// The 404 for a TR-ID this tenant keeps no EEG-Anlage under.
+fn anlage_not_found(tr_id: &str) -> axum::response::Response {
+    ApiError::not_found(format!("EEG-Anlage {tr_id} not found")).into_response()
+}
+
 // ── edmd auto-fetch helper ────────────────────────────────────────────────────
 
 /// Fetch the month's **Einspeisemenge** from `edmd` for a MaLo.
@@ -643,7 +648,7 @@ pub async fn get_anlage(
 
     match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => anlage_not_found(&tr_id),
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -809,7 +814,9 @@ pub async fn delete_anlage(
 
     match decommission_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Ok(false) => {
+            ApiError::not_found(format!("active EEG-Anlage {tr_id} not found")).into_response()
+        }
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -923,7 +930,7 @@ pub async fn post_settle(
     .await
     {
         Ok(Some(result)) => (StatusCode::OK, Json(result)).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => anlage_not_found(&tr_id),
         Err(e) => crate::settle::settle_error(e).into_response(),
     }
 }
@@ -1103,7 +1110,10 @@ pub async fn get_marktwert(
             "vorlaeufig": vorlaeufig,
         }))
         .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!(
+            "no Marktwert {art} {year} recorded for {erzeugungsart}"
+        ))
+        .into_response(),
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -1255,7 +1265,10 @@ pub async fn get_epex_price(
             "avg_ct_kwh": p,
         }))
         .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!(
+            "no EPEX monthly average recorded for {year}-{month:02}"
+        ))
+        .into_response(),
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -1339,7 +1352,7 @@ pub async fn post_wind_reevaluation(
             })),
         )
             .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => anlage_not_found(&tr_id),
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -1392,7 +1405,7 @@ pub async fn post_repowering(
 
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return anlage_not_found(&tr_id),
         Err(e) => return ApiError::internal(e).into_response(),
     };
 
@@ -1452,7 +1465,7 @@ pub async fn post_repowering(
             "verguetungssatz_ct_neu": verguetungssatz_ct_neu,
         }))
         .into_response(),
-        Ok(_) => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => anlage_not_found(&tr_id),
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -1559,7 +1572,10 @@ pub async fn post_mastr_registrierung(
 
     match rows {
         Err(e) => return ApiError::internal(e).into_response(),
-        Ok(r) if r.rows_affected() == 0 => return StatusCode::NOT_FOUND.into_response(),
+        Ok(r) if r.rows_affected() == 0 => {
+            return ApiError::not_found(format!("active EEG-Anlage {tr_id} not found"))
+                .into_response();
+        }
         Ok(_) => {}
     }
 
@@ -1957,7 +1973,7 @@ pub async fn post_switch_veraeusserungsform(
 
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return anlage_not_found(&tr_id),
         Err(e) => return ApiError::internal(e).into_response(),
     };
 
@@ -2276,7 +2292,7 @@ pub async fn post_correction_settle(
     .await
     {
         Ok(Some(r)) => r,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return anlage_not_found(&tr_id),
         Err(e) => {
             return crate::settle::settle_error(e).into_response();
         }

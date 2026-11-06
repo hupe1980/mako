@@ -1,32 +1,70 @@
-import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button as AriaButton, Input, TextField } from "react-aria-components";
-import { bewerten } from "../data/agent";
+import { useHold } from "../app/Holds";
+import { AgentAbgelehnt, bewerten } from "../data/agent";
+import { useVerweigert } from "../data/verweigert";
 import { Icon } from "../design/Icon";
 
 const TOGGLE =
   "focus-ring inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-caption " +
   "data-[hovered]:bg-fill disabled:opacity-50";
 
+type Stand = "offen" | "gehalten" | "gespeichert" | { fehler: string };
+
 /**
  * „Hilfreich?" under an answer or a Hinweis — the person's verdict, kept by
  * agentd beside the run so a skill's quality is read from the journal. After
  * „Nein", one optional line says what was missing; nothing else is asked.
+ *
+ * A verdict is a routine decision (FR-029): it shows at once and leaves the
+ * browser when its five-second hold ends, so „Rückgängig" sends nothing.
  */
 export function Bewertung({ run, initial }: { run: string; initial?: boolean | null }) {
   const [urteil, setUrteil] = useState<boolean | null>(initial ?? null);
   const [warum, setWarum] = useState("");
-  const [gesendet, setGesendet] = useState(false);
-  const senden = useMutation({
-    mutationFn: (v: { hilfreich: boolean; begruendung?: string }) =>
-      bewerten(run, v.hilfreich, v.begruendung),
-  });
+  const [begruendet, setBegruendet] = useState(false);
+  const [stand, setStand] = useState<Stand>("offen");
+  const hold = useHold();
+  const verweigert = useVerweigert({ dienst: "agentd", aktion: "bewerten" });
 
-  const waehle = (hilfreich: boolean) => {
+  const halten = (hilfreich: boolean, begruendung?: string) => {
+    // What the screen returns to on „Rückgängig".
+    const vorher = { urteil, begruendet };
     setUrteil(hilfreich);
-    setGesendet(false);
-    senden.mutate({ hilfreich });
+    setBegruendet(Boolean(begruendung));
+    setStand("gehalten");
+    hold(
+      `bewertung/${run}`,
+      begruendung
+        ? "Begründung ergänzt"
+        : hilfreich
+          ? "Als hilfreich bewertet"
+          : "Als nicht hilfreich bewertet",
+      (keepalive) =>
+        bewerten(run, hilfreich, begruendung, keepalive).then(
+          () => setStand("gespeichert"),
+          (e: unknown) =>
+            setStand({
+              fehler:
+                e instanceof AgentAbgelehnt
+                  ? e.message
+                  : "Nicht gespeichert — der Assistent ist nicht erreichbar.",
+            }),
+        ),
+      () => {
+        setUrteil(vorher.urteil);
+        setBegruendet(vorher.begruendet);
+        setStand("offen");
+      },
+    );
   };
+
+  if (verweigert) {
+    return (
+      <p className="m-0 text-caption text-text-2">Bewerten ist Ihnen nicht erlaubt: {verweigert}</p>
+    );
+  }
+
   const toggle = (an: boolean) =>
     `${TOGGLE} ${an ? "border-ai bg-[color-mix(in_srgb,var(--ai)_12%,transparent)] text-ai" : "border-ai-border text-text-2"}`;
 
@@ -35,30 +73,24 @@ export function Bewertung({ run, initial }: { run: string; initial?: boolean | n
       <legend className="float-left mr-1 p-0 text-caption text-text-2">Hilfreich?</legend>
       <AriaButton
         aria-pressed={urteil === true}
-        isDisabled={senden.isPending}
-        onPress={() => waehle(true)}
+        onPress={() => urteil !== true && halten(true)}
         className={toggle(urteil === true)}
       >
         <Icon name="thumb" size={14} /> Ja
       </AriaButton>
       <AriaButton
         aria-pressed={urteil === false}
-        isDisabled={senden.isPending}
-        onPress={() => waehle(false)}
+        onPress={() => urteil !== false && halten(false)}
         className={toggle(urteil === false)}
       >
         <Icon name="thumb" size={14} className="rotate-180" /> Nein
       </AriaButton>
-      {urteil === false && !gesendet && (
+      {urteil === false && !begruendet && (
         <form
           className="flex min-w-48 flex-1"
           onSubmit={(e) => {
             e.preventDefault();
-            if (!warum.trim()) return;
-            senden.mutate(
-              { hilfreich: false, begruendung: warum.trim() },
-              { onSuccess: () => setGesendet(true) },
-            );
+            if (warum.trim()) halten(false, warum.trim());
           }}
         >
           <TextField aria-label="Was fehlte?" value={warum} onChange={setWarum} className="flex-1">
@@ -70,13 +102,11 @@ export function Bewertung({ run, initial }: { run: string; initial?: boolean | n
           </TextField>
         </form>
       )}
-      {senden.isSuccess && (urteil === true || gesendet) && (
+      {stand === "gespeichert" && (urteil === true || begruendet) && (
         <span className="text-caption text-text-2">Danke — das bleibt beim Lauf.</span>
       )}
-      {senden.isError && (
-        <span className="text-caption text-critical">
-          Nicht gespeichert — der Assistent ist nicht erreichbar.
-        </span>
+      {typeof stand === "object" && (
+        <span className="text-caption text-critical">{stand.fehler}</span>
       )}
     </fieldset>
   );

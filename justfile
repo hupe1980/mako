@@ -490,7 +490,7 @@ ci:
     RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
 
 [private]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-thin-main check-desk desk-check check-error-tuples check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-thin-main check-desk desk-check check-error-tuples check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -909,6 +909,11 @@ check-policy-settings:
 # into the untracked roadmap or specifications.
 check-known-wrong:
     cargo xtask check-known-wrong
+
+# A „…" quotation attributed to a mirrored Festlegung occurs in that document.
+# SKIPS without the gitignored `regulatories/` mirror or poppler's `pdftotext`.
+check-quotations:
+    cargo xtask check-quotations
 
 # Refuse a Werktage or clock-time literal in a string that also names a
 # Festlegung, an AHB or an AWH — the Frist renders from mako_fristen.

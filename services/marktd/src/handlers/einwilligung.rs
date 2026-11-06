@@ -122,8 +122,10 @@ pub async fn grant_einwilligung(
             )
             .await
             {
-                tracing::error!(error = %e, "einwilligung: durable enqueue failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return ApiError::internal(anyhow::Error::from(e).context(format!(
+                    "einwilligung: durable enqueue for Einwilligung {id}"
+                )))
+                .into_response();
             }
             (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
         }
@@ -177,7 +179,7 @@ pub async fn get_einwilligung(
     }
     match repo.get(&tenant, id).await {
         Ok(Some(rec)) => Json(rec).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!("Einwilligung {id} not found")).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -205,7 +207,9 @@ pub async fn revoke_einwilligung(
     }
     let revoked = match repo.revoke(&tenant, id).await {
         Ok(Some(rec)) => rec,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return ApiError::not_found(format!("Einwilligung {id} not found")).into_response();
+        }
         Err(e) => return e.into_response(),
     };
 
@@ -227,8 +231,10 @@ pub async fn revoke_einwilligung(
     )
     .await
     {
-        tracing::error!(error = %e, "einwilligung: widerrufen durable enqueue failed");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return ApiError::internal(anyhow::Error::from(e).context(format!(
+            "einwilligung: widerrufen durable enqueue for Einwilligung {id}"
+        )))
+        .into_response();
     }
 
     // GDPR Art. 7(3): stopping value delivery requires an Abbestellung (17008)
@@ -550,7 +556,10 @@ pub async fn get_esa_messprodukt_angebot(
     let at = q.at.unwrap_or_else(mako_fristen::heute);
     let code = mako_wim::esa::normalize_code(&messprodukt);
     let Some(produkt) = mako_wim::esa::messprodukt(&code) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return ApiError::not_found(format!(
+            "Messprodukt {messprodukt} is not a known ESA Messprodukt"
+        ))
+        .into_response();
     };
     let eintrag = match repo
         .esa_messprodukt_angebot(&tenant, &msb_mp_id, &code, at)
@@ -614,7 +623,10 @@ pub async fn get_esa_subscription(
             "messprodukt": messprodukt,
         }))
         .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!(
+            "no ESA subscription for Bestellung {bestellung_ref}"
+        ))
+        .into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -643,7 +655,10 @@ pub async fn get_framework(
     }
     match repo.get_framework(&tenant, &msb_mp_id, &esa_mp_id).await {
         Ok(Some(rec)) => Json(rec).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!(
+            "no framework agreement between MSB {msb_mp_id} and ESA {esa_mp_id}"
+        ))
+        .into_response(),
         Err(e) => e.into_response(),
     }
 }

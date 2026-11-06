@@ -551,7 +551,9 @@ POST /api/v1/queue/{id}/reject    → dispatch the reject command via makod, mar
 The handlers **claim** the entry (`status = 'Pending'` guard) before
 dispatching and release the claim if the body is incomplete or the dispatch
 fails, so a decided entry never re-sends and two operators cannot send both
-answers. `decided_by` records the deciding principal's `sub`. A task running
+answers. A decision on an entry somebody else decided first is a `409`
+with `code` `already_decided` and the entry's `status`, `decided_by` and
+`decided_at`, so the second operator learns who answered and when. `decided_by` records the deciding principal's `sub`. A task running
 every 60 s marks stale entries `Expired`; expired entries log a `WARN` and are
 reconciled manually.
 

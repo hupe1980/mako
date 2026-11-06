@@ -428,6 +428,9 @@ pub async fn put_product(
         ))
         .into_response();
     }
+    if let Err(why) = req.abrechnung.pruefen(&req.category) {
+        return ApiError::unprocessable(why).into_response();
+    }
     // Validate + canonicalise product data against BO4E Tarifpreisblatt schema.
     req.data = match normalize_tarifpreisblatt(&req.category, req.data) {
         Ok(v) => v,
@@ -504,7 +507,8 @@ pub async fn get_product(
     }
     match fetch_product(&pool, &lf_mp_id, claims.tenant(), &product_code, None).await {
         Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!("product {product_code} of {lf_mp_id} not found"))
+            .into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
 }
@@ -569,7 +573,8 @@ pub async fn delete_product(
     }
     match soft_delete_product(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Ok(false) => ApiError::not_found(format!("product {product_code} of {lf_mp_id} not found"))
+            .into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
 }
@@ -705,7 +710,8 @@ pub async fn get_epex_prices_quarter_hourly(
             }))
             .into_response()
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!("no EPEX day-ahead prices recorded for {date}"))
+            .into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
 }
@@ -731,7 +737,10 @@ pub async fn get_epex_monthly_average(
             "avg_ct_kwh": avg,
         }))
         .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!(
+            "no EPEX monthly average recorded for {year}-{month:02}"
+        ))
+        .into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
 }
@@ -797,7 +806,8 @@ pub async fn get_nehs_price_latest(
             "eur_per_t": eur_per_t,
         }))
         .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!("no nEHS price recorded on or before {date}"))
+            .into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
 }
@@ -901,7 +911,10 @@ pub async fn delete_energiemix_handler(
     }
     match delete_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Ok(false) => ApiError::not_found(format!(
+            "no Energiemix recorded for product {product_code} of {lf_mp_id}"
+        ))
+        .into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
 }
@@ -1862,7 +1875,7 @@ pub async fn get_angebot_handler(
     }
     match fetch_angebot(&pool, id, &cfg.tenant).await {
         Ok(Some(a)) => Json(a).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!("Angebot {id} not found")).into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
 }
@@ -1924,7 +1937,7 @@ pub async fn get_angebot_comparison(
     }
     let angebot = match fetch_angebot(&pool, id, &cfg.tenant).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return ApiError::not_found(format!("Angebot {id} not found")).into_response(),
         Err(e) => return ApiError::Internal(e).into_response(),
     };
 
@@ -2349,7 +2362,7 @@ pub async fn put_angebot(
     // Fetch existing Angebot and guard status.
     let existing = match fetch_angebot(&pool, id, &cfg.tenant).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return ApiError::not_found(format!("Angebot {id} not found")).into_response(),
         Err(e) => return ApiError::Internal(e).into_response(),
     };
     if existing.status != "ANGELEGT" {

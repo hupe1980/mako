@@ -98,8 +98,11 @@ pub(crate) async fn get_lastgang(
     let reads = match read_result {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: get_lastgang query failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e)
+                    .context(format!("get_lastgang query failed (malo_id {malo_id})")),
+            )
+            .into_response();
         }
     };
 
@@ -135,10 +138,10 @@ pub(crate) async fn get_lastgang(
                 bytes,
             )
                 .into_response(),
-            Err(e) => {
-                tracing::warn!(error = %e, malo_id, "edmd: arrow IPC serialization failed");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
+            Err(e) => ApiError::internal(e.context(format!(
+                "arrow IPC serialization failed (malo_id {malo_id})"
+            )))
+            .into_response(),
         };
     }
 
@@ -253,8 +256,11 @@ pub(crate) async fn get_energy_series(
     let reads = match read_result {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: energy series query failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e)
+                    .context(format!("energy series query failed (malo_id {malo_id})")),
+            )
+            .into_response();
         }
     };
 
@@ -789,10 +795,11 @@ pub(crate) async fn get_esa_typ2(
             "werte": reads,
         }))
         .into_response(),
-        Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: get_esa_typ2 query failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => ApiError::internal(
+            anyhow::Error::from(e)
+                .context(format!("get_esa_typ2 query failed (malo_id {malo_id})")),
+        )
+        .into_response(),
     }
 }
 
@@ -845,8 +852,11 @@ pub(crate) async fn get_zeitreihe(
     let reads = match read_result {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: get_zeitreihe query failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e)
+                    .context(format!("get_zeitreihe query failed (malo_id {malo_id})")),
+            )
+            .into_response();
         }
     };
 
@@ -893,10 +903,10 @@ pub(crate) async fn get_zeitreihe(
                 bytes,
             )
                 .into_response(),
-            Err(e) => {
-                tracing::warn!(error = %e, malo_id, "edmd: zeitreihe arrow IPC serialization failed");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
+            Err(e) => ApiError::internal(e.context(format!(
+                "zeitreihe arrow IPC serialization failed (malo_id {malo_id})"
+            )))
+            .into_response(),
         };
     }
 
@@ -980,8 +990,10 @@ pub(crate) async fn get_lastgang_resampled(
     let reads = match state.repo.query(&q).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: get_lastgang_resampled query failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(anyhow::Error::from(e).context(format!(
+                "get_lastgang_resampled query failed (malo_id {malo_id})"
+            )))
+            .into_response();
         }
     };
 
@@ -1098,8 +1110,11 @@ pub(crate) async fn get_summenzeitreihe(
     let reads = match state.repo.query(&q).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: summenzeitreihe query failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e)
+                    .context(format!("summenzeitreihe query failed (malo_id {malo_id})")),
+            )
+            .into_response();
         }
     };
 

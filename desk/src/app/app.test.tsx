@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { vergessen } from "../data/verweigert";
 import { SHORTCUTS } from "./keys";
 import { RolleProvider } from "./rollen";
 import { createDeskRouter } from "./router";
@@ -29,6 +30,7 @@ afterEach(() => {
   cleanup();
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
+  vergessen();
 });
 
 describe("the Desk", () => {
@@ -567,19 +569,86 @@ describe("the Desk", () => {
       "nicht belegt",
     );
 
-    // „Nein" is recorded at once; the reason, if given, replaces it with words.
+    // „Nein" shows at once and is held, not sent; the reason given inside the
+    // hold replaces it, and one verdict leaves when the page lets it go.
     fireEvent.click(screen.getByRole("button", { name: "Nein" }));
-    await waitFor(() => expect(verdicts).toEqual([{ hilfreich: false }]));
+    expect(screen.getByText("Als nicht hilfreich bewertet")).toBeTruthy();
+    expect(verdicts).toEqual([]);
     const warum = screen.getByRole("textbox", { name: "Was fehlte?" });
     fireEvent.change(warum, { target: { value: "Die Frist des LF fehlt." } });
     fireEvent.submit(warum.closest("form") as HTMLFormElement);
+    expect(screen.getByText("Begründung ergänzt")).toBeTruthy();
+    expect(screen.queryByText("Als nicht hilfreich bewertet")).toBeNull();
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
     await waitFor(() =>
-      expect(verdicts).toEqual([
-        { hilfreich: false },
-        { hilfreich: false, begruendung: "Die Frist des LF fehlt." },
-      ]),
+      expect(verdicts).toEqual([{ hilfreich: false, begruendung: "Die Frist des LF fehlt." }]),
     );
     expect(await screen.findByText("Danke — das bleibt beim Lauf.")).toBeTruthy();
+  });
+
+  it("hands a question from ⌘K to the assistant on screen", async () => {
+    const asked: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/svc/agentd/api/v1/agents/catalog") return Response.json({ faehigkeiten: [] });
+        if (url === "/svc/agentd/api/v1/runs") {
+          asked.push(JSON.parse(String(init?.body)));
+          return Response.json([{ agent_name: "desk-assistant", run_id: "r-7" }], { status: 202 });
+        }
+        if (url.startsWith("/svc/agentd/")) {
+          return Response.json({
+            run: "r-7",
+            status: "running",
+            disclosure: "AI-generated.",
+            saetze: [],
+            vorschlag: null,
+            schritte: [],
+            hilfreich: null,
+          });
+        }
+        const m = JSON.parse(String(init?.body));
+        const result =
+          m.method === "tools/call" && m.params.name === "get_process"
+            ? {
+                structuredContent: {
+                  business_key: "51238696012",
+                  processes: [
+                    {
+                      stream_id: "s",
+                      workflow_name: "gpke-supplier-change",
+                      process_id: "p",
+                      deadlines: [],
+                    },
+                  ],
+                },
+              }
+            : m.method === "tools/call"
+              ? { structuredContent: { process_id: "p", workflow_name: "w", eintraege: [] } }
+              : {};
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
+          headers: { "content-type": "application/json", "mcp-session-id": "s" },
+        });
+      }),
+    );
+    await open("/prozess?key=51238696012");
+    await screen.findByRole("region", { name: "Fragen" });
+    // The palette offers the row while a panel is mounted, and hands the
+    // question over (typing into ⌘K is driven in a browser by the screenshots).
+    const { frageMoeglich, frageStellen } = await import("./frage");
+    expect(frageMoeglich()).toBe(true);
+    act(() => frageStellen("Warum hängt die Anmeldung?"));
+    await waitFor(() =>
+      expect(asked).toEqual([
+        {
+          agent: "desk-assistant",
+          event_type: "manual",
+          input: { frage: "Warum hängt die Anmeldung?", malo: "51238696012" },
+        },
+      ]),
+    );
   });
 
   it("offers no Fragen without agentd, and the process still shows", async () => {
@@ -621,6 +690,8 @@ describe("the Desk", () => {
   function freigabeFetch(opts: {
     posts: { url: string; body: unknown }[];
     vorschlag?: Record<string, unknown>;
+    /** processd's answer to the decision, when it is not a plain 200. */
+    entscheidung?: Response;
   }) {
     const freigabe = {
       id: "q-1",
@@ -654,6 +725,7 @@ describe("the Desk", () => {
       // The writes under test: a decision, and what became of a proposal.
       if (url.includes("/api/v1/queue/") || url.endsWith("/bewertung")) {
         opts.posts.push({ url, body: JSON.parse(String(init?.body)) });
+        if (url.includes("/api/v1/queue/") && opts.entscheidung) return opts.entscheidung;
         return new Response(null, { status: url.endsWith("/bewertung") ? 204 : 200 });
       }
       if (url === "/svc/agentd/api/v1/agents/catalog") {
@@ -710,6 +782,41 @@ describe("the Desk", () => {
     expect(await screen.findByText("Entschieden.")).toBeTruthy();
   });
 
+  it("chooses from the keyboard and names who decided first when the race is lost", async () => {
+    const posts: { url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      freigabeFetch({
+        posts,
+        entscheidung: Response.json(
+          {
+            error: "Conflict",
+            detail: "Freigabe q-1 is already Approved",
+            code: "already_decided",
+            status: "Approved",
+            decided_by: "erika",
+            decided_at: "2031-01-02T08:15:00Z",
+          },
+          { status: 409 },
+        ),
+      }),
+    );
+    await open("/freigaben");
+    await screen.findByRole("heading", { name: /verbundenen Lieferanten/ });
+    // R chooses „Ablehnen" — not while typing in a field.
+    fireEvent.keyDown(window, { key: "r" });
+    expect((screen.getByRole("radio", { name: "Ablehnen" }) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /A02/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    expect(await screen.findByText("Schon entschieden")).toBeTruthy();
+    expect(
+      screen.getByText(/erika hat diese Freigabe am 02\.01\.2031, 09:15 Uhr freigegeben/),
+    ).toBeTruthy();
+  });
+
   it("takes the assistant's proposal into the form and sends nothing until the person does", async () => {
     const posts: { url: string; body: unknown }[] = [];
     vi.stubGlobal(
@@ -745,6 +852,91 @@ describe("the Desk", () => {
           body: { antwort_code: "A02", antwort_tree: "E_0622" },
         },
         { url: "/svc/agentd/api/v1/runs/r-9/bewertung", body: { vorschlag: "sent" } },
+      ]),
+    );
+  });
+
+  /** Choose „Ablehnen" with A02 and send it past the confirm. */
+  async function ablehnenSenden() {
+    await screen.findByRole("heading", { name: /verbundenen Lieferanten/ });
+    fireEvent.click(screen.getByRole("radio", { name: "Ablehnen" }));
+    fireEvent.click(screen.getByRole("radio", { name: /A02/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+  }
+
+  it("shows processd's own sentence when it refuses a decision, not the status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      freigabeFetch({
+        posts: [],
+        entscheidung: Response.json(
+          { error: "Unprocessable Entity", detail: "A02 is not a code of E_0623" },
+          { status: 422 },
+        ),
+      }),
+    );
+    await open("/freigaben");
+    await ablehnenSenden();
+    expect(await screen.findByText("A02 is not a code of E_0623")).toBeTruthy();
+    expect(screen.queryByText(/Unprocessable Entity/)).toBeNull();
+    // A refusal of this one request leaves the controls in place.
+    expect(screen.getByRole("radio", { name: "Ablehnen" })).toBeTruthy();
+  });
+
+  it("puts processd's reason where the controls were once its policy refuses a decision", async () => {
+    vi.stubGlobal(
+      "fetch",
+      freigabeFetch({
+        posts: [],
+        entscheidung: Response.json(
+          { error: "Forbidden", detail: "Reject denied for this principal" },
+          { status: 403 },
+        ),
+      }),
+    );
+    await open("/freigaben");
+    await ablehnenSenden();
+    expect(await screen.findByText("Reject denied for this principal")).toBeTruthy();
+    expect(screen.getByText(/lässt Sie hier nicht entscheiden/)).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: "Ablehnen" })).toBeNull();
+    // R chooses nothing: no control is left to choose.
+    fireEvent.keyDown(window, { key: "r" });
+    expect(screen.queryByRole("radio")).toBeNull();
+  });
+
+  it("holds a discarded proposal: Rückgängig sends nothing, pagehide sends it", async () => {
+    const posts: { url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      freigabeFetch({
+        posts,
+        vorschlag: {
+          aktion: "ablehnen",
+          antwortcode: "A02",
+          begruendung: "Die MaLo nimmt nicht an der Marktkommunikation teil.",
+          quelle: "processd/get_queue_entry",
+          belegt: true,
+        },
+      }),
+    );
+    await open("/freigaben?id=q-1");
+    fireEvent.click(await screen.findByRole("button", { name: "Was schlägst du vor?" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Verwerfen" }));
+    expect(screen.queryByText("Die MaLo nimmt nicht an der Marktkommunikation teil.")).toBeNull();
+    expect(screen.getByText("Vorschlag verworfen")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Rückgängig/ }));
+    expect(screen.getByText("Die MaLo nimmt nicht an der Marktkommunikation teil.")).toBeTruthy();
+    expect(screen.queryByText("Vorschlag verworfen")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Verwerfen" }));
+    expect(posts).toEqual([]);
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await waitFor(() =>
+      expect(posts).toEqual([
+        { url: "/svc/agentd/api/v1/runs/r-9/bewertung", body: { vorschlag: "dismissed" } },
       ]),
     );
   });
@@ -839,7 +1031,13 @@ describe("the Desk", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", metaKey: true }));
     });
     const sheet = await screen.findByRole("dialog", { name: "Tastaturkürzel" });
-    for (const s of SHORTCUTS) expect(within(sheet).getByText(s.keys)).toBeTruthy();
+    // Every row of the table, label beside its keys — a key may serve two groups.
+    for (const s of SHORTCUTS) {
+      const term = within(sheet)
+        .getAllByText(s.label)
+        .find((el) => el.tagName === "DT");
+      expect(term?.parentElement?.textContent).toContain(s.keys);
+    }
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", metaKey: true }));
     });

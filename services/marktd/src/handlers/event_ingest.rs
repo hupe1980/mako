@@ -40,6 +40,7 @@ use mako_markt::{
     cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent},
     repository::{MaloRepository, MeloRepository},
 };
+use mako_service::ApiError;
 use sqlx::PgPool;
 use tracing::{debug, error, warn};
 
@@ -88,7 +89,8 @@ pub async fn ingest_event(
         Ok(e) => e,
         Err(err) => {
             warn!(%err, "event_ingest: failed to deserialize CloudEvent");
-            return StatusCode::BAD_REQUEST.into_response();
+            return ApiError::bad_request(format!("body is not a CloudEvents 1.0 event: {err}"))
+                .into_response();
         }
     };
 
@@ -105,8 +107,11 @@ pub async fn ingest_event(
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            error!(event_id = %event.id, error = %e, "event_ingest: begin failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e)
+                    .context(format!("event_ingest: begin for event {}", event.id)),
+            )
+            .into_response();
         }
     };
 
@@ -121,8 +126,11 @@ pub async fn ingest_event(
             return StatusCode::ACCEPTED.into_response();
         }
         Err(e) => {
-            error!(event_id = %event.id, error = %e, "event_ingest: idempotency insert failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(anyhow::Error::from(e).context(format!(
+                "event_ingest: idempotency insert for event {}",
+                event.id
+            )))
+            .into_response();
         }
     }
 
@@ -204,12 +212,11 @@ pub async fn ingest_event(
     )
     .await
     {
-        error!(
-            event_id = %event_id_for_vs,
-            error = %e,
-            "event_ingest: MSB-Zuordnung derivation failed — rolling back"
-        );
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        // A 500, never the MdmError's own status: makod redelivers only on 5xx.
+        return ApiError::internal(anyhow::Error::from(e).context(format!(
+            "event_ingest: MSB-Zuordnung derivation for event {event_id_for_vs} failed — rolling back"
+        )))
+        .into_response();
     }
 
     let derived = match derive_supply_state(
@@ -224,12 +231,11 @@ pub async fn ingest_event(
     {
         Ok(evts) => evts,
         Err(e) => {
-            error!(
-                event_id = %event_id_for_vs,
-                error = %e,
-                "event_ingest: supply-state derivation failed — rolling back"
-            );
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            // A 500, never the MdmError's own status: makod redelivers only on 5xx.
+            return ApiError::internal(anyhow::Error::from(e).context(format!(
+                "event_ingest: supply-state derivation for event {event_id_for_vs} failed — rolling back"
+            )))
+            .into_response();
         }
     };
 
@@ -238,14 +244,19 @@ pub async fn ingest_event(
     //    so a crash can never leave the marker committed without the events.
     for evt in std::iter::once(&markt_event).chain(derived.iter()) {
         if let Err(e) = crate::outbox::enqueue(&mut *tx, evt).await {
-            error!(event_id = %event_id_for_vs, error = %e, "event_ingest: durable enqueue failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(anyhow::Error::from(e).context(format!(
+                "event_ingest: durable enqueue for event {event_id_for_vs}"
+            )))
+            .into_response();
         }
     }
 
     if let Err(e) = tx.commit().await {
-        error!(event_id = %event_id_for_vs, error = %e, "event_ingest: commit failed");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return ApiError::internal(
+            anyhow::Error::from(e)
+                .context(format!("event_ingest: commit for event {event_id_for_vs}")),
+        )
+        .into_response();
     }
 
     // 7. Secondary applies on other master-data objects. These run after the
@@ -298,8 +309,8 @@ pub async fn ingest_event(
 /// IFTSTA 21012 — the NB's „Statusmeldung (erfolgreich)".
 ///
 /// The one message that makes a WiM MSB-Wechsel constitutive. WiM Strom Teil 1
-/// Kap. 2.1.1: „Der NB ordnet den MSBN/gMSB der Messlokation … zu dem Tag des
-/// vom MSBN/gMSB mitgeteilten Termins des erfolgreichen Abschlusses des
+/// Kap. 2.1.1: „… ordnet der NB den MSBN/gMSB der Messlokation … zu dem Tag
+/// des vom MSBN/gMSB mitgeteilten Termins des erfolgreichen Abschlusses des
 /// Gesamtvorgangs … mit dem Zeitpunkt 00:00 Uhr zu. Die Zuordnung des MSBA
 /// endet entsprechend zu diesem Zeitpunkt."
 ///

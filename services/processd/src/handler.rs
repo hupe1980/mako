@@ -126,8 +126,11 @@ pub async fn handle_webhook(
     // A failed write is therefore not acknowledged — the fan-out redelivers,
     // and every module below is idempotent against a redelivery.
     if let Err(err) = crate::obs::project::project(&state.obs, &event).await {
-        warn!(%err, "processd obs: projection failed — fan-out will redeliver");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return mako_service::ApiError::internal(
+            anyhow::Error::from(err)
+                .context("processd obs: projection failed — fan-out will redeliver"),
+        )
+        .into_response();
     }
 
     // ── 2b. Sperr-/Entsperrauftrag queue (ORDERS 17115 / 17117) ───────────
@@ -160,8 +163,8 @@ pub async fn handle_webhook(
         {
             Ok(_) => StatusCode::OK.into_response(),
             Err(e) => {
-                warn!(error = %e, "processd EoG: event handling failed");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                mako_service::ApiError::internal(e.context("processd EoG: event handling failed"))
+                    .into_response()
             }
         };
     }
@@ -187,10 +190,10 @@ pub async fn handle_webhook(
             .await
             {
                 Ok(_) => StatusCode::OK.into_response(),
-                Err(e) => {
-                    warn!(error = %e, "processd NB: Abmeldeanfrage resume failed");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+                Err(e) => mako_service::ApiError::internal(
+                    anyhow::anyhow!(e).context("processd NB: Abmeldeanfrage resume failed"),
+                )
+                .into_response(),
             };
         }
         return StatusCode::NO_CONTENT.into_response();
@@ -221,8 +224,10 @@ pub async fn handle_webhook(
                 Ok(true) => return StatusCode::OK.into_response(),
                 Ok(false) => {}
                 Err(e) => {
-                    warn!(error = %e, "processd Neuanlage: evaluation error");
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return mako_service::ApiError::internal(
+                        e.context("processd Neuanlage: evaluation error"),
+                    )
+                    .into_response();
                 }
             }
         }
@@ -248,8 +253,10 @@ pub async fn handle_webhook(
                 Ok(true) => return StatusCode::OK.into_response(),
                 Ok(false) => {} // not an NB PID, fall through to LF module
                 Err(e) => {
-                    warn!(error = %e, "processd NB: evaluation error");
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return mako_service::ApiError::internal(
+                        anyhow::anyhow!(e).context("processd NB: evaluation error"),
+                    )
+                    .into_response();
                 }
             }
         }
@@ -268,8 +275,10 @@ pub async fn handle_webhook(
                 Ok(true) => return StatusCode::OK.into_response(),
                 Ok(false) => {} // not an LF PID
                 Err(e) => {
-                    warn!(error = %e, "processd LF: evaluation error");
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return mako_service::ApiError::internal(
+                        anyhow::anyhow!(e).context("processd LF: evaluation error"),
+                    )
+                    .into_response();
                 }
             }
         }
@@ -332,10 +341,10 @@ pub async fn handle_webhook(
             .await
             {
                 Ok(()) => StatusCode::OK.into_response(),
-                Err(e) => {
-                    warn!(error = %e, "processd MSB: STP evaluation failed — fan-out will redeliver");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+                Err(e) => mako_service::ApiError::internal(
+                    e.context("processd MSB: STP evaluation failed — fan-out will redeliver"),
+                )
+                .into_response(),
             };
         }
     }
@@ -373,10 +382,10 @@ pub async fn handle_webhook(
             .await
             {
                 Ok(()) => StatusCode::OK.into_response(),
-                Err(e) => {
-                    warn!(error = %e, "processd ESA: STP evaluation failed — fan-out will redeliver");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+                Err(e) => mako_service::ApiError::internal(
+                    e.context("processd ESA: STP evaluation failed — fan-out will redeliver"),
+                )
+                .into_response(),
             };
         }
     }
@@ -418,12 +427,16 @@ pub async fn handle_webhook(
         // the SteuerbareRessource may escalate. A transport error answers 5xx so
         // the fan-out redelivers.
         if let Err(e) = &sr_result {
-            warn!(sr_id, process_id, error = %e, "processd: marktd SteuerbareRessource lookup failed — fan-out will redeliver");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return mako_service::ApiError::internal(anyhow::anyhow!(
+                "processd: marktd SteuerbareRessource lookup for SR {sr_id} (process {process_id}) failed — fan-out will redeliver: {e}"
+            ))
+            .into_response();
         }
         if let Err(e) = &kp_result {
-            warn!(sr_id, process_id, error = %e, "processd: marktd Konfigurationsprodukte lookup failed — fan-out will redeliver");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return mako_service::ApiError::internal(anyhow::anyhow!(
+                "processd: marktd Konfigurationsprodukte lookup for SR {sr_id} (process {process_id}) failed — fan-out will redeliver: {e}"
+            ))
+            .into_response();
         }
 
         let is_fernschaltbar: Option<bool> = if sr_id.is_empty() {
@@ -603,10 +616,10 @@ pub async fn handle_webhook(
 
         return match result {
             Ok(()) => StatusCode::OK.into_response(),
-            Err(e) => {
-                warn!(sr_id, process_id, error = %e, "processd: Steuerungsauftrag handling failed");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
+            Err(e) => mako_service::ApiError::internal(anyhow::anyhow!(e).context(format!(
+                "processd: Steuerungsauftrag handling for SR {sr_id} (process {process_id}) failed"
+            )))
+            .into_response(),
         };
     }
 
@@ -638,8 +651,10 @@ pub async fn handle_webhook(
             Ok(true) => return StatusCode::OK.into_response(),
             Ok(false) => {} // not a REQOTE PID
             Err(e) => {
-                warn!(error = %e, "processd MSB: REQOTE handling failed — fan-out will redeliver");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return mako_service::ApiError::internal(
+                    e.context("processd MSB: REQOTE handling failed — fan-out will redeliver"),
+                )
+                .into_response();
             }
         }
     }

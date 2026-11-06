@@ -511,7 +511,7 @@ pub async fn post_ggv_billing(
                 // Stromsteuer is a *product* property, not an endpoint one: the
                 // § 9 Abs. 1 Nr. 3 StromStG exemption depends on plant size and
                 // spatial proximity, and `productd` carries it as the typed
-                // `stromsteuer_tarif`. Forcing it off here — and only when an
+                // `abrechnung.stromsteuer_tarif`. Forcing it off here — and only when an
                 // Arbeitspreis override happens to be present — would decide a
                 // tax question from a price field.
                 if let Some(ap) = tenant.arbeitspreis_ct_per_kwh {

@@ -44,6 +44,7 @@ fn strom_product(code: &str) -> pg::ProductUpsertRequest {
         product_status: "PUBLISHED".to_owned(),
         energiemix: None,
         oekolabel: None,
+        abrechnung: Default::default(),
     }
 }
 

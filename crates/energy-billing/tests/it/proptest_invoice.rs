@@ -465,7 +465,7 @@ proptest! {
 
         let regel = bill(make(serde_json::json!({"art": "REGEL"})));
         let befreit = bill(make(serde_json::json!({
-            "art": "BEFREIUNG", "grund": "KLEINANLAGE"
+            "art": "BEFREIUNG", "grund": "NOTSTROM"
         })));
         let ermaessigt = bill(make(serde_json::json!({
             "art": "ERMAESSIGUNG", "grund": "FAHRSTROM"

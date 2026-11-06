@@ -3522,6 +3522,215 @@ pub struct ZaehlzeitSaisonRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
+/// The tariff zone a register counts: `HT`, `NT` or `EINZEL`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Tarifzone {
+    /// Hochtarif.
+    Ht,
+    /// Niedertarif.
+    Nt,
+    /// Single-rate: the register counts every hour.
+    Einzel,
+}
+
+impl Tarifzone {
+    /// The stored value, as `zaehler_register`'s CHECK lists it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ht => "HT",
+            Self::Nt => "NT",
+            Self::Einzel => "EINZEL",
+        }
+    }
+}
+
+/// The season a window applies in: `SOMMER`, `WINTER` or `GESAMT` (all year).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Saison {
+    /// Summer.
+    Sommer,
+    /// Winter.
+    Winter,
+    /// All year.
+    Gesamt,
+}
+
+impl Saison {
+    /// The stored value, as `zaehler_saisons`' CHECK lists it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sommer => "SOMMER",
+            Self::Winter => "WINTER",
+            Self::Gesamt => "GESAMT",
+        }
+    }
+}
+
+/// The body of `PUT /api/v1/zaehler/{zaehler_id}/register`.
+///
+/// What a caller states about a register; the Zähler comes from the path, the
+/// tenant from the session, `id` and `updated_at` from the server. A register
+/// is identified by Zähler, `bezeichnung` and `valid_from`: a second `PUT` with
+/// those three updates it and keeps its id.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZaehlzeitRegisterUpsert {
+    /// Register label (e.g. `"HT"`, `"NT"`, `"Gesamt"`).
+    pub bezeichnung: String,
+    /// The tariff zone the register counts.
+    pub zaehlerauspraegung: Tarifzone,
+    /// OBIS kennzahl identifying this register in MSCONS (e.g. `"1-1:1.8.1"`).
+    #[serde(default)]
+    pub obis_kennzahl: Option<String>,
+    /// Measurement unit, `"KWH"` when absent.
+    #[serde(default = "default_kwh")]
+    pub einheit: String,
+    /// First day of validity.
+    pub valid_from: time::Date,
+    /// First day no longer valid — `None` while the register is current.
+    #[serde(default)]
+    pub valid_to: Option<time::Date>,
+}
+
+impl ZaehlzeitRegisterUpsert {
+    /// Refuse what the schema would refuse, with the field named.
+    ///
+    /// # Errors
+    /// [`MdmError::Unprocessable`] for an empty `bezeichnung` or a `valid_to`
+    /// not after `valid_from`.
+    pub fn validate(&self) -> Result<(), MdmError> {
+        if self.bezeichnung.trim().is_empty() {
+            return Err(MdmError::Unprocessable {
+                reason: "bezeichnung must not be empty".to_owned(),
+            });
+        }
+        if self.valid_to.is_some_and(|to| to <= self.valid_from) {
+            return Err(MdmError::Unprocessable {
+                reason: "valid_to must be after valid_from".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The body of `PUT /api/v1/zaehler-register/{register_id}/saisons`.
+///
+/// One window of a register; the register comes from the path, `id` and
+/// `updated_at` from the server. A window is identified by register, `saison`
+/// and `zeit_von`: a second `PUT` with those three updates it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZaehlzeitSaisonUpsert {
+    /// The season the window applies in.
+    pub saison: Saison,
+    /// ISO weekdays, 1 (Mon) through 7 (Sun), each at most once.
+    pub wochentage: Vec<i16>,
+    /// Window start in German local time, inclusive (`"07:00"`).
+    #[serde(with = "wall_clock")]
+    pub zeit_von: time::Time,
+    /// Window end in German local time, exclusive (`"22:00"`).
+    #[serde(with = "wall_clock")]
+    pub zeit_bis: time::Time,
+}
+
+impl ZaehlzeitSaisonUpsert {
+    /// Refuse what the schema would refuse, with the field named.
+    ///
+    /// # Errors
+    /// [`MdmError::Unprocessable`] for no weekday, a weekday outside 1–7 or
+    /// named twice, or a window that does not end after it starts — which
+    /// would classify no reading and show up as missing HT/NT energy.
+    pub fn validate(&self) -> Result<(), MdmError> {
+        let refuse = |reason: &str| {
+            Err(MdmError::Unprocessable {
+                reason: reason.to_owned(),
+            })
+        };
+        if self.wochentage.is_empty() {
+            return refuse("wochentage must name at least one weekday");
+        }
+        if self.wochentage.iter().any(|d| !(1..=7).contains(d)) {
+            return refuse("wochentage are ISO weekdays, 1 (Mon) through 7 (Sun)");
+        }
+        let mut days = self.wochentage.clone();
+        days.sort_unstable();
+        days.dedup();
+        if days.len() != self.wochentage.len() {
+            return refuse("wochentage names a weekday twice");
+        }
+        if self.zeit_von >= self.zeit_bis {
+            return refuse("zeit_bis must be after zeit_von");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod zaehlzeit_body_tests {
+    use super::{Saison, Tarifzone, ZaehlzeitRegisterUpsert, ZaehlzeitSaisonUpsert};
+    use time::macros::{date, time};
+
+    fn window(wochentage: Vec<i16>, von: time::Time, bis: time::Time) -> ZaehlzeitSaisonUpsert {
+        ZaehlzeitSaisonUpsert {
+            saison: Saison::Winter,
+            wochentage,
+            zeit_von: von,
+            zeit_bis: bis,
+        }
+    }
+
+    #[test]
+    fn a_window_that_classifies_no_reading_is_refused() {
+        assert!(
+            window(vec![1, 2, 3, 4, 5], time!(07:00), time!(22:00))
+                .validate()
+                .is_ok()
+        );
+        for bad in [
+            window(vec![], time!(07:00), time!(22:00)),
+            window(vec![0], time!(07:00), time!(22:00)),
+            window(vec![8], time!(07:00), time!(22:00)),
+            window(vec![1, 1], time!(07:00), time!(22:00)),
+            window(vec![1], time!(22:00), time!(07:00)),
+            window(vec![1], time!(07:00), time!(07:00)),
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_register_body_carries_no_server_owned_field() {
+        let body: ZaehlzeitRegisterUpsert = serde_json::from_value(serde_json::json!({
+            "bezeichnung": "HT", "zaehlerauspraegung": "HT", "valid_from": "2026-01-01",
+        }))
+        .expect("the three stated fields are a register");
+        assert_eq!(body.zaehlerauspraegung, Tarifzone::Ht);
+        assert_eq!(body.einheit, "KWH");
+        for key in ["id", "zaehler_id", "tenant", "updated_at"] {
+            let mut json = serde_json::json!({
+                "bezeichnung": "HT", "zaehlerauspraegung": "HT", "valid_from": "2026-01-01",
+            });
+            json[key] = serde_json::json!("x");
+            assert!(
+                serde_json::from_value::<ZaehlzeitRegisterUpsert>(json).is_err(),
+                "`{key}` is the server's, so a body naming it is refused"
+            );
+        }
+        let ended = ZaehlzeitRegisterUpsert {
+            valid_to: Some(date!(2026 - 01 - 01)),
+            ..body
+        };
+        assert!(
+            ended.validate().is_err(),
+            "valid_to on valid_from is an empty validity"
+        );
+    }
+}
+
 /// `"HH:MM:SS"` on the wire for a [`time::Time`], accepting `"HH:MM"` too.
 ///
 /// The default `time` serde impl emits a component array, which has bitten this
@@ -3575,20 +3784,17 @@ pub mod wall_clock {
 
     #[cfg(test)]
     mod tests {
-        use super::super::ZaehlzeitSaisonRecord;
+        use super::super::ZaehlzeitSaisonUpsert;
 
         #[test]
         fn a_window_round_trips_as_hh_mm_ss_not_a_component_array() {
             let json = serde_json::json!({
-                "id": "00000000-0000-0000-0000-000000000001",
-                "register_id": "00000000-0000-0000-0000-000000000002",
                 "saison": "WINTER",
                 "wochentage": [1, 2, 3, 4, 5],
                 "zeit_von": "07:00",
                 "zeit_bis": "22:00:00",
-                "updated_at": "2026-01-01T00:00:00Z",
             });
-            let rec: ZaehlzeitSaisonRecord =
+            let rec: ZaehlzeitSaisonUpsert =
                 serde_json::from_value(json).expect("HH:MM and HH:MM:SS both parse");
             assert_eq!(rec.zeit_von, time::macros::time!(07:00));
             assert_eq!(rec.zeit_bis, time::macros::time!(22:00));
@@ -3605,16 +3811,13 @@ pub mod wall_clock {
         fn a_nonsense_time_is_refused_rather_than_defaulted() {
             for bad in ["25:00", "07", "07:00:00:00", "seven"] {
                 let json = serde_json::json!({
-                    "id": "00000000-0000-0000-0000-000000000001",
-                    "register_id": "00000000-0000-0000-0000-000000000002",
                     "saison": "WINTER",
                     "wochentage": [1],
                     "zeit_von": bad,
                     "zeit_bis": "22:00",
-                    "updated_at": "2026-01-01T00:00:00Z",
                 });
                 assert!(
-                    serde_json::from_value::<ZaehlzeitSaisonRecord>(json).is_err(),
+                    serde_json::from_value::<ZaehlzeitSaisonUpsert>(json).is_err(),
                     "{bad:?} must not parse as a window boundary"
                 );
             }
@@ -3631,8 +3834,14 @@ pub mod wall_clock {
     reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
 )]
 pub trait ZaehlzeitRepository: Send + Sync {
-    /// Upsert a `ZaehlzeitRegister`.
-    async fn upsert_register(&self, rec: &ZaehlzeitRegisterRecord) -> Result<(), MdmError>;
+    /// Create or update the register of `zaehler_id` the body identifies, and
+    /// return it as stored.
+    async fn upsert_register(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+        body: &ZaehlzeitRegisterUpsert,
+    ) -> Result<ZaehlzeitRegisterRecord, MdmError>;
 
     /// Return all registers for a given `zaehler_id`.
     async fn list_registers_by_zaehler(
@@ -3641,8 +3850,17 @@ pub trait ZaehlzeitRepository: Send + Sync {
         tenant: &str,
     ) -> Result<Vec<ZaehlzeitRegisterRecord>, MdmError>;
 
-    /// Upsert a `ZaehlzeitSaison` for a given register.
-    async fn upsert_saison(&self, rec: &ZaehlzeitSaisonRecord) -> Result<(), MdmError>;
+    /// Create or update a window of `register_id`, which must be one of
+    /// `tenant`'s registers, and return it as stored.
+    ///
+    /// # Errors
+    /// [`MdmError::NotFound`] when `tenant` holds no register `register_id`.
+    async fn upsert_saison(
+        &self,
+        register_id: uuid::Uuid,
+        tenant: &str,
+        body: &ZaehlzeitSaisonUpsert,
+    ) -> Result<ZaehlzeitSaisonRecord, MdmError>;
 
     /// Return all `ZaehlzeitSaison` entries for a register.
     async fn list_saisons_by_register(

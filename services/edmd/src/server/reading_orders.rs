@@ -220,7 +220,7 @@ pub(crate) async fn get_reading_order(
 
     match row {
         Ok(Some(r)) => Json(r).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!("reading order {id} not found")).into_response(),
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -281,7 +281,9 @@ pub(crate) async fn complete_reading_order(
 
     let row = match res {
         Ok(Some(row)) => row,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return ApiError::not_found(format!("no open reading order {id}")).into_response();
+        }
         Err(e) => return ApiError::internal(e).into_response(),
     };
 
@@ -402,7 +404,9 @@ pub(crate) async fn cancel_reading_order(
     .await;
 
     match res {
-        Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
+        Ok(r) if r.rows_affected() == 0 => {
+            ApiError::not_found(format!("no open reading order {id}")).into_response()
+        }
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => ApiError::internal(e).into_response(),
     }
@@ -476,7 +480,9 @@ pub(crate) async fn fail_reading_order(
 
     let row = match row {
         Ok(Some(r)) => r,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return ApiError::not_found(format!("no open reading order {id}")).into_response();
+        }
         Err(e) => return ApiError::internal(e).into_response(),
     };
 

@@ -3,7 +3,7 @@
 //!
 //! Three tables here are keyed on an identifier the caller chooses — a
 //! `contract_id` in the request path, a `netzzugang_antraege.id` in the request
-//! body, a `zaehler_saisons.id` in the payload — and each key is unique across
+//! body, a `zaehler_register.id` in the request path — and each key is unique across
 //! the whole table rather than per tenant. An `ON CONFLICT … DO UPDATE` on such
 //! a key reaches another tenant's row, and no Cedar policy sees it: the check
 //! upstream compares the caller against the deployment's tenant, which the row
@@ -19,8 +19,8 @@
 use mako_markt::error::MdmError;
 use mako_markt::repository::{
     NbContractRecord, NbContractRepository as _, NetzzugangAktion, NetzzugangAntrag,
-    NetzzugangAntragTyp, NetzzugangStatus, ZaehlzeitRegisterRecord, ZaehlzeitRepository as _,
-    ZaehlzeitSaisonRecord,
+    NetzzugangAntragTyp, NetzzugangStatus, Saison, Tarifzone, ZaehlzeitRegisterUpsert,
+    ZaehlzeitRepository as _, ZaehlzeitSaisonUpsert,
 };
 use marktd::pg::{PgNbContractRepository, PgNetzzugangRepository, PgZaehlzeitRepository};
 use sqlx::PgPool;
@@ -186,41 +186,36 @@ async fn a_netzzugang_request_of_another_tenant_is_never_overwritten() {
 }
 
 async fn seed_register(pool: &PgPool, tenant: &str, zaehler_id: &str) -> Uuid {
-    let repo = PgZaehlzeitRepository::new(pool.clone());
-    let id = Uuid::new_v4();
-    repo.upsert_register(&ZaehlzeitRegisterRecord {
-        id,
-        zaehler_id: zaehler_id.to_owned(),
-        tenant: tenant.to_owned(),
-        bezeichnung: "HT".to_owned(),
-        zaehlerauspraegung: "HT".to_owned(),
-        obis_kennzahl: None,
-        einheit: "KWH".to_owned(),
-        valid_from: time::macros::date!(2026 - 01 - 01),
-        valid_to: None,
-        updated_at: time::OffsetDateTime::now_utc(),
-    })
-    .await
-    .expect("seed register");
-    id
+    PgZaehlzeitRepository::new(pool.clone())
+        .upsert_register(
+            zaehler_id,
+            tenant,
+            &ZaehlzeitRegisterUpsert {
+                bezeichnung: "HT".to_owned(),
+                zaehlerauspraegung: Tarifzone::Ht,
+                obis_kennzahl: None,
+                einheit: "KWH".to_owned(),
+                valid_from: time::macros::date!(2026 - 01 - 01),
+                valid_to: None,
+            },
+        )
+        .await
+        .expect("seed register")
+        .id
 }
 
-fn saison(id: Uuid, register_id: Uuid, von: time::Time) -> ZaehlzeitSaisonRecord {
-    ZaehlzeitSaisonRecord {
-        id,
-        register_id,
-        saison: "GESAMT".to_owned(),
+fn saison(von: time::Time, bis: time::Time) -> ZaehlzeitSaisonUpsert {
+    ZaehlzeitSaisonUpsert {
+        saison: Saison::Gesamt,
         wochentage: vec![1, 2, 3, 4, 5],
         zeit_von: von,
-        zeit_bis: time::macros::time!(22:00),
-        updated_at: time::OffsetDateTime::now_utc(),
+        zeit_bis: bis,
     }
 }
 
 /// `zaehler_saisons` carries no tenant column: it is scoped through its
 /// `zaehler_register` parent. A register id from another tenant's request path
-/// therefore lists nothing, and a season id cannot be moved onto a foreign
-/// register.
+/// therefore lists nothing and takes no window.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_season_window_is_scoped_through_its_register() {
@@ -229,10 +224,15 @@ async fn a_season_window_is_scoped_through_its_register() {
     };
     let repo = PgZaehlzeitRepository::new(pool.clone());
     let register_a = seed_register(&pool, TENANT_A, "Z-A").await;
-    let register_b = seed_register(&pool, TENANT_B, "Z-B").await;
+    seed_register(&pool, TENANT_B, "Z-B").await;
+    let (sieben, zehn, zweiundzwanzig) = (
+        time::macros::time!(07:00),
+        time::macros::time!(10:00),
+        time::macros::time!(22:00),
+    );
 
-    let window = Uuid::new_v4();
-    repo.upsert_saison(&saison(window, register_a, time::macros::time!(07:00)))
+    let stored = repo
+        .upsert_saison(register_a, TENANT_A, &saison(sieben, zweiundzwanzig))
         .await
         .expect("the owning tenant stores its window");
 
@@ -252,36 +252,33 @@ async fn a_season_window_is_scoped_through_its_register() {
         "a foreign tenant must not read another register's windows"
     );
 
-    // A caller-supplied id may not be moved onto a register it does not belong
-    // to — which is how a window of one tenant would land on another's meter.
+    // Nor write one: a window of tenant B would otherwise land on tenant A's
+    // meter and reclassify its readings.
     let err = repo
-        .upsert_saison(&saison(window, register_b, time::macros::time!(09:00)))
+        .upsert_saison(register_a, TENANT_B, &saison(zehn, zweiundzwanzig))
         .await
-        .expect_err("the window belongs to another register");
+        .expect_err("the register belongs to another tenant");
     assert!(
         matches!(err, MdmError::NotFound { .. }),
         "the refusal must name the register, got: {err}"
     );
+
+    // The same saison and zeit_von is the same window: updated, id kept.
+    let again = repo
+        .upsert_saison(register_a, TENANT_A, &saison(sieben, zehn))
+        .await
+        .expect("update");
+    assert_eq!(again.id, stored.id);
     let still = repo
         .list_saisons_by_register(register_a, TENANT_A)
         .await
         .expect("read back");
-    assert_eq!(still[0].zeit_von, time::macros::time!(07:00));
-    assert!(
-        repo.list_saisons_by_register(register_b, TENANT_B)
-            .await
-            .expect("read back")
-            .is_empty()
-    );
+    assert_eq!(still.len(), 1, "the refused write added nothing");
+    assert_eq!(still[0].zeit_bis, zehn);
 
-    // A season window whose register does not exist is refused, not stored
-    // orphaned.
+    // A window for a register nobody holds is refused, not stored orphaned.
     let err = repo
-        .upsert_saison(&saison(
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            time::macros::time!(10:00),
-        ))
+        .upsert_saison(Uuid::new_v4(), TENANT_A, &saison(zehn, zweiundzwanzig))
         .await
         .expect_err("no such register");
     assert!(matches!(err, MdmError::NotFound { .. }), "got: {err}");

@@ -763,8 +763,8 @@ pub fn build_app(
     trust_client_mp_id_header: bool,
 ) -> Router {
     let routes = router(handler)
-        // Innermost, so the handlers only ever see a request whose signature,
-        // when it carries one, verified.
+        // Innermost, so the handlers only ever see a request whose signature
+        // verified.
         .layer(axum::middleware::from_fn_with_state(
             max_body_bytes,
             content_signature_middleware,
@@ -818,7 +818,10 @@ pub const HEADER_BDEW_CERT: &str = "x-bdew-cert";
 ///   here; the mTLS-terminating proxy authenticates the caller.
 /// - The signed URI is rebuilt as `https://{Host}{path?query}`, the URL the
 ///   caller addressed through the proxy.
-/// - A request carrying no signature at all passes with a warning.
+/// - A request carrying no signature at all is refused with `401`: Kap. 3.3
+///   states „MUST Jede API-Interaktion und der übertragene Payload wird
+///   signiert", so an unsigned order is never one a counterparty sent under
+///   the Regelungen.
 pub async fn content_signature_middleware(
     axum::extract::State(max_body_bytes): axum::extract::State<usize>,
     request: axum::extract::Request,
@@ -838,11 +841,10 @@ pub async fn content_signature_middleware(
         one(HEADER_BDEW_CERT),
     ) {
         (Ok(None), Ok(None), Ok(None)) => {
-            tracing::warn!(
-                path = %request.uri().path(),
-                "API-Webdienste: inbound request carries no content signature"
-            );
-            return next.run(request).await;
+            return refuse(format!(
+                "{HEADER_BDEW_SIGNATURE}, {HEADER_BDEW_DIGEST} and {HEADER_BDEW_CERT} are \
+                 absent — every API-Webdienste interaction is signed"
+            ));
         }
         (Ok(Some(s)), Ok(Some(d)), Ok(Some(c))) => (s.to_owned(), d.to_owned(), c.to_owned()),
         (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {

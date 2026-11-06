@@ -445,6 +445,169 @@ fn extract_tariff_from_product_data(
         }
     }
 
+    let stated = |key: &str| product.and_then(|p| p.get(key));
+    // productd keeps the settings that are not prices in the product's
+    // `abrechnung`, typed and checked when the catalog was written.
+    let setting = |key: &str| {
+        product
+            .and_then(|p| p.get("abrechnung"))
+            .and_then(|a| a.get(key))
+            .filter(|v| !v.is_null())
+    };
+    // A tax treatment the catalog states, or nothing — then the category's own
+    // rule applies: `SOLAR` refuses (its Stromsteuer turns on the plant), every
+    // other supply is taxed at the Regelsatz. A stated value that does not
+    // parse refuses the product: billing it at either rate would substitute a
+    // treatment for the one the operator declared.
+    let tarif = |key: &'static str| -> crate::error::BillingResult<Option<serde_json::Value>> {
+        let Some(v) = setting(key) else {
+            return Ok(None);
+        };
+        let parsed = if key == "stromsteuer_tarif" {
+            serde_json::from_value::<energy_billing::StromsteuerTarif>(v.clone()).map(drop)
+        } else {
+            serde_json::from_value::<energy_billing::EnergiesteuerTarif>(v.clone()).map(drop)
+        };
+        parsed.map_err(|e| {
+            crate::error::BillingError::unprocessable(
+                "STEUERTARIF_UNLESBAR",
+                format!("the catalog's {key} is not one billingd can bill: {e}"),
+            )
+        })?;
+        Ok(Some(v.clone()))
+    };
+    let stromsteuer_tarif = tarif("stromsteuer_tarif")?;
+    if category == "SOLAR" && stromsteuer_tarif.is_none() {
+        return Err(crate::error::BillingError::unprocessable(
+            "SOLAR_STROMSTEUER_UNBESTIMMT",
+            "the SOLAR product states no stromsteuer_tarif. § 9 Abs. 1 Nr. 3 StromStG turns \
+             on the plant and on who supplies, so the catalog states it: \
+             {\"art\":\"KLEINANLAGE\", …} with the plant's facts, or {\"art\":\"REGEL\"}",
+        ));
+    }
+    let energiesteuer_tarif = tarif("energiesteuer_tarif")?;
+    let steuerentlastungen = setting("steuerentlastungen").and_then(|v| {
+        serde_json::from_value::<Vec<energy_billing::Steuerentlastung>>(v.clone()).ok()
+    });
+    let energiequellen = setting("energiequellen")
+        .and_then(|v| serde_json::from_value::<energy_billing::EnergieQuellen>(v.clone()).ok());
+    let gas_indexed_price = setting("gas_indexed_price")
+        .and_then(|v| serde_json::from_value::<energy_billing::IndexedPriceConfig>(v.clone()).ok());
+
+    // What the catalog's priced positions fill, keyed by the product field.
+    let mut priced = present(serde_json::json!({
+        "grundpreis_ct_per_day": grundpreis_ct_per_day,
+        "arbeitspreis_ct_per_kwh": arbeitspreis_ct_per_kwh,
+        "arbeitspreis_ht_ct_per_kwh": arbeitspreis_ht_ct_per_kwh,
+        "arbeitspreis_nt_ct_per_kwh": arbeitspreis_nt_ct_per_kwh,
+        "sect14a_modul1_pauschale_eur_per_year": sect14a_modul1_pauschale_eur_per_year,
+        "sect14a_steuerungsentschaedigung_eur_per_kw_year": sect14a_steuerungsentschaedigung_eur_per_kw_year,
+        "gas_grundpreis_ct_per_day": gas_grundpreis_ct_per_day,
+        "gas_arbeitspreis_ct_per_kwh_hs": gas_arbeitspreis_ct_per_kwh_hs,
+        "waerme_grundpreis_eur_per_month": waerme_grundpreis_eur_per_month,
+        "waerme_arbeitspreis_ct_per_kwh": waerme_arbeitspreis_ct_per_kwh,
+        "waerme_leistungspreis_eur_per_kw_month": waerme_leistungspreis_eur_per_kw_month,
+        "solar_arbeitspreis_ct_per_kwh": solar_arbeitspreis_ct_per_kwh,
+        "grundversorgung_arbeitspreis_ct_per_kwh": grundversorgung_arbeitspreis_ct_per_kwh
+            .or_else(|| get_decimal("grundversorgung_arbeitspreis_ct_per_kwh")),
+        "gemeinschaft_rabatt_ct_per_kwh": gemeinschaft_rabatt_ct_per_kwh,
+        "eeg_verguetungssatz_ct_per_kwh": eeg_verguetungssatz_ct_per_kwh,
+        "eeg_marktpraemie_ct_per_kwh": eeg_marktpraemie_ct_per_kwh,
+        "eeg_managementpraemie_ct_per_kwh": eeg_managementpraemie_ct_per_kwh,
+        "kwkg_zuschlag_ct_per_kwh": kwkg_zuschlag_ct_per_kwh,
+        "marktwert_ct_per_kwh": marktwert_ct_per_kwh,
+        "vermarktungsgebuehr_ct_per_kwh": vermarktungsgebuehr_ct_per_kwh,
+        "hems_subscription_eur_per_month": get_decimal("hems_subscription_eur_per_month")
+            .or(hems_subscription_eur_per_month_from_code),
+        "hems_optimization_event_eur": hems_optimization_event_eur,
+        "hems_readout_event_eur": hems_readout_event_eur,
+        "emobility_service_fee_eur": get_decimal("emobility_service_fee_eur")
+            .or(emobility_service_fee_eur_from_code),
+        "emobility_kwh_price_ct": get_decimal("emobility_kwh_price_ct")
+            .or(emobility_kwh_price_ct_from_code),
+        "emobility_session_fee_eur": emobility_session_fee_eur,
+        "emobility_roaming_fee_eur": emobility_roaming_fee_eur,
+        "service_fee_eur": service_fee_eur,
+        "service_event_price_eur": service_event_price_eur,
+    }));
+    // What the catalog states outright: product metadata and typed `data` keys.
+    let mut rest = present(serde_json::json!({
+        "product_code": stated("product_code").and_then(|v| v.as_str()),
+        "register_count": register_count,
+        "leistungspreis_strom_ct_per_kw_month": get_decimal("leistungspreis_strom_ct_per_kw_month"),
+        "sect14a_modul2_nne_reduktion_ct_per_kwh": get_decimal("sect14a_modul2_nne_reduktion_ct_per_kwh"),
+        "sect14a_steuerungsentschaedigung_ct_per_kwh": get_decimal("sect14a_steuerungsentschaedigung_ct_per_kwh"),
+        "gas_leistungspreis_ct_per_kw_month": get_decimal("gas_leistungspreis_ct_per_kw_month"),
+        "gas_indexed_price": gas_indexed_price,
+        "energiesteuer_tarif": energiesteuer_tarif,
+        "waerme_leistungspreis_eur_per_kw_year": get_decimal("waerme_leistungspreis_eur_per_kw_year"),
+        "waerme_erneuerbar_anteil_pct": get_decimal("waerme_erneuerbar_anteil_pct"),
+        "waerme_co2_kosten_ct_per_kwh": get_decimal("waerme_co2_kosten_ct_per_kwh"),
+        "waerme_co2_emission_g_per_kwh": get_decimal("waerme_co2_emission_g_per_kwh"),
+        "dynamic_epex": dynamic_epex,
+        "dynamic_epex_floor_ct_kwh": get_decimal("dynamic_epex_floor_ct_kwh"),
+        "dynamic_epex_cap_ct_kwh": get_decimal("dynamic_epex_cap_ct_kwh"),
+        "dynamic_aufschlag_ct_per_kwh": get_decimal("dynamic_aufschlag_ct_per_kwh"),
+        "dynamic_price_source": stated("dyn_source").and_then(|v| v.as_str()),
+        "auf_abschlag_ct_per_kwh": get_decimal("auf_abschlag_ct_per_kwh"),
+        "auf_abschlag_eur_per_month": get_decimal("auf_abschlag_eur_per_month"),
+        "msb_gebuehr_ct_per_day": get_decimal("msb_gebuehr_ct_per_day"),
+        "block_tiers": setting("block_tiers"),
+        "minimum_invoice_eur_brutto": get_decimal("minimum_invoice_eur_brutto"),
+        "indexed_price": setting("indexed_price"),
+        "seasonal_prices": setting("seasonal_prices"),
+        "anlage_kwp": get_decimal("anlage_kwp"),
+        "stromsteuer_tarif": stromsteuer_tarif,
+        "steuerentlastungen": steuerentlastungen,
+        "preisgarantie_bis": setting("preisgarantie_bis").and_then(|v| v.as_str()),
+        "stromsteuer_ct_per_kwh_override": get_decimal("stromsteuer_ct_per_kwh_override"),
+        "energiesteuer_gas_ct_per_kwh_override": get_decimal("energiesteuer_gas_ct_per_kwh_override"),
+        "behg_gas_ct_per_kwh_override": get_decimal("behg_gas_ct_per_kwh_override"),
+        "mwst_rate_override": get_decimal("mwst_rate_override"),
+        "sharing_credit_ct_per_kwh": get_decimal("sharing_credit_ct_per_kwh"),
+        "sharing_description": setting("sharing_description").and_then(|v| v.as_str()),
+        "energiequellen": energiequellen,
+    }));
+
+    // Each category is given its own fields and no other, so its variant can
+    // refuse an unknown key — a misspelt one included.
+    let mut take = |keys: &[&str]| {
+        let mut out = serde_json::Map::new();
+        for &k in keys {
+            if let Some(v) = priced.remove(k).or_else(|| rest.remove(k)) {
+                out.insert(k.to_owned(), v);
+            }
+        }
+        out
+    };
+    let mut body = match category.as_str() {
+        "WAERMEPUMPE" | "WALLBOX" => {
+            let strom = take(STROM_FIELDS);
+            let mut body = take(SECT14A_FIELDS);
+            body.insert("strom".to_owned(), strom.into());
+            body
+        }
+        "SHARING" => {
+            let strom = take(STROM_FIELDS);
+            let mut body = take(SHARING_FIELDS);
+            body.insert("strom".to_owned(), strom.into());
+            body
+        }
+        "GAS" => take(GAS_FIELDS),
+        "WAERME" => take(WAERME_FIELDS),
+        "WASSER" => take(WASSER_FIELDS),
+        "SOLAR" => take(SOLAR_FIELDS),
+        "EEG" => take(EEG_FIELDS),
+        "EINSPEISUNG" => take(EINSPEISUNG_FIELDS),
+        "HEMS" => take(HEMS_FIELDS),
+        "EMOBILITY" => take(EMOBILITY_FIELDS),
+        "ENERGIEDIENSTLEISTUNG" => take(SERVICE_FIELDS),
+        _ => take(STROM_FIELDS),
+    };
+    body.insert("category".to_owned(), category.clone().into());
+    // A priced position this category has no field for bills nothing.
+    dropped.extend(priced.keys().map(|k| format!("{k} (no {category} field)")));
+
     if !dropped.is_empty() {
         tracing::warn!(
             category = %category,
@@ -459,113 +622,137 @@ fn extract_tariff_from_product_data(
         );
     }
 
-    let gas_indexed_price: Option<energy_billing::IndexedPriceConfig> = product
-        .and_then(|p| p.get("gas_indexed_price"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
-    // How the Stromsteuer applies, and which Entlastungen the customer may
-    // claim afterwards. Both are pass-through of what the catalog states — an
-    // unparseable value falls back to "taxed at the standard rate", never to a
-    // silent exemption (see `energy_billing::steuer`).
-    let stromsteuer_tarif: energy_billing::StromsteuerTarif = product
-        .and_then(|p| p.get("stromsteuer_tarif"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    let energiesteuer_tarif: energy_billing::EnergiesteuerTarif = product
-        .and_then(|p| p.get("energiesteuer_tarif"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    let steuerentlastungen: Vec<energy_billing::Steuerentlastung> = product
-        .and_then(|p| p.get("steuerentlastungen"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    let energiequellen: Option<energy_billing::EnergieQuellen> = product
-        .and_then(|p| p.get("energiequellen"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
-
-    // Build a flat JSON map and deserialize to the typed Product enum.
-    // Product uses #[serde(tag = "category")] so the flat map works directly.
-    let flat = serde_json::json!({
-        "category": category,
-        "product_code": product.and_then(|p| p.get("product_code")).and_then(|v| v.as_str()),
-        "register_count": register_count,
-        "grundpreis_ct_per_day": grundpreis_ct_per_day,
-        "arbeitspreis_ct_per_kwh": arbeitspreis_ct_per_kwh,
-        "arbeitspreis_ht_ct_per_kwh": arbeitspreis_ht_ct_per_kwh,
-        "arbeitspreis_nt_ct_per_kwh": arbeitspreis_nt_ct_per_kwh,
-        "leistungspreis_strom_ct_per_kw_month": get_decimal("leistungspreis_strom_ct_per_kw_month"),
-        "sect14a_modul2_nne_reduktion_ct_per_kwh": get_decimal("sect14a_modul2_nne_reduktion_ct_per_kwh"),
-        "sect14a_steuerungsentschaedigung_ct_per_kwh": get_decimal("sect14a_steuerungsentschaedigung_ct_per_kwh"),
-        "sect14a_modul1_pauschale_eur_per_year": sect14a_modul1_pauschale_eur_per_year,
-        "sect14a_steuerungsentschaedigung_eur_per_kw_year": sect14a_steuerungsentschaedigung_eur_per_kw_year,
-        "gas_grundpreis_ct_per_day": gas_grundpreis_ct_per_day,
-        "gas_arbeitspreis_ct_per_kwh_hs": gas_arbeitspreis_ct_per_kwh_hs,
-        "gas_leistungspreis_ct_per_kw_month": get_decimal("gas_leistungspreis_ct_per_kw_month"),
-        "gas_indexed_price": gas_indexed_price,
-        "energiesteuer_tarif": energiesteuer_tarif,
-        "waerme_grundpreis_eur_per_month": waerme_grundpreis_eur_per_month,
-        "waerme_arbeitspreis_ct_per_kwh": waerme_arbeitspreis_ct_per_kwh,
-        "waerme_leistungspreis_eur_per_kw_month": waerme_leistungspreis_eur_per_kw_month,
-        "waerme_leistungspreis_eur_per_kw_year": get_decimal("waerme_leistungspreis_eur_per_kw_year"),
-        "waerme_erneuerbar_anteil_pct": get_decimal("waerme_erneuerbar_anteil_pct"),
-        "waerme_co2_kosten_ct_per_kwh": get_decimal("waerme_co2_kosten_ct_per_kwh"),
-        "waerme_co2_emission_g_per_kwh": get_decimal("waerme_co2_emission_g_per_kwh"),
-        "solar_arbeitspreis_ct_per_kwh": solar_arbeitspreis_ct_per_kwh,
-        "grundversorgung_arbeitspreis_ct_per_kwh": grundversorgung_arbeitspreis_ct_per_kwh
-            .or_else(|| get_decimal("grundversorgung_arbeitspreis_ct_per_kwh")),
-        "gemeinschaft_rabatt_ct_per_kwh": gemeinschaft_rabatt_ct_per_kwh,
-        // § 9 StromStG treatment of the solar supply. Absent, the engine
-        // defaults to the § 9 Abs. 1 Nr. 3 Kleinanlage-Befreiung — what a
-        // rooftop Mieterstrom or GGV supply is — and states the ground on the
-        // invoice. A catalog product that does not qualify sets REGEL.
-        "stromsteuer_tarif": product
-            .and_then(|p| p.get("stromsteuer_tarif"))
-            .cloned(),
-        "eeg_verguetungssatz_ct_per_kwh": eeg_verguetungssatz_ct_per_kwh,
-        "eeg_marktpraemie_ct_per_kwh": eeg_marktpraemie_ct_per_kwh,
-        "eeg_managementpraemie_ct_per_kwh": eeg_managementpraemie_ct_per_kwh,
-        "kwkg_zuschlag_ct_per_kwh": kwkg_zuschlag_ct_per_kwh,
-        "marktwert_ct_per_kwh": marktwert_ct_per_kwh,
-        "vermarktungsgebuehr_ct_per_kwh": vermarktungsgebuehr_ct_per_kwh,
-        "hems_subscription_eur_per_month": get_decimal("hems_subscription_eur_per_month").or(hems_subscription_eur_per_month_from_code),
-        "hems_optimization_event_eur": hems_optimization_event_eur,
-        "hems_readout_event_eur": hems_readout_event_eur,
-        "emobility_service_fee_eur": get_decimal("emobility_service_fee_eur").or(emobility_service_fee_eur_from_code),
-        "emobility_kwh_price_ct": get_decimal("emobility_kwh_price_ct").or(emobility_kwh_price_ct_from_code),
-        "emobility_session_fee_eur": emobility_session_fee_eur,
-        "emobility_roaming_fee_eur": emobility_roaming_fee_eur,
-        "service_fee_eur": service_fee_eur,
-        "service_event_price_eur": service_event_price_eur,
-        "dynamic_epex": dynamic_epex,
-        "dynamic_epex_floor_ct_kwh": get_decimal("dynamic_epex_floor_ct_kwh"),
-        "dynamic_epex_cap_ct_kwh": get_decimal("dynamic_epex_cap_ct_kwh"),
-        "dynamic_aufschlag_ct_per_kwh": get_decimal("dynamic_aufschlag_ct_per_kwh"),
-        "dynamic_price_source": product.and_then(|p| p.get("dyn_source")).and_then(|v| v.as_str()),
-        "auf_abschlag_ct_per_kwh": get_decimal("auf_abschlag_ct_per_kwh"),
-        "auf_abschlag_eur_per_month": get_decimal("auf_abschlag_eur_per_month"),
-        "msb_gebuehr_ct_per_day": get_decimal("msb_gebuehr_ct_per_day"),
-        "block_tiers": product.and_then(|p| p.get("block_tiers")).cloned(),
-        "minimum_invoice_eur_brutto": get_decimal("minimum_invoice_eur_brutto"),
-        "indexed_price": product.and_then(|p| p.get("indexed_price")).cloned(),
-        "seasonal_prices": product.and_then(|p| p.get("seasonal_prices")).cloned(),
-        "anlage_kwp": get_decimal("anlage_kwp"),
-        "stromsteuer_tarif": stromsteuer_tarif,
-        "steuerentlastungen": steuerentlastungen,
-        "preisgarantie_bis": product.and_then(|p| p.get("preisgarantie_bis")).and_then(|v| v.as_str()),
-        "stromsteuer_ct_per_kwh_override": get_decimal("stromsteuer_ct_per_kwh_override"),
-        "energiesteuer_gas_ct_per_kwh_override": get_decimal("energiesteuer_gas_ct_per_kwh_override"),
-        "behg_gas_ct_per_kwh_override": get_decimal("behg_gas_ct_per_kwh_override"),
-        "mwst_rate_override": get_decimal("mwst_rate_override"),
-        "sharing_credit_ct_per_kwh": get_decimal("sharing_credit_ct_per_kwh"),
-        "sharing_description": product.and_then(|p| p.get("sharing_description")).and_then(|v| v.as_str()),
-        "energiequellen": energiequellen,
-    });
-    serde_json::from_value::<Product>(flat).map_err(|e| {
+    serde_json::from_value::<Product>(body.into()).map_err(|e| {
         crate::error::BillingError::upstream(
             "productd",
             format!("product deserialization from productd JSONB: {e}"),
         )
     })
 }
+
+/// The non-null members of a JSON object.
+fn present(v: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    match v {
+        serde_json::Value::Object(m) => m.into_iter().filter(|(_, v)| !v.is_null()).collect(),
+        _ => serde_json::Map::new(),
+    }
+}
+
+// The fields of each `energy_billing::Product` variant that the catalog fills.
+// A field outside its category's list never reaches that variant, which
+// refuses unknown keys.
+const STROM_FIELDS: &[&str] = &[
+    "product_code",
+    "grundpreis_ct_per_day",
+    "arbeitspreis_ct_per_kwh",
+    "arbeitspreis_ht_ct_per_kwh",
+    "arbeitspreis_nt_ct_per_kwh",
+    "register_count",
+    "leistungspreis_strom_ct_per_kw_month",
+    "block_tiers",
+    "indexed_price",
+    "seasonal_prices",
+    "dynamic_epex",
+    "dynamic_epex_floor_ct_kwh",
+    "dynamic_epex_cap_ct_kwh",
+    "dynamic_aufschlag_ct_per_kwh",
+    "dynamic_price_source",
+    "auf_abschlag_ct_per_kwh",
+    "auf_abschlag_eur_per_month",
+    "msb_gebuehr_ct_per_day",
+    "stromsteuer_tarif",
+    "steuerentlastungen",
+    "mwst_rate_override",
+    "stromsteuer_ct_per_kwh_override",
+    "preisgarantie_bis",
+    "minimum_invoice_eur_brutto",
+    "anlage_kwp",
+    "energiequellen",
+];
+const SECT14A_FIELDS: &[&str] = &[
+    "sect14a_modul2_nne_reduktion_ct_per_kwh",
+    "sect14a_steuerungsentschaedigung_ct_per_kwh",
+    "sect14a_modul1_pauschale_eur_per_year",
+    "sect14a_steuerungsentschaedigung_eur_per_kw_year",
+];
+const SHARING_FIELDS: &[&str] = &["sharing_credit_ct_per_kwh", "sharing_description"];
+const GAS_FIELDS: &[&str] = &[
+    "product_code",
+    "gas_grundpreis_ct_per_day",
+    "gas_arbeitspreis_ct_per_kwh_hs",
+    "gas_leistungspreis_ct_per_kw_month",
+    "gas_indexed_price",
+    "seasonal_prices",
+    "energiesteuer_tarif",
+    "steuerentlastungen",
+    "auf_abschlag_ct_per_kwh",
+    "auf_abschlag_eur_per_month",
+    "mwst_rate_override",
+    "energiesteuer_gas_ct_per_kwh_override",
+    "behg_gas_ct_per_kwh_override",
+    "preisgarantie_bis",
+    "minimum_invoice_eur_brutto",
+];
+const WAERME_FIELDS: &[&str] = &[
+    "product_code",
+    "waerme_grundpreis_eur_per_month",
+    "waerme_leistungspreis_eur_per_kw_year",
+    "waerme_leistungspreis_eur_per_kw_month",
+    "waerme_arbeitspreis_ct_per_kwh",
+    "waerme_erneuerbar_anteil_pct",
+    "waerme_co2_kosten_ct_per_kwh",
+    "waerme_co2_emission_g_per_kwh",
+    "mwst_rate_override",
+    "minimum_invoice_eur_brutto",
+];
+const WASSER_FIELDS: &[&str] = &["product_code", "mwst_rate_override"];
+const SOLAR_FIELDS: &[&str] = &[
+    "product_code",
+    "solar_arbeitspreis_ct_per_kwh",
+    "arbeitspreis_ct_per_kwh",
+    "grundversorgung_arbeitspreis_ct_per_kwh",
+    "gemeinschaft_rabatt_ct_per_kwh",
+    "stromsteuer_tarif",
+    "anlage_kwp",
+    "mwst_rate_override",
+    "minimum_invoice_eur_brutto",
+];
+const EEG_FIELDS: &[&str] = &[
+    "product_code",
+    "eeg_verguetungssatz_ct_per_kwh",
+    "eeg_marktpraemie_ct_per_kwh",
+    "eeg_managementpraemie_ct_per_kwh",
+    "kwkg_zuschlag_ct_per_kwh",
+    "anlage_kwp",
+    "mwst_rate_override",
+];
+const EINSPEISUNG_FIELDS: &[&str] = &[
+    "product_code",
+    "marktwert_ct_per_kwh",
+    "vermarktungsgebuehr_ct_per_kwh",
+    "mwst_rate_override",
+];
+const HEMS_FIELDS: &[&str] = &[
+    "product_code",
+    "hems_subscription_eur_per_month",
+    "hems_optimization_event_eur",
+    "hems_readout_event_eur",
+    "mwst_rate_override",
+];
+const EMOBILITY_FIELDS: &[&str] = &[
+    "product_code",
+    "emobility_service_fee_eur",
+    "emobility_kwh_price_ct",
+    "emobility_session_fee_eur",
+    "emobility_roaming_fee_eur",
+    "mwst_rate_override",
+];
+const SERVICE_FIELDS: &[&str] = &[
+    "product_code",
+    "service_fee_eur",
+    "service_event_price_eur",
+    "mwst_rate_override",
+];
 
 /// The price of the Preisstaffel that applies at `menge`.
 ///
@@ -1726,7 +1913,11 @@ mod vertragsart_tests {
         jahresverbrauch_kwh: Option<rust_decimal::Decimal>,
     ) -> crate::error::BillingResult<Product> {
         let data = serde_json::json!({ "tarifpreise": tarifpreise });
-        let product = serde_json::json!({ "product_code": "P-TIER", "category": category });
+        let mut product = serde_json::json!({ "product_code": "P-TIER", "category": category });
+        // A SOLAR product states its Stromsteuer; these tests are about prices.
+        if category == "SOLAR" {
+            product["abrechnung"] = serde_json::json!({ "stromsteuer_tarif": { "art": "REGEL" } });
+        }
         extract_tariff_from_product_data(Some(&data), Some(&product), jahresverbrauch_kwh)
     }
 
@@ -1741,6 +1932,81 @@ mod vertragsart_tests {
     }
 
     /// The contract's annual consumption picks the tier.
+    fn position(preistyp: &str, preis: &str) -> serde_json::Value {
+        serde_json::json!({ "preistyp": preistyp, "preisstaffeln": [{ "preis": preis }] })
+    }
+
+    /// A § 14a product reads its supply's prices under `strom`, so the variant
+    /// refuses a key it does not define instead of dropping it.
+    #[test]
+    fn a_controllable_load_carries_its_supply_under_strom() {
+        for category in ["WAERMEPUMPE", "WALLBOX"] {
+            let p = map(
+                serde_json::json!([
+                    position("ARBEITSPREIS_EINTARIF", "21.5"),
+                    position("STEUERUNGSRABATT_MODUL1", "110"),
+                ]),
+                category,
+            )
+            .unwrap_or_else(|e| panic!("{category} maps: {e}"));
+            let (Product::Waermepumpe(c) | Product::Wallbox(c)) = p else {
+                panic!("{category} maps to a controllable load");
+            };
+            assert_eq!(c.base.arbeitspreis_ct_per_kwh, Some(dec!(21.5)));
+            assert_eq!(c.sect14a_modul1_pauschale_eur_per_year, Some(dec!(110)));
+        }
+    }
+
+    /// A SOLAR catalog entry that states no Stromsteuer treatment is refused,
+    /// a malformed one too, and a stated one is passed as stated.
+    #[test]
+    fn solar_takes_the_stromsteuer_the_catalog_states_and_refuses_none() {
+        let data = serde_json::json!({ "tarifpreise": [position("SOLAR_ARBEITSPREIS", "25")] });
+        let unstated = serde_json::json!({ "product_code": "SOLAR-?", "category": "SOLAR" });
+        let err = extract_tariff_from_product_data(Some(&data), Some(&unstated), None)
+            .expect_err("no treatment is right for every SOLAR supply");
+        assert!(
+            format!("{err:?}").contains("SOLAR_STROMSTEUER_UNBESTIMMT"),
+            "{err:?}"
+        );
+        let typo = serde_json::json!({
+            "product_code": "SOLAR-X", "category": "SOLAR",
+            "abrechnung": { "stromsteuer_tarif": { "art": "KLEINANLAGE", "energietraeger": "SONNE" } },
+        });
+        let err = extract_tariff_from_product_data(Some(&data), Some(&typo), None)
+            .expect_err("a malformed claim is not billed at any rate");
+        assert!(err.to_string().contains("stromsteuer_tarif"), "{err}");
+
+        let product = serde_json::json!({
+            "product_code": "SOLAR-REGEL", "category": "SOLAR",
+            "abrechnung": { "stromsteuer_tarif": { "art": "REGEL" } },
+        });
+        let Product::Solar(solar) =
+            extract_tariff_from_product_data(Some(&data), Some(&product), None).expect("maps")
+        else {
+            panic!("a SOLAR entry maps to Product::Solar")
+        };
+        assert_eq!(
+            solar.stromsteuer_tarif,
+            energy_billing::StromsteuerTarif::Regel
+        );
+    }
+
+    /// A position the category has no field for is not handed to a variant
+    /// that would refuse the whole product for it.
+    #[test]
+    fn a_position_outside_its_category_does_not_refuse_the_product() {
+        let p = map(
+            serde_json::json!([
+                position("SOLAR_ARBEITSPREIS", "25"),
+                position("GRUNDPREIS", "12"),
+            ]),
+            "SOLAR",
+        )
+        .expect("a SOLAR product with a Grundpreis position still maps");
+        assert!(matches!(p, Product::Solar(_)));
+    }
+
     #[test]
     fn a_tiered_position_bills_at_the_tier_the_year_falls_in() {
         for (jahr, expected) in [(dec!(3500), dec!(25.00)), (dec!(20000), dec!(22.00))] {

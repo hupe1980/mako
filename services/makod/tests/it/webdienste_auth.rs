@@ -165,7 +165,7 @@ permit(
         true,
     );
     let res = app
-        .oneshot(post(Some("s3cret")))
+        .oneshot(crate::support::webdienste_signed(post(Some("s3cret"))).await)
         .await
         .expect("service call");
     assert!(
@@ -184,7 +184,10 @@ permit(
 #[tokio::test]
 async fn the_opt_out_removes_the_layer() {
     let app = webdienste::build_app(handler().await, None, 1024 * 1024, true);
-    let res = app.oneshot(post(None)).await.expect("service call");
+    let res = app
+        .oneshot(crate::support::webdienste_signed(post(None)).await)
+        .await
+        .expect("service call");
     assert_ne!(
         res.status(),
         StatusCode::UNAUTHORIZED,
@@ -219,14 +222,17 @@ async fn a_control_order_without_a_caller_mp_id_is_refused() {
     );
     let res = app
         .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(CONTROL_URI)
-                .header("authorization", "Bearer s3cret")
-                .header("transactionId", "tx-identity-1")
-                .header("creationDateTime", "2026-08-18T10:00:00Z")
-                .body(Body::empty())
-                .expect("request"),
+            crate::support::webdienste_signed(
+                Request::builder()
+                    .method("POST")
+                    .uri(CONTROL_URI)
+                    .header("authorization", "Bearer s3cret")
+                    .header("transactionId", "tx-identity-1")
+                    .header("creationDateTime", "2026-08-18T10:00:00Z")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await,
         )
         .await
         .expect("service call");
@@ -263,15 +269,18 @@ async fn a_control_order_with_a_caller_mp_id_passes_the_identity_gate() {
     );
     let res = app
         .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(CONTROL_URI)
-                .header("authorization", "Bearer s3cret")
-                .header("transactionId", "tx-identity-2")
-                .header("creationDateTime", "2026-08-18T10:00:00Z")
-                .header(webdienste::CLIENT_MP_ID_HEADER, "9900001000002")
-                .body(Body::empty())
-                .expect("request"),
+            crate::support::webdienste_signed(
+                Request::builder()
+                    .method("POST")
+                    .uri(CONTROL_URI)
+                    .header("authorization", "Bearer s3cret")
+                    .header("transactionId", "tx-identity-2")
+                    .header("creationDateTime", "2026-08-18T10:00:00Z")
+                    .header(webdienste::CLIENT_MP_ID_HEADER, "9900001000002")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await,
         )
         .await
         .expect("service call");
@@ -333,7 +342,10 @@ async fn wim_app() -> axum::Router {
 async fn a_wim_anmeldung_naming_another_netzbetreiber_is_refused() {
     let res = wim_app()
         .await
-        .oneshot(wim_anmeldung(Some("9900009000009"), "tx-wim-spoof"))
+        .oneshot(
+            crate::support::webdienste_signed(wim_anmeldung(Some("9900009000009"), "tx-wim-spoof"))
+                .await,
+        )
         .await
         .expect("service call");
     assert_eq!(
@@ -349,7 +361,7 @@ async fn a_wim_anmeldung_naming_another_netzbetreiber_is_refused() {
 async fn a_wim_anmeldung_without_a_caller_mp_id_is_refused() {
     let res = wim_app()
         .await
-        .oneshot(wim_anmeldung(None, "tx-wim-anon"))
+        .oneshot(crate::support::webdienste_signed(wim_anmeldung(None, "tx-wim-anon")).await)
         .await
         .expect("service call");
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
@@ -369,7 +381,10 @@ async fn a_wim_anmeldung_without_a_caller_mp_id_is_refused() {
 async fn a_wim_anmeldung_from_the_named_netzbetreiber_is_accepted() {
     let res = wim_app()
         .await
-        .oneshot(wim_anmeldung(Some("9900001000002"), "tx-wim-ok"))
+        .oneshot(
+            crate::support::webdienste_signed(wim_anmeldung(Some("9900001000002"), "tx-wim-ok"))
+                .await,
+        )
         .await
         .expect("service call");
     assert_eq!(res.status(), StatusCode::ACCEPTED);
@@ -394,15 +409,18 @@ async fn an_undeclared_deployment_ignores_the_caller_identity_header() {
     );
     let res = app
         .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(CONTROL_URI)
-                .header("authorization", "Bearer s3cret")
-                .header("transactionId", "tx-untrusted-1")
-                .header("creationDateTime", "2026-08-18T10:00:00Z")
-                .header(webdienste::CLIENT_MP_ID_HEADER, "9900001000002")
-                .body(Body::empty())
-                .expect("request"),
+            crate::support::webdienste_signed(
+                Request::builder()
+                    .method("POST")
+                    .uri(CONTROL_URI)
+                    .header("authorization", "Bearer s3cret")
+                    .header("transactionId", "tx-untrusted-1")
+                    .header("creationDateTime", "2026-08-18T10:00:00Z")
+                    .header(webdienste::CLIENT_MP_ID_HEADER, "9900001000002")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await,
         )
         .await
         .expect("service call");
@@ -431,16 +449,19 @@ async fn a_repeated_caller_identity_header_is_refused() {
     );
     let res = app
         .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(CONTROL_URI)
-                .header("authorization", "Bearer s3cret")
-                .header("transactionId", "tx-dup-1")
-                .header("creationDateTime", "2026-08-18T10:00:00Z")
-                .header(webdienste::CLIENT_MP_ID_HEADER, "9900001000002")
-                .header(webdienste::CLIENT_MP_ID_HEADER, "9900357000004")
-                .body(Body::empty())
-                .expect("request"),
+            crate::support::webdienste_signed(
+                Request::builder()
+                    .method("POST")
+                    .uri(CONTROL_URI)
+                    .header("authorization", "Bearer s3cret")
+                    .header("transactionId", "tx-dup-1")
+                    .header("creationDateTime", "2026-08-18T10:00:00Z")
+                    .header(webdienste::CLIENT_MP_ID_HEADER, "9900001000002")
+                    .header(webdienste::CLIENT_MP_ID_HEADER, "9900357000004")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await,
         )
         .await
         .expect("service call");

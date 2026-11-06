@@ -206,6 +206,14 @@ The worklist itself is agentplane's operator surface, mounted at
 | `GET /push` · `POST /push/rearm` | Which receivers stopped acknowledging, and resume one |
 | `POST /events` | This message arrived; wake whoever wanted it |
 
+The Desk puts the same oversight in front of operators in two places. A
+triage row is a **Hinweis** under the MaLo, MeLo or process it names
+(`GET /api/v1/hinweise`). A question is a `desk-assistant` run (**Fragen**) that
+reads and never acts: a proposed decision only fills the Desk's form, and the
+person sends it. Each answer and Hinweis takes a „Hilfreich?" verdict, and a
+proposal records whether it was sent, edited or dismissed
+(`POST /api/v1/runs/{run}/bewertung`).
+
 Controls on that surface:
 
 - **An approval may carry an `amendment`, and it is the call** — labelled

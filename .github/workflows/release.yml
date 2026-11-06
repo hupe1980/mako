@@ -988,7 +988,9 @@ jobs:
           push-to-registry: true
 
       # The binary an operator copies out of the image is byte-identical to the
-      # one extracted here, so its attestation verifies against that copy.
+      # one extracted here, so its attestation verifies against that copy. The
+      # Desk ships no binary: its artefact is the static bundle nginx serves,
+      # extracted as one tarball per platform.
       - name: Extract the binaries
         run: |
           set -euo pipefail
@@ -997,7 +999,11 @@ jobs:
             digest=$(cat "/tmp/digests/${arch}/${{ matrix.service }}")
             ctr=$(docker create --platform "linux/${arch}" \
                     "ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}@sha256:${digest}")
-            docker cp "${ctr}:/usr/local/bin/${{ matrix.service }}" "bin/${{ matrix.service }}-linux-${arch}"
+            if [ "${{ matrix.service }}" = desk ]; then
+              docker cp "${ctr}:/usr/share/nginx/html" - > "bin/desk-linux-${arch}.tar"
+            else
+              docker cp "${ctr}:/usr/local/bin/${{ matrix.service }}" "bin/${{ matrix.service }}-linux-${arch}"
+            fi
             docker rm "$ctr" > /dev/null
           done
           sha256sum bin/*
@@ -1007,6 +1013,7 @@ jobs:
       # change to the Dockerfile that bypasses the builder check still fails
       # the release.
       - name: Every binary carries its dependency manifest
+        if: matrix.service != 'desk'
         run: |
           set -euo pipefail
           cargo install --locked rust-audit-info@0.5.4

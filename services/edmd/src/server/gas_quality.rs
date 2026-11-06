@@ -91,9 +91,9 @@ pub(crate) async fn get_gas_quality(
                 .into_response()
             }
         }
-        Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: get_gas_quality failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => ApiError::internal(
+            anyhow::Error::from(e).context(format!("get_gas_quality failed (malo_id {malo_id})")),
+        )
+        .into_response(),
     }
 }

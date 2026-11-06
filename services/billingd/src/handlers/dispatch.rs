@@ -1142,7 +1142,7 @@ mod leg_summary_tests {
         let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "GAS",
             "product_code": "GAS-BASIS",
-            "arbeitspreis_ct_per_kwh": "9",
+            "gas_arbeitspreis_ct_per_kwh_hs": "9",
         }))
         .expect("a minimal GAS product");
         TariffLeg {

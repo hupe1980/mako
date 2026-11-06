@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearch } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button as AriaButton,
   GridList,
@@ -12,15 +12,19 @@ import {
   TextField,
 } from "react-aria-components";
 import { DIENST, nichtErreichbar } from "../app/dienste";
+import { ABLEHNEN, FREIGEBEN, NAECHSTE, VORIGE } from "../app/keys";
 import { ROLLEN, useRolle } from "../app/rollen";
 import { type Schicksal, schicksal, type Vorschlag } from "../data/agent";
-import { Abgelehnt, type Entscheidung, entscheiden } from "../data/freigabe";
+import { Abgelehnt, type Entscheidung, entscheiden, SchonEntschieden } from "../data/freigabe";
 import type { Freigabe } from "../data/gen/processd";
 import { call, ServiceUnavailable } from "../data/mcp";
+import { useVerweigert, Verweigert } from "../data/verweigert";
 import { FristUhr } from "../design/FristUhr";
 import { Icon } from "../design/Icon";
 import { EmptyState, Notice, Panel } from "../design/Panel";
+import type { Instant } from "../format/brands";
 import { formatCount } from "../format/count";
+import { formatInstant } from "../format/date";
 import { Fragen } from "./Fragen";
 import { Verlauf } from "./Verlauf";
 
@@ -59,6 +63,9 @@ function Entscheiden({ f, onDone }: { f: Freigabe; onDone: () => void }) {
   const [bemerkung, setBemerkung] = useState("");
   const [bestaetigen, setBestaetigen] = useState(false);
   const [herkunft, setHerkunft] = useState<Herkunft | null>(null);
+  // processd's policy refused this person a decision once: the reason stands
+  // where the controls were, for every Freigabe, for the rest of the session.
+  const verweigert = useVerweigert({ dienst: "processd", aktion: "entscheiden" });
 
   // processd states, per action, the codes pressing it needs — none where the
   // answer goes as held — by the same rule it checks the code against.
@@ -89,12 +96,47 @@ function Entscheiden({ f, onDone }: { f: Freigabe; onDone: () => void }) {
     onSuccess: onDone,
   });
 
+  // A and R choose the action from the keyboard; the code and the confirm
+  // follow with the arrow keys and ↵, as everywhere else.
+  useEffect(() => {
+    if (verweigert) return;
+    const onKey = (e: KeyboardEvent) => {
+      const a =
+        FREIGEBEN.match?.(e) && f.kann_freigeben
+          ? "freigeben"
+          : ABLEHNEN.match?.(e) && f.kann_ablehnen
+            ? "ablehnen"
+            : null;
+      if (!a) return;
+      e.preventDefault();
+      setAktion(a);
+      setCode(null);
+      setBestaetigen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [f.kann_freigeben, f.kann_ablehnen, verweigert]);
+
   const uebernehmen = (v: Vorschlag, run: string) => {
     setHerkunft({ run, v });
     setAktion(v.aktion);
     setCode(v.antwortcode);
     setBestaetigen(false);
   };
+
+  if (verweigert) {
+    return (
+      <>
+        <Panel className="flex flex-col gap-4 p-5">
+          <h3 className="m-0 text-callout font-semibold">Entscheidung</h3>
+          <Notice tone="refusal" title="Die Prozessüberwachung lässt Sie hier nicht entscheiden">
+            {verweigert}
+          </Notice>
+        </Panel>
+        <Fragen anker={{ freigabe: f.id }} />
+      </>
+    );
+  }
 
   return (
     <>
@@ -172,14 +214,27 @@ function Entscheiden({ f, onDone }: { f: Freigabe; onDone: () => void }) {
           </TextField>
         )}
 
-        {senden.isError && (
-          <Notice
-            tone="refusal"
-            title="Die Prozessüberwachung hat die Entscheidung nicht angenommen"
-          >
-            {senden.error instanceof Abgelehnt ? senden.error.message : nichtErreichbar("processd")}
-          </Notice>
-        )}
+        {senden.isError &&
+          !(senden.error instanceof Verweigert) &&
+          (senden.error instanceof SchonEntschieden ? (
+            <Notice tone="info" title="Schon entschieden">
+              {senden.error.decidedBy ?? "Jemand"} hat diese Freigabe
+              {senden.error.decidedAt
+                ? ` am ${formatInstant(senden.error.decidedAt as Instant)} Uhr`
+                : ""}{" "}
+              {senden.error.status === "Rejected" ? "abgelehnt" : "freigegeben"}. Ihre Entscheidung
+              wurde nicht gesendet.
+            </Notice>
+          ) : (
+            <Notice
+              tone="refusal"
+              title="Die Prozessüberwachung hat die Entscheidung nicht angenommen"
+            >
+              {senden.error instanceof Abgelehnt
+                ? senden.error.message
+                : nichtErreichbar("processd")}
+            </Notice>
+          ))}
 
         {!bestaetigen ? (
           <div className="flex justify-end">
@@ -288,6 +343,23 @@ export function FreigabenView() {
   const list = useFreigaben();
   const rows = list.data?.freigaben ?? [];
   const selected = rows.find((f) => f.id === id) ?? rows[0];
+
+  // J and K walk the queue in processd's order.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const step = NAECHSTE.match?.(e) ? 1 : VORIGE.match?.(e) ? -1 : 0;
+      if (!step || rows.length === 0) return;
+      e.preventDefault();
+      const at = Math.max(
+        0,
+        rows.findIndex((f) => f.id === selected?.id),
+      );
+      const next = rows[Math.min(rows.length - 1, Math.max(0, at + step))];
+      if (next) router.navigate({ to: "/freigaben", search: { id: next.id } });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rows, selected?.id, router]);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6 px-8 py-10">

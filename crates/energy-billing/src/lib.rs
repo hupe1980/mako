@@ -120,8 +120,9 @@ pub use rates::{
     mwst_rate_for_period, round_money, steuer_stichtage_im_zeitraum, stromsteuer_for_year,
 };
 pub use steuer::{
-    EnergiesteuerBefreiung, EnergiesteuerTarif, Steuerentlastung, StromsteuerBefreiung,
-    StromsteuerErmaessigung, StromsteuerTarif,
+    EnergiesteuerBefreiung, EnergiesteuerTarif, Kleinanlage, KleinanlageEnergietraeger,
+    KleinanlageEntnahme, Steuerentlastung, StromsteuerBefreiung, StromsteuerErmaessigung,
+    StromsteuerTarif,
 };
 
 // Typed Product enum + per-category product structs

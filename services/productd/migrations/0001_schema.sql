@@ -62,6 +62,10 @@ CREATE TABLE products (
     -- Certification labels extracted from energiemix for GIN filtering
     oekolabel       TEXT[],
     tenant          TEXT    NOT NULL,
+    -- Billing settings that are not prices (tax treatment, Stromkennzeichnung,
+    -- index and tier configuration), typed and checked on PUT; billingd reads them.
+    abrechnung      JSONB   NOT NULL DEFAULT '{}'::jsonb
+                    CHECK (jsonb_typeof(abrechnung) = 'object'),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -157,6 +161,7 @@ CREATE TABLE product_history (
     product_code    TEXT    NOT NULL,
     data            JSONB   NOT NULL,
     energiemix      JSONB,
+    abrechnung      JSONB   NOT NULL DEFAULT '{}'::jsonb,
     bo4e_version    TEXT    NOT NULL DEFAULT '202607.1.0',
     changed_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );

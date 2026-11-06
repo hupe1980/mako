@@ -1020,40 +1020,34 @@ own `SmgwSession`).
 A single-rate meter answers `EINZEL` from its own window; an instant no window
 covers is a `422`, never a defaulted `EINZEL`.
 
-Both `PUT` bodies are the stored record, so every field is required:
-`zaehler_id`, `tenant` and `register_id` are overwritten from the path and the
-caller, `updated_at` by the server — send them anyway, or the `422` names the
-missing field.
+A register is identified by Zähler, `bezeichnung` and `valid_from`, a window by
+register, `saison` and `zeit_von`; a second `PUT` with the same identity updates
+it. Each `PUT` answers `200` with the row as stored — the register's `id` is the
+path of its windows. The Zähler, the register and the tenant come from the path
+and the session, so a body naming `id`, `tenant` or `updated_at` is a `422`, as
+is an empty or inverted window, a weekday outside 1–7 or named twice. A register
+the caller's tenant does not hold takes no window: `404`.
 
 ```bash
-REGISTER_ID=$(uuidgen)
-curl -s -X PUT "http://marktd:8180/api/v1/zaehler/Z001234567/register" \
+REGISTER_ID=$(curl -s -X PUT "http://marktd:8180/api/v1/zaehler/Z001234567/register" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"id\": \"${REGISTER_ID}\",
-    \"zaehler_id\": \"Z001234567\",
-    \"tenant\": \"9900357000004\",
-    \"bezeichnung\": \"HT\",
-    \"zaehlerauspraegung\": \"HT\",
-    \"obis_kennzahl\": \"1-1:1.29.0\",
-    \"einheit\": \"KWH\",
-    \"valid_from\": \"2025-01-01\",
-    \"updated_at\": \"2025-01-01T00:00:00Z\"
-  }"
+  -d '{
+    "bezeichnung": "HT",
+    "zaehlerauspraegung": "HT",
+    "obis_kennzahl": "1-1:1.8.1",
+    "valid_from": "2025-01-01"
+  }' | jq -r .id)
 
 curl -s -X PUT "http://marktd:8180/api/v1/zaehler-register/${REGISTER_ID}/saisons" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"id\": \"$(uuidgen)\",
-    \"register_id\": \"${REGISTER_ID}\",
-    \"saison\": \"WINTER\",
-    \"wochentage\": [1,2,3,4,5],
-    \"zeit_von\": \"07:00\",
-    \"zeit_bis\": \"22:00\",
-    \"updated_at\": \"2025-01-01T00:00:00Z\"
-  }"
+  -d '{
+    "saison": "WINTER",
+    "wochentage": [1,2,3,4,5],
+    "zeit_von": "07:00",
+    "zeit_bis": "22:00"
+  }'
 
 curl -s "http://marktd:8180/api/v1/zaehler/Z001234567/tariff-zone?datetime=2026-01-15T14:30:00" \
   -H "Authorization: Bearer <token>"

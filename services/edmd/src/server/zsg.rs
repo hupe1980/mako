@@ -355,7 +355,10 @@ pub async fn post_zaehlerstandsgang(
     // Every reading carries the request's one register, so the difference is
     // one Lastgang.
     let Some(lastgang) = to_lastgang(&zsg, &config).into_iter().next() else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return ApiError::internal(anyhow::anyhow!(
+            "Zählerstandsgang for MaLo {malo_id} differenced to no Lastgang"
+        ))
+        .into_response();
     };
 
     // ── Persist the readings — the primary record ────────────────────────────
@@ -633,10 +636,11 @@ pub(crate) async fn get_zaehlerstandsgang(
             }))
             .into_response()
         }
-        Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: Zählerstandsgang read failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => ApiError::internal(
+            anyhow::Error::from(e)
+                .context(format!("Zählerstandsgang read failed (malo_id {malo_id})")),
+        )
+        .into_response(),
     }
 }
 

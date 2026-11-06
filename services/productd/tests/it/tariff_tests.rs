@@ -765,6 +765,7 @@ mod comparison_feed_tests {
             product_status: "PUBLISHED".to_owned(),
             energiemix: None,
             oekolabel: None,
+            abrechnung: serde_json::json!({}),
             updated_at: time::OffsetDateTime::from_unix_timestamp(updated_at_secs).unwrap(),
         }
     }

@@ -97,7 +97,7 @@ Energiesteuer rate.
 | Category | Positions |
 |---|---|
 | `STROM` | Grundpreis (ct/day), Arbeitspreis (ct/kWh), Leistungspreis (RLM, ct/kW/month); NNE Grund-/Arbeits-/Leistungspreis and Konzessionsabgabe from marktd; § 14a modules; Stromsteuer; MwSt. Eintarif, Zweitarif, Mehrtarif, § 41a dynamic |
-| `WAERMEPUMPE` · `WALLBOX` | As `STROM` plus the § 14a positions |
+| `WAERMEPUMPE` · `WALLBOX` | As `STROM` — its fields under `strom` — plus the § 14a positions |
 | `GAS` | Brennwertkorrektur (`kWh_Hs = m³ × Hs × Z`), Grund-/Arbeitspreis, Gasnetzentgelt, Konzessionsabgabe, Bilanzierungsumlage, Energiesteuer, BEHG CO₂, MwSt |
 | `WAERME` | Grundpreis (EUR/month), Leistungspreis (EUR/kW/month), Arbeitspreis (ct/kWh_th), CO₂ cost line |
 | `WASSER` | Trinkwasser 7 %, gesplittete Abwassergebühr, Absetzungen |
@@ -105,12 +105,14 @@ Energiesteuer rate.
 | `EEG` | LF-side feed-in Gutschrift (Vergütung, Marktprämie, KWKG) |
 | `EINSPEISUNG` | Direktvermarktung: Marktwert − Vermarktungsgebühr |
 | `HEMS` · `EMOBILITY` · `ENERGIEDIENSTLEISTUNG` | Platform/operating fees plus per-event or per-kWh charges |
-| `SHARING` | § 42c Energy-Sharing credit |
+| `SHARING` | A `STROM` supply under `strom`, and the § 42c Energy-Sharing credit |
 
 `productd`'s `BUNDLE` is decomposed into its components; it never appears as a
 billed category. `Product` deserialises from productd's JSON on the
-`"category"` discriminator; `product.build_engine(&grid, &rates)` builds the
-engine.
+`"category"` discriminator, and each category refuses a key it does not define:
+a misspelt price in a posted `tariff` is a `422`, never a product billed without
+it. A catalog position whose category has no field for it is logged as dropped.
+`product.build_engine(&grid, &rates)` builds the engine.
 
 ### STROM
 
@@ -266,14 +268,16 @@ Arbeitspreis Solar      productd   ct/kWh
 GGV-Preisvorteil        productd   contractual, § 42b Abs. 2 Nr. 2 EnWG
 Preisobergrenze         [info]     § 42a Abs. 4 EnWG — 90 % of the Grundversorgungs-
                                    Arbeitspreis; a price above it is refused
-Stromsteuer             none       § 9 Abs. 1 Nr. 3 StromStG, ground stated on the invoice
+Stromsteuer             productd   § 3 or § 9 Abs. 1 Nr. 3 StromStG, ground and Erlaubnis
+                                   stated on the invoice
 MwSt
 ```
 
-The § 9 Abs. 1 Nr. 3 Befreiung (installations up to 2 MW, supply im räumlichen
-Zusammenhang or self-consumption) is the default and is conditioned on the
-customer's Erlaubnis (§ 9 Abs. 4); a non-qualifying supply sets
-`stromsteuer_tarif = {"art": "REGEL"}`.
+A `SOLAR` product states its `stromsteuer_tarif` in productd's
+[`abrechnung`](@/docs/services/productd.md#billing-settings-abrechnung); one
+without it is refused (`SOLAR_STROMSTEUER_UNBESTIMMT`). A `KLEINANLAGE` claim
+whose facts do not carry § 9 Abs. 1 Nr. 3 blocks the run
+(`STROMSTEUER_KLEINANLAGE_NICHT_GETRAGEN`).
 
 On a GGV invoice the allocated PV is exempt and the residual grid draw carries
 full Stromsteuer. The Mieterstromzuschlag (§ 21 Abs. 3 EEG 2023) is the
@@ -296,7 +300,7 @@ bill).
 | Field / finding | Law |
 |---|---|
 | `kleinunternehmer_19_ustg` → 0 % on a feed-in Gutschrift | § 19 UStG |
-| `stromsteuer_tarif` → Befreiung or Ermäßigung | § 9 Abs. 1 / 2 / 3 StromStG |
+| `stromsteuer_tarif` → Kleinanlage, Befreiung or Ermäßigung | § 9 Abs. 1 / 2 / 3 StromStG, §§ 10, 12b StromStV |
 | `steuerentlastungen` → note, levy billed in full | § 9a/9b/9c StromStG, §§ 53a, 54 EnergieStG |
 | `grundversorgung_arbeitspreis_ct_per_kwh` → Mieterstrom cap | § 42a Abs. 4 EnWG |
 | `waerme_co2_kosten_ct_per_kwh` → CO₂ line + § 3 Abs. 1 statement | CO2KostAufG § 3 |

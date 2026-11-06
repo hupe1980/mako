@@ -97,9 +97,7 @@ pub(crate) async fn list_confirmations(
             }))
             .into_response()
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "edmd: confirmations query failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => ApiError::internal(anyhow::Error::from(e).context("confirmations query failed"))
+            .into_response(),
     }
 }

@@ -58,6 +58,11 @@ fn internal(e: anyhow::Error) -> axum::response::Response {
     ApiError::internal(e).into_response()
 }
 
+/// The 404 for a MaLo this tenant keeps no account for.
+fn account_not_found(malo_id: &str) -> axum::response::Response {
+    ApiError::not_found(format!("account for MaLo {malo_id} not found")).into_response()
+}
+
 /// A write refused for what it was asked to store answers `422` with the
 /// refusal; a database failure underneath is a `500` with an `error_id`, never
 /// its text.
@@ -95,7 +100,7 @@ pub async fn get_account(
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => account_not_found(&malo_id),
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -158,7 +163,7 @@ pub async fn get_balance(
             "status": if row.balance_ct > 0 { "overdue" } else if row.balance_ct < 0 { "credit" } else { "settled" },
         }))
         .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => account_not_found(&malo_id),
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -178,7 +183,7 @@ pub async fn get_ledger(
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        return StatusCode::NOT_FOUND.into_response();
+        return account_not_found(&malo_id);
     }
     match list_ledger(
         &ledger,
@@ -230,7 +235,7 @@ pub async fn get_kontoauszug(
     };
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return account_not_found(&malo_id),
         Err(e) => return ApiError::internal(e).into_response(),
     };
     let query = period.map_or_else(doubleentry::BalanceQuery::all, |(from, to)| {
@@ -343,7 +348,7 @@ pub async fn get_abschlaege(
         return ApiError::bad_request("from must not be after to").into_response();
     }
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        return StatusCode::NOT_FOUND.into_response();
+        return account_not_found(&malo_id);
     }
     let all = match crate::pg::list_abschlag_forderungen(
         &ledger,
@@ -500,7 +505,7 @@ pub async fn ingest_webhook(
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "accountingd: malformed CloudEvent body");
-            return StatusCode::BAD_REQUEST.into_response();
+            return ApiError::bad_request("body is not a JSON CloudEvent").into_response();
         }
     };
 
@@ -509,7 +514,10 @@ pub async fn ingest_webhook(
     // without it a redelivery could not be deduplicated, so reject it outright.
     let Some(ce_id) = ce.get("id").and_then(|v| v.as_str()).map(str::to_owned) else {
         tracing::warn!("accountingd: CloudEvent without an id — cannot deduplicate, rejected");
-        return StatusCode::BAD_REQUEST.into_response();
+        return ApiError::bad_request(
+            "CloudEvent carries no id — a redelivery could not be deduplicated",
+        )
+        .into_response();
     };
     let data = ce.get("data");
     let today = mako_fristen::heute();
@@ -589,12 +597,10 @@ pub async fn ingest_webhook(
             let account_id = match upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant).await {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        malo_id,
-                        "accountingd: account upsert FAILED — returning 500 so the sender redelivers"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(e.context(format!(
+                        "account upsert for MaLo {malo_id} — returning 500 so the sender redelivers"
+                    )))
+                    .into_response();
                 }
             };
 
@@ -648,11 +654,10 @@ pub async fn ingest_webhook(
                 )
                 .await
                 {
-                    tracing::error!(
-                        error = %e,
-                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(e.context(format!(
+                        "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
+                    )))
+                    .into_response();
                 }
 
                 // The advances this invoice settled stop being advances. A
@@ -674,13 +679,11 @@ pub async fn ingest_webhook(
                     )
                     .await
                 {
-                    tracing::error!(
-                        error = %e,
-                        malo_id,
-                        "accountingd: Abschlag-Verrechnung FAILED — returning 500 so the sender \
+                    return ApiError::internal(e.context(format!(
+                        "Abschlag-Verrechnung for MaLo {malo_id} — returning 500 so the sender \
                          redelivers; without it the customer owes the period twice"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    )))
+                    .into_response();
                 }
             }
             StatusCode::OK.into_response()
@@ -722,12 +725,10 @@ pub async fn ingest_webhook(
                 // posted against this row, so swallowing it would answer 200
                 // for a settlement that was never recorded.
                 if let Err(e) = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await {
-                    tracing::error!(
-                        error = %e,
-                        malo_id,
-                        "accountingd: account upsert FAILED — returning 500 so the sender redelivers"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(e.context(format!(
+                        "account upsert for MaLo {malo_id} — returning 500 so the sender redelivers"
+                    )))
+                    .into_response();
                 }
                 if let Err(e) = crate::pg::post_entry(
                     &ledger,
@@ -747,11 +748,10 @@ pub async fn ingest_webhook(
                 )
                 .await
                 {
-                    tracing::error!(
-                        error = %e,
-                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(e.context(format!(
+                        "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
+                    )))
+                    .into_response();
                 }
             }
             StatusCode::OK.into_response()
@@ -779,7 +779,8 @@ pub async fn ingest_webhook(
                     "EEG settlement event carries no data.malo_id — refusing rather \
                      than booking the credit against an account keyed on nothing"
                 );
-                return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+                return ApiError::unprocessable("EEG settlement event carries no data.malo_id")
+                    .into_response();
             };
             let tr_id = data
                 .and_then(|d| d.get("tr_id"))
@@ -833,12 +834,10 @@ pub async fn ingest_webhook(
             let account_id = match upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        malo_id,
-                        "accountingd: account upsert FAILED — returning 500 so the sender redelivers"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(e.context(format!(
+                        "account upsert for MaLo {malo_id} — returning 500 so the sender redelivers"
+                    )))
+                    .into_response();
                 }
             };
             if amount_ct != 0 {
@@ -860,11 +859,10 @@ pub async fn ingest_webhook(
                 )
                 .await
                 {
-                    tracing::error!(
-                        error = %e,
-                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(e.context(format!(
+                        "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
+                    )))
+                    .into_response();
                 }
 
                 // ── SCT Inst / SCT CORE auto-payout ─────────────────────────────
@@ -978,7 +976,8 @@ pub async fn ingest_webhook(
                     "EEG settlement event carries no data.malo_id — refusing rather \
                      than booking the credit against an account keyed on nothing"
                 );
-                return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+                return ApiError::unprocessable("EEG settlement event carries no data.malo_id")
+                    .into_response();
             };
             let amount_ct: i64 = data
                 .and_then(|d| d.get("settlement_eur"))
@@ -1002,12 +1001,10 @@ pub async fn ingest_webhook(
                 // The entry below is posted against this row: swallowing a
                 // failed upsert would answer 200 for a payment never booked.
                 if let Err(e) = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await {
-                    tracing::error!(
-                        error = %e,
-                        malo_id,
-                        "accountingd: account upsert FAILED — returning 500 so the sender redelivers"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(e.context(format!(
+                        "account upsert for MaLo {malo_id} — returning 500 so the sender redelivers"
+                    )))
+                    .into_response();
                 }
                 if let Err(e) = crate::pg::post_entry(
                     &ledger,
@@ -1027,11 +1024,10 @@ pub async fn ingest_webhook(
                 )
                 .await
                 {
-                    tracing::error!(
-                        error = %e,
-                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(e.context(format!(
+                        "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
+                    )))
+                    .into_response();
                 }
             }
             StatusCode::OK.into_response()
@@ -2137,7 +2133,7 @@ pub async fn put_account_business_partner(
     }
     match crate::pg::set_account_kunden_nr(&pool, &malo_id, lf_mp_id, &cfg.tenant, kunden_nr).await
     {
-        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(0) => account_not_found(&malo_id),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => ApiError::internal(e).into_response(),
     }
@@ -2313,7 +2309,9 @@ pub async fn escalate_dunning(
     };
     let account = match fetch_account_by_id(&pool, account_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return ApiError::not_found(format!("account {account_id} not found")).into_response();
+        }
         Err(e) => return ApiError::internal(e).into_response(),
     };
     let amount_due_ct = account.balance_ct.max(0);
@@ -2350,7 +2348,7 @@ pub async fn resolve_dunning(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     match resolve_dunning_case(&pool, id, &cfg.tenant).await {
-        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(0) => ApiError::not_found(format!("open dunning case {id} not found")).into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => ApiError::internal(e).into_response(),
     }
@@ -2383,7 +2381,9 @@ pub async fn abwendung_angebot(
     let (_, malo_id, lf_mp_id) = match crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return ApiError::not_found(format!("dunning case {id} not found")).into_response();
+        }
         Err(e) => return internal(e),
     };
     // Re-derived, not read: the instalment band depends on the arrears, and an
@@ -2432,7 +2432,10 @@ pub async fn abwendung_angebot(
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         // Already offered, or the case is closed — either way there is nothing
         // to do and nothing went wrong.
-        Ok(false) => StatusCode::CONFLICT.into_response(),
+        Ok(false) => ApiError::conflict(format!(
+            "dunning case {id} does not exist or already carries an Abwendungsangebot"
+        ))
+        .into_response(),
         Err(e) => internal(e),
     }
 }
@@ -2535,7 +2538,7 @@ pub async fn place_lock(
             Json(serde_json::json!({ "lock_id": lock_id })),
         )
             .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!("dunning case {id} not found")).into_response(),
         // `dl_no_overlap`: the account already carries a live lock on this
         // ground for part of the term. Two would make lifting one a release the
         // operator can read and the dunning run cannot see, so the second is
@@ -2687,7 +2690,9 @@ pub async fn lift_lock(
         )
             .into_response(),
         Ok(Some(_)) => StatusCode::NO_CONTENT.into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            ApiError::not_found(format!("live dunning lock {lock_id} not found")).into_response()
+        }
         Err(e) => internal(e),
     }
 }
@@ -2732,7 +2737,9 @@ pub async fn place_einwand(
     let (account_id, malo_id, lf_mp_id) =
         match crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await {
             Ok(Some(row)) => row,
-            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Ok(None) => {
+                return ApiError::not_found(format!("dunning case {id} not found")).into_response();
+            }
             Err(e) => return internal(e),
         };
 
@@ -2787,7 +2794,9 @@ pub async fn get_einwaende(
     }
     let (account_id, _, _) = match crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await {
         Ok(Some(row)) => row,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return ApiError::not_found(format!("dunning case {id} not found")).into_response();
+        }
         Err(e) => return internal(e),
     };
     match crate::pg::list_einwaende(&pool, account_id, &cfg.tenant).await {
@@ -2855,7 +2864,9 @@ pub async fn close_einwand(
 
     match done {
         Ok(Some(_)) => StatusCode::NO_CONTENT.into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            ApiError::not_found(format!("open objection {einwand_id} not found")).into_response()
+        }
         Err(e) => internal(e),
     }
 }
@@ -2918,7 +2929,7 @@ pub async fn get_mandate(
     }
     match fetch_mandate(&pool, mandate_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!("mandate {mandate_id} not found")).into_response(),
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -2954,7 +2965,9 @@ pub async fn delete_mandate(
 
     match rows {
         Err(e) => ApiError::internal(e).into_response(),
-        Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
+        Ok(r) if r.rows_affected() == 0 => {
+            ApiError::not_found(format!("active mandate {mandate_id} not found")).into_response()
+        }
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
     }
 }
@@ -4041,7 +4054,7 @@ pub async fn get_zahlungsinformation(
     .await;
 
     match row {
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => account_not_found(&malo_id),
         Err(e) => ApiError::internal(e).into_response(),
         Ok(Some(row)) => {
             let typed_json: Option<serde_json::Value> =
@@ -4057,7 +4070,10 @@ pub async fn get_zahlungsinformation(
                 };
                 serde_json::to_value(&z).unwrap_or_default()
             } else {
-                return StatusCode::NOT_FOUND.into_response();
+                return ApiError::not_found(format!(
+                    "account for MaLo {malo_id} carries no Zahlungsinformation"
+                ))
+                .into_response();
             };
             Json(payload).into_response()
         }
@@ -4138,7 +4154,7 @@ pub async fn get_open_items(
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return account_not_found(&malo_id),
         Err(e) => return ApiError::internal(e).into_response(),
     };
     match crate::pg::list_open_items(&ledger, lf_mp_id, &malo_id).await {
@@ -4218,7 +4234,7 @@ pub async fn post_anonymize(
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return account_not_found(&malo_id),
         Err(e) => return ApiError::internal(e).into_response(),
     };
 
@@ -4284,7 +4300,7 @@ pub async fn post_reconcile(
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        return StatusCode::NOT_FOUND.into_response();
+        return account_not_found(&malo_id);
     }
     let repair = q.repair.unwrap_or(false);
     match crate::pg::reconcile_balance(&ledger, &pool, &malo_id, lf_mp_id, &cfg.tenant, repair)
@@ -4633,7 +4649,7 @@ pub async fn post_clear(
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        return StatusCode::NOT_FOUND.into_response();
+        return account_not_found(&malo_id);
     }
     let today = mako_fristen::heute();
     match ledger.apply_fifo_clearing(lf_mp_id, &malo_id, today).await {
@@ -6468,7 +6484,7 @@ pub async fn get_interest_charges(
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return account_not_found(&malo_id),
         Err(e) => return ApiError::internal(e).into_response(),
     };
     match crate::pg::list_interest_charges(&pool, account.account_id, &cfg.tenant, 200).await {
@@ -6512,7 +6528,7 @@ pub async fn post_interest_charge(
     let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return account_not_found(&malo_id),
         Err(e) => return ApiError::internal(e).into_response(),
     };
 
@@ -6565,7 +6581,7 @@ pub async fn get_payment_plans(
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return account_not_found(&malo_id),
         Err(e) => return ApiError::internal(e).into_response(),
     };
     match crate::pg::list_payment_plans(&pool, account.account_id, &cfg.tenant).await {
@@ -6617,7 +6633,9 @@ pub async fn get_payment_plan(
             "installments": installments,
         }))
         .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            ApiError::not_found(format!("payment plan {plan_id} not found")).into_response()
+        }
         Err(e) => ApiError::internal(e).into_response(),
     }
 }

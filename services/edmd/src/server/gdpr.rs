@@ -441,8 +441,10 @@ pub(crate) async fn get_gdpr_erasures(
     }
 
     let Some(registry) = state.repo.store().subject_registry() else {
-        tracing::error!("edmd: the meter store carries no subject registry");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return ApiError::internal(anyhow::anyhow!(
+            "the meter store carries no subject registry"
+        ))
+        .into_response();
     };
     match registry.erasures(&query).await {
         Ok(records) => {

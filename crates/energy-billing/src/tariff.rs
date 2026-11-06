@@ -74,6 +74,7 @@ mod date_option_serde {
 /// Replaces the legacy free-text energiemix string with structured data for
 /// CO₂ label generation, HKN traceability, and BO4E Energiemix generation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct EnergieQuellen {
     #[serde(default)]
     pub erneuerbar_pct: Decimal,
@@ -95,6 +96,7 @@ pub struct EnergieQuellen {
 
 /// One seasonal price band (Saisontarif). Months wrap: from_month=10, to_month=3 → Oct–Mar.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SeasonalPriceOverride {
     pub from_month: u8,
     pub to_month: u8,
@@ -121,6 +123,7 @@ impl SeasonalPriceOverride {
 
 /// One tier in a block/graduated tariff (Blocktarif / Staffelpreis).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BlockTierInput {
     /// Upper bound (kWh). None = open-ended last tier.
     pub bis_kwh: Option<Decimal>,
@@ -133,6 +136,7 @@ pub struct BlockTierInput {
 ///
 /// Effective = base_ct + spread_ct + (index_value × factor_ct_per_unit).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct IndexedPriceConfig {
     pub base_ct_per_kwh: Decimal,
     pub spread_ct_per_kwh: Decimal,
@@ -167,22 +171,15 @@ impl IndexedPriceConfig {
     }
 }
 
-/// The § 9 Abs. 1 Nr. 3 StromStG Kleinanlage-Befreiung — the default treatment
-/// of a rooftop solar supply.
-fn solar_stromsteuer_default() -> crate::steuer::StromsteuerTarif {
-    crate::steuer::StromsteuerTarif::Befreiung {
-        grund: crate::steuer::StromsteuerBefreiung::Kleinanlage,
-    }
-}
-
 // ── Per-category product structs ──────────────────────────────────────────────
 
 /// STROM electricity product.
 ///
 /// Used by `ElectricityProvider` (static) and `DynamicElectricityProvider`
-/// (§41a, when `dynamic_epex = true`). Also the base for `ControllableLoadProduct`
-/// and `SharingProduct` via `#[serde(flatten)]`.
+/// (§41a, when `dynamic_epex = true`). Also the `strom` part of
+/// `ControllableLoadProduct` and `SharingProduct`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ElectricityProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -291,12 +288,14 @@ pub struct ElectricityProduct {
 
 /// §14a EnWG controllable load — WAERMEPUMPE / WALLBOX.
 ///
-/// Extends `ElectricityProduct` (via `#[serde(flatten)]`) with §14a Steuerungsrabatt
+/// Extends an `ElectricityProduct`, under `strom`, with §14a Steuerungsrabatt
 /// fields. `ControllableLoadProvider` delegates standard electricity billing to
 /// `ElectricityProvider` then appends the §14a credit positions.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ControllableLoadProduct {
-    #[serde(flatten)]
+    /// The electricity supply the § 14a positions are added to.
+    #[serde(rename = "strom", default)]
     pub base: ElectricityProduct,
     /// §14a **Modul 2** — prozentuale Reduzierung des NNE-Arbeitspreises,
     /// carried here as the resulting per-kWh credit (ct/kWh).
@@ -352,6 +351,7 @@ pub struct ControllableLoadProduct {
 
 /// Natural gas supply product — GAS (SLP / RLM / B2B indexed).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct GasProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -397,6 +397,7 @@ pub struct GasProduct {
 
 /// District heating / Fernwärme product — WAERME.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct HeatProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -476,6 +477,7 @@ pub enum AbwasserRegime {
 ///   Frischwassermaßstab minus metered Absetzungen, plus
 ///   Niederschlagswasser per m² of sealed surface per year.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WaterProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -501,6 +503,7 @@ pub struct WaterProduct {
 
 /// Solar PV / Eigenverbrauch / §42b EnWG GGV / §21 Abs. 3 EEG Mieterstrom product — SOLAR.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct SolarProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -531,18 +534,15 @@ pub struct SolarProduct {
     /// §42b EnWG GGV community energy discount (ct/kWh).
     #[serde(default)]
     pub gemeinschaft_rabatt_ct_per_kwh: Option<Decimal>,
-    /// How the Stromsteuer applies to the solar supply.
+    /// How the Stromsteuer applies to the solar supply — required, because it
+    /// turns on facts only the operator holds.
     ///
-    /// Defaults to the **§ 9 Abs. 1 Nr. 3 StromStG** Kleinanlage-Befreiung,
-    /// which is what a rooftop Mieterstrom or GGV supply is: an installation up
-    /// to 2 MW, delivered by its operator to Letztverbraucher drawing *im
-    /// räumlichen Zusammenhang* (lit. b) or self-consumed (lit. a). The invoice
-    /// states the ground rather than merely omitting the levy — § 9 Abs. 4
-    /// conditions the exemption on the customer's Erlaubnis.
-    ///
-    /// Set `{"art": "REGEL"}` where the supply does not qualify: an installation
-    /// over 2 MW, or delivery beyond the räumlicher Zusammenhang.
-    #[serde(default = "solar_stromsteuer_default")]
+    /// `{"art": "KLEINANLAGE", …}` claims § 9 Abs. 1 Nr. 3 StromStG with the
+    /// plant's Energieträger, Nennleistung, Entnahme, distance and Erlaubnis,
+    /// and the run refuses a claim they do not carry. A Lieferant that neither
+    /// operates the plant nor has it operated is outside Buchst. b (§ 12b
+    /// Abs. 2 StromStV) and states `{"art": "REGEL"}`; so does an operator
+    /// renouncing the exemption (§ 9 Abs. 1b StromStG).
     pub stromsteuer_tarif: crate::steuer::StromsteuerTarif,
     /// Plant capacity (kWp) — informational (MaStR / §48 EEG size class).
     #[serde(default)]
@@ -559,6 +559,7 @@ pub struct SolarProduct {
 
 /// EEG feed-in Gutschrift — LF pays generator. Category: EEG.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct EegProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -583,6 +584,7 @@ pub struct EegProduct {
 
 /// Direktvermarktung feed-in — LF as market premium payer. Category: EINSPEISUNG.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct EinspeisungProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -600,6 +602,7 @@ pub struct EinspeisungProduct {
 
 /// Home Energy Management System subscription. Category: HEMS.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct HemsProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -615,6 +618,7 @@ pub struct HemsProduct {
 
 /// EV charging CPO/EMSP. Category: EMOBILITY.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct EmobilityProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -632,6 +636,7 @@ pub struct EmobilityProduct {
 
 /// Energy services subscription. Category: ENERGIEDIENSTLEISTUNG.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceProduct {
     #[serde(default)]
     pub product_code: Option<String>,
@@ -645,11 +650,13 @@ pub struct ServiceProduct {
 
 /// §42c EnWG community energy sharing. Category: SHARING.
 ///
-/// Bills the full grid consumption via `ElectricityProvider` (base), then
+/// Bills the full grid consumption via `ElectricityProvider` (`strom`), then
 /// credits the allocated community generation via `EnergyShareProvider`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct SharingProduct {
-    #[serde(flatten)]
+    /// The electricity supply the sharing credit is applied to.
+    #[serde(rename = "strom", default)]
     pub electricity: ElectricityProduct,
     /// Community sharing credit rate (ct/kWh) applied to allocated community kWh.
     #[serde(default)]
@@ -911,8 +918,8 @@ mod tests {
     }
 
     #[test]
-    fn product_waermepumpe_flattens_electricity_base() {
-        let json = r#"{"category":"WAERMEPUMPE","arbeitspreis_ct_per_kwh":"20.0","sect14a_modul2_nne_reduktion_ct_per_kwh":"1.5"}"#;
+    fn product_waermepumpe_nests_its_electricity_supply() {
+        let json = r#"{"category":"WAERMEPUMPE","strom":{"arbeitspreis_ct_per_kwh":"20.0"},"sect14a_modul2_nne_reduktion_ct_per_kwh":"1.5"}"#;
         let p: Product = serde_json::from_str(json).unwrap();
         match p {
             Product::Waermepumpe(c) => {
@@ -941,6 +948,24 @@ mod tests {
                 );
             }
             _ => panic!("expected Gas"),
+        }
+    }
+
+    #[test]
+    fn a_misspelt_key_is_refused_in_every_category() {
+        for json in [
+            r#"{"category":"STROM","arbeitspreis_ct_per_kwhh":"28.5"}"#,
+            r#"{"category":"GAS","gas_arbeitspreis_ct_kwh_hs":"7.5"}"#,
+            r#"{"category":"WAERMEPUMPE","strom":{"arbeitspreis":"20"}}"#,
+            r#"{"category":"WALLBOX","arbeitspreis_ct_per_kwh":"20"}"#,
+            r#"{"category":"SHARING","strom":{},"sharing_credit":"3"}"#,
+            r#"{"category":"SOLAR","solar_arbeitspreis":"25"}"#,
+            r#"{"category":"STROM","block_tiers":[{"bis_kwh":"1000","preis_ct_per_kwh":"30","rabatt":"1"}]}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Product>(json).is_err(),
+                "{json} must be refused, not billed without the price it misspells"
+            );
         }
     }
 

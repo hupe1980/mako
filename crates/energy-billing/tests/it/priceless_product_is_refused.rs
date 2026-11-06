@@ -491,8 +491,10 @@ fn any_verguetungssatz_satisfies_the_eeg_guard() {
 #[test]
 fn energy_sharing_without_a_credit_rate_is_refused() {
     let rates = RegulatoryRates::default();
-    let product: Product =
-        serde_json::from_str(r#"{"category":"SHARING","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
+    let product: Product = serde_json::from_str(
+        r#"{"category":"SHARING","strom":{"arbeitspreis_ct_per_kwh":"30.0"}}"#,
+    )
+    .unwrap();
     let q = Quantities {
         electricity: Some(MeterInput {
             arbeitsmenge_kwh: dec!(1000),
@@ -569,7 +571,7 @@ fn hems_without_any_price_is_refused() {
 
 fn waermepumpe_modul3(bands: &str) -> Product {
     serde_json::from_str(&format!(
-        r#"{{"category":"WAERMEPUMPE","arbeitspreis_ct_per_kwh":"30.0",
+        r#"{{"category":"WAERMEPUMPE","strom":{{"arbeitspreis_ct_per_kwh":"30.0"}},
              "sect14a_modul1_pauschale_eur_per_year":"110.0",{bands}}}"#
     ))
     .unwrap()
@@ -693,7 +695,7 @@ fn steuerungsentschaedigung_without_a_spitzenleistung_is_refused() {
         r#""sect14a_steuerungsentschaedigung_eur_per_kw_year":"40.0""#,
     ] {
         let product: Product = serde_json::from_str(&format!(
-            r#"{{"category":"WAERMEPUMPE","arbeitspreis_ct_per_kwh":"30.0",{rate}}}"#
+            r#"{{"category":"WAERMEPUMPE","strom":{{"arbeitspreis_ct_per_kwh":"30.0"}},{rate}}}"#
         ))
         .unwrap();
         let q = Quantities {
@@ -724,7 +726,7 @@ fn steuerungsentschaedigung_without_a_spitzenleistung_is_refused() {
 fn steuerungsentschaedigung_with_a_spitzenleistung_is_credited() {
     let rates = RegulatoryRates::default();
     let product: Product = serde_json::from_str(
-        r#"{"category":"WAERMEPUMPE","arbeitspreis_ct_per_kwh":"30.0",
+        r#"{"category":"WAERMEPUMPE","strom":{"arbeitspreis_ct_per_kwh":"30.0"},
             "sect14a_steuerungsentschaedigung_ct_per_kwh":"5.0"}"#,
     )
     .unwrap();

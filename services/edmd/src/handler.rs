@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-/// The status an ingest door answers when the store refused a batch.
+/// The answer an ingest door gives when the store refused a batch.
 ///
 /// `marktd` treats 2xx as delivered and redelivers on 5xx, so the choice is
 /// whether this delivery should come back. A transient failure — a lost
@@ -41,11 +41,14 @@ use std::sync::Arc;
 ///
 /// 422 is the honest answer for the second: the delivery was received and
 /// understood, and it cannot be stored as sent.
-fn ingest_status(err: &crate::domain::error::EdmError) -> StatusCode {
+///
+/// The 500 carries an `error_id` its log line carries; the 422 says what the
+/// store refused.
+fn ingest_refusal(err: crate::domain::error::EdmError, what: String) -> ApiError {
     if err.is_retryable() {
-        StatusCode::INTERNAL_SERVER_ERROR
+        ApiError::internal(anyhow::Error::new(err).context(what))
     } else {
-        StatusCode::UNPROCESSABLE_ENTITY
+        ApiError::unprocessable(format!("{what}: {err}"))
     }
 }
 
@@ -62,7 +65,7 @@ use axum::{
 };
 use mako_service::ApiError;
 use secrecy::{ExposeSecret, SecretString};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::store::{MeterStoreTimeSeriesRepository, MeterStoreTyp2Repository};
@@ -265,8 +268,10 @@ pub async fn handle_webhook(
             Err(e) => {
                 // marktd treats any 2xx as delivered, so acknowledging here
                 // loses the reading order permanently. 500 lets fan-out retry.
-                warn!(error = %e, malo_id = %malo_id, "edmd: failed to create {description} reading order");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return ApiError::internal(anyhow::Error::from(e).context(format!(
+                    "failed to create {description} reading order (malo_id {malo_id})"
+                )))
+                .into_response();
             }
         }
         return StatusCode::NO_CONTENT.into_response();
@@ -351,8 +356,10 @@ pub async fn handle_webhook(
                 Ok(_) => debug!(malo_id = %malo_id, "edmd: {label} reading order already exists"),
                 Err(e) => {
                     // As above: a 2xx here would be read as delivered by marktd.
-                    warn!(error = %e, malo_id = %malo_id, "edmd: failed to create {label} reading order");
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(anyhow::Error::from(e).context(format!(
+                        "failed to create {label} reading order (malo_id {malo_id})"
+                    )))
+                    .into_response();
                 }
             }
         }
@@ -429,12 +436,8 @@ pub async fn handle_webhook(
                 // failed receipt write must surface rather than being logged and
                 // forgotten — as 5xx when another attempt could work, as 422
                 // when the delivery itself is what the store refused.
-                let status = ingest_status(&err);
-                error!(
-                    %err, process_id = %process_id, retryable = err.is_retryable(),
-                    "edmd: failed to store receipt"
-                );
-                return status.into_response();
+                return ingest_refusal(err, format!("receipt of process {process_id} not stored"))
+                    .into_response();
             }
         }
 
@@ -519,11 +522,11 @@ pub async fn handle_webhook(
                 Some(raw) => match crate::domain::parse_sparte(raw) {
                     Some(s) => s,
                     None => {
-                        error!(
-                            process_id = %process_id, pid, malo_id = %malo_id, sparte = raw,
-                            "edmd: MSCONS payload names an unknown Sparte — refusing the batch"
-                        );
-                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                        return ApiError::internal(anyhow::anyhow!(
+                            "MSCONS payload names an unknown Sparte {raw:?} — refusing the batch \
+                             (process_id {process_id}, pid {pid}, malo_id {malo_id})"
+                        ))
+                        .into_response();
                     }
                 },
             };
@@ -649,13 +652,11 @@ pub async fn handle_webhook(
                     .collect();
                 let stored = typ2.len();
                 if let Err(err) = state.typ2_repo.store_typ2_reads(&typ2).await {
-                    let status = ingest_status(&err);
-                    error!(
-                        %err, process_id = %process_id, pid, malo_id = %malo_id,
-                        retryable = err.is_retryable(),
-                        "edmd: ESA Typ-2 store failed"
-                    );
-                    return status.into_response();
+                    return ingest_refusal(
+                        err,
+                        format!("ESA Typ-2 values of PID {pid} for MaLo {malo_id} not stored"),
+                    )
+                    .into_response();
                 }
                 info!(
                     process_id = %process_id, pid, malo_id = %malo_id, stored,
@@ -685,13 +686,11 @@ pub async fn handle_webhook(
                 // process delivered while the readings were never stored. A
                 // refused delivery gets 422 instead — redelivering a batch the
                 // store will always refuse never terminates.
-                let status = ingest_status(&err);
-                error!(
-                    %err, process_id = %process_id, pid, malo_id = %malo_id,
-                    retryable = err.is_retryable(),
-                    "edmd: MSCONS interval store failed"
-                );
-                return status.into_response();
+                return ingest_refusal(
+                    err,
+                    format!("MSCONS intervals of PID {pid} for MaLo {malo_id} not stored"),
+                )
+                .into_response();
             }
 
             if let Some(q) = &hampel {

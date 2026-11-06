@@ -88,15 +88,16 @@ async fn load_rule(
     .fetch_optional(state.repo.pool())
     .await
     .map_err(|e| {
-        tracing::warn!(error = %e, virtual_malo_id, "edmd: virtual meter config query failed");
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        ApiError::internal(anyhow::Error::from(e).context(format!("virtual meter config query failed (virtual_malo_id {virtual_malo_id})"))).into_response()
     })?
     .ok_or_else(|| {
         ApiError::NotFound.into_response()
     })?;
     let rule_json: serde_json::Value = sqlx::Row::try_get(&row, "rule_json").map_err(|e| {
-        tracing::warn!(error = %e, "edmd: failed to decode virtual meter rule_json");
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        ApiError::internal(
+            anyhow::Error::from(e).context("failed to decode virtual meter rule_json"),
+        )
+        .into_response()
     })?;
     // A stored rule that no longer deserialises is a row edmd did not write.
     VirtualMeterRule::from_json(&rule_json).map_err(|e| {
@@ -253,8 +254,7 @@ pub(crate) async fn list_virtual_meters(
             Json(serde_json::json!({ "virtual_meters": configs, "count": configs.len() })).into_response()
         }
         Err(e) => {
-            tracing::warn!(error = %e, "edmd: list_virtual_meters failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            ApiError::internal(anyhow::Error::from(e).context("list_virtual_meters failed")).into_response()
         }
     }
 }
@@ -348,8 +348,10 @@ pub(crate) async fn create_virtual_meter(
     let rule_json = match serde_json::to_value(rule) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(error = %e, "edmd: could not serialise a VirtualMeterRule");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e).context("could not serialise a VirtualMeterRule"),
+            )
+            .into_response();
         }
     };
     let legal_basis: Option<&str> = body.legal_basis.as_deref();
@@ -379,8 +381,7 @@ pub(crate) async fn create_virtual_meter(
             "virtual_malo_id": virtual_malo_id, "rule_type": rule_type, "status": "created"
         }))).into_response(),
         Err(e) => {
-            tracing::warn!(error = %e, "edmd: create_virtual_meter insert failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            ApiError::internal(anyhow::Error::from(e).context("create_virtual_meter insert failed")).into_response()
         }
     }
 }
@@ -417,8 +418,7 @@ pub(crate) async fn get_virtual_meter(
         }
         Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => {
-            tracing::warn!(error = %e, "edmd: get_virtual_meter failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            ApiError::internal(anyhow::Error::from(e).context("get_virtual_meter failed")).into_response()
         }
     }
 }
@@ -447,10 +447,8 @@ pub(crate) async fn delete_virtual_meter(
     {
         Ok(res) if res.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
         Ok(_) => ApiError::NotFound.into_response(),
-        Err(e) => {
-            tracing::warn!(error = %e, "edmd: delete_virtual_meter failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => ApiError::internal(anyhow::Error::from(e).context("delete_virtual_meter failed"))
+            .into_response(),
     }
 }
 

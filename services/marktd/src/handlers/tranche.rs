@@ -184,7 +184,6 @@ pub async fn put_tranche(
             resp_headers.insert("ETag", etag(new_version).parse().unwrap());
             (StatusCode::OK, resp_headers).into_response()
         }
-        Err(MdmError::VersionConflict { .. }) => StatusCode::PRECONDITION_FAILED.into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -218,7 +217,7 @@ pub async fn get_tranche(
             )
                 .into_response()
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!("Tranche {tranche_id} not found")).into_response(),
         Err(e) => e.into_response(),
     }
 }

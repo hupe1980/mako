@@ -163,7 +163,7 @@ pub async fn webhook(
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "agentd: malformed CloudEvent body");
-            return StatusCode::BAD_REQUEST.into_response();
+            return ApiError::bad_request("body is not a JSON CloudEvent").into_response();
         }
     };
 
@@ -175,7 +175,8 @@ pub async fn webhook(
                 attribute = missing,
                 "agentd: CloudEvent is missing a required attribute — refused"
             );
-            return StatusCode::BAD_REQUEST.into_response();
+            return ApiError::bad_request(format!("CloudEvent carries no {missing} attribute"))
+                .into_response();
         }
     };
     let (event_id, event_source, event_type) = (
@@ -191,7 +192,10 @@ pub async fn webhook(
         && ev_tenant != state.cfg.tenant
     {
         tracing::warn!(event_id, ev_tenant, "agentd: tenant mismatch — rejected");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden(format!(
+            "CloudEvent tenantid {ev_tenant} is not this daemon's tenant"
+        ))
+        .into_response();
     }
 
     // There is deliberately no duplicate check here: deduplication happens where

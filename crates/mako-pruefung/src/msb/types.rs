@@ -204,8 +204,9 @@ impl Abmeldegrund {
 
     /// The maximum Weiterverpflichtungszeitraum this Abmeldegrund permits.
     ///
-    /// WiM Teil 1 Kap. 2.4.2 Nr. 4: „längstens drei Monate" on an
-    /// Anschlussnutzerwechsel, „längstens einen Monat" in every other case.
+    /// WiM Teil 1 Kap. 2.4.2 Nr. 4: „für einen Zeitraum von längstens drei
+    /// Monaten" on an Anschlussnutzerwechsel, „längstens einem Monat" in every
+    /// other case.
     #[must_use]
     pub const fn max_weiterverpflichtung_monate(self) -> i64 {
         match self {

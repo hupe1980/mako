@@ -122,6 +122,13 @@ impl From<WebhookError> for axum::http::StatusCode {
     }
 }
 
+/// A refused webhook is `401` naming why — never a bare status.
+impl From<WebhookError> for crate::ApiError {
+    fn from(e: WebhookError) -> Self {
+        Self::unauthorized(e.to_string())
+    }
+}
+
 /// The bytes a signature covers: `{id}.{timestamp}.{body}`.
 ///
 /// Derived here and nowhere else. Signer and verifier agreeing byte for byte
@@ -266,10 +273,8 @@ pub fn verify_request_only(
     secret: Option<&[u8]>,
     headers: &axum::http::HeaderMap,
     body: &[u8],
-) -> Result<(), axum::http::StatusCode> {
-    verify_request(secret, headers, body)
-        .map(|_| ())
-        .map_err(Into::into)
+) -> Result<(), WebhookError> {
+    verify_request(secret, headers, body).map(|_| ())
 }
 
 #[cfg(test)]

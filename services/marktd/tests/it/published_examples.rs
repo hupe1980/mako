@@ -100,7 +100,8 @@ struct Write {
     body: Option<String>,
 }
 
-/// Every `curl -X PUT|POST|PATCH` in the `bash`/`sh` blocks of a page.
+/// Every `curl -X PUT|POST|PATCH` in the `bash`/`sh` blocks of a page, at the
+/// start of a line or inside a command substitution.
 fn writes(name: &str, md: &str) -> Vec<Write> {
     let mut out = Vec::new();
     let mut in_shell = false;
@@ -113,9 +114,18 @@ fn writes(name: &str, md: &str) -> Vec<Write> {
             in_shell = !in_shell && matches!(t.trim_start_matches('`').trim(), "bash" | "sh");
             continue;
         }
-        if !in_shell || !t.starts_with("curl ") {
+        // A command line opens with `curl`, or captures one: `ID=$(curl …)`.
+        let Some(at) = (if t.starts_with("curl ") {
+            Some(0)
+        } else {
+            t.find("$(curl ").map(|i| i + 2)
+        }) else {
+            continue;
+        };
+        if !in_shell {
             continue;
         }
+        let start = start + (line.len() - t.len()) + at;
         let mut w = Write {
             at: format!("{name}:{}", n + 1),
             method: "GET".to_owned(),
@@ -125,6 +135,7 @@ fn writes(name: &str, md: &str) -> Vec<Write> {
         let mut it = shell_words(&md[start..]).into_iter().skip(1);
         while let Some(word) = it.next() {
             match word.as_str() {
+                "|" => break,
                 "-X" | "--request" => w.method = it.next().unwrap_or_default(),
                 "-d" | "--data" | "--data-raw" => w.body = it.next(),
                 "-H" | "--header" => {
@@ -235,12 +246,12 @@ const ROUTES: &[(&str, &str, Check)] = &[
     (
         "PUT",
         "/api/v1/zaehler/{}/register",
-        parses::<mako_markt::repository::ZaehlzeitRegisterRecord>,
+        parses::<mako_markt::repository::ZaehlzeitRegisterUpsert>,
     ),
     (
         "PUT",
         "/api/v1/zaehler-register/{}/saisons",
-        parses::<mako_markt::repository::ZaehlzeitSaisonRecord>,
+        parses::<mako_markt::repository::ZaehlzeitSaisonUpsert>,
     ),
     (
         "PUT",

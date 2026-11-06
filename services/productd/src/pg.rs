@@ -39,6 +39,76 @@ pub struct ProductUpsertRequest {
     /// Optional list of `Oekolabel` enum codes (e.g. \`[\"OK_POWER\", \"NATURWATT_STROM\"]\`).
     #[serde(default)]
     pub oekolabel: Option<Vec<String>>,
+    /// What billingd needs of the product besides its prices.
+    #[serde(default)]
+    pub abrechnung: Abrechnung,
+}
+
+/// A product's billing settings that are not prices, each typed as the
+/// billing engine reads it — so a misspelt key, or a tax treatment its facts
+/// do not carry, is refused when the catalog is written and not at the first
+/// invoice. Stored in `products.abrechnung`; billingd reads it from there.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Abrechnung {
+    /// § 3 / § 9 StromStG. Required for `SOLAR`, whose treatment turns on the
+    /// plant; any other supply without one is taxed at the Regelsatz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stromsteuer_tarif: Option<energy_billing::StromsteuerTarif>,
+    /// § 2 / §§ 25–29 EnergieStG; without one, gas is taxed at the Regelsatz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energiesteuer_tarif: Option<energy_billing::EnergiesteuerTarif>,
+    /// Reliefs the customer claims afterwards — an invoice note, never an amount.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steuerentlastungen: Vec<energy_billing::Steuerentlastung>,
+    /// § 42 EnWG Stromkennzeichnung printed on the invoice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energiequellen: Option<energy_billing::EnergieQuellen>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_price: Option<energy_billing::IndexedPriceConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gas_indexed_price: Option<energy_billing::IndexedPriceConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_tiers: Option<Vec<energy_billing::BlockTierInput>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seasonal_prices: Option<Vec<energy_billing::SeasonalPriceOverride>>,
+    /// Price guarantee end, `YYYY-MM-DD` (§ 41 Abs. 1 Nr. 4 EnWG, display only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preisgarantie_bis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sharing_description: Option<String>,
+}
+
+impl Abrechnung {
+    /// Why these settings cannot be billed for `category`, or `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// The sentence naming the setting and the rule it fails.
+    #[must_use = "an unchecked setting reaches the first invoice"]
+    pub fn pruefen(&self, category: &str) -> Result<(), String> {
+        match &self.stromsteuer_tarif {
+            None if category == "SOLAR" => {
+                return Err(
+                    "a SOLAR product states abrechnung.stromsteuer_tarif: § 9 Abs. 1 \
+                            Nr. 3 StromStG turns on the plant and on who supplies, so no \
+                            treatment is right for every SOLAR supply"
+                        .to_owned(),
+                );
+            }
+            Some(energy_billing::StromsteuerTarif::Kleinanlage(k)) => {
+                k.pruefen()
+                    .map_err(|why| format!("abrechnung.stromsteuer_tarif: {why}"))?;
+            }
+            _ => {}
+        }
+        if let Some(d) = &self.preisgarantie_bis {
+            time::Date::parse(d, &time::format_description::well_known::Iso8601::DATE).map_err(
+                |_| format!("abrechnung.preisgarantie_bis {d} is not a YYYY-MM-DD date"),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 fn default_bo4e() -> String {
@@ -71,6 +141,8 @@ pub struct ProductRow {
     pub energiemix: Option<serde_json::Value>,
     /// Active `Oekolabel` certification codes.
     pub oekolabel: Option<Vec<String>>,
+    /// The product's [`Abrechnung`], as stored.
+    pub abrechnung: serde_json::Value,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
@@ -96,8 +168,8 @@ pub async fn upsert_product(
 
     // Archive previous version before upsert (includes energiemix for §42 audit trail).
     sqlx::query(
-        r"INSERT INTO product_history (lf_mp_id, product_code, data, energiemix, bo4e_version)
-          SELECT lf_mp_id, product_code, data, energiemix, bo4e_version
+        r"INSERT INTO product_history (lf_mp_id, product_code, data, energiemix, abrechnung, bo4e_version)
+          SELECT lf_mp_id, product_code, data, energiemix, abrechnung, bo4e_version
           FROM products
           WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $4
             AND (valid_from = $3 OR $3 IS NULL)
@@ -142,8 +214,8 @@ pub async fn upsert_product(
         r"INSERT INTO products
               (lf_mp_id, product_code, category, name, sparte, register_count, kundentyp,
                dyn_source, valid_from, valid_to, data, bo4e_version, product_status,
-               energiemix, oekolabel, tenant, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
+               energiemix, oekolabel, tenant, abrechnung, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, now())
           ON CONFLICT (tenant, lf_mp_id, product_code, (COALESCE(valid_from, DATE '0001-01-01')))
           DO UPDATE
           SET category      = EXCLUDED.category,
@@ -158,6 +230,7 @@ pub async fn upsert_product(
               product_status= EXCLUDED.product_status,
               energiemix    = COALESCE(EXCLUDED.energiemix, products.energiemix),
               oekolabel     = COALESCE(EXCLUDED.oekolabel, products.oekolabel),
+              abrechnung    = EXCLUDED.abrechnung,
               updated_at    = now()
           WHERE products.tenant = EXCLUDED.tenant
           RETURNING id",
@@ -183,6 +256,7 @@ pub async fn upsert_product(
     )
     .bind(&req.oekolabel)
     .bind(tenant)
+    .bind(serde_json::to_value(&req.abrechnung).context("serialise abrechnung")?)
     .fetch_one(&mut *tx)
     .await
     .context("upsert product")?;
@@ -1710,5 +1784,42 @@ mod nehs_validation_tests {
         assert!(
             validate_nehs_import(&req(dec!(0), Some("manual")), date!(2026 - 07 - 08)).is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod abrechnung_tests {
+    use super::Abrechnung;
+
+    fn parse(v: serde_json::Value) -> Abrechnung {
+        serde_json::from_value(v).expect("an Abrechnung")
+    }
+
+    /// The catalog refuses what billing would refuse, at the write.
+    #[test]
+    fn a_solar_product_states_its_stromsteuer_and_its_facts_carry_the_claim() {
+        assert!(Abrechnung::default().pruefen("SOLAR").is_err());
+        assert_eq!(Abrechnung::default().pruefen("STROM"), Ok(()));
+
+        let claim = |kw: &str, az: Option<&str>| {
+            parse(serde_json::json!({ "stromsteuer_tarif": {
+                "art": "KLEINANLAGE", "energietraeger": "SONNENENERGIE",
+                "nennleistung_kw": kw, "entnahme": "LETZTVERBRAUCHER",
+                "entfernung_km": "0.3", "erlaubnis_aktenzeichen": az,
+            }}))
+        };
+        assert_eq!(claim("750", None).pruefen("SOLAR"), Ok(()));
+        let err = claim("1500", None).pruefen("SOLAR").unwrap_err();
+        assert!(err.contains("Einzelerlaubnis"), "{err}");
+        assert_eq!(claim("1500", Some("E-1/26")).pruefen("SOLAR"), Ok(()));
+    }
+
+    #[test]
+    fn a_misspelt_setting_or_date_is_refused() {
+        assert!(
+            serde_json::from_value::<Abrechnung>(serde_json::json!({ "stromsteuer": {} })).is_err()
+        );
+        let d = parse(serde_json::json!({ "preisgarantie_bis": "31.12.2027" }));
+        assert!(d.pruefen("STROM").is_err());
     }
 }

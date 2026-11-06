@@ -86,7 +86,7 @@ pub async fn upsert_antrag(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-netzzugang", &tenant) {
         tracing::warn!(error = %e, "marktd: Cedar denied write-netzzugang");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("write-netzzugang denied").into_response();
     }
     rec.tenant = tenant.clone();
     if rec.netzanschluss_id.trim().is_empty() || rec.nb_mp_id.trim().is_empty() {
@@ -97,8 +97,10 @@ pub async fn upsert_antrag(
             rec.id = id;
             if let Err(e) = emit(&pool, &tenant, id.to_string(), antrag_event(&rec, version)).await
             {
-                tracing::error!(error = %e, "netzzugang: durable enqueue failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return ApiError::internal(anyhow::Error::from(e).context(format!(
+                    "netzzugang: durable enqueue for Netzzugangsantrag {id}"
+                )))
+                .into_response();
             }
             (
                 StatusCode::OK,
@@ -141,7 +143,7 @@ pub async fn list_antraege(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-netzzugang", &tenant) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-netzzugang");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("read-netzzugang denied").into_response();
     }
     match repo
         .list(&tenant, q.status, q.netzanschluss_id.as_deref())
@@ -173,11 +175,13 @@ pub async fn get_antrag(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-netzzugang", &tenant) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-netzzugang");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("read-netzzugang denied").into_response();
     }
     match repo.get(&tenant, id).await {
         Ok(Some(rec)) => (StatusCode::OK, Json(serde_json::json!({ "data": rec }))).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            ApiError::not_found(format!("Netzzugangsantrag {id} not found")).into_response()
+        }
         Err(e) => e.into_response(),
     }
 }
@@ -226,7 +230,7 @@ pub async fn set_antrag_status(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-netzzugang", &tenant) {
         tracing::warn!(error = %e, "marktd: Cedar denied write-netzzugang");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("write-netzzugang denied").into_response();
     }
     match repo
         .set_status(
@@ -247,12 +251,16 @@ pub async fn set_antrag_status(
             )
             .await
             {
-                tracing::error!(error = %e, "netzzugang: durable enqueue failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return ApiError::internal(anyhow::Error::from(e).context(format!(
+                    "netzzugang: durable enqueue for Netzzugangsantrag {id}"
+                )))
+                .into_response();
             }
             (StatusCode::OK, Json(serde_json::json!({ "data": rec }))).into_response()
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            ApiError::not_found(format!("Netzzugangsantrag {id} not found")).into_response()
+        }
         Err(e) => e.into_response(),
     }
 }

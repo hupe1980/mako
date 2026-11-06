@@ -202,6 +202,26 @@
       animation: none;
     }
   }
+
+  /* A held decision's toast: the bar drains over what is left of the hold. */
+  .drain {
+    transform-origin: left;
+    animation: drain linear forwards;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .drain {
+      animation: none;
+    }
+  }
+}
+
+@keyframes drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }
 
 @keyframes shimmer {

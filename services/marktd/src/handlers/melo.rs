@@ -39,18 +39,15 @@ fn normalize_messlokation(data: serde_json::Value) -> mako_service::ApiResult<Me
     mako_markt::bo4e::decode(data).map_err(|e| super::bo4e_refusal(&e))
 }
 
-/// Deserialise stored JSONB as `Messlokation`. Returns `None` on schema drift.
-fn deserialize_stored_melo(data: serde_json::Value, melo_id: &str) -> Option<Messlokation> {
-    serde_json::from_value::<Messlokation>(data)
-        .map_err(|e| {
-            tracing::error!(
-                melo_id,
-                error = %e,
-                "schema drift: stored MeLo data is not a valid Messlokation — \
-                 re-PUT with a valid BO4E payload"
-            );
-        })
-        .ok()
+/// Deserialise stored JSONB as `Messlokation`. Fails on schema drift
+/// (operator must re-PUT the record to fix); the error names the MeLo.
+fn deserialize_stored_melo(data: serde_json::Value, melo_id: &str) -> anyhow::Result<Messlokation> {
+    serde_json::from_value::<Messlokation>(data).map_err(|e| {
+        anyhow::Error::from(e).context(format!(
+            "schema drift: stored MeLo {melo_id} data is not a valid Messlokation — \
+             re-PUT with a valid BO4E payload"
+        ))
+    })
 }
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
@@ -284,8 +281,8 @@ pub async fn get_melo(
     match state.melo_repo.find(&melo_id).await {
         Ok(Some(r)) => {
             let data = match deserialize_stored_melo(r.data, r.melo_id.as_ref()) {
-                Some(v) => v,
-                None => return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                Ok(v) => v,
+                Err(e) => return ApiError::internal(e).into_response(),
             };
             let resp = MeloResponse {
                 melo_id: r.melo_id.to_string(),

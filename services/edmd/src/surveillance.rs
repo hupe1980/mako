@@ -653,10 +653,10 @@ pub async fn get_delivery_surveillance(
             }))
             .into_response()
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "edmd: surveillance query failed");
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => mako_service::ApiError::internal(
+            anyhow::Error::from(e).context("surveillance query failed"),
+        )
+        .into_response(),
     }
 }
 

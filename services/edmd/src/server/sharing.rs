@@ -64,8 +64,10 @@ pub(crate) async fn community_allocation(
     .fetch_all(state.repo.pool())
     .await
     .map_err(|e| {
-        tracing::warn!(error = %e, %plant, "edmd: community query failed");
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        ApiError::internal(
+            anyhow::Error::from(e).context(format!("community query failed (plant {plant})")),
+        )
+        .into_response()
     })?;
     if rows.is_empty() {
         return Err(ApiError::not_found(

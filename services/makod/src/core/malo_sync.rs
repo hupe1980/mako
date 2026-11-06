@@ -441,17 +441,15 @@ async fn handle_webhook(
         .map(|s| s.expose_secret().as_bytes().to_vec());
     // Idempotent by construction — every delivery re-reads the current record
     // — so the webhook id needs no deduplication store.
-    if let Err(status) =
-        mako_service::webhook::verify_request_only(secret.as_deref(), &headers, &body)
-    {
-        warn!(%status, "malo sync: inbound webhook refused");
-        return status.into_response();
+    if let Err(e) = mako_service::webhook::verify_request_only(secret.as_deref(), &headers, &body) {
+        warn!(error = %e, "malo sync: inbound webhook refused");
+        return mako_service::ApiError::from(e).into_response();
     }
     let event: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
             warn!(error = %e, "malo sync: delivery is not JSON");
-            return StatusCode::BAD_REQUEST.into_response();
+            return mako_service::ApiError::bad_request("delivery is not JSON").into_response();
         }
     };
     let ce_type = event["type"].as_str().unwrap_or_default();
@@ -464,13 +462,19 @@ async fn handle_webhook(
         .unwrap_or_default();
     if malo_id.parse::<rubo4e::identifiers::MaloId>().is_err() {
         warn!(malo_id, "malo sync: delivery names no valid MaLo-ID");
-        return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+        return mako_service::ApiError::unprocessable(format!(
+            "delivery names no valid MaLo-ID ({malo_id:?})"
+        ))
+        .into_response();
     }
     match sync.apply(malo_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             warn!(malo_id, error = %e, "malo sync: record not applied; the fan-out redelivers");
-            StatusCode::SERVICE_UNAVAILABLE.into_response()
+            mako_service::ApiError::unavailable(format!(
+                "record for MaLo {malo_id} not applied; the fan-out redelivers"
+            ))
+            .into_response()
         }
     }
 }

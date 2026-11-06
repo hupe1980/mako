@@ -19,7 +19,6 @@ use std::sync::Arc;
 use axum::{
     Extension,
     extract::{Path, Query},
-    http::StatusCode,
     response::IntoResponse,
 };
 use mako_markt::{
@@ -225,7 +224,7 @@ pub async fn put_nb_contract(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-nb-contract", &tenant.0) {
         tracing::warn!(error = %e, "marktd: Cedar denied write-nb-contract");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("write-nb-contract denied").into_response();
     }
 
     let rec = match parse_req(id.clone(), req, &tenant.0) {
@@ -279,7 +278,7 @@ pub async fn get_nb_contract(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant.0) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-nb-contract");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("read-nb-contract denied").into_response();
     }
 
     match repo.find(&id, &tenant.0).await {
@@ -303,7 +302,7 @@ pub async fn list_nb_contracts(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant.0) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-nb-contract");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("read-nb-contract denied").into_response();
     }
 
     let nb_mp_id = match q.nb_mp_id {
@@ -349,7 +348,7 @@ pub async fn get_nb_contract_by_malo(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant.0) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-nb-contract");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("read-nb-contract denied").into_response();
     }
 
     let date_fmt = format_description!("[year]-[month]-[day]");
@@ -365,7 +364,10 @@ pub async fn get_nb_contract_by_malo(
 
     match repo.find_active(&malo_id, on, &tenant.0).await {
         Ok(Some(rec)) => Json(rec_to_response(rec)).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::not_found(format!(
+            "no NB contract for MaLo {malo_id} in force on {on}"
+        ))
+        .into_response(),
         Err(e) => e.into_response(),
     }
 }

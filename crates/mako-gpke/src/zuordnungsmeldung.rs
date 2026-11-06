@@ -26,7 +26,7 @@
 //!
 //! GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4: „Ist die
 //! Marktlokation bzw. Tranche zum Zuordnungsbeginn einem LF zugeordnet, fährt
-//! der NB mit Prozessschritt 2 fort, ansonsten mit Prozessschritt 5." So 55036
+//! der NB mit Prozessschritt 2, ansonsten mit Prozessschritt 5 fort." So 55036
 //! is owed exactly when an LFA exists — the same condition that makes the 55010
 //! Abmeldeanfrage owed („Parallel zu Nr. 2"). The Festlegung adds: „Die
 //! Information ist auch dann zu versenden, sofern LFA und LFN identisch sind."

@@ -177,6 +177,7 @@ fn minimal_row() -> productd::pg::ProductRow {
         product_status: "PUBLISHED".to_owned(),
         energiemix: None,
         oekolabel: None,
+        abrechnung: serde_json::json!({}),
         updated_at: time::OffsetDateTime::UNIX_EPOCH,
     }
 }

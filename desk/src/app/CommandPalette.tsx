@@ -16,6 +16,7 @@ import {
 import { Icon, type IconName } from "../design/Icon";
 import { Kbd } from "../design/Kbd";
 import { monogram, useKundenSuche } from "../views/kundenSuche";
+import { frageMoeglich, frageStellen } from "./frage";
 import { PALETTE } from "./keys";
 import { ROLLEN, type Rolle, useRolle } from "./rollen";
 
@@ -109,6 +110,21 @@ export function CommandPalette({
         }))
       : [];
 
+  // On a page with a Fragen panel, anything typed can go to the assistant.
+  const fragen: Command[] =
+    open && typed.length >= 3 && frageMoeglich()
+      ? [
+          {
+            id: "fragen",
+            label: `„${typed}"`,
+            icon: "sparkle",
+            hint: "Den Assistenten fragen",
+            direct: true,
+            run: () => frageStellen(typed),
+          },
+        ]
+      : [];
+
   const views: Command[] = [
     {
       id: "ueberblick",
@@ -171,6 +187,7 @@ export function CommandPalette({
     [
       ["Kunden", kunden],
       ["Öffnen", direct],
+      ["Assistent", fragen],
       ["Ansichten", views],
       ["Rolle wechseln", rollen],
     ] as [string, Command[]][]

@@ -1126,12 +1126,20 @@ mod rest {
             crate::pg::approval::QueueStatus::Rejected
         };
 
-        // Absent or already decided — nothing to dispatch.
-        let entry = queue
+        // Nothing pending to claim: absent (404), or decided by somebody
+        // first — 409 naming who and when, so the person who lost the race
+        // sees whose answer went out instead of a missing page.
+        let Some(entry) = queue
             .claim(id, &state.tenant, target, decided_by)
             .await
             .map_err(ApiError::internal)?
-            .ok_or(ApiError::NotFound)?;
+        else {
+            let found = queue
+                .find_by_id(id, &state.tenant)
+                .await
+                .map_err(ApiError::internal)?;
+            return Err(super::unclaimable(id, found.as_ref()));
+        };
 
         // Every enqueuing module resolves both commands from the trigger PID at
         // enqueue time, so a stored `None` means "this decision has no market
@@ -1852,5 +1860,62 @@ mod rest {
                 .into_response()),
             Err(e) => Err(makod_dispatch_error(e)),
         }
+    }
+}
+
+/// The answer to a decision on an entry that is no longer pending: absent is
+/// 404; decided names who decided it, when, and how — the person who lost the
+/// race sees whose answer went out.
+fn unclaimable(
+    id: uuid::Uuid,
+    found: Option<&crate::pg::approval::ApprovalQueueEntry>,
+) -> mako_service::ApiError {
+    let Some(decided) = found else {
+        return mako_service::ApiError::NotFound;
+    };
+    mako_service::ApiError::conflict_with(
+        "already_decided",
+        format!("Freigabe {id} is already {}", decided.status),
+        serde_json::json!({
+            "status": decided.status.to_string(),
+            "decided_by": decided.decided_by,
+            "decided_at": decided.decided_at.and_then(|t| {
+                t.format(&time::format_description::well_known::Rfc3339).ok()
+            }),
+        }),
+    )
+}
+
+#[cfg(test)]
+mod unclaimable_tests {
+    use super::unclaimable;
+    use crate::pg::approval::{ApprovalQueueEntry, QueueStatus};
+    use axum::response::IntoResponse as _;
+
+    #[tokio::test]
+    async fn an_entry_decided_first_by_somebody_else_is_a_409_naming_them() {
+        let mut entry = ApprovalQueueEntry::pending(
+            uuid::Uuid::nil(),
+            55_001,
+            None,
+            "test".into(),
+            time::macros::datetime!(2026-11-05 09:00 UTC),
+            "t".into(),
+        );
+        entry.status = QueueStatus::Approved;
+        entry.decided_by = Some("erika".into());
+        entry.decided_at = Some(time::macros::datetime!(2026-11-05 08:15 UTC));
+        let resp = unclaimable(entry.id, Some(&entry)).into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(resp.into_body(), 4096)
+            .await
+            .expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(json["code"], "already_decided");
+        assert_eq!(json["decided_by"], "erika");
+        assert_eq!(json["decided_at"], "2026-11-05T08:15:00Z");
+
+        let absent = unclaimable(uuid::Uuid::nil(), None).into_response();
+        assert_eq!(absent.status(), axum::http::StatusCode::NOT_FOUND);
     }
 }

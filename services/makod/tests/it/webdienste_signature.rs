@@ -20,23 +20,14 @@ use tower::ServiceExt as _;
 
 use makod::webdienste::{self, MakodApiHandler};
 
+use crate::support::{WEBDIENSTE_CALLER_CERT as CALLER_CERT, WEBDIENSTE_CALLER_KEY as CALLER_KEY};
+
 const TENANT: &str = "9900357000004";
 const CALLER: &str = "9900001000001";
 const HOST: &str = "msb.example.de";
 const PATH: &str = "/[Post]/steuerbefehl/konfiguration/?locationId=E1234848431&commandControl=%7B%22maximumPowerValue%22%3A%224.2%22%2C%22executionTimeFrom%22%3A%222026-09-01T00%3A00%3A00Z%22%7D";
 const CREATED: &str = "2026-09-01T10:00:00.000Z";
 const TX: &str = "f81d4fae-7dec-11d0-a765-00a0c91e6bf6";
-
-/// The caller's signing key; `CALLER_CERT` carries its public half.
-const CALLER_KEY: &str = "-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgckWBECvjQWtsSdvR
-HoiIfDEkbWbAnYri4WAvp2St+v+hRANCAASu1tuAaW6ZKbVOAyetJgFYgZEEYP/a
-r/Ox8QqIhDVKepRV09o6tWyu3o1V8IeBpSlvcWRWS2J39e8qjUDwmCPr
------END PRIVATE KEY-----";
-
-/// A self-signed P-256 certificate over `CALLER_KEY`'s public key, DER in
-/// standard Base64.
-const CALLER_CERT: &str = "MIIBhDCCASugAwIBAgIUd0O+Mx2XBxfhEKRqlUdnmSSHU2UwCgYIKoZIzj0EAwIwGDEWMBQGA1UEAwwNOTkwMDAwMTAwMDAwMTAeFw0yNjEwMDUxNDIzMTlaFw0zNjEwMDIxNDIzMTlaMBgxFjAUBgNVBAMMDTk5MDAwMDEwMDAwMDEwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASu1tuAaW6ZKbVOAyetJgFYgZEEYP/ar/Ox8QqIhDVKepRV09o6tWyu3o1V8IeBpSlvcWRWS2J39e8qjUDwmCPro1MwUTAdBgNVHQ4EFgQUswL8Izc4762WL12or5ykXpaTBJAwHwYDVR0jBBgwFoAUswL8Izc4762WL12or5ykXpaTBJAwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNHADBEAiBxBiWnEciLutLqz4JaEIF6cpxmbA9BWAKi5qJSxOcTKwIgYUlfsyMjm3jaGMbpPZdu1Br5vFG97Ob7Kwj1Qcc7cyk=";
 
 /// Somebody else's key.
 const OTHER_KEY: &str = "-----BEGIN PRIVATE KEY-----
@@ -133,6 +124,19 @@ async fn an_altered_initial_transaction_id_is_refused() {
             .parse()
             .expect("header"),
     );
+    let res = app().await.oneshot(req).await.expect("service call");
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Kap. 3.3: „MUST Jede API-Interaktion und der übertragene Payload wird
+/// signiert". An unsigned request is not one a counterparty sends under the
+/// Regelungen, so it is refused before any handler.
+#[tokio::test]
+async fn an_unsigned_request_is_refused() {
+    let mut req = signed(CALLER_KEY);
+    for h in ["x-bdew-signature", "x-bdew-digest", "x-bdew-cert"] {
+        req.headers_mut().remove(h);
+    }
     let res = app().await.oneshot(req).await.expect("service call");
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }

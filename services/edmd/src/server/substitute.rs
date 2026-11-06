@@ -226,8 +226,10 @@ pub async fn run_substitute_values(
     {
         Ok(reads) => reads,
         Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: substitute reference read failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(anyhow::Error::from(e).context(format!(
+                "substitute reference read failed (malo_id {malo_id})"
+            )))
+            .into_response();
         }
     };
     // Scope the reference data to the **one register** the Ersatzwert is written

@@ -61,7 +61,7 @@ let rechnung_json: serde_json::Value = invoice.to_rechnung_json();  // feature `
 
 | Item | Purpose |
 |---|---|
-| `Product` | one variant per category, deserialised from productd JSON by its `category` tag; `build_engine()` routes to the providers |
+| `Product` | one variant per category, deserialised from productd JSON by its `category` tag — each refuses a key it does not define, and `WAERMEPUMPE`, `WALLBOX` and `SHARING` carry their supply under `strom`; `build_engine()` routes to the providers |
 | `BillingContext`, `BillingPeriod`, `Quantities`, `RegulatoryRates` | the period (validated), identities, meter inputs and dated statutory rates |
 | `BillingEngine` | `validate()` pre-flight, `bill()` → `Invoice`, `bill_batch()` for portfolios |
 | `Invoice` | positions, totals, VAT breakdown and `warnings` (`has_errors()`); a missing input is a refusal, never a zero |
@@ -75,7 +75,7 @@ let rechnung_json: serde_json::Value = invoice.to_rechnung_json();  // feature `
 | `Gas(GasProduct)` | `GAS` | `GasProvider` | Brennwertkorrektur; Energiesteuer; BEHG CO₂ |
 | `Waerme(HeatProduct)` | `WAERME` | `HeatProvider` | Fernwärme; standard-rated (19 %); AVBFernwärmeV §24 Preisgleitklausel; the CO2KostAufG § 3 Abs. 1 statement + § 14 WPG Anteil |
 | `Wasser(WaterProduct)` | `WASSER` | `WaterProvider` | Trinkwasser 7 % USt; gesplittete Abwassergebühr (Schmutzwasser − Absetzungen, Niederschlagswasser m²); public-law fee is EN 16931 `O`, not `Z` |
-| `Solar(SolarProduct)` | `SOLAR` | `SolarProvider` | §42b EnWG GGV; Mieterstrom mit § 42a Abs. 4 EnWG 90 %-Deckel; Stromsteuer per § 9 Abs. 1 Nr. 3 StromStG, **stated** not omitted; 0 % USt if Kleinunternehmer (§19 UStG) |
+| `Solar(SolarProduct)` | `SOLAR` | `SolarProvider` | §42b EnWG GGV; Mieterstrom mit § 42a Abs. 4 EnWG 90 %-Deckel; Stromsteuer stated by the product — a `KLEINANLAGE` claim is held to § 9 Abs. 1 Nr. 3 StromStG and §§ 10, 12b StromStV; 0 % USt if Kleinunternehmer (§19 UStG) |
 | `Eeg(EegProduct)` | `EEG` | `EegProvider` | LF-side Gutschrift; `eeg` feature for §51/§52 |
 | `Einspeisung(EinspeisungProduct)` | `EINSPEISUNG` | `EinspeisungProvider` | Direktvermarktung Marktwert − Gebühr |
 | `Hems(HemsProduct)` | `HEMS` | `HemsProvider` | Platform subscription + events |

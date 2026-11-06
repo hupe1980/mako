@@ -2,7 +2,10 @@
 
 use mako_markt::{
     error::MdmError,
-    repository::{ZaehlzeitRegisterRecord, ZaehlzeitRepository, ZaehlzeitSaisonRecord},
+    repository::{
+        ZaehlzeitRegisterRecord, ZaehlzeitRegisterUpsert, ZaehlzeitRepository,
+        ZaehlzeitSaisonRecord, ZaehlzeitSaisonUpsert,
+    },
 };
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -19,32 +22,38 @@ impl PgZaehlzeitRepository {
 }
 
 impl ZaehlzeitRepository for PgZaehlzeitRepository {
-    async fn upsert_register(&self, rec: &ZaehlzeitRegisterRecord) -> Result<(), MdmError> {
-        sqlx::query(
+    async fn upsert_register(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+        body: &ZaehlzeitRegisterUpsert,
+    ) -> Result<ZaehlzeitRegisterRecord, MdmError> {
+        let row = sqlx::query(
             r"INSERT INTO zaehler_register
-                  (id, zaehler_id, tenant, bezeichnung, zaehlerauspraegung,
+                  (zaehler_id, tenant, bezeichnung, zaehlerauspraegung,
                    obis_kennzahl, einheit, valid_from, valid_to, updated_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
               ON CONFLICT (zaehler_id, tenant, bezeichnung, valid_from) DO UPDATE
               SET zaehlerauspraegung = EXCLUDED.zaehlerauspraegung,
                   obis_kennzahl      = EXCLUDED.obis_kennzahl,
                   einheit            = EXCLUDED.einheit,
                   valid_to           = EXCLUDED.valid_to,
-                  updated_at         = now()",
+                  updated_at         = now()
+              RETURNING id, zaehler_id, tenant, bezeichnung, zaehlerauspraegung,
+                        obis_kennzahl, einheit, valid_from, valid_to, updated_at",
         )
-        .bind(rec.id)
-        .bind(&rec.zaehler_id)
-        .bind(&rec.tenant)
-        .bind(&rec.bezeichnung)
-        .bind(&rec.zaehlerauspraegung)
-        .bind(&rec.obis_kennzahl)
-        .bind(&rec.einheit)
-        .bind(rec.valid_from)
-        .bind(rec.valid_to)
-        .execute(&self.pool)
+        .bind(zaehler_id)
+        .bind(tenant)
+        .bind(&body.bezeichnung)
+        .bind(body.zaehlerauspraegung.as_str())
+        .bind(&body.obis_kennzahl)
+        .bind(&body.einheit)
+        .bind(body.valid_from)
+        .bind(body.valid_to)
+        .fetch_one(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
-        Ok(())
+        row_to_register(&row)
     }
 
     async fn list_registers_by_zaehler(
@@ -72,40 +81,42 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
     ///
     /// `zaehler_saisons` carries no tenant of its own — it is scoped through
     /// its `zaehler_register` parent, so the row is written only against a
-    /// register that exists, and a caller-supplied `id` may only ever move
-    /// within the register it already belongs to.
-    async fn upsert_saison(&self, rec: &ZaehlzeitSaisonRecord) -> Result<(), MdmError> {
-        let written: Option<Uuid> = sqlx::query_scalar(
+    /// register of the caller's tenant: a register id from another tenant's
+    /// path writes nothing and is refused as not found.
+    async fn upsert_saison(
+        &self,
+        register_id: Uuid,
+        tenant: &str,
+        body: &ZaehlzeitSaisonUpsert,
+    ) -> Result<ZaehlzeitSaisonRecord, MdmError> {
+        let row = sqlx::query(
             r"INSERT INTO zaehler_saisons
-                  (id, register_id, saison, wochentage, zeit_von, zeit_bis, updated_at)
-              SELECT $1::uuid, r.id, $3::text, $4::smallint[], $5::time, $6::time, now()
+                  (register_id, saison, wochentage, zeit_von, zeit_bis, updated_at)
+              SELECT r.id, $3::text, $4::smallint[], $5::time, $6::time, now()
                 FROM zaehler_register r
-               WHERE r.id = $2
-              ON CONFLICT (id) DO UPDATE
-              SET saison     = EXCLUDED.saison,
-                  wochentage = EXCLUDED.wochentage,
-                  zeit_von   = EXCLUDED.zeit_von,
+               WHERE r.id = $1 AND r.tenant = $2
+              ON CONFLICT (register_id, saison, zeit_von) DO UPDATE
+              SET wochentage = EXCLUDED.wochentage,
                   zeit_bis   = EXCLUDED.zeit_bis,
                   updated_at = now()
-              WHERE zaehler_saisons.register_id = EXCLUDED.register_id
-              RETURNING id",
+              RETURNING id, register_id, saison, wochentage, zeit_von, zeit_bis, updated_at",
         )
-        .bind(rec.id)
-        .bind(rec.register_id)
-        .bind(&rec.saison)
-        .bind(&rec.wochentage)
-        .bind(rec.zeit_von)
-        .bind(rec.zeit_bis)
+        .bind(register_id)
+        .bind(tenant)
+        .bind(body.saison.as_str())
+        .bind(&body.wochentage)
+        .bind(body.zeit_von)
+        .bind(body.zeit_bis)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
-        // Nothing written means the register does not exist, or the id names a
-        // window of a different register. Both are refusals, never a silent
-        // `Ok` that reports a stored window there is none of.
-        written.map(|_| ()).ok_or(MdmError::NotFound {
+        // Nothing written means the tenant holds no such register — a refusal,
+        // never a silent `Ok` reporting a window there is none of.
+        let row = row.ok_or_else(|| MdmError::NotFound {
             resource_type: "zaehler_register",
-            id: rec.register_id.to_string(),
-        })
+            id: register_id.to_string(),
+        })?;
+        row_to_saison(&row)
     }
 
     /// The season windows of one register, scoped through the register's own

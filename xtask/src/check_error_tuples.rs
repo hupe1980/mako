@@ -37,7 +37,13 @@
 //! the rest of its file: a test module in the middle of a handler file does not
 //! hide the handlers after it.
 //!
-//! The rule is absolute: any tuple fails, named by file and line.
+//! **A bare status counts too.** `StatusCode::NAME.into_response()` with a
+//! non-2xx `NAME` is a failure with no body at all: a 500 without the
+//! `error_id` its log line carries, a 404 that does not say what is missing.
+//! `304 Not Modified` is exempt — RFC 9110 § 15.4.5 gives it no content.
+//!
+//! The rule is absolute: any tuple or bare failure fails, named by file and
+//! line.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -55,6 +61,9 @@ const SUCCESS: &[&str] = &[
     "ALREADY_REPORTED",
     "IM_USED",
 ];
+
+/// Statuses whose response has no body by definition (RFC 9110 § 15.4.5).
+const BODILESS: &[&str] = &["NOT_MODIFIED"];
 
 /// The lowest number of `.rs` files a healthy walk of `services/*/src` reads.
 const MIN_FILES: usize = 100;
@@ -129,6 +138,43 @@ pub fn tuple_lines(src: &str) -> Vec<usize> {
             lines.push(text[..open].matches('\n').count() + 1);
         }
     }
+    lines.extend(bare_lines(&text));
+    lines.sort_unstable();
+    lines.dedup();
+    lines
+}
+
+/// One-based lines of a bare `StatusCode::NAME.into_response()` failure in
+/// already-blanked `text` — a response with no body, so a 500 carries no
+/// `error_id` and a 404 no reason.
+fn bare_lines(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut lines = Vec::new();
+    for (at, _) in text.match_indices("StatusCode::") {
+        // The whole path token, so `axum::http::StatusCode::X` counts once.
+        let mut start = at;
+        while start > 0
+            && (bytes[start - 1].is_ascii_alphanumeric()
+                || bytes[start - 1] == b'_'
+                || bytes[start - 1] == b':')
+        {
+            start -= 1;
+        }
+        let mut end = at + "StatusCode::".len();
+        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+            end += 1;
+        }
+        let Some(name) = status_name(&text[start..end]) else {
+            continue;
+        };
+        if SUCCESS.contains(&name) || BODILESS.contains(&name) {
+            continue;
+        }
+        let rest = text[end..].trim_start();
+        if rest.starts_with(".into_response()") {
+            lines.push(text[..at].matches('\n').count() + 1);
+        }
+    }
     lines
 }
 
@@ -198,7 +244,8 @@ pub fn findings(found: &BTreeMap<String, Vec<usize>>) -> Vec<String> {
         .map(|(file, lines)| {
             let at: Vec<String> = lines.iter().map(|l| format!("{file}:{l}")).collect();
             format!(
-                "{file}: {} `(StatusCode::…, …)` error tuple(s) — return an `ApiError` (`?`, \
+                "{file}: {} `(StatusCode::…, …)` tuple(s) or bare `StatusCode::….into_response()` \
+                 failure(s) — return an `ApiError` (`?`, \
                  `ApiError::bad_request`/`unprocessable`/`conflict`/`not_found`/…, \
                  `.with_code`/`.with_fields` for machine-readable keys, `ApiError::internal`, \
                  `ApiError::upstream_*`) instead:\n    {}",
@@ -233,6 +280,16 @@ pub fn run(root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bare_failure_status_counts_and_a_bodiless_one_does_not() {
+        let src = "fn h() -> Response {\n    StatusCode::INTERNAL_SERVER_ERROR.into_response()\n}\n\
+                   fn g() -> Response { axum::http::StatusCode::NOT_FOUND\n        .into_response() }\n\
+                   fn ok() -> Response { StatusCode::NO_CONTENT.into_response() }\n\
+                   fn etag() -> Response { StatusCode::NOT_MODIFIED.into_response() }\n\
+                   fn status() -> StatusCode { StatusCode::NOT_FOUND }\n";
+        assert_eq!(tuple_lines(src), vec![2, 4]);
+    }
 
     #[test]
     fn a_planted_tuple_is_counted_on_its_line() {

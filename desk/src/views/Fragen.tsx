@@ -2,9 +2,12 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Button as AriaButton, Form, Input, TextField } from "react-aria-components";
 import { quelle } from "../app/dienste";
+import { fragenAnmelden } from "../app/frage";
+import { useHold } from "../app/Holds";
 import { FRAGEN } from "../app/keys";
 import { useRolle } from "../app/rollen";
 import {
+  AgentAbgelehnt,
   type Anker,
   type Answer,
   antwort,
@@ -13,6 +16,7 @@ import {
   schicksal,
   type Vorschlag,
 } from "../data/agent";
+import { useVerweigert, Verweigert } from "../data/verweigert";
 import { Icon } from "../design/Icon";
 import { Bewertung } from "./Bewertung";
 
@@ -98,7 +102,8 @@ function Lesen({ schritte }: { schritte: Answer["schritte"] }) {
 /**
  * The assistant's proposal for a Freigabe: what to do, the code, and the one
  * sentence why, checked like any other. „Übernehmen" fills the decision form
- * and sends nothing; „Verwerfen" hides it and says so beside the run.
+ * and sends nothing; „Verwerfen" hides it and, once its hold ends, says so
+ * beside the run — a routine decision, taken back with „Rückgängig" (FR-029).
  */
 function VorschlagKarte({
   v,
@@ -110,7 +115,7 @@ function VorschlagKarte({
   onUebernehmen: (v: Vorschlag, run: string) => void;
 }) {
   const [weg, setWeg] = useState(false);
-  const verwerfen = useMutation({ mutationFn: () => schicksal(run, "dismissed") });
+  const hold = useHold();
   if (weg) return null;
   return (
     <div className="mt-3 rounded-[12px] border border-ai bg-surface p-3">
@@ -140,7 +145,14 @@ function VorschlagKarte({
         <AriaButton
           onPress={() => {
             setWeg(true);
-            verwerfen.mutate();
+            hold(
+              `vorschlag/${run}`,
+              "Vorschlag verworfen",
+              // What became of a proposal is the assistant's quality signal;
+              // a lost one costs nothing the person sees.
+              (keepalive) => schicksal(run, "dismissed", keepalive),
+              () => setWeg(false),
+            );
           }}
           className="focus-ring h-7 rounded-full px-3 text-body text-text-2 data-[hovered]:bg-fill data-[hovered]:text-text"
         >
@@ -192,6 +204,7 @@ export function Fragen({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  const verweigert = useVerweigert({ dienst: "agentd", aktion: "fragen" });
   const kind = "kunde" in anker ? "kunde" : "malo" in anker ? "malo" : "freigabe";
   const start = useMutation({ mutationFn: (q: string) => fragen(q, anker) });
   const run = start.data;
@@ -206,8 +219,24 @@ export function Fragen({
     setFrage(q);
     start.mutate(q.trim());
   };
+  // ⌘K can ask too: the palette offers it while this panel is on screen.
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  useEffect(() => fragenAnmelden((q) => askRef.current(q)), []);
   const reading = start.isPending || answer.data?.status === "running" || (run && !answer.data);
   if (skill.isError) return null;
+  if (verweigert) {
+    return (
+      <section
+        aria-label="Fragen"
+        className="squircle flex items-center gap-2 rounded-panel border border-ai-border bg-ai-fill p-4 text-callout text-text-2"
+      >
+        <Icon name="sparkle" size={16} className="shrink-0 text-ai" />
+        Den Assistenten zu fragen ist Ihnen nicht erlaubt: {verweigert}
+      </section>
+    );
+  }
+  const fehler = start.error ?? answer.error;
 
   return (
     <section
@@ -265,9 +294,11 @@ export function Fragen({
 
       {reading && <Lesen schritte={answer.data?.schritte ?? []} />}
 
-      {(start.isError || answer.isError) && (
+      {fehler && !(fehler instanceof Verweigert) && (
         <p className="m-0 mt-4 text-callout text-critical">
-          Der Assistent ist nicht erreichbar. Alles andere im Desk funktioniert weiter.
+          {fehler instanceof AgentAbgelehnt
+            ? `Der Assistent hat die Frage nicht angenommen: ${fehler.message}`
+            : "Der Assistent ist nicht erreichbar. Alles andere im Desk funktioniert weiter."}
         </p>
       )}
 

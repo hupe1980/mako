@@ -62,8 +62,7 @@ pub(crate) async fn list_quality_assessments(
             })).into_response()
         }
         Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: list_quality_assessments failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            ApiError::internal(anyhow::Error::from(e).context(format!("list_quality_assessments failed (malo_id {malo_id})"))).into_response()
         }
     }
 }

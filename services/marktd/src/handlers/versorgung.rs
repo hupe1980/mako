@@ -23,8 +23,8 @@ use mako_markt::{
         VersorgungsStatusRepository, ZuordnungsStatus,
     },
 };
-use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
+use mako_service::{ApiError, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::pg::PgVersorgungsStatusRepository;
@@ -240,7 +240,10 @@ where
                 )
                     .into_response()
             }
-            Ok(None) => StatusCode::NOT_FOUND.into_response(),
+            Ok(None) => {
+                ApiError::not_found(format!("no Versorgungsstatus for MaLo {malo_id} at {at}"))
+                    .into_response()
+            }
             Err(e) => e.into_response(),
         };
     }
@@ -257,7 +260,9 @@ where
             )
                 .into_response()
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            ApiError::not_found(format!("no Versorgungsstatus for MaLo {malo_id}")).into_response()
+        }
         Err(e) => e.into_response(),
     }
 }
@@ -438,9 +443,6 @@ pub async fn put_versorgungsstatus(
     let new_version =
         match PgVersorgungsStatusRepository::upsert_tx(&mut tx, &rec, if_version).await {
             Ok(v) => v,
-            Err(MdmError::VersionConflict { .. }) => {
-                return StatusCode::PRECONDITION_FAILED.into_response();
-            }
             Err(e) => return e.into_response(),
         };
 
@@ -455,19 +457,21 @@ pub async fn put_versorgungsstatus(
     // tenant's — so the lookup keys on the MaLo-ID alone. A failure here is not
     // "no Sparte": it aborts the surrounding transaction, so it must surface
     // rather than resolve to `None`.
-    let sparte: Option<String> = match sqlx::query_scalar(
-        "SELECT sparte FROM malo WHERE malo_id = $1",
-    )
-    .bind(&malo_id_str)
-    .fetch_optional(&mut *tx)
-    .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(error = %e, malo = %malo_id_str, "versorgung: Sparte lookup failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    let sparte: Option<String> =
+        match sqlx::query_scalar("SELECT sparte FROM malo WHERE malo_id = $1")
+            .bind(&malo_id_str)
+            .fetch_optional(&mut *tx)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                return ApiError::internal(
+                    anyhow::Error::from(e)
+                        .context(format!("versorgung: Sparte lookup for MaLo {malo_id_str}")),
+                )
+                .into_response();
+            }
+        };
 
     let evt = MarktEvent::new(
         &state.tenant,
@@ -481,13 +485,15 @@ pub async fn put_versorgungsstatus(
         }),
     )
     .with_extensions(EventExtensions {
-        marktmaloid: Some(malo_id_str),
+        marktmaloid: Some(malo_id_str.clone()),
         marktsparte: sparte,
         ..Default::default()
     });
     if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
-        tracing::error!(error = %e, "versorgung: durable enqueue failed");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return ApiError::internal(anyhow::Error::from(e).context(format!(
+            "versorgung: durable enqueue for MaLo {malo_id_str}"
+        )))
+        .into_response();
     }
     if let Err(e) = tx.commit().await {
         tracing::error!(error = %e, "versorgung: commit failed");

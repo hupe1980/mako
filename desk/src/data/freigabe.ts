@@ -3,6 +3,9 @@
 // evidence, GoBD) and dispatches the answer the entry holds. The Desk sends
 // exactly the request its form shows — a proposal only ever fills the form.
 
+import { problem, sentence } from "./problem";
+import { verweigern } from "./verweigert";
+
 export interface Entscheidung {
   aktion: "freigeben" | "ablehnen";
   /** For a refusal, and for approving an escalation: the code of the entry's tree. */
@@ -16,6 +19,20 @@ export class Abgelehnt extends Error {
   override name = "Abgelehnt";
 }
 
+/** Somebody decided the Freigabe first: who, when, and how. */
+export class SchonEntschieden extends Error {
+  override name = "SchonEntschieden";
+  readonly status: string;
+  readonly decidedBy: string | null;
+  readonly decidedAt: string | null;
+  constructor(status: string, decidedBy: string | null, decidedAt: string | null) {
+    super(`already ${status}`);
+    this.status = status;
+    this.decidedBy = decidedBy;
+    this.decidedAt = decidedAt;
+  }
+}
+
 export async function entscheiden(id: string, e: Entscheidung): Promise<void> {
   const tuer = e.aktion === "freigeben" ? "approve" : "reject";
   const { aktion: _, ...body } = e;
@@ -25,13 +42,12 @@ export async function entscheiden(id: string, e: Entscheidung): Promise<void> {
     body: JSON.stringify(body),
   });
   if (res.ok) return;
-  const text = await res.text();
-  let message = text;
-  try {
-    const json = JSON.parse(text) as { error?: string; message?: string };
-    message = json.message ?? json.error ?? text;
-  } catch {
-    // processd answered with text; show it as it came.
+  const p = await problem(res);
+  if (res.status === 409 && p.code === "already_decided") {
+    const text = (k: string) => (typeof p[k] === "string" ? (p[k] as string) : null);
+    throw new SchonEntschieden(text("status") ?? "", text("decided_by"), text("decided_at"));
   }
-  throw new Abgelehnt(message || `Die Prozessüberwachung hat abgelehnt (${res.status}).`);
+  if (res.status === 403)
+    throw verweigern({ dienst: "processd", aktion: "entscheiden" }, sentence(p));
+  throw new Abgelehnt(sentence(p));
 }

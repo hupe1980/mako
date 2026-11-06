@@ -143,9 +143,12 @@ fn contract_commands(src: &str) -> BTreeSet<String> {
 fn queue_commands(src: &str) -> Option<Vec<(String, usize)>> {
     let mut mask = code_mask(src);
     blank_cfg_test(src, &mut mask);
-    let builds = src
-        .match_indices("ApprovalQueueEntry")
-        .any(|(at, _)| mask[at]);
+    // Building is a constructor call or a struct literal. A file that only
+    // names the type — a helper reading a decided entry — queues nothing, and
+    // counting it would hold every command it dispatches to the queue's table.
+    let builds = ["ApprovalQueueEntry::pending(", "ApprovalQueueEntry {"]
+        .iter()
+        .any(|needle| src.match_indices(needle).any(|(at, _)| mask[at]));
     if !builds {
         return None;
     }
@@ -228,5 +231,14 @@ fn real() { ApprovalQueueEntry::pending(); }
 mod tests { fn t() { mako_markt::commands::ONLY_IN_TESTS; } }
 "#;
         assert_eq!(queue_commands(with_test).expect("builds"), vec![]);
+    }
+
+    #[test]
+    fn naming_the_type_is_not_building_an_entry() {
+        let src = r#"
+fn unclaimable(found: Option<&ApprovalQueueEntry>) -> ApiError { todo!() }
+fn supply() { mako_markt::commands::GPKE_LIEFERBEGINN_ANMELDEN; }
+"#;
+        assert!(queue_commands(src).is_none());
     }
 }

@@ -1010,7 +1010,7 @@ fn sect42c_energy_sharing_credit_reduces_effective_cost() {
 
     // SHARING tariff: full STROM price + sharing credit
     let strom_tariff: Product = serde_json::from_str(
-        r#"{"category":"SHARING","arbeitspreis_ct_per_kwh":"32.0","sharing_credit_ct_per_kwh":"20.0"}"#,
+        r#"{"category":"SHARING","strom":{"arbeitspreis_ct_per_kwh":"32.0"},"sharing_credit_ct_per_kwh":"20.0"}"#,
     )
     .unwrap();
     let invoice = strom_tariff
@@ -1726,6 +1726,7 @@ fn golden_mieterstrom_invoice_reconciles_and_states_its_ceiling() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "SOLAR",
+        "stromsteuer_tarif": {"art":"KLEINANLAGE", "energietraeger":"SONNENENERGIE", "nennleistung_kw":"99", "entnahme":"LETZTVERBRAUCHER", "entfernung_km":"0.1"},
         "solar_arbeitspreis_ct_per_kwh": "24.0",
         "grundversorgung_arbeitspreis_ct_per_kwh": "30.0",
         "anlage_kwp": "60.0"
@@ -1774,7 +1775,14 @@ fn golden_mieterstrom_invoice_reconciles_and_states_its_ceiling() {
         .expect("§ 9 Abs. 1 Nr. 3 StromStG must be stated");
     assert_eq!(
         exemption.legal_basis.as_deref(),
-        Some("§ 9 Abs. 1 Nr. 3 StromStG")
+        Some("§ 9 Abs. 1 Nr. 3 Buchst. b StromStG")
+    );
+    assert!(
+        exemption
+            .description
+            .contains("allgemeine Erlaubnis nach § 10 Abs. 2 StromStV"),
+        "{}",
+        exemption.description
     );
     assert_eq!(exemption.net_eur, dec!(0));
 
@@ -1809,7 +1817,7 @@ fn golden_mieterstrom_ceiling_is_exact_at_ninety_percent() {
     let rates = RegulatoryRates::default();
     let bill_at = |ms_ct: &str| {
         let tariff: Product = serde_json::from_str(&format!(
-            r#"{{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"{ms_ct}",
+            r#"{{"category":"SOLAR","stromsteuer_tarif":{{"art":"KLEINANLAGE","energietraeger":"SONNENENERGIE","nennleistung_kw":"99","entnahme":"LETZTVERBRAUCHER","entfernung_km":"0.1"}},"solar_arbeitspreis_ct_per_kwh":"{ms_ct}",
                  "grundversorgung_arbeitspreis_ct_per_kwh":"30.0"}}"#
         ))
         .unwrap();
@@ -1847,7 +1855,7 @@ fn golden_mieterstrom_without_a_reference_tariff_bills_unchecked() {
     use energy_billing::SolarMeterInput;
 
     let tariff: Product =
-        serde_json::from_str(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"35.0"}"#)
+        serde_json::from_str(r#"{"category":"SOLAR","stromsteuer_tarif":{"art":"KLEINANLAGE","energietraeger":"SONNENENERGIE","nennleistung_kw":"99","entnahme":"LETZTVERBRAUCHER","entfernung_km":"0.1"},"solar_arbeitspreis_ct_per_kwh":"35.0"}"#)
             .unwrap();
     let rates = RegulatoryRates::default();
     let ctx = BillingContext {
@@ -1932,6 +1940,7 @@ fn golden_ggv_splits_pv_and_grid_and_taxes_only_the_grid() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "SOLAR",
+        "stromsteuer_tarif": {"art":"KLEINANLAGE", "energietraeger":"SONNENENERGIE", "nennleistung_kw":"99", "entnahme":"LETZTVERBRAUCHER", "entfernung_km":"0.1"},
         "solar_arbeitspreis_ct_per_kwh": "24.0",
         "arbeitspreis_ct_per_kwh": "32.0",
         "gemeinschaft_rabatt_ct_per_kwh": "3.0"

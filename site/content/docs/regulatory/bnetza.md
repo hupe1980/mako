@@ -114,6 +114,11 @@ MPES Festlegung BK6-20-160 was gültig bis 05.06.2025. The erzeugende-MaLo PIDs
 > „Bestehende Anwendungsfälle bleiben in EDIFACT und neue Anwendungsfälle aus der
 > ausstehenden Festlegung ‚MaBiS-Hub' werden ebenfalls in EDIFACT ausgeprägt werden"
 > ([Mitteilung Nr. 58](https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Mitteilung_58/Mitteilung_Nr_58.html), 01.10.2026, „Weitere Ergebnisse").
+> The timetable consulted with it (26.09.2025) is the BDEW's proposal, not a
+> binding date: Testsysteme ab 01.07.2028, Schnittstellentests bis 30.09.2028,
+> Parallelbetrieb ab 01.01.2029, Produktivsetzung — „ausschließlich die neue
+> Prozesslandschaft" — zum 01.10.2029 (BDEW, Einführungsszenario zur
+> Produktivsetzung des MaBiS-Hub, Kap. 1–2, S. 1–2).
 
 **Selected Mitteilungen:**
 

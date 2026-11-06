@@ -318,9 +318,7 @@ pub(crate) async fn get_netzverlust(
             }))
             .into_response()
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "edmd: netzverlust query failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => ApiError::internal(anyhow::Error::from(e).context("netzverlust query failed"))
+            .into_response(),
     }
 }

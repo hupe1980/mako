@@ -597,13 +597,14 @@ API-Webdienste.
   It applies to Control Measures and MaLo Identification; the Verzeichnisdienst
   uses JWS. Without a signing key, makod refuses to start when `addr`,
   `--maloid-partner` or `--verzeichnisdienst-url` is set.
-- **Inbound signatures are verified.** A request carrying `X-BDEW-SIGNATURE` /
-  `X-BDEW-DIGEST` / `X-BDEW-CERT` (Kap. 3.3; certificate in RFC 9440 encoding)
-  is checked against the named certificate's key over
+- **Inbound signatures are required and verified.** Kap. 3.3: „MUST Jede
+  API-Interaktion und der übertragene Payload wird signiert". Every request
+  carries `X-BDEW-SIGNATURE` / `X-BDEW-DIGEST` / `X-BDEW-CERT` (certificate in
+  RFC 9440 encoding), checked against the named certificate's key over
   `https://{Host}{path?query}`, the canonical body and the `creationDateTime` /
-  `transactionId` / `initialTransactionId` headers before any handler runs. A
-  mismatch or a partial or repeated header set is `401`; an unsigned request
-  passes with a warning. The proxy, not makod, validates the SM-PKI chain.
+  `transactionId` / `initialTransactionId` headers before any handler runs. An
+  unsigned request, a mismatch and a partial or repeated header set are `401`.
+  The proxy, not makod, validates the SM-PKI chain.
 - **mTLS is the proxy's job.** makod does not terminate TLS; front `:8090` with a
   proxy (Nginx, Envoy, ALB) enforcing mTLS against the BDEW PKI CA. By default
   every `:8090` route also requires bearer/OIDC and Cedar `UseWebdienste`.

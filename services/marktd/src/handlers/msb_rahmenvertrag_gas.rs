@@ -75,7 +75,7 @@ pub async fn upsert_msb_rv_gas(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-msb-rv-gas", &tenant) {
         tracing::warn!(error = %e, "marktd: Cedar denied write-msb-rv-gas");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("write-msb-rv-gas denied").into_response();
     }
     rec.tenant = tenant.clone();
     if rec.gnb_mp_id.trim().is_empty() || rec.msb_mp_id.trim().is_empty() {
@@ -116,8 +116,10 @@ pub async fn upsert_msb_rv_gas(
             )
             .await
             {
-                tracing::error!(error = %e, "msb_rv_gas: durable enqueue failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return ApiError::internal(anyhow::Error::from(e).context(format!(
+                    "msb_rv_gas: durable enqueue for MSB-Rahmenvertrag Gas {id}"
+                )))
+                .into_response();
             }
             (
                 StatusCode::OK,
@@ -160,7 +162,7 @@ pub async fn list_msb_rv_gas(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-msb-rv-gas", &tenant) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-msb-rv-gas");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("read-msb-rv-gas denied").into_response();
     }
     match repo.list(&tenant, q.msb_mp_id.as_deref(), q.status).await {
         Ok(rows) => (StatusCode::OK, Json(serde_json::json!({ "data": rows }))).into_response(),
@@ -189,11 +191,13 @@ pub async fn get_msb_rv_gas(
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-msb-rv-gas", &tenant) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-msb-rv-gas");
-        return StatusCode::FORBIDDEN.into_response();
+        return ApiError::forbidden("read-msb-rv-gas denied").into_response();
     }
     match repo.get(&tenant, id).await {
         Ok(Some(rec)) => (StatusCode::OK, Json(serde_json::json!({ "data": rec }))).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            ApiError::not_found(format!("MSB-Rahmenvertrag Gas {id} not found")).into_response()
+        }
         Err(e) => e.into_response(),
     }
 }

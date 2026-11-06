@@ -800,7 +800,8 @@ Datenstatus (§9.9.2 Nr. 1).
 `[mabis] submission_target` selects where Summenzeitreihen are filed. One value is
 accepted, `"biko-bilateral"` (the default). `"mabis-hub"` (BK6-24-210) parses
 and then **refuses at startup**: no Beschluss publishes a wire format, endpoint
-or payload shape.
+or payload shape. Its Anwendungsfälle will be EDIFACT, not API-Webdienste
+([Mitteilung Nr. 58](@/docs/regulatory/bnetza.md), 01.10.2026).
 
 ### Routes and run lifecycle
 

@@ -50,19 +50,18 @@ fn normalize_marktlokation(data: serde_json::Value) -> mako_service::ApiResult<M
     mako_markt::bo4e::decode(data).map_err(|e| super::bo4e_refusal(&e))
 }
 
-/// Deserialise stored JSONB as `Marktlokation`. Returns `None` and logs an
-/// error on schema drift (operator must re-PUT the record to fix).
-fn deserialize_stored_malo(data: serde_json::Value, malo_id: &str) -> Option<Marktlokation> {
-    serde_json::from_value::<Marktlokation>(data)
-        .map_err(|e| {
-            tracing::error!(
-                malo_id,
-                error = %e,
-                "schema drift: stored MaLo data is not a valid Marktlokation — \
-                 re-PUT with a valid BO4E payload"
-            );
-        })
-        .ok()
+/// Deserialise stored JSONB as `Marktlokation`. Fails on schema drift
+/// (operator must re-PUT the record to fix); the error names the MaLo.
+fn deserialize_stored_malo(
+    data: serde_json::Value,
+    malo_id: &str,
+) -> anyhow::Result<Marktlokation> {
+    serde_json::from_value::<Marktlokation>(data).map_err(|e| {
+        anyhow::Error::from(e).context(format!(
+            "schema drift: stored MaLo {malo_id} data is not a valid Marktlokation — \
+             re-PUT with a valid BO4E payload"
+        ))
+    })
 }
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
@@ -350,8 +349,8 @@ pub async fn get_malo(
     match state.malo_repo.find(&malo_id, today_berlin()).await {
         Ok(Some(r)) => {
             let data = match deserialize_stored_malo(r.data, r.malo_id.as_ref()) {
-                Some(v) => v,
-                None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                Ok(v) => v,
+                Err(e) => return ApiError::internal(e).into_response(),
             };
             let resp = MaloResponse {
                 malo_id: r.malo_id.to_string(),
@@ -430,7 +429,9 @@ pub async fn list_malo(
                 .into_iter()
                 .filter_map(|r| {
                     let malo_id_str = r.malo_id.to_string();
-                    let data = deserialize_stored_malo(r.data, r.malo_id.as_ref())?;
+                    let data = deserialize_stored_malo(r.data, r.malo_id.as_ref())
+                        .map_err(|e| tracing::error!("{e:#}"))
+                        .ok()?;
                     Some(MaloResponse {
                         malo_id: malo_id_str,
                         sparte: r.sparte,

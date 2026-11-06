@@ -98,15 +98,7 @@ use std::path::Path;
 /// `deny_unknown_fields`, with the reason. Keyed by file and name. An entry
 /// covers everything read out of that buffer, so it is a claim about the whole
 /// subtree and has to say why.
-const BUFFER_EXEMPT: &[(&str, &str, &str)] = &[(
-    "crates/energy-billing/src/tariff.rs",
-    "Product",
-    "the variant structs are also read from billingd's productd mapping \
-     (`services/billingd/src/clients.rs`), which builds one object carrying every \
-     category's keys for whichever variant the product is, so they cannot deny the keys \
-     of the others — and two of them flatten an `ElectricityProduct`. A misspelt key in a \
-     `tariff` posted to billingd is therefore not refused",
-)];
+const BUFFER_EXEMPT: &[(&str, &str, &str)] = &[];
 
 /// Every `Lenient<T>` extraction, by file and body type, with the reason the
 /// body is read without the unknown-key refusal.

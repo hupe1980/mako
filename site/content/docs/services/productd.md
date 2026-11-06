@@ -126,6 +126,40 @@ Content-Type: application/json
 the canonical `rubo4e` round-trip, so the gate's strict-enum stage refuses a
 typo that would otherwise come back as `"UNKNOWN"`.
 
+### Billing settings: `abrechnung`
+
+What `billingd` needs of a product besides its prices goes in `abrechnung`:
+`stromsteuer_tarif`, `energiesteuer_tarif`, `steuerentlastungen`,
+`energiequellen`, `indexed_price`, `gas_indexed_price`, `block_tiers`,
+`seasonal_prices`, `preisgarantie_bis` and `sharing_description`. Each is typed
+as the billing engine reads it, so an unknown key is a `422` at the `PUT`.
+
+A `SOLAR` product must state its `stromsteuer_tarif`. A Mieterstrom supplied
+by the plant's operator claims § 9 Abs. 1 Nr. 3 StromStG with the plant's
+facts, and the `PUT` is refused when they do not carry it:
+
+```json
+"abrechnung": {
+  "stromsteuer_tarif": {
+    "art": "KLEINANLAGE",
+    "energietraeger": "SONNENENERGIE",
+    "nennleistung_kw": "99",
+    "entnahme": "LETZTVERBRAUCHER",
+    "entfernung_km": "0.2"
+  }
+}
+```
+
+| Fact | Rule |
+|---|---|
+| `nennleistung_kw` | all units of the operator at the site with the same Energieträger (§ 12b Abs. 1 StromStV); at most 2 000 kW |
+| `entfernung_km` | at most 4,5 km between unit and Entnahmestelle (§ 12b Abs. 3 StromStV) |
+| `erlaubnis_aktenzeichen` | required above 1 000 kW (KWK: from 1 000 kW); below, the allgemeine Erlaubnis of § 10 Abs. 2 StromStV applies |
+| `entnahme` | `LETZTVERBRAUCHER` only when the supplier operates the plant or has it operated (§ 12b Abs. 2 StromStV) |
+
+A Lieferant that does not operate the plant, or an operator renouncing the
+exemption (§ 9 Abs. 1b StromStG), states `{"art": "REGEL"}`.
+
 ### Two vocabularies, one field — and why they are kept apart
 
 BO4E `Preistyp` defines **ten** values; mako's whitelist

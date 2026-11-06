@@ -60,10 +60,10 @@ pub(crate) async fn get_deliveries(
             let energiemengen: Vec<Energiemenge> = reads.iter().map(read_to_energiemenge).collect();
             Json(energiemengen).into_response()
         }
-        Err(err) => {
-            tracing::warn!(%err, malo_id, "edmd: get_deliveries failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(err) => ApiError::internal(
+            anyhow::Error::from(err).context(format!("get_deliveries failed (malo_id {malo_id})")),
+        )
+        .into_response(),
     }
 }
 
@@ -167,10 +167,10 @@ pub(crate) async fn get_imbalance(
         Err(crate::domain::error::EdmError::InvalidMaloId { malo_id, reason }) => {
             ApiError::bad_request(format!("{malo_id}: {reason}")).into_response()
         }
-        Err(err) => {
-            tracing::warn!(%err, malo_id, "edmd: get_imbalance failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(err) => ApiError::internal(
+            anyhow::Error::from(err).context(format!("get_imbalance failed (malo_id {malo_id})")),
+        )
+        .into_response(),
     }
 }
 
@@ -250,10 +250,11 @@ pub(crate) async fn get_billing_period(
     match state.repo.billing_period(&q).await {
         Ok(Some(period)) => Json(serde_json::to_value(period).unwrap_or_default()).into_response(),
         Ok(None) => ApiError::NotFound.into_response(),
-        Err(err) => {
-            tracing::warn!(%err, %malo_id, "edmd: get_billing_period failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(err) => ApiError::internal(
+            anyhow::Error::from(err)
+                .context(format!("get_billing_period failed (malo_id {malo_id})")),
+        )
+        .into_response(),
     }
 }
 
@@ -399,10 +400,8 @@ pub(crate) async fn list_billing_periods(
             }))
             .into_response()
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "edmd: list_billing_periods failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => ApiError::internal(anyhow::Error::from(e).context("list_billing_periods failed"))
+            .into_response(),
     }
 }
 

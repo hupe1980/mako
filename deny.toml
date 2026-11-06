@@ -569,7 +569,7 @@ reason  = "typst document rendering (outputd) → syntect → plist pins quick-x
 [[bans.skip]]
 name    = "aes"
 version = "=0.8"
-reason  = "older crypto crates in the iceberg/tls ecosystem use aes 0.8; workspace now uses 0.9."
+reason  = "older crypto crates in the iceberg/tls ecosystem use aes 0.8; the workspace uses 0.9."
 
 # ── iceberg 0.10 vs asx-rs AES-GCM stack split ──────────────────────────────────
 # The cold tier (iceberg 0.10, via edmd/meterstore) pulls the aes-gcm 0.10 AEAD

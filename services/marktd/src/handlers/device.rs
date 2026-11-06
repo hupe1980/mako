@@ -408,8 +408,11 @@ pub async fn put_konfigurationsprodukte(
                 }),
             );
             if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
-                tracing::error!(error = %e, "device: durable enqueue failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return ApiError::internal(
+                    anyhow::Error::from(e)
+                        .context(format!("device: durable enqueue for sr_id {sr_id}")),
+                )
+                .into_response();
             }
             StatusCode::NO_CONTENT.into_response()
         }
@@ -487,8 +490,11 @@ pub async fn delete_konfigurationsprodukt(
                 }),
             );
             if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
-                tracing::error!(error = %e, "device: durable enqueue failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return ApiError::internal(
+                    anyhow::Error::from(e)
+                        .context(format!("device: durable enqueue for sr_id {sr_id}")),
+                )
+                .into_response();
             }
             StatusCode::NO_CONTENT.into_response()
         }
@@ -606,7 +612,9 @@ pub async fn get_zaehlwerke(
 
     let zaehler = match repo.find_zaehler(&zaehler_id, &tenant).await {
         Ok(Some(z)) => z,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            return ApiError::not_found(format!("Zaehler {zaehler_id} not found")).into_response();
+        }
         Err(e) => return ApiError::internal(e).into_response(),
     };
 
@@ -927,8 +935,11 @@ pub async fn put_geraet_konfigurationen(
                 }),
             );
             if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
-                tracing::error!(error = %e, "device: durable enqueue failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return ApiError::internal(
+                    anyhow::Error::from(e)
+                        .context(format!("device: durable enqueue for geraet_id {geraet_id}")),
+                )
+                .into_response();
             }
             StatusCode::NO_CONTENT.into_response()
         }
@@ -1061,7 +1072,9 @@ pub async fn get_technische_ressource(
 
     match repo.find_tr(&tr_id, &tenant).await {
         Ok(Some(record)) => Json(record).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            ApiError::not_found(format!("Technische Ressource {tr_id} not found")).into_response()
+        }
         Err(e) => ApiError::internal(e).into_response(),
     }
 }
@@ -1101,35 +1114,34 @@ pub async fn list_technische_ressourcen_by_malo(
 
 pub type ZaehlzeitRepoExt = Arc<crate::pg::PgZaehlzeitRepository>;
 
-use mako_markt::repository::{ZaehlzeitRegisterRecord, ZaehlzeitRepository, ZaehlzeitSaisonRecord};
+use mako_markt::repository::{
+    ZaehlzeitRegisterRecord, ZaehlzeitRegisterUpsert, ZaehlzeitRepository, ZaehlzeitSaisonRecord,
+    ZaehlzeitSaisonUpsert,
+};
 
 /// `PUT /api/v1/zaehler/{zaehler_id}/register`
 ///
-/// Upsert a `ZaehlzeitRegister` for a given Zähler.  One register per tariff
-/// zone (HT/NT/EINZEL), written by an operator or an ERP import.
+/// Create or update the register of a Zähler that `bezeichnung` and
+/// `valid_from` identify — one per tariff zone (HT/NT/EINZEL). Answers `200`
+/// with the register as stored, whose `id` the season windows are written
+/// under.
 pub async fn put_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(zaehler_id): Path<String>,
-    Json(mut rec): Json<ZaehlzeitRegisterRecord>,
-) -> impl IntoResponse {
-    if enforcer
+    Json(body): Json<ZaehlzeitRegisterUpsert>,
+) -> ApiResult<Json<ZaehlzeitRegisterRecord>> {
+    enforcer
         .check(&claims.principal(), "write-device", &tenant)
-        .is_err()
-    {
-        return ApiError::forbidden("access denied").into_response();
-    }
-    rec.zaehler_id = zaehler_id;
-    rec.tenant = tenant;
-    if rec.id == uuid::Uuid::nil() {
-        rec.id = uuid::Uuid::new_v4();
-    }
-    match repo.upsert_register(&rec).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => ApiError::unprocessable(e.to_string()).into_response(),
-    }
+        .map_err(|_| ApiError::forbidden("access denied"))?;
+    body.validate().map_err(super::mdm_error)?;
+    let stored = repo
+        .upsert_register(&zaehler_id, &tenant, &body)
+        .await
+        .map_err(super::mdm_error)?;
+    Ok(Json(stored))
 }
 
 /// `GET /api/v1/zaehler/{zaehler_id}/register`
@@ -1157,30 +1169,27 @@ pub async fn list_zaehler_register(
 
 /// `PUT /api/v1/zaehler-register/{register_id}/saisons`
 ///
-/// Upsert a `ZaehlzeitSaison` entry for a register.  One row per
-/// season × weekday combination.  Example: "HT applies Mon–Fri 07:00–22:00 in WINTER".
+/// Create or update the window of a register that `saison` and `zeit_von`
+/// identify — e.g. "HT applies Mon–Fri 07:00–22:00 in WINTER". A register the
+/// caller's tenant does not hold is `404`. Answers `200` with the window as
+/// stored.
 pub async fn put_zaehler_saison(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(register_id): Path<uuid::Uuid>,
-    Json(mut rec): Json<ZaehlzeitSaisonRecord>,
-) -> impl IntoResponse {
-    if enforcer
+    Json(body): Json<ZaehlzeitSaisonUpsert>,
+) -> ApiResult<Json<ZaehlzeitSaisonRecord>> {
+    enforcer
         .check(&claims.principal(), "write-device", &tenant)
-        .is_err()
-    {
-        return ApiError::forbidden("access denied").into_response();
-    }
-    rec.register_id = register_id;
-    if rec.id == uuid::Uuid::nil() {
-        rec.id = uuid::Uuid::new_v4();
-    }
-    match repo.upsert_saison(&rec).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => ApiError::unprocessable(e.to_string()).into_response(),
-    }
+        .map_err(|_| ApiError::forbidden("access denied"))?;
+    body.validate().map_err(super::mdm_error)?;
+    let stored = repo
+        .upsert_saison(register_id, &tenant, &body)
+        .await
+        .map_err(super::mdm_error)?;
+    Ok(Json(stored))
 }
 
 /// `GET /api/v1/zaehler-register/{register_id}/saisons`

@@ -114,6 +114,13 @@ codes its Entscheidungsbaum defines, each with its published wording. The
 process's Verlauf is beside it. Every decision sends a market message, so the
 Desk asks once more before it goes, and it is recorded under your name.
 
+<kbd>J</kbd> and <kbd>K</kbd> step through the list, <kbd>A</kbd> chooses
+Freigeben and <kbd>R</kbd> Ablehnen; <kbd>↵</kbd> confirms the send. When a
+colleague decided the same Freigabe first, the Desk says who and when, and
+yours is not sent. Any other refusal is shown in the Prozessüberwachung's own
+words; one its policy makes stands where the controls were until the tab is
+closed.
+
 Ask the assistant „Was schlägst du vor?" and it may propose a decision — an
 action, a code and one sentence why, checked like every sentence it writes.
 „In die Entscheidung übernehmen" fills the form and sends nothing; you check
@@ -123,6 +130,15 @@ are measured.
 
 [![A Freigabe with the assistant's proposal taken into the form, unsent](freigaben-light.png)](freigaben-light.png)
 [![A Freigabe with the assistant's proposal taken into the form, unsent](freigaben-dark.png)](freigaben-dark.png)
+
+## Taking a decision back
+
+A routine decision — „Hilfreich?" under an answer or a Hinweis, „Verwerfen"
+on a proposal — shows at once and leaves the browser five seconds later. Until
+then a toast at the foot of the window offers „Rückgängig", and
+<kbd>⌘Z</kbd> takes back the newest; nothing was sent, so there is nothing to
+reverse. Closing the tab sends whatever is still held. A decision that sends a
+market message is never held: it asks first and goes at once.
 
 ## Überblick
 
@@ -183,6 +199,12 @@ Payment data is not part of the view.
 [![The command palette listing customers for „Muster“](palette-kunden-light.png)](palette-kunden-light.png)
 [![The command palette listing customers for „Muster“](palette-kunden-dark.png)](palette-kunden-dark.png)
 
+A question typed into the palette goes to the assistant on the page you are
+on — under a process, a customer or a Freigabe — and is answered there.
+
+[![The command palette handing a question to the assistant](palette-fragen-light.png)](palette-fragen-light.png)
+[![The command palette handing a question to the assistant](palette-fragen-dark.png)](palette-fragen-dark.png)
+
 ## One role at a time
 
 Holding several market roles, a person wears one at a time — **Netz** (NB),
@@ -213,6 +235,8 @@ hold and sets the appearance: System, Hell or Dunkel, kept in this browser.
   them, in Berlin time.
 - **Show data it cannot type** — a view reads only tools whose answer has a
   declared shape.
+- **Decide who may act** — it offers every action and the service's policy
+  answers.
 
 ## The design system
 

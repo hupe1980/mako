@@ -554,8 +554,8 @@ pub enum BillingEvent {
     },
     /// This participant sent a Prüfmitteilung for one version.
     PruefmitteilungSent {
-        /// Version the check refers to (Kap. 3.8.3: „Eine Prüfmitteilung
-        /// bezieht sich immer auf eine Version").
+        /// Version the check refers to (Kap. 3.8.3: a Prüfmitteilung „bezieht
+        /// sich immer auf eine Version einer Summenzeitreihe").
         version: SzrVersion,
         /// IFTSTA PID it went out on (21000 / 21001 / 21005).
         pid: Pruefidentifikator,
@@ -706,8 +706,9 @@ pub enum BillingState {
     New,
     /// At least one version received; versions may still arrive and be checked.
     Offen(BillingData),
-    /// The clearing window closed. Kap. 3.10: „Danach dürfen die Prozesse …
-    /// nicht erneut gestartet werden."
+    /// The clearing window closed: the Abrechnungsstichtag of MaBiS Kap. 3.10
+    /// Tabelle 2 (S. 23) has passed, and the settling versions „erhalten nun den
+    /// Datenstatus ‚abgerechnete Daten' bzw. ‚abgerechnete Daten KBKA'".
     Geschlossen(BillingData),
 }
 

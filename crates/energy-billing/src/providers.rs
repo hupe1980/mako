@@ -112,6 +112,7 @@ impl BillingProvider for ElectricityProvider {
             self.product.indexed_price.as_ref(),
             has_any_work_price,
         ));
+        w.extend(kleinanlage_warning(&self.product.stromsteuer_tarif));
         if !has_any_work_price {
             w.push(BillingWarning {
                 code: "KEIN_ARBEITSPREIS",
@@ -315,8 +316,8 @@ impl BillingProvider for ElectricityProvider {
 
         // ── Prosumer billing path ──────────────────────────────────────────────
         // When prosumer meter data is provided, bill only grid_consumption.
-        // Self-consumed electricity is Stromsteuer-exempt (§ 9 Abs. 1 Nr. 3 StromStG)
-        // and does NOT attract NNE charges.
+        // Self-consumed electricity is the customer's own generation, not this
+        // supply: it carries neither this invoice's Stromsteuer nor NNE.
         if let Some(p) = &quantities.prosumer {
             return self.bill_prosumer(ctx, p, product, grid, rates, seasonal_arbeitspreis);
         }
@@ -576,7 +577,7 @@ impl BillingProvider for ElectricityProvider {
 
         // ── Stromsteuer ────────────────────────────────────────────────────────
         positions.extend(stromsteuer_positions(
-            product.stromsteuer_tarif,
+            &product.stromsteuer_tarif,
             kwh,
             rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override)?,
             &["strom"],
@@ -728,8 +729,8 @@ impl ElectricityProvider {
                     .with_tag("nne"),
                 );
             }
-            // Stromsteuer on grid consumption only (§ 9 Abs. 1 Nr. 3 StromStG:
-            // self-consumption exempt)
+            // Stromsteuer on grid consumption only: the self-consumed share is
+            // not supplied.
             let st_rate = rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override)?;
             if st_rate > Decimal::ZERO {
                 positions.push(
@@ -753,15 +754,11 @@ impl ElectricityProvider {
                 description: format!(
                     "Eigenverbrauch PV: {self_kwh:.3}\u{202f}kWh (Selbstversorgungsgrad {self_supply_pct:.1}\u{202f}%)",
                 ),
-                // § 9 Abs. 1 Nr. 3 StromStG — an installation up to 2 MW,
-                // consumed by the operator or drawn in the räumlicher
-                // Zusammenhang. Not § 9a, which is a Steuerentlastung for
-                // industrial processes.
-                legal_basis: Some(
-                    "\u{a7} 9 Abs. 1 Nr. 3 StromStG (Stromsteuerfreiheit Eigenverbrauch, \
-                     Anlage bis 2\u{202f}MW)"
-                        .to_owned(),
-                ),
+                // The customer's own generation is no supply of this invoice,
+                // so its Stromsteuer is not this invoice's to state: § 9 Abs. 1
+                // Nr. 3 StromStG turns on the customer's plant, which the
+                // supplier does not hold.
+                legal_basis: None,
                 quantity: self_kwh,
                 unit: "kWh".to_owned(),
                 unit_price_eur: Decimal::ZERO,
@@ -2258,8 +2255,10 @@ impl BillingProvider for SolarProvider {
         _ctx: &BillingContext,
         _quantities: &Quantities,
     ) -> Vec<BillingWarning> {
-        let mut w = Vec::new();
         let p = &self.product;
+        let mut w: Vec<BillingWarning> = kleinanlage_warning(&p.stromsteuer_tarif)
+            .into_iter()
+            .collect();
 
         // A commodity product must be able to price its commodity — the same
         // invariant electricity, gas and heat carry. Without it a solar product
@@ -2353,7 +2352,7 @@ impl BillingProvider for SolarProvider {
                 // the line merely being absent, which is all a bare
                 // `solar_include_stromsteuer = false` produced.
                 positions.extend(stromsteuer_positions(
-                    product.stromsteuer_tarif,
+                    &product.stromsteuer_tarif,
                     pv_kwh,
                     ctx.regulatory_rates.effective_stromsteuer(None)?,
                     &["solar", "ggv_pv"],
@@ -2493,7 +2492,7 @@ impl BillingProvider for SolarProvider {
         // Stromsteuer is owed on them, or a ground exempts them and the invoice
         // says which. This path billed neither — no levy and no notice.
         positions.extend(stromsteuer_positions(
-            product.stromsteuer_tarif,
+            &product.stromsteuer_tarif,
             kwh,
             ctx.regulatory_rates.effective_stromsteuer(None)?,
             &["solar"],
@@ -3309,7 +3308,9 @@ impl BillingProvider for DynamicElectricityProvider {
             }];
         }
 
-        let mut w = Vec::new();
+        let mut w: Vec<BillingWarning> = kleinanlage_warning(&self.product.stromsteuer_tarif)
+            .into_iter()
+            .collect();
         // On this path the **interval series is the quantity**: every amount —
         // Arbeitspreis, NNE Arbeitspreis, Konzessionsabgabe, Stromsteuer — is
         // charged on the sum of the priced intervals, and nothing else reads
@@ -3577,7 +3578,7 @@ impl BillingProvider for DynamicElectricityProvider {
             // path uses, so a Befreiung or an ermäßigter Satz cannot apply to
             // one kind of electricity tariff and not the other.
             positions.extend(stromsteuer_positions(
-                product.stromsteuer_tarif,
+                &product.stromsteuer_tarif,
                 total_kwh,
                 rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override)?,
                 &["strom"],
@@ -4052,8 +4053,21 @@ fn info_position(
 ///
 /// One place decides, so a Befreiung, an Ermäßigung and the Regelsatz cannot
 /// diverge between the static, controllable-load and dynamic paths.
+/// A § 9 Abs. 1 Nr. 3 StromStG claim whose facts do not carry it blocks the
+/// run: billing it would leave the Stromsteuer off a supply that owes it.
+fn kleinanlage_warning(tarif: &crate::steuer::StromsteuerTarif) -> Option<BillingWarning> {
+    let crate::steuer::StromsteuerTarif::Kleinanlage(k) = tarif else {
+        return None;
+    };
+    k.pruefen().err().map(|why| BillingWarning {
+        code: "STROMSTEUER_KLEINANLAGE_NICHT_GETRAGEN",
+        severity: WarningSeverity::Error,
+        message: format!("{}: {why}", k.citation()),
+    })
+}
+
 fn stromsteuer_positions(
-    tarif: crate::steuer::StromsteuerTarif,
+    tarif: &crate::steuer::StromsteuerTarif,
     kwh: Decimal,
     regelsatz_ct: Decimal,
     extra_tags: &[&'static str],
@@ -4063,6 +4077,23 @@ fn stromsteuer_positions(
         return Vec::new();
     }
     match tarif {
+        StromsteuerTarif::Kleinanlage(k) => vec![BillingPosition {
+            description: k.description(),
+            legal_basis: Some(k.citation().to_owned()),
+            quantity: kwh,
+            unit: "kWh".to_owned(),
+            unit_price_eur: Decimal::ZERO,
+            net_eur: Decimal::ZERO,
+            category: PositionCategory::Info,
+            tags: vec!["stromsteuer_befreiung".to_owned()],
+            applicable_tax_rate: None,
+            trace: crate::position::PositionTrace::commodity(
+                kwh,
+                "kWh",
+                Decimal::ZERO,
+                k.citation(),
+            ),
+        }],
         StromsteuerTarif::Befreiung { grund } => vec![BillingPosition {
             description: grund.description().to_owned(),
             legal_basis: Some(grund.citation().to_owned()),

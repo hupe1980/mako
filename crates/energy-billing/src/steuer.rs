@@ -5,7 +5,7 @@
 //!
 //! | Instrument | Who acts | Effect on the invoice |
 //! |---|---|---|
-//! | **Steuerbefreiung** (§ 9 Abs. 1 StromStG, §§ 25–29 EnergieStG) | the supplier, against the customer's Erlaubnis | the levy is **not** invoiced |
+//! | **Steuerbefreiung** (§ 9 Abs. 1 StromStG, §§ 25–29 EnergieStG) | the supplier, against an Erlaubnis (§ 9 Abs. 4 StromStG) | the levy is **not** invoiced |
 //! | **Steuerermäßigung** (§ 9 Abs. 2/3 StromStG) | the supplier | the levy is invoiced at the **reduced** rate |
 //! | **Steuerentlastung** (§ 9b StromStG, §§ 53a, 54 EnergieStG) | the *customer*, afterwards, at the Hauptzollamt | **none** — the supply is invoiced in full |
 //!
@@ -27,11 +27,12 @@ use serde::{Deserialize, Serialize};
 
 // ── Stromsteuer ───────────────────────────────────────────────────────────────
 
-/// § 9 Abs. 1 StromStG — grounds on which a supply carries **no** Stromsteuer.
+/// § 9 Abs. 1 StromStG — grounds on which a supply carries **no** Stromsteuer,
+/// each claimed by name so the invoice can cite it.
 ///
-/// Every ground requires the customer to hold the corresponding Erlaubnis
-/// (§ 9 Abs. 4 StromStG) and the supplier to have it on file; the enum records
-/// which one was claimed so the invoice can cite it.
+/// Nr. 3, the ground a Mieterstrom or GGV supply stands on, is not here: it
+/// depends on facts of the plant and the supply, so it is
+/// [`StromsteuerTarif::Kleinanlage`] and carries them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StromsteuerBefreiung {
@@ -42,14 +43,6 @@ pub enum StromsteuerBefreiung {
     /// Nr. 2 — Strom, der zur Stromerzeugung oder zur Aufrechterhaltung der
     /// Erzeugungsfähigkeit entnommen wird (Kraftwerkseigenverbrauch).
     ZurStromerzeugung,
-    /// Nr. 3 — Anlagen bis 2 MW aus erneuerbaren Energieträgern oder
-    /// hocheffizienter KWK, zum Selbstverbrauch oder an Letztverbraucher im
-    /// räumlichen Zusammenhang zur Anlage geleistet.
-    ///
-    /// This is the ground a rooftop-PV self-consumption and a Quartiers-BHKW
-    /// actually stand on — **not** § 9a, which is a Steuerentlastung for
-    /// industrial processes.
-    Kleinanlage,
     /// Nr. 4 — Notstromanlagen.
     Notstrom,
     /// Nr. 5 — Bordnetze von Wasser-, Luft- und Schienenfahrzeugen, erzeugt und
@@ -70,7 +63,6 @@ impl StromsteuerBefreiung {
         match self {
             Self::ErneuerbarSelbstverbrauch => "§ 9 Abs. 1 Nr. 1 StromStG",
             Self::ZurStromerzeugung => "§ 9 Abs. 1 Nr. 2 StromStG",
-            Self::Kleinanlage => "§ 9 Abs. 1 Nr. 3 StromStG",
             Self::Notstrom => "§ 9 Abs. 1 Nr. 4 StromStG",
             Self::Bordnetz => "§ 9 Abs. 1 Nr. 5 StromStG",
             Self::VersteuerteEnergieerzeugnisse => "§ 9 Abs. 1 Nr. 6 StromStG",
@@ -88,10 +80,6 @@ impl StromsteuerBefreiung {
             }
             Self::ZurStromerzeugung => {
                 "Stromsteuer: steuerfrei (§ 9 Abs. 1 Nr. 2 StromStG — Strom zur Stromerzeugung)"
-            }
-            Self::Kleinanlage => {
-                "Stromsteuer: steuerfrei (§ 9 Abs. 1 Nr. 3 StromStG — Anlage bis 2 MW, \
-                 Selbstverbrauch bzw. Belieferung im räumlichen Zusammenhang)"
             }
             Self::Notstrom => {
                 "Stromsteuer: steuerfrei (§ 9 Abs. 1 Nr. 4 StromStG — Notstromanlage)"
@@ -160,14 +148,21 @@ impl StromsteuerErmaessigung {
 ///
 /// The default is [`Self::Regel`] — a supply is taxed unless a ground says
 /// otherwise, which is the direction the statute runs in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "art", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StromsteuerTarif {
     /// Regelsteuersatz nach § 3 StromStG (2,05 ct/kWh since 01.04.2003).
+    ///
+    /// On a supply that would qualify for § 9 Abs. 1 Nr. 1–3, this is the
+    /// operator's Verzicht nach § 9 Abs. 1b StromStG — irrevocable, by taxing
+    /// the quantity under § 3.
     #[default]
     Regel,
     /// Steuerbefreiung nach § 9 Abs. 1 StromStG.
     Befreiung { grund: StromsteuerBefreiung },
+    /// Steuerbefreiung nach § 9 Abs. 1 Nr. 3 StromStG, with the facts it rests
+    /// on; [`Kleinanlage::pruefen`] holds them to the statute.
+    Kleinanlage(Kleinanlage),
     /// Ermäßigter Steuersatz nach § 9 Abs. 2 / Abs. 3 StromStG.
     Ermaessigung { grund: StromsteuerErmaessigung },
 }
@@ -175,18 +170,142 @@ pub enum StromsteuerTarif {
 impl StromsteuerTarif {
     /// The rate actually invoiced, given the standard rate for the period.
     #[must_use]
-    pub fn rate_ct_per_kwh(self, regelsatz_ct_per_kwh: Decimal) -> Decimal {
+    pub fn rate_ct_per_kwh(&self, regelsatz_ct_per_kwh: Decimal) -> Decimal {
         match self {
             Self::Regel => regelsatz_ct_per_kwh,
-            Self::Befreiung { .. } => Decimal::ZERO,
+            Self::Befreiung { .. } | Self::Kleinanlage(_) => Decimal::ZERO,
             Self::Ermaessigung { grund } => grund.rate_ct_per_kwh(),
         }
     }
 
     /// `true` when the supply carries no Stromsteuer at all.
     #[must_use]
-    pub const fn is_befreit(self) -> bool {
-        matches!(self, Self::Befreiung { .. })
+    pub const fn is_befreit(&self) -> bool {
+        matches!(self, Self::Befreiung { .. } | Self::Kleinanlage(_))
+    }
+}
+
+/// The plant a § 9 Abs. 1 Nr. 3 StromStG supply comes from, and how it is
+/// drawn — each fact one the statute or the StromStV makes the exemption
+/// depend on, stated by the operator who knows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Kleinanlage {
+    pub energietraeger: KleinanlageEnergietraeger,
+    /// Elektrische Nennleistung of the Anlage in kW: every Stromerzeugungs-
+    /// einheit of the same operator at the site with the same Energieträger
+    /// (§ 12b Abs. 1 StromStV), not one module string.
+    pub nennleistung_kw: Decimal,
+    pub entnahme: KleinanlageEntnahme,
+    /// The farthest Entnahmestelle from its Stromerzeugungseinheit, in km —
+    /// the räumliche Zusammenhang reaches 4,5 km (§ 12b Abs. 3 StromStV).
+    pub entfernung_km: Decimal,
+    /// The Hauptzollamt's förmliche Einzelerlaubnis (§ 9 Abs. 4 StromStG), by
+    /// Aktenzeichen. Absent, the supply relies on the allgemeine Erlaubnis of
+    /// § 10 Abs. 2 StromStV.
+    #[serde(default)]
+    pub erlaubnis_aktenzeichen: Option<String>,
+}
+
+/// The Energieträger § 9 Abs. 1 Nr. 3 StromStG names — „ausschließlich aus
+/// Windkraft, Sonnenenergie, Erdwärme oder Wasserkraft oder in hocheffizienten
+/// KWK-Anlagen". Biomass outside a KWK process is not among them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum KleinanlageEnergietraeger {
+    Windkraft,
+    Sonnenenergie,
+    Erdwaerme,
+    Wasserkraft,
+    /// Hocheffiziente KWK-Anlage. Its allgemeine Erlaubnis also needs the
+    /// Marktstammdatenregister entry (§ 10 Abs. 2 Satz 1 Nr. 2 StromStV).
+    HocheffizienteKwk,
+}
+
+/// Who draws the electricity — the two Buchstaben of § 9 Abs. 1 Nr. 3 StromStG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum KleinanlageEntnahme {
+    /// Buchst. a — the operator, as Eigenerzeuger, for its own consumption.
+    Selbstverbrauch,
+    /// Buchst. b — Letztverbraucher, supplied by whoever operates the plant
+    /// or has it operated, with nobody else in the supply relationship
+    /// (§ 12b Abs. 2 StromStV). A Lieferant that neither operates the plant
+    /// nor has it operated cannot claim it.
+    Letztverbraucher,
+}
+
+impl Kleinanlage {
+    /// The two thresholds of § 9 Abs. 1 Nr. 3 StromStG and § 10 Abs. 2
+    /// StromStV, in kW.
+    const HOECHSTLEISTUNG_KW: Decimal = dec!(2000);
+    const ALLGEMEINE_ERLAUBNIS_KW: Decimal = dec!(1000);
+    const RADIUS_KM: Decimal = dec!(4.5);
+
+    /// Why the stated facts do not carry the exemption, or `Ok` when they do.
+    ///
+    /// # Errors
+    ///
+    /// The sentence naming the rule the facts fail.
+    #[must_use = "an unchecked claim bills no Stromsteuer on facts nobody held to the statute"]
+    pub fn pruefen(&self) -> Result<(), String> {
+        let kw = self.nennleistung_kw;
+        if kw <= Decimal::ZERO {
+            return Err(format!("Nennleistung {kw} kW ist keine Anlagenleistung"));
+        }
+        if kw > Self::HOECHSTLEISTUNG_KW {
+            return Err(format!(
+                "§ 9 Abs. 1 Nr. 3 StromStG trägt Anlagen bis 2 MW; die Anlage hat {kw} kW"
+            ));
+        }
+        if self.entfernung_km < Decimal::ZERO || self.entfernung_km > Self::RADIUS_KM {
+            return Err(format!(
+                "der räumliche Zusammenhang reicht 4,5 km (§ 12b Abs. 3 StromStV); \
+                 angegeben sind {} km",
+                self.entfernung_km
+            ));
+        }
+        let einzelerlaubnis = self
+            .erlaubnis_aktenzeichen
+            .as_deref()
+            .is_some_and(|a| !a.trim().is_empty());
+        if !einzelerlaubnis {
+            let allgemein = match self.energietraeger {
+                KleinanlageEnergietraeger::HocheffizienteKwk => kw < Self::ALLGEMEINE_ERLAUBNIS_KW,
+                _ => kw <= Self::ALLGEMEINE_ERLAUBNIS_KW,
+            };
+            if !allgemein {
+                return Err(format!(
+                    "die allgemeine Erlaubnis des § 10 Abs. 2 StromStV reicht bis 1 MW; \
+                     für {kw} kW braucht die Befreiung die Einzelerlaubnis des \
+                     Hauptzollamts (§ 9 Abs. 4 StromStG) — erlaubnis_aktenzeichen fehlt"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The Buchstabe the supply stands on.
+    #[must_use]
+    pub const fn citation(&self) -> &'static str {
+        match self.entnahme {
+            KleinanlageEntnahme::Selbstverbrauch => "§ 9 Abs. 1 Nr. 3 Buchst. a StromStG",
+            KleinanlageEntnahme::Letztverbraucher => "§ 9 Abs. 1 Nr. 3 Buchst. b StromStG",
+        }
+    }
+
+    /// The invoice line: the ground and the Erlaubnis it is claimed under.
+    #[must_use]
+    pub fn description(&self) -> String {
+        let erlaubnis = match self.erlaubnis_aktenzeichen.as_deref().map(str::trim) {
+            Some(az) if !az.is_empty() => format!("Erlaubnis des Hauptzollamts, Az. {az}"),
+            _ => "allgemeine Erlaubnis nach § 10 Abs. 2 StromStV".to_owned(),
+        };
+        format!(
+            "Stromsteuer: steuerfrei ({} — Anlage bis 2 MW, Entnahme im räumlichen \
+             Zusammenhang; {erlaubnis})",
+            self.citation()
+        )
     }
 }
 
@@ -376,9 +495,13 @@ mod tests {
         assert_eq!(StromsteuerTarif::Regel.rate_ct_per_kwh(regel), regel);
         assert_eq!(
             StromsteuerTarif::Befreiung {
-                grund: StromsteuerBefreiung::Kleinanlage
+                grund: StromsteuerBefreiung::Notstrom
             }
             .rate_ct_per_kwh(regel),
+            Decimal::ZERO
+        );
+        assert_eq!(
+            StromsteuerTarif::Kleinanlage(dach(dec!(99))).rate_ct_per_kwh(regel),
             Decimal::ZERO
         );
         assert_eq!(
@@ -426,15 +549,77 @@ mod tests {
         assert!(!EnergiesteuerTarif::default().is_befreit());
     }
 
+    /// A rooftop plant supplying the building's tenants under the allgemeine
+    /// Erlaubnis.
+    fn dach(kw: Decimal) -> Kleinanlage {
+        Kleinanlage {
+            energietraeger: KleinanlageEnergietraeger::Sonnenenergie,
+            nennleistung_kw: kw,
+            entnahme: KleinanlageEntnahme::Letztverbraucher,
+            entfernung_km: dec!(0.2),
+            erlaubnis_aktenzeichen: None,
+        }
+    }
+
+    /// The statute's thresholds, each on both sides of its line.
+    #[test]
+    fn a_kleinanlage_claim_is_held_to_its_thresholds() {
+        assert_eq!(dach(dec!(1000)).pruefen(), Ok(()));
+        let err = dach(dec!(1000.1)).pruefen().unwrap_err();
+        assert!(err.contains("§ 10 Abs. 2 StromStV"), "{err}");
+        let mut einzel = dach(dec!(2000));
+        einzel.erlaubnis_aktenzeichen = Some("E-123/26".to_owned());
+        assert_eq!(einzel.pruefen(), Ok(()));
+        assert!(einzel.description().contains("Az. E-123/26"));
+        einzel.nennleistung_kw = dec!(2000.1);
+        assert!(einzel.pruefen().unwrap_err().contains("bis 2 MW"));
+
+        let mut weit = dach(dec!(99));
+        weit.entfernung_km = dec!(4.5);
+        assert_eq!(weit.pruefen(), Ok(()));
+        weit.entfernung_km = dec!(4.6);
+        assert!(
+            weit.pruefen()
+                .unwrap_err()
+                .contains("§ 12b Abs. 3 StromStV")
+        );
+
+        // A KWK plant's allgemeine Erlaubnis stops below 1 MW, not at it.
+        let mut kwk = dach(dec!(1000));
+        kwk.energietraeger = KleinanlageEnergietraeger::HocheffizienteKwk;
+        assert!(kwk.pruefen().is_err());
+        kwk.nennleistung_kw = dec!(999.9);
+        assert_eq!(kwk.pruefen(), Ok(()));
+        assert_eq!(
+            dach(dec!(99)).citation(),
+            "§ 9 Abs. 1 Nr. 3 Buchst. b StromStG"
+        );
+    }
+
     /// Serde round-trip: the tagged representation is what `productd` stores.
     #[test]
     fn tagged_serde_round_trip() {
         let t = StromsteuerTarif::Befreiung {
-            grund: StromsteuerBefreiung::Kleinanlage,
+            grund: StromsteuerBefreiung::Notstrom,
         };
         let json = serde_json::to_string(&t).unwrap();
-        assert_eq!(json, r#"{"art":"BEFREIUNG","grund":"KLEINANLAGE"}"#);
+        assert_eq!(json, r#"{"art":"BEFREIUNG","grund":"NOTSTROM"}"#);
         assert_eq!(serde_json::from_str::<StromsteuerTarif>(&json).unwrap(), t);
+
+        let k: StromsteuerTarif = serde_json::from_str(
+            r#"{"art":"KLEINANLAGE","energietraeger":"SONNENENERGIE","nennleistung_kw":"99",
+                "entnahme":"LETZTVERBRAUCHER","entfernung_km":"0.2"}"#,
+        )
+        .unwrap();
+        assert_eq!(k, StromsteuerTarif::Kleinanlage(dach(dec!(99))));
+        assert!(
+            serde_json::from_str::<StromsteuerTarif>(
+                r#"{"art":"KLEINANLAGE","energietraeger":"SONNENENERGIE","nennleistung_kw":"99",
+                    "entnahme":"LETZTVERBRAUCHER","entfernung_km":"0.2","kwp":"99"}"#,
+            )
+            .is_err(),
+            "an unknown fact is refused, not dropped"
+        );
 
         let e = EnergiesteuerTarif::Befreiung {
             grund: EnergiesteuerBefreiung::StofflicheVerwendung,

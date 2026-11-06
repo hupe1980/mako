@@ -558,6 +558,15 @@ try {
     await page.getByText("2 Prozesse").waitFor();
     await shot(page, "prozesse", theme);
 
+    // ⌘K on a page with a Fragen panel offers to ask the assistant.
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.keyboard.type("Warum wartet die Anmeldung?");
+    await page.getByText("Den Assistenten fragen").waitFor();
+    await shot(page, "palette-fragen", theme);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog", { name: "Befehle" }).waitFor({ state: "hidden" });
+
     await page.goto(`${base}prozess`);
     await page.getByText("Welcher Prozess?").waitFor();
     await page.keyboard.press("ControlOrMeta+k");

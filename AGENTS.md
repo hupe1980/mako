@@ -37,7 +37,9 @@ neither is restated here. This file is what an agent needs before touching code.
 - **Every regulatory claim cites a primary source** — document, chapter, page.
   A `§` reaches the codebase from a published document or not at all. Guessing a
   plausible one is the most expensive mistake available here; see the
-  known-wrong citations in *Domain Rules* below.
+  known-wrong citations in *Domain Rules* below. A „…" quotation is the
+  document's own words, omissions marked „…" — `check-quotations` holds it
+  against the mirrored PDF.
 - **A defect class becomes a guard.** When something is found, the deliverable is
   the check that makes it unrepresentable — which is why `just ci` runs a
   `cargo xtask` guard per defect class (`cargo xtask evidence-pack

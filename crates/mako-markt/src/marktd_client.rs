@@ -1833,20 +1833,20 @@ impl MarktdClient {
 
     /// `PUT /api/v1/zaehler/{zaehler_id}/register`
     ///
-    /// Upsert a `ZaehlzeitRegisterRecord` for a given Zähler.  Idempotent: the
-    /// server uses `ON CONFLICT (zaehler_id, tenant, bezeichnung, valid_from) DO
-    /// UPDATE` so repeated calls with the same business key are safe.
+    /// Create or update the register of a Zähler that `bezeichnung` and
+    /// `valid_from` identify, and return it as stored — its `id` is the one
+    /// [`Self::put_zaehler_saison`] writes windows under.
     pub async fn put_zaehler_register(
         &self,
         zaehler_id: &str,
-        rec: &crate::repository::ZaehlzeitRegisterRecord,
-    ) -> Result<(), MarktdClientError> {
+        body: &crate::repository::ZaehlzeitRegisterUpsert,
+    ) -> Result<crate::repository::ZaehlzeitRegisterRecord, MarktdClientError> {
         let url = format!("{}/api/v1/zaehler/{}/register", self.base_url, zaehler_id);
         let resp = self
             .client
             .put(&url)
             .bearer_auth(self.api_key.expose_secret())
-            .json(rec)
+            .json(body)
             .send()
             .await
             .map_err(|e| MarktdClientError::Http(e.to_string()))?;
@@ -1859,22 +1859,27 @@ impl MarktdClient {
             );
             return Err(MarktdClientError::Http(format!("HTTP {s}")));
         }
+        let stored = resp
+            .json()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
         info!(
             zaehler_id,
-            bezeichnung = %rec.bezeichnung,
+            bezeichnung = %body.bezeichnung,
             "MarktdClient: ZaehlzeitRegister upserted"
         );
-        Ok(())
+        Ok(stored)
     }
 
     /// `PUT /api/v1/zaehler-register/{register_id}/saisons`
     ///
-    /// Upsert a `ZaehlzeitSaisonRecord` for a given register.
+    /// Create or update the window of a register that `saison` and `zeit_von`
+    /// identify, and return it as stored.
     pub async fn put_zaehler_saison(
         &self,
         register_id: uuid::Uuid,
-        rec: &crate::repository::ZaehlzeitSaisonRecord,
-    ) -> Result<(), MarktdClientError> {
+        body: &crate::repository::ZaehlzeitSaisonUpsert,
+    ) -> Result<crate::repository::ZaehlzeitSaisonRecord, MarktdClientError> {
         let url = format!(
             "{}/api/v1/zaehler-register/{}/saisons",
             self.base_url, register_id
@@ -1883,7 +1888,7 @@ impl MarktdClient {
             .client
             .put(&url)
             .bearer_auth(self.api_key.expose_secret())
-            .json(rec)
+            .json(body)
             .send()
             .await
             .map_err(|e| MarktdClientError::Http(e.to_string()))?;
@@ -1896,7 +1901,9 @@ impl MarktdClient {
             );
             return Err(MarktdClientError::Http(format!("HTTP {s}")));
         }
-        Ok(())
+        resp.json()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))
     }
 
     /// `GET /api/v1/energiemix/{nb_mp_id}?year={year}`

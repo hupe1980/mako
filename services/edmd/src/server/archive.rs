@@ -113,8 +113,10 @@ pub(crate) async fn get_archive_olap(
     ) {
         Ok(q) => q,
         Err(e) => {
-            tracing::error!(error = %e, "edmd: series read could not be scoped to the tenant");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e).context("series read could not be scoped to the tenant"),
+            )
+            .into_response();
         }
     };
     match query.range(from, to).collect().await {
@@ -140,10 +142,11 @@ pub(crate) async fn get_archive_olap(
             .into_response()
         }
         Ok(None) => ApiError::NotFound.into_response(),
-        Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: archive OLAP query failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => ApiError::internal(
+            anyhow::Error::from(e)
+                .context(format!("archive OLAP query failed (malo_id {malo_id})")),
+        )
+        .into_response(),
     }
 }
 
@@ -259,14 +262,18 @@ pub(crate) async fn get_archive_portfolio(
             match result.to_json() {
                 Ok(rows) => (rows, spans),
                 Err(e) => {
-                    tracing::warn!(error = %e, "edmd: portfolio JSON serialisation failed");
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return ApiError::internal(
+                        anyhow::Error::from(e).context("portfolio JSON serialisation failed"),
+                    )
+                    .into_response();
                 }
             }
         }
         Err(e) => {
-            tracing::warn!(error = %e, "edmd: portfolio aggregation query failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e).context("portfolio aggregation query failed"),
+            )
+            .into_response();
         }
     };
     let (rows, spans_tiers) = rows;
@@ -462,8 +469,10 @@ pub(crate) async fn get_archive_timeseries(
     ) {
         Ok(q) => q,
         Err(e) => {
-            tracing::error!(error = %e, "edmd: series read could not be scoped to the tenant");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e).context("series read could not be scoped to the tenant"),
+            )
+            .into_response();
         }
     };
     match query.range(from, to).collect().await {
@@ -484,10 +493,10 @@ pub(crate) async fn get_archive_timeseries(
             Json(serde_json::json!({ "malo_id": malo_id, "rows": rows })).into_response()
         }
         Ok(_) => ApiError::NotFound.into_response(),
-        Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: archive timeseries query failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(e) => ApiError::internal(anyhow::Error::from(e).context(format!(
+            "archive timeseries query failed (malo_id {malo_id})"
+        )))
+        .into_response(),
     }
 }
 
@@ -630,8 +639,10 @@ pub(crate) async fn post_sql_query(
     let scoped = match store.scoped(TENANT_COL, state.tenant.as_str()).await {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!(error = %e, "edmd: SQL session could not be scoped to the tenant");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(
+                anyhow::Error::from(e).context("SQL session could not be scoped to the tenant"),
+            )
+            .into_response();
         }
     };
 
@@ -662,8 +673,8 @@ pub(crate) async fn post_sql_query(
                     )
                         .into_response(),
                     Err(e) => {
-                        tracing::warn!(error = %e, "edmd: SQL result Arrow-IPC serialisation failed");
-                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                        ApiError::internal(e.context("SQL result Arrow-IPC serialisation failed"))
+                            .into_response()
                     }
                 };
             }
@@ -682,10 +693,10 @@ pub(crate) async fn post_sql_query(
                     }))
                     .into_response()
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "edmd: SQL result JSON serialisation failed");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+                Err(e) => ApiError::internal(
+                    anyhow::Error::from(e).context("SQL result JSON serialisation failed"),
+                )
+                .into_response(),
             }
         }
         // A planning/type error is the caller's SQL, not an edmd fault.

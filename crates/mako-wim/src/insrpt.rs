@@ -117,9 +117,11 @@ pub const ANTWORT_WINDOW_LABEL: &str = "wim-insrpt-antwort";
 /// Deadline label for the MSB's **Ergebnisbericht** window (23008).
 ///
 /// Counted from the ÜT of the MSB's own Bestätigung, **not** from the
-/// Störungsmeldung (WiM Strom Teil 2 Kap. 1.2 Nr. 7: „spätester ÜT ist der n.
-/// WT nach dem ÜT von Nr. 2"). Anchoring it on the Störungsmeldung shortens
-/// every window by the answer time that has already elapsed.
+/// Störungsmeldung (WiM Strom Teil 2 Kap. 1.2 Nr. 7: „spätester ÜT ist der 4.
+/// WT nach dem ÜT von Nr. 2" for a kME mit RLM in Niederspannung — 7 and 2
+/// Werktage for the other Messtechniken, [`ergebnis_werktage`]). Anchoring it
+/// on the Störungsmeldung shortens every window by the answer time that has
+/// already elapsed.
 pub const ERGEBNIS_WINDOW_LABEL: &str = "wim-insrpt-ergebnis";
 
 /// Deadline label for the Weiterleitung an die betroffenen Marktlokationen

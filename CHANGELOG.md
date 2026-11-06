@@ -9,6 +9,77 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.25.0] — 2026-11-06
+
+### Added
+
+- The Desk decides Freigaben from the keyboard: <kbd>J</kbd>/<kbd>K</kbd> step
+  through the list, <kbd>A</kbd>/<kbd>R</kbd> choose Freigeben or Ablehnen.
+- A question typed into the Desk's ⌘K palette goes to the assistant on the
+  page.
+- `cargo xtask check-quotations` (in `just ci`): a „…" quotation attributed to
+  a mirrored Festlegung must occur in that document. It skips without the
+  `regulatories/` mirror or `pdftotext`. Seven misquotations it found in doc
+  comments are corrected.
+- The Desk holds a routine decision — „Hilfreich?", „Verwerfen" on a
+  proposal — for five seconds behind a „Rückgängig" toast and <kbd>⌘Z</kbd>,
+  sends it when the hold ends, and sends every hold at once with `keepalive`
+  when the tab closes.
+- When a service refuses an action with `403`, the Desk puts the service's
+  reason where the action was and offers that action of that service no more
+  for the tab's session.
+
+### Changed
+
+- processd answers a decision on an entry decided first by somebody else with
+  `409` `already_decided`, naming `status`, `decided_by` and `decided_at`
+  (was `404`); the Desk shows who decided and that the second decision was not
+  sent.
+- **Breaking:** marktd's `PUT /api/v1/zaehler/{zaehler_id}/register` and
+  `PUT /api/v1/zaehler-register/{register_id}/saisons` take request bodies
+  without `id`, `zaehler_id`, `tenant`, `register_id` or `updated_at`, and
+  answer `200` with the stored row. A register is identified by `bezeichnung`
+  and `valid_from`, a window by `saison` and `zeit_von`. `MarktdClient`'s two
+  methods take `ZaehlzeitRegisterUpsert` / `ZaehlzeitSaisonUpsert` and return
+  the stored record.
+- **Breaking:** every `energy_billing::Product` category refuses a key it does
+  not define, and `WAERMEPUMPE`, `WALLBOX` and `SHARING` carry their
+  electricity supply under `strom`. A misspelt price in a posted tariff is a
+  `422` instead of a product billed without it.
+- Every failure a service answers carries a body: a 500 its `error_id`, a 404
+  what is missing. `check-error-tuples` refuses a bare non-2xx
+  `StatusCode::….into_response()` as it refuses a tuple.
+  `mako_service::webhook::verify_request_only` returns the `WebhookError`, which
+  converts into a `401` `ApiError` naming the reason.
+- **Breaking:** a `SOLAR` product states its `stromsteuer_tarif`; there is
+  no default exemption. § 9 Abs. 1 Nr. 3 StromStG is claimed as
+  `{"art": "KLEINANLAGE", …}` with the plant's Energieträger, Nennleistung,
+  Entnahme, distance and Erlaubnis, and refused when they do not carry it:
+  above 2 MW, beyond 4,5 km (§ 12b Abs. 3 StromStV), or above the 1 MW of the
+  allgemeine Erlaubnis (§ 10 Abs. 2 StromStV) without an Einzelerlaubnis.
+  `StromsteuerBefreiung::Kleinanlage` is gone and `StromsteuerTarif` is no
+  longer `Copy`.
+- **Breaking:** productd's product body takes `abrechnung`, the billing
+  settings that are not prices, typed and checked on `PUT`; billingd reads them
+  from the product's `abrechnung` and refuses a tax treatment it cannot parse
+  instead of billing the Regelsatz.
+- **Breaking:** makod's API-Webdienste port refuses an unsigned request with
+  `401` (Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3:
+  „Jede API-Interaktion … wird signiert").
+
+### Fixed
+
+- marktd refuses a season window for a register of another tenant (`404`); it
+  used to write the window onto that register.
+- A productd product can carry its tax treatment and the other settings
+  billingd reads (`abrechnung`); billingd read them from keys productd never
+  served, so a catalog product was billed without any of them. A priced
+  catalog position whose category has no field for it is logged as dropped.
+- The Desk shows a service's refusal in the service's own sentence (`detail`,
+  with the `error_id` where there is one) instead of the status's reason
+  phrase, and tells agentd's refusal of a question or a verdict apart from
+  agentd being unreachable.
+
 ## [0.24.4] — 2026-11-05
 
 ### Fixed
