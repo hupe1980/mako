@@ -146,7 +146,7 @@ impl MetricVec {
 /// | [`outbox_delivery_attempted`] | `makod_outbox_delivery_attempts_total` | `result` |
 /// | [`deadline_fired`] | `makod_deadline_fired_total` | `family` |
 /// | [`dead_letter_recorded`] | `makod_dead_letter_recorded_total` | `reason` |
-/// | [`aperak_missed`] | `makod_aperak_missed_total` | `label` |
+/// | [`delivery_window_missed`] | `makod_delivery_window_missed_total` | `label` |
 ///
 /// For `makod_dead_letter_recorded_total`, the `reason` label is:
 /// - `unknown_pid:<N>` when `DeadLetterReason::UnknownPid { pid: N, .. }` — one label per
@@ -160,7 +160,7 @@ impl MetricVec {
 /// [`outbox_delivery_attempted`]: EngineMetrics::outbox_delivery_attempted
 /// [`deadline_fired`]: EngineMetrics::deadline_fired
 /// [`dead_letter_recorded`]: EngineMetrics::dead_letter_recorded
-/// [`aperak_missed`]: EngineMetrics::aperak_missed
+/// [`delivery_window_missed`]: EngineMetrics::delivery_window_missed
 pub struct EngineMetrics {
     /// `makod_process_initiated_total{family}` — incremented when a new
     /// process is spawned via `Process::run(InitiateXxx, …)`.
@@ -193,19 +193,20 @@ pub struct EngineMetrics {
     /// - `result`: `"dispatched"`, `"skipped"`, or `"error"`
     inbound_received: MetricVec,
 
-    /// `makod_aperak_missed_total{label}` — incremented when an APERAK delivery
-    /// window comes due while still registered.
+    /// `makod_delivery_window_missed_total{label}` — incremented when an
+    /// APERAK or CONTRL delivery window comes due while still registered.
     ///
-    /// The outbox worker discharges the window as soon as the APERAK is
+    /// The outbox worker discharges the window as soon as its message is
     /// delivered, so a window that survives to its due time was never answered.
     /// A non-zero value is a regulatory violation under APERAK AHB 1.1 §2.4.1
-    /// (Strom) / §2.3.1 (Gas). Alert on `makod_aperak_missed_total > 0`.
+    /// (Strom) / §2.3.1 (Gas) or CONTRL AHB 1.0 §2.3.1; `label` says which.
+    /// Alert on `makod_delivery_window_missed_total > 0`.
     ///
     /// The discharge is what gives this counter meaning. Firing *after* the due
     /// time is not evidence of anything on its own — the scheduler selects
     /// deadlines on `due_at <= now`, so every deadline it hands out is late by
     /// construction.
-    aperak_missed: MetricVec,
+    delivery_window_missed: MetricVec,
 }
 
 impl EngineMetrics {
@@ -218,7 +219,7 @@ impl EngineMetrics {
             deadline_fired: MetricVec::default(),
             dead_letter_recorded: MetricVec::default(),
             inbound_received: MetricVec::default(),
-            aperak_missed: MetricVec::default(),
+            delivery_window_missed: MetricVec::default(),
         }
     }
 
@@ -293,15 +294,15 @@ impl EngineMetrics {
         self.dead_letter_recorded.increment(reason);
     }
 
-    /// Increment `makod_aperak_missed_total{label=<label>}`.
+    /// Increment `makod_delivery_window_missed_total{label=<label>}`.
     ///
-    /// Call in the deadline scheduler when an APERAK delivery window comes due
-    /// **while still registered** — the outbox worker discharges it on delivery,
-    /// so surviving to the due time is what marks the obligation unmet.
-    /// `label` should be the APERAK deadline label constant from `fristen::`
-    /// (e.g. `APERAK_STROM_WINDOW_LABEL`, `APERAK_GAS_FOLGEPROZESS_LABEL`).
-    pub fn aperak_missed(&self, label: &str) {
-        self.aperak_missed.increment(label);
+    /// Call in the deadline scheduler when a delivery window comes due **while
+    /// still registered** — the outbox worker discharges it on delivery, so
+    /// surviving to the due time is what marks the obligation unmet. `label`
+    /// is the window's label from `mako_fristen` (`APERAK_STROM_WINDOW_LABEL`,
+    /// `CONTRL_FRIST_LABEL`, …).
+    pub fn delivery_window_missed(&self, label: &str) {
+        self.delivery_window_missed.increment(label);
     }
 
     /// Increment `makod_inbound_messages_total{pid=<pid>,result=<result>}`.
@@ -333,7 +334,7 @@ impl EngineMetrics {
             deadline_fired: self.deadline_fired.snapshot(),
             dead_letter_recorded: self.dead_letter_recorded.snapshot(),
             inbound_received: self.inbound_received.snapshot(),
-            aperak_missed: self.aperak_missed.snapshot(),
+            delivery_window_missed: self.delivery_window_missed.snapshot(),
         }
     }
 }
@@ -366,8 +367,8 @@ pub struct MetricsSnapshot {
     pub dead_letter_recorded: Vec<(Box<str>, u64)>,
     /// `("pid,result", count)` pairs for `makod_inbound_messages_total`.
     pub inbound_received: Vec<(Box<str>, u64)>,
-    /// `(label, count)` pairs for `makod_aperak_missed_total`.
-    pub aperak_missed: Vec<(Box<str>, u64)>,
+    /// `(label, count)` pairs for `makod_delivery_window_missed_total`.
+    pub delivery_window_missed: Vec<(Box<str>, u64)>,
 }
 
 impl MetricsSnapshot {
@@ -438,12 +439,12 @@ impl MetricsSnapshot {
         );
         Self::write_counter_vec(
             &mut out,
-            "makod_aperak_missed_total",
-            "Total number of APERAK deadlines fired after their due-at time — a regulatory \
-             violation under APERAK AHB 1.1 §2.4.1 (Strom) / §2.3.1 (Gas). \
-             Alert when this counter is non-zero.",
+            "makod_delivery_window_missed_total",
+            "APERAK and CONTRL delivery windows that came due undelivered — a regulatory \
+             violation under APERAK AHB 1.1 §2.4.1 (Strom) / §2.3.1 (Gas) or CONTRL AHB 1.0 \
+             §2.3.1. Alert when this counter is non-zero.",
             &["label"],
-            &self.aperak_missed,
+            &self.delivery_window_missed,
         );
 
         out

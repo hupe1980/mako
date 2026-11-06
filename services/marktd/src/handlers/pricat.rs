@@ -9,7 +9,7 @@ use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
-use mako_markt::repository::{PriCatRepository, PriCatVersion};
+use mako_markt::repository::PriCatVersion;
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::Serialize;

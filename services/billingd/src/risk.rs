@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 /// One scored observation about an invoice. The full set is persisted as
 /// `billing_records.risk_findings` — the audit-proof explanation of the score.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RiskFinding {
     /// Stable machine-readable code (e.g. `TAX_BREAKDOWN_MISMATCH`).
     pub code: String,

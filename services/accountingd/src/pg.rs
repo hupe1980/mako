@@ -2347,7 +2347,7 @@ pub async fn list_open_items(
     lf_mp_id: &str,
     malo_id: &str,
 ) -> anyhow::Result<Vec<crate::ledger::OpenReceivable>> {
-    ledger.open_receivables(lf_mp_id, malo_id).await
+    Ok(ledger.open_receivables(lf_mp_id, malo_id).await?)
 }
 
 // ── GDPR Art. 17 anonymization ─────────────────────────────────────────

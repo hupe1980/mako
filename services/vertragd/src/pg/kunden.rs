@@ -44,6 +44,18 @@ pub struct CreateKundeInput {
     /// § 13b Abs. 2 Nr. 5 lit. b UStG Stromwiederverkäufer flag (USt 1 TH on
     /// file). Defaults to `false`; billingd derives reverse charge from it.
     pub stromwiederverkaeufer: Option<bool>,
+    /// The Zustimmung to an electronic format that is not § 14 Abs. 1 Satz 6
+    /// UStG: § 27 Abs. 38 Nr. 1 and 2 UStG admit one only „vorbehaltlich der
+    /// Zustimmung des Empfängers". Absent = not recorded, which refuses that
+    /// grace.
+    pub zustimmung_sonstige_erechnung: Option<bool>,
+    /// The agreement on an EDI format (§ 14 Abs. 1 Satz 6 Nr. 2 UStG,
+    /// § 27 Abs. 38 Nr. 3 UStG). Absent = not recorded.
+    pub edi_zustimmung: Option<bool>,
+    /// Whether the agreed EDI format allows „die richtige und vollständige
+    /// Extraktion der … erforderlichen Angaben" into an EN 16931 format
+    /// (§ 14 Abs. 1 Satz 6 Nr. 2 UStG). Absent = not recorded.
+    pub edi_extrahierbar: Option<bool>,
     pub notizen: Option<String>,
 }
 
@@ -70,6 +82,13 @@ pub struct UpdateKundeInput {
     /// lapses) during the relationship, so this must be correctable too;
     /// leaving it create-only silently froze the reverse-charge decision.
     pub stromwiederverkaeufer: Option<bool>,
+    /// See [`CreateKundeInput::zustimmung_sonstige_erechnung`]; absent keeps
+    /// the stored value.
+    pub zustimmung_sonstige_erechnung: Option<bool>,
+    /// See [`CreateKundeInput::edi_zustimmung`]; absent keeps the stored value.
+    pub edi_zustimmung: Option<bool>,
+    /// See [`CreateKundeInput::edi_extrahierbar`]; absent keeps the stored value.
+    pub edi_extrahierbar: Option<bool>,
     pub notizen: Option<String>,
 }
 
@@ -134,8 +153,9 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
         "INSERT INTO kunden
          (id,tenant,kunden_nr,kundentyp,haushaltskunde,geschaeftspartner,
           organisations_id,umsatzsteuer_id,zahlungsziel_tage,sepa_erlaubt,erp_kunde_id,
-          stromwiederverkaeufer,notizen)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          stromwiederverkaeufer,notizen,
+          zustimmung_sonstige_erechnung,edi_zustimmung,edi_extrahierbar)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
          ON CONFLICT (tenant, erp_kunde_id) WHERE erp_kunde_id IS NOT NULL DO UPDATE
            SET kunden_nr             = COALESCE(EXCLUDED.kunden_nr, kunden.kunden_nr),
                kundentyp             = EXCLUDED.kundentyp,
@@ -147,6 +167,10 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
                sepa_erlaubt          = EXCLUDED.sepa_erlaubt,
                stromwiederverkaeufer = EXCLUDED.stromwiederverkaeufer,
                notizen               = COALESCE(EXCLUDED.notizen, kunden.notizen),
+               zustimmung_sonstige_erechnung =
+                   COALESCE(EXCLUDED.zustimmung_sonstige_erechnung, kunden.zustimmung_sonstige_erechnung),
+               edi_zustimmung        = COALESCE(EXCLUDED.edi_zustimmung, kunden.edi_zustimmung),
+               edi_extrahierbar      = COALESCE(EXCLUDED.edi_extrahierbar, kunden.edi_extrahierbar),
                updated_at            = now()
          RETURNING id",
     )
@@ -163,6 +187,9 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
     .bind(&input.erp_kunde_id)
     .bind(input.stromwiederverkaeufer.unwrap_or(false))
     .bind(&input.notizen)
+    .bind(input.zustimmung_sonstige_erechnung)
+    .bind(input.edi_zustimmung)
+    .bind(input.edi_extrahierbar)
     .fetch_one(&mut *tx)
     .await?;
     let actual_id: Uuid = row.try_get("id")?;
@@ -206,6 +233,9 @@ pub async fn update_kunde(
          haushaltskunde        = COALESCE($9, haushaltskunde),
          stromwiederverkaeufer = COALESCE($10, stromwiederverkaeufer),
          notizen               = COALESCE($11, notizen),
+         zustimmung_sonstige_erechnung = COALESCE($12, zustimmung_sonstige_erechnung),
+         edi_zustimmung        = COALESCE($13, edi_zustimmung),
+         edi_extrahierbar      = COALESCE($14, edi_extrahierbar),
          updated_at            = now()
          WHERE id=$1 AND tenant=$2",
     )
@@ -220,6 +250,9 @@ pub async fn update_kunde(
     .bind(input.haushaltskunde)
     .bind(input.stromwiederverkaeufer)
     .bind(&input.notizen)
+    .bind(input.zustimmung_sonstige_erechnung)
+    .bind(input.edi_zustimmung)
+    .bind(input.edi_extrahierbar)
     .execute(pool)
     .await?
     .rows_affected();
@@ -788,6 +821,41 @@ pub struct RechnungsempfaengerRow {
     /// invoice is addressed to is the party it is sent to, and resolving those
     /// separately lets a document reach somebody else.
     pub email: Option<String>,
+    /// Whether the Rechnungsempfänger is a Unternehmer receiving for his
+    /// Unternehmen (§ 14 Abs. 2 Satz 2 Nr. 1 UStG), from **this party's**
+    /// `kundentyp`: `B2C` is not, every `B2B_*` segment is. The contract's own
+    /// `kundentyp` describes the supply, and a Rechnungsempfänger who is not
+    /// the contract's customer would be classified by the wrong party.
+    pub unternehmer: bool,
+    /// See [`CreateKundeInput::zustimmung_sonstige_erechnung`]; `None` = not
+    /// recorded.
+    pub zustimmung_sonstige_erechnung: Option<bool>,
+    /// See [`CreateKundeInput::edi_zustimmung`]; `None` = not recorded.
+    pub edi_zustimmung: Option<bool>,
+    /// See [`CreateKundeInput::edi_extrahierbar`]; `None` = not recorded.
+    pub edi_extrahierbar: Option<bool>,
+}
+
+/// The `kunden` columns the projection carries beside the BO4E document.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct BuyerCols {
+    geschaeftspartner: Option<serde_json::Value>,
+    umsatzsteuer_id: Option<String>,
+    stromwiederverkaeufer: bool,
+    kundentyp: String,
+    zustimmung_sonstige_erechnung: Option<bool>,
+    edi_zustimmung: Option<bool>,
+    edi_extrahierbar: Option<bool>,
+}
+
+/// The `SELECT` list every projection reads `kunden ku` through.
+const BUYER_COLS: &str = "ku.geschaeftspartner, ku.umsatzsteuer_id, ku.stromwiederverkaeufer, \
+     ku.kundentyp, ku.zustimmung_sonstige_erechnung, ku.edi_zustimmung, ku.edi_extrahierbar";
+
+/// Whether a `kundentyp` is a Unternehmer segment. The `kunden` CHECK admits
+/// `B2C` and three `B2B_*` values, so every stored row has an answer.
+fn unternehmer_aus_kundentyp(kundentyp: &str) -> bool {
+    kundentyp != "B2C"
 }
 
 /// Read the BG-7 terms out of a BO4E `Geschaeftspartner`.
@@ -801,22 +869,26 @@ pub struct RechnungsempfaengerRow {
 /// the column is operator-populated and nullable, and a malformed one must not
 /// fail the contract lookup § 40 Abs. 1 EnWG needs — the invoice then carries
 /// the synthesised buyer and says so.
-fn buyer_from_geschaeftspartner(
-    gp: Option<&serde_json::Value>,
-    vat_id: Option<String>,
-    stromwiederverkaeufer: bool,
-) -> RechnungsempfaengerRow {
+fn buyer_from_geschaeftspartner(cols: BuyerCols) -> RechnungsempfaengerRow {
     use rubo4e::current::Geschaeftspartner;
+
+    let BuyerCols {
+        geschaeftspartner: gp,
+        umsatzsteuer_id: vat_id,
+        stromwiederverkaeufer,
+        kundentyp,
+        zustimmung_sonstige_erechnung,
+        edi_zustimmung,
+        edi_extrahierbar,
+    } = cols;
+    let unternehmer = unternehmer_aus_kundentyp(&kundentyp);
 
     // Fully typed, including the contact methods.
     //
     // `Kontaktweg.kontaktwert` is a `String` per the schema, so the whole
     // `Geschaeftspartner` — name, address, VAT-ID and contact methods — reads as
     // one typed object and the e-mail comes off it directly.
-    let Some(gp) = gp
-        .cloned()
-        .and_then(|v| serde_json::from_value::<Geschaeftspartner>(v).ok())
-    else {
+    let Some(gp) = gp.and_then(|v| serde_json::from_value::<Geschaeftspartner>(v).ok()) else {
         return RechnungsempfaengerRow {
             name: None,
             line1: None,
@@ -826,6 +898,10 @@ fn buyer_from_geschaeftspartner(
             vat_id,
             stromwiederverkaeufer,
             email: None,
+            unternehmer,
+            zustimmung_sonstige_erechnung,
+            edi_zustimmung,
+            edi_extrahierbar,
         };
     };
     let email = email_from_kontaktwege(gp.kontaktwege.as_deref());
@@ -862,6 +938,10 @@ fn buyer_from_geschaeftspartner(
         vat_id: vat_id.or_else(|| gp.umsatzsteuer_id.clone()),
         stromwiederverkaeufer,
         email,
+        unternehmer,
+        zustimmung_sonstige_erechnung,
+        edi_zustimmung,
+        edi_extrahierbar,
     }
 }
 
@@ -888,8 +968,6 @@ fn email_from_kontaktwege(kontaktwege: Option<&[rubo4e::current::Kontaktweg]>) -
         .or_else(|| entries.iter().find(is_mail).and_then(value))
 }
 
-type BuyerCols = (Option<serde_json::Value>, Option<String>, bool);
-
 /// The BG-7 buyer behind `malo_id`, or `None` when no contract/Kunde is on file.
 ///
 /// # Errors
@@ -906,7 +984,7 @@ pub async fn fetch_rechnungsempfaenger_by_malo(
     // status list. Two lists put a priced period and no Leistungsempfänger on
     // the same invoice.
     let row: Option<BuyerCols> = sqlx::query_as(&format!(
-        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id, ku.stromwiederverkaeufer
+        "SELECT {BUYER_COLS}
            FROM versorgungsvertraege v
            JOIN vertragskomponenten k ON k.vertrag_id = v.id
            JOIN kunden ku            ON ku.id = v.kunden_id
@@ -921,7 +999,7 @@ pub async fn fetch_rechnungsempfaenger_by_malo(
     .bind(tenant)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(gp, vat, wv)| buyer_from_geschaeftspartner(gp.as_ref(), vat, wv)))
+    Ok(row.map(buyer_from_geschaeftspartner))
 }
 
 /// The BG-7 buyer behind a Rahmenvertrag — the holder a Sammelrechnung bills.
@@ -938,17 +1016,17 @@ pub async fn fetch_rechnungsempfaenger_by_rahmenvertrag(
     rahmenvertrag_id: Uuid,
     tenant: &str,
 ) -> Result<Option<RechnungsempfaengerRow>> {
-    let row: Option<BuyerCols> = sqlx::query_as(
-        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id, ku.stromwiederverkaeufer
+    let row: Option<BuyerCols> = sqlx::query_as(&format!(
+        "SELECT {BUYER_COLS}
            FROM rahmenvertraege r
            JOIN kunden ku ON ku.id = r.kunden_id
           WHERE r.id=$1 AND r.tenant=$2",
-    )
+    ))
     .bind(rahmenvertrag_id)
     .bind(tenant)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(gp, vat, wv)| buyer_from_geschaeftspartner(gp.as_ref(), vat, wv)))
+    Ok(row.map(buyer_from_geschaeftspartner))
 }
 
 /// The BG-7 buyer behind a GGV — the § 42b operator the bundled Sammelrechnung
@@ -966,17 +1044,17 @@ pub async fn fetch_rechnungsempfaenger_by_ggv(
     ggv_id: &str,
     tenant: &str,
 ) -> Result<Option<RechnungsempfaengerRow>> {
-    let row: Option<BuyerCols> = sqlx::query_as(
-        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id, ku.stromwiederverkaeufer
+    let row: Option<BuyerCols> = sqlx::query_as(&format!(
+        "SELECT {BUYER_COLS}
            FROM ggv_betreiber g
            JOIN kunden ku ON ku.id = g.kunden_id
           WHERE g.ggv_id=$1 AND g.tenant=$2",
-    )
+    ))
     .bind(ggv_id)
     .bind(tenant)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(gp, vat, wv)| buyer_from_geschaeftspartner(gp.as_ref(), vat, wv)))
+    Ok(row.map(buyer_from_geschaeftspartner))
 }
 
 #[cfg(test)]
@@ -989,7 +1067,19 @@ mod buyer_tests {
         assert_eq!(super::like_word_prefix("a_b\\c"), "% a\\_b\\\\c%");
     }
 
-    use super::{buyer_from_geschaeftspartner, email_from_kontaktwege};
+    use super::{BuyerCols, buyer_from_geschaeftspartner, email_from_kontaktwege};
+
+    fn cols(gp: serde_json::Value, stromwiederverkaeufer: bool) -> BuyerCols {
+        BuyerCols {
+            geschaeftspartner: Some(gp),
+            umsatzsteuer_id: None,
+            stromwiederverkaeufer,
+            kundentyp: "B2C".to_owned(),
+            zustimmung_sonstige_erechnung: None,
+            edi_zustimmung: None,
+            edi_extrahierbar: None,
+        }
+    }
 
     /// The projection reads BO4E's own field names. A reader probing for a key
     /// BO4E does not define leaves BT-44 empty on every invoice addressed to a
@@ -1008,7 +1098,7 @@ mod buyer_tests {
             },
             "umsatzsteuerId": "DE123456789"
         });
-        let b = buyer_from_geschaeftspartner(Some(&gp), None, false);
+        let b = buyer_from_geschaeftspartner(cols(gp, false));
         assert_eq!(b.name.as_deref(), Some("Stadtwerke Musterstadt GmbH"));
         assert_eq!(b.line1.as_deref(), Some("Musterstraße 1"));
         assert_eq!(b.post_code.as_deref(), Some("12345"));
@@ -1026,7 +1116,7 @@ mod buyer_tests {
             "vorname": "Erika",
             "nachname": "Mustermann"
         });
-        let b = buyer_from_geschaeftspartner(Some(&gp), None, false);
+        let b = buyer_from_geschaeftspartner(cols(gp, false));
         assert_eq!(b.name.as_deref(), Some("Erika Mustermann"));
     }
 
@@ -1045,7 +1135,7 @@ mod buyer_tests {
                   "istBevorzugterKontaktweg": true }
             ]
         });
-        let b = buyer_from_geschaeftspartner(Some(&gp), None, false);
+        let b = buyer_from_geschaeftspartner(cols(gp, false));
         assert_eq!(b.name.as_deref(), Some("Beispiel AG"));
         assert_eq!(b.email.as_deref(), Some("rechnung@beispiel.test"));
     }
@@ -1089,7 +1179,7 @@ mod buyer_tests {
     /// master data is half-filled.
     #[test]
     fn an_unusable_payload_yields_empty_terms() {
-        let b = buyer_from_geschaeftspartner(Some(&serde_json::json!(42)), None, true);
+        let b = buyer_from_geschaeftspartner(cols(serde_json::json!(42), true));
         assert!(b.name.is_none() && b.line1.is_none());
         assert!(b.stromwiederverkaeufer, "the columns still travel");
     }

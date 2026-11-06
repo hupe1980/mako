@@ -708,7 +708,6 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
         Parameters(p): Parameters<PricatParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::PgPriCatRepository;
-        use mako_markt::repository::PriCatRepository as _;
         let repo = PgPriCatRepository::new(self.state.pool.clone());
         match repo.list_versions(&p.nb_mp_id, &self.state.tenant).await {
             Ok(versions) => {
@@ -921,32 +920,19 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
         &self,
         Parameters(p): Parameters<GetNbEnergiemixParams>,
     ) -> Result<CallToolResult, McpError> {
-        let row = sqlx::query(
-            r"SELECT nb_mp_id, gueltig_fuer, energiemix,
-                     eeg_einspeisung_kwh, gesamtentnahme_kwh, updated_at
-              FROM nb_energiemix
-              WHERE tenant = $1
-                AND nb_mp_id = $2
-                AND ($3::smallint IS NULL OR gueltig_fuer = $3)
-              ORDER BY gueltig_fuer DESC
-              LIMIT 1",
-        )
-        .bind(&self.state.tenant)
-        .bind(&p.nb_mp_id)
-        .bind(p.year)
-        .fetch_optional(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let record = crate::pg::PgNbEnergiemixRepository::new(self.state.pool.clone())
+            .find(&self.state.tenant, &p.nb_mp_id, p.year)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        use sqlx::Row as _;
-        match row {
+        match record {
             Some(r) => ContentBlock::json(serde_json::json!({
-                "nb_mp_id": r.try_get::<String,_>("nb_mp_id").ok(),
-                "gueltig_fuer": r.try_get::<i16,_>("gueltig_fuer").ok(),
-                "energiemix": r.try_get::<serde_json::Value,_>("energiemix").ok(),
-                "eeg_einspeisung_kwh": r.try_get::<Option<i64>,_>("eeg_einspeisung_kwh").ok().flatten(),
-                "gesamtentnahme_kwh": r.try_get::<Option<i64>,_>("gesamtentnahme_kwh").ok().flatten(),
-                "updated_at": r.try_get::<time::OffsetDateTime,_>("updated_at").ok().map(|t| t.to_string()),
+                "nb_mp_id": r.nb_mp_id,
+                "gueltig_fuer": r.gueltig_fuer,
+                "energiemix": r.energiemix,
+                "eeg_einspeisung_kwh": r.eeg_einspeisung_kwh,
+                "gesamtentnahme_kwh": r.gesamtentnahme_kwh,
+                "updated_at": r.updated_at.to_string(),
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
@@ -1038,7 +1024,8 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
     /// Read a single trading partner by its 13-digit MP-ID.
     ///
     /// Returns display name, AS4 endpoints (`makoadresse`), the BO4E
-    /// `Geschaeftspartner`, roles, and
+    /// `Geschaeftspartner`, the recorded EDI agreement (`edi_zustimmung`,
+    /// `edi_extrahierbar`; `null` = not recorded), roles, and
     /// the applicable EDIFACT identification scheme (BDEW `293`, DVGW `332`,
     /// or GS1 `9`).
     #[tool(
@@ -1049,32 +1036,28 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
         &self,
         Parameters(p): Parameters<GetPartnerParams>,
     ) -> Result<CallToolResult, McpError> {
-        let row = sqlx::query(
-            r"SELECT mp_id, display_name, makoadresse, geschaeftspartner, updated_at
-              FROM partners
-              WHERE mp_id = $1",
-        )
-        .bind(&p.mp_id)
-        .fetch_optional(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        use sqlx::Row as _;
-        match row {
-            Some(r) => ContentBlock::json(serde_json::json!({
-                "mp_id": r.try_get::<String, _>("mp_id").ok(),
-                "display_name": r.try_get::<Option<String>, _>("display_name").ok().flatten(),
-                "makoadresse": r.try_get::<Option<String>, _>("makoadresse").ok().flatten(),
-                "geschaeftspartner": r
-                    .try_get::<Option<serde_json::Value>, _>("geschaeftspartner")
-                    .ok()
-                    .flatten(),
-                "updated_at": r.try_get::<Option<time::OffsetDateTime>, _>("updated_at").ok().flatten().map(|t| t.to_string()),
-            }))
+        // One read path with REST: the typed repository decodes every column,
+        // so a TEXT[] like `makoadresse` cannot quietly come back as null.
+        let Ok(mp_id) = mako_markt::domain::MarktpartnerId::try_from(p.mp_id.as_str()) else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "invalid_mp_id: '{}' is not a 13-digit MP-ID.",
+                p.mp_id
+            ))]));
+        };
+        match crate::pg::PgPartnerRepository::new(self.state.pool.clone())
+            .find(&mp_id)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        {
+            Some(partner) => ContentBlock::json(
+                serde_json::to_value(&partner)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+            )
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
             None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "partner_not_found: Marktpartner '{}' not found.", p.mp_id
+                "partner_not_found: Marktpartner '{}' not found.",
+                p.mp_id
             ))])),
         }
     }

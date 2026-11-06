@@ -83,7 +83,7 @@ It is a Frist breach for the operator — whether our own answer is late or the
 counterparty's — and not an outcome: every command `offen` accepts is still
 accepted, so a late answer still goes out or still lands, and the next event
 moves the process on. The `DeadlineExpired` event records the lapse, and the
-`TimeoutExpired` arm enqueues an `AperakTimeout` ERP notification where the
+`TimeoutExpired` arm enqueues an `AntwortfristAbgelaufen` ERP notification where the
 workflow carries one, in the same write.
 
 ### Key invariant: a delivery window watches a message that goes out
@@ -146,8 +146,8 @@ healthy run ends lapsed or rejected.
 ## ERP delivery
 
 `OutboxErpWorker` (`services/makod/src/core/erp_adapter.rs`) maps an
-`AperakTimeout` outbox entry to `ErpEventType::AperakTimeout` and delivers it as
-the CloudEvent `de.mako.aperak.timeout`, with the inbound PID in the `makopid`
+`AntwortfristAbgelaufen` outbox entry to `ErpEventType::AntwortfristAbgelaufen` and delivers it as
+the CloudEvent `de.mako.antwortfrist.abgelaufen`, with the inbound PID in the `makopid`
 extension. Envelope and receiver: [ERP Integration](@/docs/architecture/erp-integration.md).
 
 ## Adding a new workflow with compensation
@@ -159,7 +159,7 @@ extension. Envelope and receiver: [ERP Integration](@/docs/architecture/erp-inte
 3. Implement `window_open` and `on_deadline` as above.
 4. In the `TimeoutExpired` arm, re-check `window_open`, then record the outcome
    the Festlegung gives the silence — or a `DeadlineExpired` event that `apply`
-   folds into `FristAbgelaufen` — plus an `AperakTimeout` outbox entry where the
+   folds into `FristAbgelaufen` — plus an `AntwortfristAbgelaufen` outbox entry where the
    ERP must hear of it.
 5. Register the workflow in its module's `drivers()` with
    `WorkflowDriver::of::<W>(WORKFLOW_NAME)`; `EngineBuilder::build` refuses a

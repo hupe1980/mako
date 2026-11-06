@@ -25,7 +25,7 @@ use mako_markt::{
     cloudevents::MarktEvent,
     domain::{MaloId, Sparte},
     error::MdmError,
-    repository::{BillingSchedule, NbContractRecord, NbContractRepository, NetznutzerTyp},
+    repository::{BillingSchedule, NbContractRecord, NetznutzerTyp},
 };
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;

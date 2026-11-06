@@ -611,18 +611,26 @@ The render endpoints answer `422 MODEL_NOT_REPRESENTABLE` where paper is
 admissible, naming the ground, and **`422 PAPIER_UNZULAESSIG`** where it is not.
 A recipient who is no Unternehmer is outside the duty. Neither fact is assumed
 when missing: the recipient comes from `billing_records.empfaenger_unternehmer`
-(recorded from vertragd's `kundentyp`: `B2C` no, `B2B_*` yes), the Gesamtumsatz
-from `[e_rechnung]`; an unrecorded year never admits paper.
+(vertragd's `unternehmer` in the `rechnungsempfaenger` block — the
+Rechnungsempfänger's own `kundentyp`, `B2C` no, `B2B_*` yes, not the
+contract's), the Gesamtumsatz from `[e_rechnung]`, selected by the tax identity
+the record was issued under (`billing_records.aussteller_ust_id` /
+`aussteller_steuernummer`, stamped from `seller_vat_id` / `seller_tax_number`).
+An issuer or a year with no entry never admits paper.
 
 ```toml
 [[e_rechnung.gesamtumsatz]]
-jahr = 2026
-eur  = "…"
+ust_id = "DE123456789"   # or: steuernummer = "123/456/78901" — exactly one
+jahr   = 2026
+eur    = "…"
 ```
 
-One figure per calendar year: a list naming a year twice, or a negative figure,
-refuses startup, so a corrected figure replaces the old entry rather than
-sitting beside it unread.
+One figure per Rechnungsaussteller and calendar year: an entry naming no or
+both identities, an (identity, year) listed twice, or a negative figure refuses
+startup, so a corrected figure replaces the old entry rather than sitting
+beside it unread. billingd issues on paper only, so the recipient's Zustimmung
+to another electronic format, which vertragd also records, does not enter this
+path.
 
 The EDI grace of Nr. 3 belongs to the INVOIC issuers, not this path.
 
@@ -858,7 +866,7 @@ The VPP webhook is signature-authenticated and carries no Cedar action.
 
 ## MCP server
 
-`/mcp` (Streamable HTTP 2025-11-25): **twelve tools** and six prompts, every
+`/mcp` (Streamable HTTP 2025-11-25): **thirteen tools** and six prompts, every
 tool **read-only**, run in process. There is no `calculate_billing`: issuing a
 Rechnung is a legally binding act for an OIDC identity, not a model.
 
@@ -876,6 +884,7 @@ Rechnung is a legally binding act for an OIDC identity, not a model.
 | `get_billing_summary` | Aggregates per MaLo or LF, each euro once |
 | `validate_tariff_config` | Engine validation (incl. `KEIN_ARBEITSPREIS`), § 41a iMSys guard, § 42 Energiemix disclosure |
 | `explain_invoice_position` | `PositionTrace` of a position |
+| `list_review_queue` | REVIEW + HELD records with their risk findings, typed (`Pruefposten`) |
 
 Prompts: `order-to-cash`, `preview-invoice`, `check-dynamic-tariff`,
 `14a-steuerungsrabatt`, `eeg-billing`, `gas-billing`. agentd's

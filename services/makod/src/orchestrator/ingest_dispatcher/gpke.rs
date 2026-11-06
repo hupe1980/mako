@@ -475,7 +475,7 @@ impl EdifactIngestDispatcher {
             "gpke-abrechnung" => match pid {
                 31001 | 31002 | 31005 | 31006 => {
                     let cmd = adapters::gpke_abrechnung_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_malo_from_invoic(msg);
+                    let invoice_ref = extract_invoice_ref_from_invoic(msg);
                     // The settlement window of an INVOIC is its **Zahlungsziel**
                     // (`SG8 DTM+265`), which the sender states on the document —
                     // the receiver must answer „zum Zahlungsziel". Ten Werktage

@@ -20,10 +20,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use mako_markt::{
-    domain::Sparte,
-    repository::{GrundversorgerRecord, GrundversorgerRepository},
-};
+use mako_markt::{domain::Sparte, repository::GrundversorgerRecord};
 use mako_service::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;

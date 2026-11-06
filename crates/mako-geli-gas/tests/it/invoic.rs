@@ -141,6 +141,7 @@ async fn a_foreign_pid_is_refused_on_both_legs() {
                 recipient: MarktpartnerCode::new("4012345000023"),
                 document_date: "20260601".to_owned(),
                 invoice_ref: MessageRef::new("INV-1"),
+                nachricht: "UNH+1+INVOIC:D:06A:UN:2.8e'UNT+2+1'".to_owned(),
             },
             RunOptions::new()
         )

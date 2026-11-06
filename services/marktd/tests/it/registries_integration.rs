@@ -1,5 +1,6 @@
-//! Real-PostgreSQL guards for the §20b EnWG Netzzugang request registry and
-//! the Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0).
+//! Real-PostgreSQL guards for the §20b EnWG Netzzugang request registry, the
+//! Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0), the trading-partner registry
+//! and the § 42 EnWG grid-area Energiemix.
 //!
 //! ```bash
 //! PostgreSQL is self-managed via testcontainers (only a Docker daemon is
@@ -18,8 +19,9 @@ use mako_markt::{
 };
 use mako_service::cedar::{CedarEnforcer, CedarPrincipal};
 use marktd::pg::{
-    PgMsbRahmenvertragGasRepository, PgNetzzugangRepository,
+    PgMsbRahmenvertragGasRepository, PgNbEnergiemixRepository, PgNetzzugangRepository,
     msb_rahmenvertrag_gas::{MsbRvGasStatus, MsbRvGasUpsertRequest},
+    nb_energiemix::NbEnergiemixWrite,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -386,4 +388,197 @@ async fn pg_container() -> Option<(String, PgContainer)> {
     let port = container.get_host_port_ipv4(5432).await.ok()?;
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     Some((url, container))
+}
+
+// ── Trading partners ─────────────────────────────────────────────────────────
+
+/// A partner reads back as written — every AS4 endpoint of `makoadresse` (a
+/// TEXT[]) and the EDI agreement makod's INVOIC check reads. `find` is the one
+/// read path REST and the MCP `get_partner` tool share.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_partner_reads_back_with_every_endpoint_and_its_edi_agreement() {
+    let Some((pool, _pg)) = test_pool("partner_roundtrip").await else {
+        return;
+    };
+    let repo = marktd::pg::PgPartnerRepository::new(pool.clone());
+    let mp_id = mako_markt::domain::MarktpartnerId::try_from(NB).expect("an MP-ID");
+    let partner: mako_markt::repository::PartnerRecord =
+        serde_json::from_value(serde_json::json!({
+            "mp_id": NB,
+            "display_name": "Netz Nord",
+            "makoadresse": ["https://as4-a.example.de/msh", "https://as4-b.example.de/msh"],
+            "edi_zustimmung": true,
+            "edi_extrahierbar": false,
+        }))
+        .expect("a partner record");
+    repo.upsert(partner).await.expect("upsert");
+
+    let stored = repo.find(&mp_id).await.expect("find").expect("stored");
+    assert_eq!(
+        stored.makoadresse,
+        [
+            "https://as4-a.example.de/msh",
+            "https://as4-b.example.de/msh"
+        ]
+    );
+    assert_eq!(stored.edi_zustimmung, Some(true));
+    assert_eq!(stored.edi_extrahierbar, Some(false));
+}
+
+// ── § 42 EnWG grid-area Energiemix ───────────────────────────────────────────
+
+/// A BO4E `Energiemix` COM whose one share is `prozent` of `erzeugungsart`.
+fn energiemix(jahr: i16, erzeugungsart: &str) -> serde_json::Value {
+    serde_json::json!({
+        "gueltigkeitsjahr": jahr,
+        "anteil": [{ "erzeugungsart": erzeugungsart, "anteilProzent": "100" }],
+    })
+}
+
+fn mix_write<'a>(
+    tenant: &'a str,
+    year: i16,
+    mix: &'a serde_json::Value,
+    eeg_kwh: Option<i64>,
+) -> NbEnergiemixWrite<'a> {
+    NbEnergiemixWrite {
+        tenant,
+        nb_mp_id: NB,
+        gueltig_fuer: year,
+        energiemix: mix,
+        eeg_einspeisung_kwh: eeg_kwh,
+        gesamtentnahme_kwh: Some(9_876_543_210),
+    }
+}
+
+/// A year's mix reads back as written — the JSON and both kWh figures, which
+/// are `NUMERIC` columns and decode only through an exact cast. Without a read
+/// year the most recent one answers, with one it answers that year, and
+/// `history` lists every year newest first.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_energiemix_reads_back_latest_and_by_year() {
+    let Some((pool, _pg)) = test_pool("energiemix_roundtrip").await else {
+        return;
+    };
+    let repo = PgNbEnergiemixRepository::new(pool);
+    let (mix_2024, mix_2025) = (energiemix(2024, "KOHLE"), energiemix(2025, "WIND"));
+    repo.upsert(&mix_write(TENANT, 2025, &mix_2025, Some(123_456_789)))
+        .await
+        .expect("store 2025");
+    repo.upsert(&mix_write(TENANT, 2024, &mix_2024, None))
+        .await
+        .expect("store 2024");
+
+    let latest = repo
+        .find(TENANT, NB, None)
+        .await
+        .expect("read")
+        .expect("a mix is stored");
+    assert_eq!(latest.gueltig_fuer, 2025, "the most recent year answers");
+    assert_eq!(latest.energiemix, mix_2025);
+    assert_eq!(latest.eeg_einspeisung_kwh, Some(123_456_789));
+    assert_eq!(latest.gesamtentnahme_kwh, Some(9_876_543_210));
+
+    let older = repo
+        .find(TENANT, NB, Some(2024))
+        .await
+        .expect("read")
+        .expect("2024 is stored");
+    assert_eq!(older.energiemix, mix_2024);
+    assert_eq!(older.eeg_einspeisung_kwh, None);
+    assert!(
+        repo.find(TENANT, NB, Some(2023))
+            .await
+            .expect("read")
+            .is_none(),
+        "a year never published is absent, not the nearest one"
+    );
+
+    let years: Vec<i16> = repo
+        .history(TENANT, NB)
+        .await
+        .expect("history")
+        .iter()
+        .map(|r| r.gueltig_fuer)
+        .collect();
+    assert_eq!(years, [2025, 2024]);
+}
+
+/// Republishing a year replaces its mix and keeps a kWh figure the new write
+/// leaves out: the annual totals are known later than the mix.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn republishing_a_year_replaces_the_mix_and_keeps_an_omitted_total() {
+    let Some((pool, _pg)) = test_pool("energiemix_republish").await else {
+        return;
+    };
+    let repo = PgNbEnergiemixRepository::new(pool);
+    let (first, second) = (energiemix(2025, "KOHLE"), energiemix(2025, "SOLAR"));
+    repo.upsert(&mix_write(TENANT, 2025, &first, Some(42)))
+        .await
+        .expect("first");
+    repo.upsert(&mix_write(TENANT, 2025, &second, None))
+        .await
+        .expect("republish");
+
+    let stored = repo
+        .find(TENANT, NB, Some(2025))
+        .await
+        .expect("read")
+        .expect("stored");
+    assert_eq!(stored.energiemix, second);
+    assert_eq!(stored.eeg_einspeisung_kwh, Some(42));
+    assert_eq!(repo.history(TENANT, NB).await.expect("history").len(), 1);
+}
+
+/// Every read is scoped to its tenant: another tenant's mix for the same
+/// Netzbetreiber and year is neither the latest, nor that year, nor history.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_energiemix_is_scoped_to_its_tenant() {
+    let Some((pool, _pg)) = test_pool("energiemix_tenant").await else {
+        return;
+    };
+    let repo = PgNbEnergiemixRepository::new(pool);
+    let other = "9900000000003";
+    let (ours, theirs) = (energiemix(2024, "WIND"), energiemix(2026, "KOHLE"));
+    repo.upsert(&mix_write(TENANT, 2024, &ours, None))
+        .await
+        .expect("ours");
+    repo.upsert(&mix_write(other, 2026, &theirs, None))
+        .await
+        .expect("theirs");
+    repo.upsert(&mix_write(other, 2024, &theirs, None))
+        .await
+        .expect("theirs, same year");
+
+    let latest = repo
+        .find(TENANT, NB, None)
+        .await
+        .expect("read")
+        .expect("ours is stored");
+    assert_eq!(
+        latest.gueltig_fuer, 2024,
+        "the other tenant's 2026 is not ours"
+    );
+    assert_eq!(latest.tenant, TENANT);
+    assert_eq!(
+        repo.find(TENANT, NB, Some(2024))
+            .await
+            .expect("read")
+            .expect("ours")
+            .energiemix,
+        ours
+    );
+    assert!(
+        repo.find(TENANT, NB, Some(2026))
+            .await
+            .expect("read")
+            .is_none()
+    );
+    let history = repo.history(TENANT, NB).await.expect("history");
+    assert_eq!(history.len(), 1);
+    assert!(history.iter().all(|r| r.tenant == TENANT));
 }

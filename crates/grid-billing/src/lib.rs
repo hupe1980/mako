@@ -184,7 +184,6 @@ pub use types::{
     Grundpreis,
     // Presenting a settlement as an invoice: numbers, dates, Prüfidentifikator.
     InvoiceDocument,
-    Jahresanteil,
     KaKundengruppe,
     Konzessionsabgabe,
     KorrekturGrund,
@@ -197,6 +196,7 @@ pub use types::{
     MsbEmpfaengerRolle,
     MsbInput,
     MsbRechnungsempfaenger,
+    MsbTagespreise,
     NneInput,
     // The pricing formula behind a rate, as a value rather than a document.
     PriceReference,
@@ -219,6 +219,7 @@ pub use types::{
     TariffSource,
     ValidationResult,
     WarningSeverity,
+    bdew_artikelnummer_code,
     // Validation functions
     validate_gas_awh_input,
     validate_mmm_input,

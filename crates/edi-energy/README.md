@@ -73,6 +73,12 @@ println!("{}", String::from_utf8_lossy(&bytes));
 The builder emits what it is given; `profile.pruefschablone(55001)` says what a
 column needs and `profile.validate` names every place still missing.
 
+A sender can also address segments by MIG place: `profile.seed_segment("00041",
+&[("5004", "80.00")])` writes the place's identifying qualifier (`MOA+203`) from
+the profile, `profile.completion(&seed, af, &parties)` adds what the
+Prüfschablone fixes, and its `unstated` list names every data element it could
+only have filled with a made-up value — the places to refuse rather than send.
+
 ## Message types
 
 | Feature flag | Message type | BDEW abbreviation | Profiles |

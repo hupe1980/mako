@@ -669,11 +669,11 @@ measures the second; the first never reaches it.
 | **APERAK Frist** | Strom UTILMD/ORDERS 45 min (Samstag: Sonntag 12:00), other Strom next Werktag 12:00; Gas Folgeprozess next Werktag 12:00, Initialprozess end of the 3. Werktag (APERAK AHB 1.1 §§ 2.3.1 / 2.4.1) | the counterparty's acknowledgement did not arrive — a transport or validation fault | not in the read model: makod raises the delivery-window alert and keeps the message in its outbox |
 | **Antwortfrist** | per PID — see below | the *business answer* is owed and has not been sent | `deadline_at`, computed on `process.initiated` |
 
-`state = aperak_timeout` is set by `de.mako.aperak.timeout`, which
+`state = antwortfrist_abgelaufen` is set by `de.mako.antwortfrist.abgelaufen`, which
 `gpke-supplier-change` and `geli-gas-supplier-change` emit when **their
 Antwortfrist** lapses unanswered — an Antwortfrist signal raised by the
-workflow. `total_aperak_timeout` and `total_frist_breached` are separate fields
-on every report; `aperak_timeout` is not terminal, so those processes stay in the
+workflow. `total_antwortfrist_abgelaufen` and `total_frist_breached` are separate fields
+on every report; `antwortfrist_abgelaufen` is not terminal, so those processes stay in the
 Antwortfrist sweep.
 
 ### ProcessProjection
@@ -684,7 +684,7 @@ Antwortfrist sweep.
 | `pid` | BDEW Prüfidentifikator (e.g. 55001) |
 | `family` | `gpke`, `wim`, `geli-gas`, `wim-gas`, `gabi-gas`, `mabis`, `emob`, `redispatch`, `invoic-storno`, `unknown` — the Festlegung of the PID's Antwortfrist; a two-Sparten WiM PID by `data.sparte`, else the counterparty's coding authority (`293` / `332`) |
 | `workflow_name` | From the `makoworkflow` CE extension |
-| `state` | `initiated` \| `running` \| `aperak_timeout` \| `completed` \| `rejected` \| `failed` |
+| `state` | `initiated` \| `running` \| `antwortfrist_abgelaufen` \| `completed` \| `rejected` \| `failed` |
 | `malo_id` | 11-digit Marktlokations-ID |
 | `partner_mp_id` | MP-ID of the counterparty |
 | `mdm_role` | Canonical Marktrolle (`LF`, `NB`, …) |
@@ -733,8 +733,8 @@ The comparison covers the processes the network arm answers for a Lieferant,
 derived from the Antwortfrist table (`answered_by == "NB"` in GPKE and GeLi Gas):
 55001, 55077, 55004, 44001 and 44004. `initiator_is_affiliate` is set when the
 Lieferant's MP-ID (`new_supplier`, else the counterparty) is in
-`[identity] own_mp_ids`; list every MP-ID the operator uses, or its affiliate
-processes count as third-party.
+`[identity] verbundene_lieferanten` — the list the NB module holds an
+affiliate's Anmeldung on, so the evidence and the hold cannot disagree.
 
 **`gap_pp = affiliate − third_party`, in percentage points; positive means the
 affiliate fared better.** `gap_pp` covers the completion rate, `frist_gap_pp`
@@ -929,10 +929,10 @@ pool_size = 10                  # default
 [identity]
 own_mp_id = "9900357000004"     # required — must match makod.toml [[party]] primary
 tenant    = ""                  # optional; defaults to own_mp_id
-# Every MP-ID the operator acts under, for the read model's § 7a Abs. 5 EnWG
-# affiliate detection: Strom NB (BDEW 99…) + Gas GNB (DVGW 98…). Defaults to
-# [own_mp_id].
-own_mp_ids = ["9900357000004", "9800357000004"]
+# required, [] included — the MP-IDs of the affiliated Lieferanten (each role
+# has its own MP-ID). Their Anmeldungen are held for a person and grouped as
+# affiliate in the § 7a Abs. 5 EnWG evidence.
+verbundene_lieferanten = ["9900357000011"]
 
 [makod]
 url     = "http://makod:8080"   # required
@@ -964,7 +964,7 @@ event_types = [
   "de.mako.process.failed",
   "de.mako.aperak.accepted",
   "de.mako.aperak.rejected",
-  "de.mako.aperak.timeout",
+  "de.mako.antwortfrist.abgelaufen",
   "de.markt.versorgung.gap-detected",
   "de.markt.versorgung.eog-begonnen",
   "de.markt.versorgung.changed",

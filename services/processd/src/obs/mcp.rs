@@ -303,7 +303,7 @@ impl ProcessdMcpHandler {
 
     /// Processes past their **business Antwortfrist**.
     ///
-    /// A process in `state = aperak_timeout` is still listed: that state is the
+    /// A process in `state = antwortfrist_abgelaufen` is still listed: that state is the
     /// Lieferantenwechsel's own report that this same Antwortfrist lapsed, it
     /// is not terminal, and the answer is still owed.
     ///
@@ -444,9 +444,9 @@ impl ProcessdMcpHandler {
     /// Process KPIs for a Prüfidentifikator and calendar month.
     ///
     /// `frist_breached` counts processes that passed their *business*
-    /// Antwortfrist, measured by the projection against `deadline_at`. `aperak_timeout`
-    /// counts processes whose current state is `aperak_timeout`: the
-    /// `de.mako.aperak.timeout` event that `gpke-supplier-change` and
+    /// Antwortfrist, measured by the projection against `deadline_at`. `antwortfrist_abgelaufen`
+    /// counts processes whose current state is `antwortfrist_abgelaufen`: the
+    /// `de.mako.antwortfrist.abgelaufen` event that `gpke-supplier-change` and
     /// `geli-gas-supplier-change` emit when *their* Antwortfrist lapses
     /// unanswered. Neither number measures an APERAK or CONTRL delivery
     /// window — no such lapse reaches the read model.
@@ -455,7 +455,7 @@ impl ProcessdMcpHandler {
     /// `period` — `YYYY-MM` (default: current month).
     #[tool(
         description = "Process KPIs for a PID and calendar month (YYYY-MM). frist_breached is \
-                       the business Antwortfrist measured against deadline_at; aperak_timeout \
+                       the business Antwortfrist measured against deadline_at; antwortfrist_abgelaufen \
                        counts the supplier-change workflows' own Antwortfrist-lapse reports. \
                        Neither measures an APERAK delivery window. Rates are null when the \
                        bucket contains nothing measurable — never 0.",
@@ -484,7 +484,7 @@ impl ProcessdMcpHandler {
                 "total_failed": report.total_failed,
                 // The GPKE / GeLi Gas Lieferantenwechsel reporting its own
                 // Antwortfrist lapse — not an APERAK delivery window.
-                "aperak_timeout": report.total_aperak_timeout,
+                "antwortfrist_abgelaufen": report.total_antwortfrist_abgelaufen,
                 // The business Antwortfrist. `total_with_frist` is the
                 // denominator and is reported because a small one means the
                 // bucket is mostly *unmeasured*, which a rate near 1.0 hides.
@@ -494,7 +494,7 @@ impl ProcessdMcpHandler {
                 "avg_cycle_time_hours": report.avg_cycle_time_hours,
                 "p95_cycle_time_hours": report.p95_cycle_time_hours,
                 "note": "frist_breached is the business Antwortfrist measured against \
-                         deadline_at; aperak_timeout counts processes the GPKE / GeLi Gas \
+                         deadline_at; antwortfrist_abgelaufen counts processes the GPKE / GeLi Gas \
                          supplier-change workflow reported as past its Antwortfrist. Neither \
                          measures an APERAK delivery window. Null rates mean nothing measurable \
                          in the bucket, not perfect performance.",
@@ -603,13 +603,13 @@ impl ProcessdMcpHandler {
     /// Rolling STP (Straight-Through Processing) rate across all families.
     ///
     /// The denominator is processes that **ended** — completed, rejected or
-    /// failed. An `aperak_timeout` is not an ending: the Antwortfrist lapsed and
+    /// failed. An `antwortfrist_abgelaufen` is not an ending: the Antwortfrist lapsed and
     /// the answer can still arrive, so counting it as a terminal failure
     /// understates the rate for as long as the process stays open.
     #[tool(
         description = "Rolling STP rate over processes that ended in the last N days. \
                        Denominator is completed + rejected + failed; in-flight and \
-                       aperak_timeout processes are reported separately because neither has \
+                       antwortfrist_abgelaufen processes are reported separately because neither has \
                        ended. Null when nothing ended in the window. No regulatory target \
                        exists — compare against your own operating goal.",
         annotations(read_only_hint = true, open_world_hint = false)
@@ -626,7 +626,7 @@ impl ProcessdMcpHandler {
                 COUNT(*) FILTER (WHERE state = 'completed')      AS completed,
                 COUNT(*) FILTER (WHERE state = 'rejected')       AS rejected,
                 COUNT(*) FILTER (WHERE state = 'failed')         AS failed,
-                COUNT(*) FILTER (WHERE state = 'aperak_timeout') AS aperak_timeout,
+                COUNT(*) FILTER (WHERE state = 'antwortfrist_abgelaufen') AS antwortfrist_abgelaufen,
                 COUNT(*) FILTER (WHERE state IN ('initiated','running')) AS in_flight,
                 COUNT(*) FILTER (
                     WHERE deadline_at IS NOT NULL
@@ -662,10 +662,10 @@ impl ProcessdMcpHandler {
             "rejected": rejected,
             "failed": failed,
             "in_flight": n("in_flight"),
-            "aperak_timeout": n("aperak_timeout"),
+            "antwortfrist_abgelaufen": n("antwortfrist_abgelaufen"),
             "frist_breached": n("frist_breached"),
             "stp_rate": stp_rate,
-            "note": "stp_rate = completed / (completed + rejected + failed). aperak_timeout is \
+            "note": "stp_rate = completed / (completed + rejected + failed). antwortfrist_abgelaufen is \
                      a lapsed Antwortfrist the supplier-change workflow reported and is not an \
                      ending — the answer can still arrive. No regulatory STP target exists.",
         }))
@@ -928,9 +928,9 @@ fn audit_kpi_prompt_text() -> String {
     String::from(
         "1. Use `get_kpi_report` with a PID and a `YYYY-MM` period.\n\
          2. Read `total_initiated`, `total_completed`, `total_rejected`, `total_failed`, \
-         `aperak_timeout`, `frist_breached`, `frist_compliance_rate` and \
+         `antwortfrist_abgelaufen`, `frist_breached`, `frist_compliance_rate` and \
          `avg_cycle_time_hours`. `frist_breached` is the business Antwortfrist measured \
-         against `deadline_at`; `aperak_timeout` counts the GPKE / GeLi Gas supplier-change \
+         against `deadline_at`; `antwortfrist_abgelaufen` counts the GPKE / GeLi Gas supplier-change \
          workflows' own Antwortfrist-lapse reports. Neither is an APERAK delivery window — \
          never report either as one.\n\
          3. No BNetzA threshold exists for these rates. Any target is the operator's own; \
@@ -945,7 +945,7 @@ fn aperak_prompt_text() -> String {
         "1. Use `get_process` with the process_id to see the full projection.\n\
          2. The APERAK Frist: {}.\n\
          3. The read model does not measure it: no APERAK or CONTRL delivery-window lapse reaches \
-         this read model, and `state = aperak_timeout` is a lapsed Antwortfrist. A missed \
+         this read model, and `state = antwortfrist_abgelaufen` is a lapsed Antwortfrist. A missed \
          APERAK Frist is root-caused from makod's delivery-window alert and outbox.",
         aperak_frist_sentence()
     )
@@ -965,7 +965,7 @@ pub(crate) fn instructions() -> String {
              measure it: no delivery-window lapse reaches this read model.\n\
              - **Antwortfrist** — the business answer, per inbound PID: {antwort}. Stored as \
              `deadline_at`, with `deadline_source` naming the Festlegung. `state = \
-             aperak_timeout` is the GPKE / GeLi Gas Lieferantenwechsel reporting that this \
+             antwortfrist_abgelaufen` is the GPKE / GeLi Gas Lieferantenwechsel reporting that this \
              window lapsed unanswered.\n\
              \n\
              They differ by orders of magnitude and fail for different reasons. Never report \
@@ -995,7 +995,7 @@ pub(crate) fn instructions() -> String {
              Any target is the operator's own; say whose it is.\n\
              \n\
              ## Process states\n\
-             `initiated` → `running` → `completed` | `rejected` | `failed`; `aperak_timeout` \
+             `initiated` → `running` → `completed` | `rejected` | `failed`; `antwortfrist_abgelaufen` \
              is not terminal — the answer can still arrive after the Antwortfrist lapsed.",
         aperak = aperak_frist_sentence(),
         antwort = antwort_examples(),

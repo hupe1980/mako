@@ -124,6 +124,20 @@ pub fn aufteilung(
 const UENB_2026: &str = "Übertragungsnetzbetreiber, Netzentgeltumlagen 2026 \
                          (netztransparenz.de, Veröffentlichung nach § 11 EnFG im Oktober 2025)";
 
+/// The publication the 2027 rows are read from: one page per levy on
+/// netztransparenz.de, each dated 26.10.2026.
+const UENB_2027: &str = "Übertragungsnetzbetreiber, KWKG-Umlage 2027, Offshore-Netzumlage 2027 \
+                         und Aufschlag für besondere Netznutzung 2027 (netztransparenz.de, \
+                         veröffentlicht am 26.10.2026 nach § 11 EnFG)";
+
+/// The ÜNB's reservation on the 2027 Aufschlag für besondere Netznutzung: the
+/// provisional Übertragungsnetzentgelte behind it assume the federal Zuschuss
+/// of § 24d EnWG, not yet enacted when it was published.
+const VORBEHALT_2027: &str = "veröffentlicht unter dem Vorbehalt, dass der Zuschuss zu den \
+                              Übertragungsnetzkosten (§ 24d EnWG) gesetzlich geregelt wird; \
+                              „Sollte bis zum 07.12.2026 keine Rechtssicherheit bestehen\", \
+                              erhöht sich der Aufschlag";
+
 /// One year of the §19 StromNEV-Umlage, A′/B′/C′ in ct/kWh, with its source.
 #[derive(Debug, Clone, Copy)]
 struct Sect19Zeile {
@@ -132,6 +146,8 @@ struct Sect19Zeile {
     b: Decimal,
     c: Decimal,
     quelle: &'static str,
+    /// The publisher's reservation, when the row was published under one.
+    vorbehalt: Option<&'static str>,
 }
 
 /// One year of a levy published only at the non-privileged rate, in ct/kWh,
@@ -147,27 +163,52 @@ struct UmlageZeile {
 ///
 /// Published as an explicit A′/B′/C′ schedule, which is why this levy is tabled
 /// per group while the other two are not.
-const SECT19_STROMNEV: &[Sect19Zeile] = &[Sect19Zeile {
-    jahr: 2026,
-    a: dec!(1.559),
-    b: dec!(0.050),
-    c: dec!(0.025),
-    quelle: UENB_2026,
-}];
+const SECT19_STROMNEV: &[Sect19Zeile] = &[
+    Sect19Zeile {
+        jahr: 2026,
+        a: dec!(1.559),
+        b: dec!(0.050),
+        c: dec!(0.025),
+        quelle: UENB_2026,
+        vorbehalt: None,
+    },
+    Sect19Zeile {
+        jahr: 2027,
+        a: dec!(2.027),
+        b: dec!(0.050),
+        c: dec!(0.025),
+        quelle: UENB_2027,
+        vorbehalt: Some(VORBEHALT_2027),
+    },
+];
 
 /// Offshore-Netzumlage (§17f EnWG) by year, non-privileged, in ct/kWh.
-const OFFSHORE_NETZUMLAGE: &[UmlageZeile] = &[UmlageZeile {
-    jahr: 2026,
-    satz: dec!(0.941),
-    quelle: UENB_2026,
-}];
+const OFFSHORE_NETZUMLAGE: &[UmlageZeile] = &[
+    UmlageZeile {
+        jahr: 2026,
+        satz: dec!(0.941),
+        quelle: UENB_2026,
+    },
+    UmlageZeile {
+        jahr: 2027,
+        satz: dec!(1.143),
+        quelle: UENB_2027,
+    },
+];
 
 /// KWKG-Umlage (§26 KWKG) by year, non-privileged, in ct/kWh.
-const KWKG_UMLAGE: &[UmlageZeile] = &[UmlageZeile {
-    jahr: 2026,
-    satz: dec!(0.446),
-    quelle: UENB_2026,
-}];
+const KWKG_UMLAGE: &[UmlageZeile] = &[
+    UmlageZeile {
+        jahr: 2026,
+        satz: dec!(0.446),
+        quelle: UENB_2026,
+    },
+    UmlageZeile {
+        jahr: 2027,
+        satz: dec!(0.451),
+        quelle: UENB_2027,
+    },
+];
 
 /// The publication a tabled year of the §19 StromNEV-Umlage is read from.
 ///
@@ -178,6 +219,16 @@ pub fn sect19_stromnev_quelle(year: i32) -> Option<&'static str> {
         .iter()
         .find(|z| z.jahr == year)
         .map(|z| z.quelle)
+}
+
+/// The reservation a tabled year of the §19 StromNEV-Umlage was published
+/// under, if any — the rate may still be replaced by the ÜNB.
+#[must_use]
+pub fn sect19_stromnev_vorbehalt(year: i32) -> Option<&'static str> {
+    SECT19_STROMNEV
+        .iter()
+        .find(|z| z.jahr == year)
+        .and_then(|z| z.vorbehalt)
 }
 
 /// The publication a tabled year of the Offshore-Netzumlage is read from.
@@ -285,7 +336,35 @@ mod tests {
         assert!(sect19_stromnev_quelle(2026).is_some());
         assert!(offshore_netzumlage_quelle(2026).is_some());
         assert!(kwkg_umlage_quelle(2026).is_some());
-        assert_eq!(kwkg_umlage_quelle(2027), None);
+        assert_eq!(kwkg_umlage_quelle(2028), None);
+    }
+
+    /// The 2027 schedule as the ÜNB published it on 26.10.2026.
+    #[test]
+    fn published_2027_rates() {
+        use Letztverbrauchergruppe as G;
+        assert_eq!(sect19_stromnev_ct_per_kwh(2027, G::A), Some(dec!(2.027)));
+        assert_eq!(sect19_stromnev_ct_per_kwh(2027, G::B), Some(dec!(0.050)));
+        assert_eq!(sect19_stromnev_ct_per_kwh(2027, G::C), Some(dec!(0.025)));
+        assert_eq!(
+            sect19_stromnev_ct_per_kwh(2027, G::Befreit),
+            Some(Decimal::ZERO)
+        );
+        assert_eq!(
+            offshore_netzumlage_ct_per_kwh(2027, G::A),
+            Some(dec!(1.143))
+        );
+        assert_eq!(kwkg_umlage_ct_per_kwh(2027, G::A), Some(dec!(0.451)));
+        assert!(kwkg_umlage_quelle(2027).is_some_and(|q| q.contains("26.10.2026")));
+    }
+
+    /// Only the 2027 §19 row was published under a reservation, and it says
+    /// until when.
+    #[test]
+    fn the_2027_sect19_row_carries_its_reservation() {
+        assert_eq!(sect19_stromnev_vorbehalt(2026), None);
+        let v = sect19_stromnev_vorbehalt(2027).expect("the 2027 row is reserved");
+        assert!(v.contains("§ 24d EnWG") && v.contains("07.12.2026"), "{v}");
     }
 
     /// Each levy is tabled for the same years, so a period never finds one
@@ -324,7 +403,7 @@ mod tests {
     fn an_uncovered_year_has_no_rate() {
         use Letztverbrauchergruppe as G;
         assert_eq!(sect19_stromnev_ct_per_kwh(2025, G::A), None);
-        assert_eq!(offshore_netzumlage_ct_per_kwh(2027, G::A), None);
+        assert_eq!(offshore_netzumlage_ct_per_kwh(2028, G::A), None);
         assert_eq!(kwkg_umlage_ct_per_kwh(1999, G::A), None);
     }
 

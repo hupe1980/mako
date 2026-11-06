@@ -268,7 +268,7 @@ async fn parity_sweep_alerts_when_affiliate_is_favoured_beyond_threshold() {
 /// would also disagree with `list_overdue_processes`, which does not.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn an_aperak_timeout_still_gets_its_antwortfrist_alert() {
+async fn a_lapsed_antwortfrist_still_gets_its_alert() {
     let Some((pool, _pg)) = pg_pool().await else {
         return;
     };
@@ -278,7 +278,7 @@ async fn an_aperak_timeout_still_gets_its_antwortfrist_alert() {
         &pool,
         tenant,
         55001,
-        "aperak_timeout",
+        "antwortfrist_abgelaufen",
         Some(now + Duration::hours(6)),
         false,
     )

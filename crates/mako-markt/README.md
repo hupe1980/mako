@@ -3,8 +3,8 @@
 [![Crates.io](https://img.shields.io/crates/v/mako-markt?label=mako-markt&color=f59e0b&logo=rust)](https://crates.io/crates/mako-markt)
 
 Master-data domain for the German energy market: validated identifiers
-(MaLo-ID, MeLo-ID, MP-ID), the BO4E gate every payload crosses, the repository
-traits and record types behind [`marktd`](https://hupe1980.github.io/mako/docs/services/marktd/)
+(MaLo-ID, MeLo-ID, MP-ID), the BO4E gate every payload crosses, the record
+types behind [`marktd`](https://hupe1980.github.io/mako/docs/services/marktd/)
 (Marktlokation, Messlokation, VersorgungsStatus, NB contracts, PRICAT), the
 `de.markt.*` CloudEvents and the typed `makod` command names.
 
@@ -48,7 +48,7 @@ validation. `bo4e::decode` makes the four decisions in one place:
 | `ensure_conformant` | outbound: stages 3 and 4 on a value mako built. |
 
 A rule belongs in stage 4 only if BO4E itself asserts it. Writes take the typed
-BO (`MaloRepository::upsert(&Marktlokation)`); reads hand the stored JSONB back
+BO (marktd's `PgMaloRepository::upsert(&Marktlokation)`); reads hand the stored JSONB back
 verbatim.
 
 ## Modules
@@ -57,10 +57,9 @@ verbatim.
 |---|---|
 | `domain` | `MaloId`, `MeloId`, `MarktpartnerId`, `EicCode`, … (from `rubo4e::identifiers`), `Sparte` |
 | `bo4e` | `decode`, `decode_received`, `ensure_conformant`, shadow columns |
-| `repository` | AFIT repository traits and record types; PostgreSQL implementations live in `marktd` |
+| `repository` | record types; the PostgreSQL storage lives in `marktd` |
 | `cloudevents` | `InboundMakoEvent`, `MarktEvent` and the `de.markt.*` emissions |
 | `commands` | the catalogued `makod` command names |
 | `makod_client`, `marktd_client` | HTTP clients (features `makod-client`, `marktd-client`) |
-| `testing` | two in-memory doubles (feature `testing`, never in production) |
 
 API documentation: <https://docs.rs/mako-markt>.

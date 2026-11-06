@@ -17,7 +17,6 @@
 //! This makes every invoice amount reproducible and auditable without re-running
 //! the calculation, satisfying BNetzA §20 EnWG audit requirements.
 
-use crate::EuroAmount;
 use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -250,8 +249,9 @@ pub enum PositionCategory {
 
 /// One line item on an energy invoice.
 ///
-/// All monetary amounts are in **EUR** (not ct/kWh), stored as [`Decimal`]
-/// with 5 decimal places precision (matching the internal `EuroAmount` type).
+/// All monetary amounts are in **EUR** (not ct/kWh), stored as [`Decimal`].
+/// A provider states `net_eur` exactly; [`Invoice::from_positions`](crate::Invoice::from_positions)
+/// rounds it once, kaufmännisch, to the cent.
 ///
 /// ## Sign convention
 ///
@@ -404,7 +404,8 @@ impl BillingPosition {
         unit_price_eur: Decimal,
         category: PositionCategory,
     ) -> Self {
-        let net_eur = validated_eur(quantity * unit_price_eur);
+        // Exact: a position is rounded once, to the cent, by `Invoice::from_positions`.
+        let net_eur = quantity * unit_price_eur;
         let unit_str = unit.into();
         Self {
             description: description.into(),
@@ -431,7 +432,7 @@ impl BillingPosition {
         abs_rate_eur: Decimal,
         category: PositionCategory,
     ) -> Self {
-        let net_eur = -validated_eur(quantity * abs_rate_eur);
+        let net_eur = -(quantity * abs_rate_eur);
         Self {
             description: description.into(),
             legal_basis: None,
@@ -538,22 +539,6 @@ impl BillingPosition {
             .map(|p| p.net_eur)
             .sum()
     }
-}
-
-/// Round and range-validate a monetary EUR amount to 5 decimal places.
-///
-/// Uses [`EuroAmount`] internally to detect overflow. The ceiling is
-/// `billing::Amount::MAX`, about 92,2 billion EUR, so the check is here for a
-/// corrupt input rather than for a large customer.
-///
-/// Beyond the fixed-point range the amount is **kept** and rounded directly.
-/// Zeroing it would erase the position's value silently, which is the one
-/// failure a billing engine must not have; an out-of-range line instead fails
-/// loudly downstream in the EN 16931 total reconciliation.
-pub(crate) fn validated_eur(amount: Decimal) -> Decimal {
-    EuroAmount::from_decimal(amount)
-        .map(EuroAmount::to_decimal)
-        .unwrap_or_else(|_| amount.round_kfm(5))
 }
 
 // ── Convenience constructors ──────────────────────────────────────────────────

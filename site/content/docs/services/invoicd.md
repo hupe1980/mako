@@ -50,7 +50,6 @@ Every `/api/v1/*` route needs a JWT and a Cedar action (paths under `/api/v1`):
 | `GET /disputes` | `read-disputes` | any caller in the tenant |
 | `GET /overdue-remadv` | `read-overdue-remadv` | any caller in the tenant |
 | `POST /receipts/{id}/confirm-payment`, `/dispatch-answer`, `/resolve-dispute` | `write-receipt` | **LF role** |
-| `POST /selbstausstellen` | `dispatch-selbstausstellen` | **LF role** |
 | `POST\|GET /mcp` | `use-mcp` | any caller in the tenant (OIDC or `[mcp]` key) |
 
 The runner adds `/health/live`, `/health/ready` and `/metrics`; invoicd's own
@@ -85,7 +84,7 @@ not net plus tax) is **disputable** and answered by a REMADV from check stage 7.
 | 31003 | WiM-Rechnung — Abrechnung von Dienstleistungen im Messwesen (MSBA → NB · MSBA → MSBN) | Inbound | ⚡🔥 | ✅ |
 | 31004 | Stornorechnung — universal Storno (GPKE/MMM/WiM/Kapazität/AWH/GeLi) | Inbound | **Strom + Gas** | ✅ arithmetic-only (`check_storno`) |
 | 31005 | MMM-Rechnung Mehr-/Mindermengensaldo | Inbound | Strom | ✅ |
-| 31006 | MMM Mehrmenge, selbst ausgestellt (LF → NB) | Inbound + Outbound | Strom | ✅ |
+| 31006 | MMM Mehrmenge, selbst ausgestellt (NB → LF) | Inbound | Strom | ✅ |
 | 31007 | GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) | Inbound | Gas | ✅ + MMM-Preisprüfung |
 | 31008 | GaBi Gas selbst ausgest. Aggreg. MMM-Rechnung | Inbound | Gas | ✅ + MMM-Preisprüfung |
 | 31009 | MSB-Rechnung (MSB → **NB / LF / ESA**, WiM) | Inbound | Strom | ✅ `PreisblattMessung` — or the accepted **Angebot** toward an ESA |
@@ -223,7 +222,6 @@ outcomes auto-approve unless the invoice net exceeds `auto_dispute_threshold_eur
 |---|---|
 | `de.invoic.receipt.settled` | Outcome `Ok`, `AcceptedPartial`, or `Warn` |
 | `de.invoic.receipt.disputed` | Outcome `Dispute` |
-| `de.invoic.receipt.dispatched` | Self-issued 31006 sent |
 | `de.invoic.payment.overdue` | Zahlungsziel passed without `confirm-payment` |
 
 `dispatched` in the payload says whether the market answer actually went out.
@@ -237,7 +235,6 @@ outcomes auto-approve unless the invoice net exceeds `auto_dispute_threshold_eur
   "data": {
     "process_id": "...",
     "pid": 31001,
-    "direction": "inbound",
     "sender_mp_id": "9904234560001",
     "outcome": "Ok",
     "pay_by": "2026-10-15",
@@ -408,7 +405,7 @@ arithmetic_tolerance       = 0.01   # 1 % — qty × price = line net
 total_tolerance            = 0.01   # 1 % — Σ line nets = Gesamtnetto
 tariff_tolerance           = 0.03   # 3 % — PRICAT unit price vs INVOIC
 require_tariff             = false  # true → missing tariff escalates to Dispute
-auto_dispute_threshold_eur = 0.0    # 0.0 → Warn always auto-approved
+auto_dispute_threshold_eur = "0.00"    # EUR as a string; "0.00" → Warn always auto-approved
 max_zahlungsziel_days      = 30     # 0 = disable; default 30 (§7 Allg. Festlegungen)
 
 [erp]
@@ -417,13 +414,6 @@ webhook_url = "https://erp.example.com/webhooks/invoicd"
 # Optional: sign outbound requests with HMAC-SHA256.
 # The ERP verifies via webhook-signature: v1,<base64>.
 hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
-
-[edmd]
-# Required only for POST /api/v1/selbstausstellen (PID 31006), which reads the
-# measured quantity for the Bilanzierungsmonat. Omitted, that endpoint answers
-# 503; nothing else in the service needs it.
-url = "http://edmd:8380"
-# api_key = "env:INVOICD_EDMD_API_KEY"
 
 # Required unless allow_insecure_no_auth = true.
 [oidc]
@@ -439,48 +429,12 @@ url = "http://edmd:8380"
 
 ---
 
-## Self-issued Mehrmengen-Rechnung (PID 31006)
-
-PID 31006 is the Mehrmenge leg of an MMM settlement written by the receiving
-party itself — the Gutschriftverfahren of § 14 Abs. 2 Satz 2 UStG. The endpoint
-settles one Bilanzierungsmonat, because the price series is monthly.
-
-```bash
-curl -X POST http://invoicd:8280/api/v1/selbstausstellen \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "malo_id":        "51238696012",
-    "nb_mp_id":       "9900000000002",
-    "year":           2026,
-    "month":          6,
-    "bilanziert_kwh": "12500.000"
-  }'
-```
-
-| Input | Source |
-|---|---|
-| `gemessen_kwh` | `edmd GET /api/v1/imbalance/{malo}/{y}/{m}` — edmd measures |
-| `bilanziert_kwh` | the caller — edmd does not balance; the allocated quantity is a commercial figure from the LF's own Bilanzkreis |
-| Mehr-/Mindermengenpreise | `marktd GET /api/v1/mmm-preise/strom/{y}/{m}` |
-
-A month with no imported prices is refused `422`. The document is built by
-`grid_billing::settle_mmm` with `selbstausgestellt`
-(`netznutzungrechnungsart = Selbstausgestellt`,
-`netznutzungrechnungstyp = Mehrmindermengenrechnung`) and crosses the BO4E
-outbound gate before dispatch, so a non-reconciling document is a `422` here
-rather than a REMADV there. The receipt carries `makod`'s process id. Strom
-§ 13b needs both parties' §3g status, which a self-issued invoice cannot assert,
-so it settles at the ordinary rate.
-
----
-
 ## MCP tools
 
 | Tool | Description |
 |------|-------------|
 | `get_receipt` | Get a single INVOIC receipt by process UUID |
-| `list_disputes` | List all receipts with outcome `Dispute` |
+| `list_disputes` | Receipts with outcome `Dispute`, typed (`Disput`); `frist` is the end of the Zahlungsziel's Berlin day |
 | `get_check_result` | Get the full invoic-checker findings for a process |
 | `list_overdue_remadv` | Receipts approaching Zahlungsziel without dispatched REMADV |
 | `get_zahlungsstatus` | Payment status per MaLo-ID (settled / pending / overdue counts) |

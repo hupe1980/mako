@@ -28,11 +28,7 @@
 use mako_markt::{
     domain::{MaloId, Sparte},
     error::MdmError,
-    repository::{
-        MaloRepository, MeloMsbRepository, MeloRepository, NbContractRecord, NbContractRepository,
-        PreisblattDienstleistungRepository, PreisblattHardwareRepository, PreisblattKaRepository,
-        PreisblattMessungRepository, PreisblattRepository, PreisblattSource, Rollenzuordnung,
-    },
+    repository::{NbContractRecord, PreisblattSource, Rollenzuordnung},
 };
 use marktd::pg::{
     PgMaloRepository, PgMeloMsbRepository, PgMeloRepository, PgNbContractRepository,

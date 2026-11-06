@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BusinessDate, Decimal, Instant } from "./brands";
 import { formatBusinessDate, formatInstant, formatInstantUtc } from "./date";
-import { distance } from "./frist";
+import { band, distance } from "./frist";
 import { formatDecimal, formatEuro } from "./money";
 
 const instant = (s: string) => s as Instant;
@@ -57,5 +57,20 @@ describe("Frist-Uhr", () => {
 
   it("is calm beyond a day", () => {
     expect(distance(due, at("2026-11-01T12:00:00Z")).urgency).toBe("calm");
+  });
+});
+
+describe("the Frist band", () => {
+  // Saturday 28.03.2026, the night before the clocks change: Berlin is still
+  // UTC+1, so 22:59Z is Saturday and 23:30Z already Sunday; by 04.04. it is
+  // UTC+2, so 21:00Z is 23:00 that Saturday, seven Berlin days on.
+  const now = Date.parse("2026-03-28T10:00:00Z");
+  it("reads lapsed, today, the next seven Berlin days, later and none", () => {
+    expect(band("2026-03-28T09:59:00Z" as Instant, now)).toBe("ueberfaellig");
+    expect(band("2026-03-28T22:59:00Z" as Instant, now)).toBe("heute");
+    expect(band("2026-03-28T23:30:00Z" as Instant, now)).toBe("woche");
+    expect(band("2026-04-04T21:00:00Z" as Instant, now)).toBe("woche");
+    expect(band("2026-04-05T22:30:00Z" as Instant, now)).toBe("spaeter");
+    expect(band(null, now)).toBe("ohne");
   });
 });

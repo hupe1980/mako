@@ -1,4 +1,4 @@
-//! PostgreSQL implementation of [`LokationszuordnungRepository`].
+//! PostgreSQL storage: [`PgLokationszuordnungRepository`].
 //!
 //! Uses a recursive CTE for graph traversal (`find_graph`), enabling a single
 //! query to return the full MaLo → MeLo → NeLo → SR/TR location graph.
@@ -8,7 +8,7 @@ use std::str::FromStr;
 use mako_markt::domain::Lokationstyp;
 use mako_markt::{
     error::MdmError,
-    repository::{LokationszuordnungEdge, LokationszuordnungRepository},
+    repository::{Lokationsbuendel, LokationszuordnungEdge},
 };
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -26,7 +26,20 @@ fn typ_from_str(s: String) -> Result<Lokationstyp, sqlx::Error> {
     })
 }
 
-/// PostgreSQL-backed [`LokationszuordnungRepository`].
+/// Persistent store for the `Lokationszuordnung` location graph.
+///
+/// Enables single-query recursive traversal of the full MaLo → MeLo → NeLo →
+/// SR/TR graph for topology-dependent operations (Redispatch 2.0, iMS E-mobility
+/// Steuerungsauftrag routing, MSB Stammdaten hierarchy).
+///
+/// # Single-write-path invariant (MaLo ↔ MeLo)
+///
+/// The `melo → malo` edges of this graph are ALSO maintained by the MeLo write
+/// path (`PgMeloRepository::upsert` in marktd's PG implementation) in the same
+/// transaction that sets the `melo.malo_id` FK: the FK is a derived convenience
+/// for "current parent", the graph is the authoritative temporal history, and
+/// the two never contradict. Writers other than the MeLo PUT and the graph API
+/// must not touch `melo.malo_id` directly.
 #[derive(Clone, Debug)]
 pub struct PgLokationszuordnungRepository {
     pool: PgPool,
@@ -65,8 +78,17 @@ fn map_edge(
     })
 }
 
-impl LokationszuordnungRepository for PgLokationszuordnungRepository {
-    async fn upsert_edge(
+impl PgLokationszuordnungRepository {
+    /// Insert or replace a directed edge.
+    ///
+    /// For open-ended edges (`valid_from = None`), only one edge per
+    /// `(tenant, von_id, nach_id)` pair is kept.  Dated edges
+    /// (`valid_from = Some(date)`) allow temporal succession.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
+    pub async fn upsert_edge(
         &self,
         tenant: &str,
         von_id: &str,
@@ -149,7 +171,14 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn find_graph(
+    /// Recursively traverse the full location graph reachable from `root_id`.
+    ///
+    /// Returns all edges BFS-ordered by depth (depth 0 = direct edges from root).
+    /// Pass `at_date = None` to return all edges regardless of validity.
+    /// Pass `at_date = Some(d)` to filter to edges valid on date `d`.
+    ///
+    /// Traversal is capped at depth 8 to prevent runaway queries on malformed data.
+    pub async fn find_graph(
         &self,
         tenant: &str,
         root_id: &str,
@@ -198,7 +227,8 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn list_edges_from(
+    /// Return direct (depth-0) edges FROM a given node, optionally filtered by date.
+    pub async fn list_edges_from(
         &self,
         tenant: &str,
         von_id: &str,
@@ -227,7 +257,11 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn delete_edge(
+    /// Hard-delete an edge by `(tenant, von_id, nach_id)`.
+    ///
+    /// Removes all temporal variants of the edge pair.
+    /// Returns `true` if at least one row was deleted.
+    pub async fn delete_edge(
         &self,
         tenant: &str,
         von_id: &str,
@@ -244,5 +278,19 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))?
         .rows_affected();
         Ok(rows_affected > 0)
+    }
+
+    /// Load the [`Lokationsbuendel`] rooted at `malo_id`, projected from the
+    /// typed edge graph (validity-filtered by `at_date`).
+    ///
+    /// Built on [`find_graph`](Self::find_graph).
+    pub async fn load_buendel(
+        &self,
+        tenant: &str,
+        malo_id: &str,
+        at_date: Option<time::Date>,
+    ) -> Result<Lokationsbuendel, MdmError> {
+        let edges = self.find_graph(tenant, malo_id, at_date).await?;
+        Ok(Lokationsbuendel::from_graph(malo_id, &edges))
     }
 }

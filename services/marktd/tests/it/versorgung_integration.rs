@@ -14,8 +14,7 @@
 
 use mako_markt::domain::MaloId;
 use mako_markt::repository::{
-    LfZuordnung, LieferStatus, VersorgungsStatusRecord, VersorgungsStatusRepository as _,
-    ZuordnungsStatus,
+    LfZuordnung, LieferStatus, VersorgungsStatusRecord, ZuordnungsStatus,
 };
 use marktd::pg::PgVersorgungsStatusRepository;
 use rust_decimal::Decimal;
@@ -659,7 +658,6 @@ async fn eog_derivation_resolves_the_default_bilanzkreis_and_snapshots_eog_seit(
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn melo_msb_timeline_resolves_the_responsible_msb_at_a_past_date() {
-    use mako_markt::repository::MeloMsbRepository as _;
     use marktd::pg::PgMeloMsbRepository;
     use time::macros::date;
 
@@ -736,7 +734,7 @@ async fn melo_msb_timeline_resolves_the_responsible_msb_at_a_past_date() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn bilanzierung_temporal_resource_resolves_by_point_in_time() {
-    use mako_markt::repository::{BilanzierungRecord, BilanzierungRepository as _};
+    use mako_markt::repository::BilanzierungRecord;
     use marktd::pg::PgBilanzierungRepository;
     use time::macros::datetime;
 
@@ -841,7 +839,7 @@ async fn bilanzierung_temporal_resource_resolves_by_point_in_time() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn bilanzierung_write_derives_the_malo_fallgruppe_column() {
-    use mako_markt::repository::{BilanzierungRecord, BilanzierungRepository as _};
+    use mako_markt::repository::BilanzierungRecord;
     use marktd::pg::PgBilanzierungRepository;
     use time::macros::datetime;
 
@@ -955,7 +953,6 @@ async fn bilanzierung_write_derives_the_malo_fallgruppe_column() {
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn two_puts_with_the_same_if_match_cannot_both_win() {
     use mako_markt::domain::Sparte;
-    use mako_markt::repository::MaloRepository as _;
     use marktd::pg::PgMaloRepository;
 
     let Some((pool, _pg)) = test_pool("malo_occ").await else {
@@ -996,7 +993,6 @@ async fn two_puts_with_the_same_if_match_cannot_both_win() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_backdated_msb_assignment_does_not_leave_two_open_rows() {
-    use mako_markt::repository::MeloMsbRepository as _;
     use marktd::pg::PgMeloMsbRepository;
     use time::macros::date;
 
@@ -1083,7 +1079,6 @@ async fn pg_container() -> Option<(String, PgContainer)> {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_msb_zuordnung_follows_the_gesamtvorgang_not_the_anmeldebestaetigung() {
-    use mako_markt::repository::MeloMsbRepository as _;
     use marktd::handlers::event_ingest::derive_msb_zuordnung;
     use marktd::pg::PgMeloMsbRepository;
 

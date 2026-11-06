@@ -3,25 +3,24 @@
 //! # Architecture
 //!
 //! ```text
-//! crates/mako-markt/   ← traits, domain types, CloudEvents structs, makod HTTP client
+//! crates/mako-markt/   ← record types, domain types, CloudEvents structs, makod HTTP client
 //!                         NO axum, NO utoipa, NO server framework
 //! services/marktd/     ← axum handlers, routes, config, PostgreSQL impls, main.rs
 //! ```
 //!
-//! This mirrors the `mako-engine` / `makod` split exactly:
-//! `mako-engine` defines traits only; `makod` wires axum + `SlateDB`.
+//! The storage itself is marktd's: each `Pg*` type in `services/marktd/src/pg/`
+//! carries its methods inherently, over the record types defined here.
 //!
 //! # Modules
 //!
 //! | Module | Contents |
 //! |--------|----------|
 //! | [`domain`] | `Sparte`, `ProcessStatus`; re-exports `MaloId`, `MeloId`, `MarktpartnerId` from [`rubo4e::identifiers`]; `nad_agency_code()` for NAD DE3055 coding authority |
-//! | [`repository`] | Repository traits: `MaloRepository`, `MeloRepository`, `SubscriptionRepository`, `CorrelationIndex`, `PartnerRepository`, `VersorgungsStatusRepository`, **`MaloGridRepository`**, **`NbEnergiemixRepository`**; record types incl. `VersorgungsStatusRecord`, `LieferStatus`, `NbContractRecord`, **`MaloGridRecord`**, **`NbEnergiemixRecord`** |
+//! | [`repository`] | The record types of every `marktd` aggregate, incl. `VersorgungsStatusRecord`, `LieferStatus`, `NbContractRecord`, **`MaloGridRecord`**, **`NbEnergiemixRecord`** |
 //! | [`cloudevents`] | CloudEvents 1.0 envelope types: `InboundMakoEvent` (from `makod`) and `MarktEvent` (`marktd`-emitted `de.markt.*`) |
 //! | [`commands`] | ERP command-name constants shared between `makod`'s registry and dispatching services (`processd`, …) |
 //! | [`makod_client`] | Typed HTTP client for `makod` admin + command APIs (reqwest-backed); requires `makod-client` feature |
 //! | [`error`] | `MdmError` — all domain-level error variants |
-//! | [`testing`] | The two in-memory test doubles (behind `testing` feature): `InMemoryVersorgungsStatusRepository`, `InMemoryNbEnergiemixRepository` |
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -44,6 +43,3 @@ pub mod makod_client;
 #[cfg(feature = "marktd-client")]
 pub mod marktd_client;
 pub mod repository;
-
-#[cfg(feature = "testing")]
-pub mod testing;

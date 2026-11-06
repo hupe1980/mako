@@ -10,6 +10,14 @@
 //!              "message": "the template did not render",
 //!              "diagnostics": ["/template.typ:12:4: unknown variable: invoce"] } }
 //! ```
+//!
+//! A `500` says nothing about its cause and carries an `error_id` instead —
+//! the id the log line recording the cause carries:
+//!
+//! ```json
+//! { "error": { "code": "INTERNAL", "message": "internal server error",
+//!              "error_id": "0b9c6f0e-6a0e-4f43-9d55-2f1d3c4b5a69" } }
+//! ```
 
 use axum::{
     http::StatusCode,
@@ -42,7 +50,8 @@ pub enum OutputError {
         /// failure.
         diagnostics: Vec<String>,
     },
-    /// 500 — an unexpected failure. Logged on render, never returned.
+    /// 500 — an unexpected failure. Logged on render under the `error_id` the
+    /// body carries; its text is never returned.
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -142,11 +151,18 @@ impl OutputError {
 }
 
 impl IntoResponse for OutputError {
+    /// An internal error is logged under a fresh `error_id` (UUID v4) and the
+    /// body carries only the id, so the id a caller reports finds the log line
+    /// and the cause never reaches the caller. A client error carries no id:
+    /// no log line stands behind it.
     fn into_response(self) -> Response {
+        let mut body = self.body();
         if let Self::Internal(ref e) = self {
-            tracing::error!(error = ?e, "outputd: internal error");
+            let error_id = uuid::Uuid::new_v4();
+            tracing::error!(%error_id, error = ?e, "outputd: internal error");
+            body["error"]["error_id"] = error_id.to_string().into();
         }
-        (self.status(), Json(self.body())).into_response()
+        (self.status(), Json(body)).into_response()
     }
 }
 
@@ -233,6 +249,78 @@ mod tests {
     fn a_plain_refusal_has_no_diagnostics_key() {
         let err = OutputError::unprocessable("PDF_STANDARD_UNUSABLE", "a-2b cannot carry a file");
         assert!(err.body()["error"].get("diagnostics").is_none());
+    }
+
+    /// Render `err` with a log subscriber installed; return the status, the
+    /// parsed body and everything that was logged.
+    async fn render_logged(err: OutputError) -> (StatusCode, serde_json::Value, String) {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Buf(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("log buffer").extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buf = Buf(Arc::new(Mutex::new(Vec::new())));
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let resp = tracing::subscriber::with_default(subscriber, || err.into_response());
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = serde_json::from_slice(&bytes).expect("a JSON body");
+        let log = String::from_utf8(buf.0.lock().expect("log buffer").clone()).expect("utf-8");
+        (status, body, log)
+    }
+
+    /// A 500 carries an `error_id`, a UUID v4, and the log line that records
+    /// the cause carries the same id — so the id a caller reports finds the
+    /// cause. The cause itself stays in the log.
+    #[tokio::test]
+    async fn an_internal_error_carries_an_error_id_the_log_line_carries() {
+        let (status, body, log) = render_logged(OutputError::Internal(anyhow::anyhow!(
+            "relation \"output_templates\" does not exist"
+        )))
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"]["code"], "INTERNAL", "{body}");
+        let id = body["error"]["error_id"]
+            .as_str()
+            .expect("error_id in the body");
+        let parsed = uuid::Uuid::parse_str(id).expect("error_id is a UUID");
+        assert_eq!(parsed.get_version_num(), 4, "{id}");
+        assert!(log.contains(id), "the log line must carry {id}: {log}");
+        assert!(
+            log.contains("output_templates"),
+            "the log keeps the error: {log}"
+        );
+        assert!(!body.to_string().contains("output_templates"), "{body}");
+    }
+
+    /// Each 500 has its own id; a client error has none, because no log line
+    /// stands behind it.
+    #[tokio::test]
+    async fn only_an_internal_error_has_an_error_id_and_each_its_own() {
+        let (_, a, _) = render_logged(OutputError::Internal(anyhow::anyhow!("x"))).await;
+        let (_, b, _) = render_logged(OutputError::Internal(anyhow::anyhow!("x"))).await;
+        assert_ne!(a["error"]["error_id"], b["error"]["error_id"]);
+        let (_, refused, _) = render_logged(OutputError::not_found(
+            "TEMPLATE_NOT_FOUND",
+            "no such template",
+        ))
+        .await;
+        assert!(refused["error"].get("error_id").is_none(), "{refused}");
     }
 
     /// An internal error's detail is logged, never returned.

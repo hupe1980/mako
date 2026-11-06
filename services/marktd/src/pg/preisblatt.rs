@@ -1,14 +1,12 @@
-//! PostgreSQL implementations of [`PreisblattRepository`], [`PreisblattMessungRepository`],
-//! [`PreisblattKaRepository`], [`PreisblattDienstleistungRepository`], and
-//! [`PreisblattHardwareRepository`].
+//! PostgreSQL storage: [`PgPreisblattRepository`], [`PgPreisblattMessungRepository`],
+//! [`PgPreisblattKaRepository`], [`PgPreisblattDienstleistungRepository`], and
+//! [`PgPreisblattHardwareRepository`].
 
 use mako_markt::{
     error::MdmError,
     repository::{
-        PreisblattDienstleistungRecord, PreisblattDienstleistungRepository,
-        PreisblattHardwareRecord, PreisblattHardwareRepository, PreisblattKaRecord,
-        PreisblattKaRepository, PreisblattMessungRecord, PreisblattMessungRepository,
-        PreisblattRecord, PreisblattRepository, PreisblattSource,
+        PreisblattDienstleistungRecord, PreisblattHardwareRecord, PreisblattKaRecord,
+        PreisblattMessungRecord, PreisblattRecord, PreisblattSource,
     },
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
@@ -78,8 +76,17 @@ impl PgPreisblattRepository {
     }
 }
 
-impl PreisblattRepository for PgPreisblattRepository {
-    async fn upsert(
+impl PgPreisblattRepository {
+    /// Upsert a `PreisblattNetznutzung` for the given NB GLN.
+    ///
+    /// Multiple records per GLN are stored; they are distinguished by the
+    /// `gueltigkeit.startdatum` inside `data`.
+    ///
+    /// `source` tracks how the record entered the system: `Api` for operator
+    /// REST uploads, `Mako` for engine-ingested PRICAT 27003 messages.
+    /// An `Api`-sourced sheet is never overwritten by a `Mako` ingest unless
+    /// `force = true`.
+    pub async fn upsert(
         &self,
         nb_mp_id: &str,
         data: serde_json::Value,
@@ -94,7 +101,11 @@ impl PreisblattRepository for PgPreisblattRepository {
         Self::upsert_tx(&mut conn, nb_mp_id, &data, bo4e_version, source).await
     }
 
-    async fn find_for_date(
+    /// Return the price sheet for `nb_mp_id` that was valid on `billing_date`
+    /// (ISO 8601 date string, e.g. `"2025-06-15"`).
+    ///
+    /// Returns `None` when no matching entry is found.
+    pub async fn find_for_date(
         &self,
         nb_mp_id: &str,
         billing_date: &str,
@@ -156,8 +167,12 @@ impl PgPreisblattMessungRepository {
     }
 }
 
-impl PreisblattMessungRepository for PgPreisblattMessungRepository {
-    async fn upsert_messung(
+impl PgPreisblattMessungRepository {
+    /// Upsert a `PreisblattMessung` for the given MSB MP-ID.
+    ///
+    /// Conflicts on `(msb_mp_id, valid_from)` perform an in-place update.
+    /// An `Api`-sourced sheet is never overwritten by a `Mako` ingest.
+    pub async fn upsert_messung(
         &self,
         msb_mp_id: &str,
         data: serde_json::Value,
@@ -195,7 +210,11 @@ impl PreisblattMessungRepository for PgPreisblattMessungRepository {
         Ok(())
     }
 
-    async fn find_messung_for_date(
+    /// Return the `PreisblattMessung` for `msb_mp_id` valid on `billing_date`
+    /// (ISO 8601 date string, e.g. `"2025-06-15"`).
+    ///
+    /// Returns `None` when no matching entry is found.
+    pub async fn find_messung_for_date(
         &self,
         msb_mp_id: &str,
         billing_date: &str,
@@ -242,7 +261,9 @@ impl PreisblattMessungRepository for PgPreisblattMessungRepository {
 
 // ── PreisblattKonzessionsabgabe (B3) ─────────────────────────────────────────
 
-/// PostgreSQL-backed [`PreisblattKaRepository`].
+/// Read/write access to `PreisblattKonzessionsabgabe` records.
+///
+/// Used by `netzbilanzd` for INVOIC 31001/31002 KA tariff positions.
 #[derive(Clone, Debug)]
 pub struct PgPreisblattKaRepository {
     pool: sqlx::PgPool,
@@ -255,8 +276,12 @@ impl PgPreisblattKaRepository {
     }
 }
 
-impl PreisblattKaRepository for PgPreisblattKaRepository {
-    async fn upsert_ka(
+impl PgPreisblattKaRepository {
+    /// Upsert a `PreisblattKonzessionsabgabe` for the given NB MP-ID.
+    ///
+    /// Conflicts on `(nb_mp_id, sparte, kundengruppe_ka, valid_from)` are updated in-place.
+    /// `Api`-sourced sheets are never overwritten by `Mako` ingests.
+    pub async fn upsert_ka(
         &self,
         nb_mp_id: &str,
         sparte: &str,
@@ -294,7 +319,10 @@ impl PreisblattKaRepository for PgPreisblattKaRepository {
         Ok(())
     }
 
-    async fn find_ka_for_date(
+    /// Return the `PreisblattKonzessionsabgabe` valid on `billing_date` for the NB.
+    ///
+    /// Returns `None` when no matching entry is found.
+    pub async fn find_ka_for_date(
         &self,
         nb_mp_id: &str,
         sparte: &str,
@@ -341,7 +369,10 @@ impl PreisblattKaRepository for PgPreisblattKaRepository {
 
 // ── PreisblattDienstleistung ──────────────────────────────────────────────────
 
-/// PostgreSQL-backed [`PreisblattDienstleistungRepository`].
+/// Read/write access to MSB service price sheets.
+///
+/// Used by `invoic-checker` for INVOIC 31009 service position validation
+/// and by `mako-wim` REQOTE/QUOTES (PIDs 35001/35002/35004/35005).
 #[derive(Clone, Debug)]
 pub struct PgPreisblattDienstleistungRepository {
     pool: sqlx::PgPool,
@@ -354,8 +385,8 @@ impl PgPreisblattDienstleistungRepository {
     }
 }
 
-impl PreisblattDienstleistungRepository for PgPreisblattDienstleistungRepository {
-    async fn upsert_dienstleistung(
+impl PgPreisblattDienstleistungRepository {
+    pub async fn upsert_dienstleistung(
         &self,
         msb_mp_id: &str,
         data: serde_json::Value,
@@ -376,7 +407,7 @@ impl PreisblattDienstleistungRepository for PgPreisblattDienstleistungRepository
         Ok(())
     }
 
-    async fn find_dienstleistung_for_date(
+    pub async fn find_dienstleistung_for_date(
         &self,
         msb_mp_id: &str,
         billing_date: &str,
@@ -413,7 +444,10 @@ impl PreisblattDienstleistungRepository for PgPreisblattDienstleistungRepository
 
 // ── PreisblattHardware ────────────────────────────────────────────────────────
 
-/// PostgreSQL-backed [`PreisblattHardwareRepository`].
+/// Read/write access to MSB hardware rental price sheets.
+///
+/// Required for NB → MSB settlement INVOIC 31009 hardware positions.
+/// `invoic-checker` check 5 cannot validate hardware positions without it.
 #[derive(Clone, Debug)]
 pub struct PgPreisblattHardwareRepository {
     pool: sqlx::PgPool,
@@ -426,8 +460,8 @@ impl PgPreisblattHardwareRepository {
     }
 }
 
-impl PreisblattHardwareRepository for PgPreisblattHardwareRepository {
-    async fn upsert_hardware(
+impl PgPreisblattHardwareRepository {
+    pub async fn upsert_hardware(
         &self,
         msb_mp_id: &str,
         data: serde_json::Value,
@@ -448,7 +482,7 @@ impl PreisblattHardwareRepository for PgPreisblattHardwareRepository {
         Ok(())
     }
 
-    async fn find_hardware_for_date(
+    pub async fn find_hardware_for_date(
         &self,
         msb_mp_id: &str,
         billing_date: &str,

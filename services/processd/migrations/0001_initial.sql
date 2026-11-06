@@ -311,7 +311,7 @@ CREATE TABLE process_projections (
     pid                 INTEGER     NOT NULL,
     family              TEXT        NOT NULL DEFAULT '',
     workflow_name       TEXT        NOT NULL DEFAULT '',
-    -- 'initiated' | 'running' | 'aperak_timeout' | 'completed' | 'rejected' | 'failed'
+    -- 'initiated' | 'running' | 'antwortfrist_abgelaufen' | 'completed' | 'rejected' | 'failed'
     -- Written by ProcessState::as_str; `terminal_state_sql_matches_domain`
     -- pins the SQL literals against the enum.
     state               TEXT        NOT NULL DEFAULT 'initiated',
@@ -320,7 +320,7 @@ CREATE TABLE process_projections (
     -- Market role of the counterparty (LF | NB | MSB | BKV | ÜNB)
     mdm_role            TEXT,
     -- The BUSINESS Antwortfrist from mako_fristen::antwort — NOT the APERAK
-    -- clock, which is minutes and arrives as its own de.mako.aperak.timeout
+    -- clock, which is minutes and arrives as its own de.mako.antwortfrist.abgelaufen
     -- event. NULL means no Festlegung this codebase has read quantifies the
     -- window for this PID: unknown, never unbounded. Such a process is
     -- deliberately absent from every breach sweep rather than measured against
@@ -354,8 +354,8 @@ COMMENT ON TABLE process_projections IS
 
 COMMENT ON COLUMN process_projections.deadline_at IS
     'Business Antwortfrist (mako_fristen::antwort). NULL = no published window for '
-    'this PID — unknown, never unbounded. Distinct from the APERAK acknowledgement '
-    'clock, which is reported as its own event and lands in state = aperak_timeout.';
+    'this PID — unknown, never unbounded. A lapse the workflow itself observed '
+    'arrives as de.mako.antwortfrist.abgelaufen and lands in state = antwortfrist_abgelaufen.';
 
 COMMENT ON COLUMN process_projections.initiator_is_affiliate IS
     '§ 7a Abs. 5 EnWG Gleichbehandlung: TRUE when the process was initiated by a '

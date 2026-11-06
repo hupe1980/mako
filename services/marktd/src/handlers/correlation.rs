@@ -15,7 +15,7 @@ use axum::{
 use mako_markt::{
     domain::{MaloId, ProcessStatus},
     error::MdmError,
-    repository::{CorrelationFilter, CorrelationIndex},
+    repository::CorrelationFilter,
 };
 use serde::Deserialize;
 use uuid::Uuid;

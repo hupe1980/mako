@@ -13,7 +13,7 @@
 use processd::config::Config;
 
 fn config(extra: serde_json::Value) -> Config {
-    let mut cfg = serde_json::json!({"http": {}, "database": {"url": "postgres://localhost/processd"}, "identity": {"own_mp_id": "9900357000004"}, "makod": {"url": "http://localhost:8080", "api_key": "test"}, "marktd": {"url": "http://localhost:8180", "api_key": "test"}});
+    let mut cfg = serde_json::json!({"http": {}, "database": {"url": "postgres://localhost/processd"}, "identity": {"own_mp_id": "9900357000004", "verbundene_lieferanten": []}, "makod": {"url": "http://localhost:8080", "api_key": "test"}, "marktd": {"url": "http://localhost:8180", "api_key": "test"}});
     let (Some(base), Some(extra)) = (cfg.as_object_mut(), extra.as_object()) else {
         panic!("both must be JSON objects");
     };

@@ -24,7 +24,7 @@
 //! | `get_submission_status` | MaBiS: latest runs + open-Korrekturbedarf and failed counts |
 //! | `list_failed_submissions` | MaBiS: failed runs, newest first, with `attempt_count` |
 //! | `get_submission_run` | MaBiS: one Summenzeitreihe run by UUID |
-//! | `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (§9.8.1 obligations) |
+//! | `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (§9.8.1 obligations), typed |
 //!
 //! Filing a Summenzeitreihe is not a tool either: it is a binding filing with
 //! the BIKO and stays behind `POST /api/v1/mabis/sync`, where Cedar authorises
@@ -49,7 +49,7 @@ use rmcp::{
     },
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -514,36 +514,76 @@ impl NetzbilanzMcpHandler {
     }
 
     #[tool(
-        description = "List open Korrekturbedarf: negative Prüfmitteilungen (§9.8.1) with no correcting submission yet. Each must be answered by a corrected Summenzeitreihe under a higher version within the Clearing window (30 Werktage after month end).",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Open Korrekturbedarf: negative Prüfmitteilungen (BK6-24-174 Anlage 3 \
+§9.8.1) with no correcting submission yet, the earliest received first. Each is answered by a \
+corrected Summenzeitreihe under a higher version, filed by an operator through \
+POST /api/v1/mabis/sync with corrects_run_id.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<KorrekturbedarfListe>()
     )]
     async fn list_korrekturbedarf(&self) -> Result<CallToolResult, McpError> {
         let rows = crate::mabis::pg::open_korrekturbedarf(&self.state.pool, &self.state.tenant)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let items: Vec<serde_json::Value> = rows
-            .into_iter()
-            .map(|(id, gebiet, from, to, version)| {
-                serde_json::json!({
-                    "pruefmitteilung_id": id.to_string(),
-                    "bilanzierungsgebiet_id": gebiet,
-                    "period_from": from.to_string(),
-                    "period_to": to.to_string(),
-                    "version": rfc3339(version),
-                })
+        let korrekturbedarf: Vec<Korrekturbedarf> =
+            rows.into_iter().map(Korrekturbedarf::from_row).collect();
+        Ok(CallToolResult::structured(
+            serde_json::to_value(KorrekturbedarfListe {
+                count: korrekturbedarf.len(),
+                korrekturbedarf,
             })
-            .collect();
-        ContentBlock::json(serde_json::json!({
-            "count": items.len(),
-            "korrekturbedarf": items,
-            "regulatory_note":
-                "BK6-24-174 Anlage 3 §9.8.1: answered by a corrected Summenzeitreihe under a \
-                 higher version — an operator triggers it via POST /api/v1/mabis/sync with \
-                 corrects_run_id.",
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
     }
+}
+
+/// One open Korrekturbedarf: a negative Prüfmitteilung no corrected
+/// Summenzeitreihe has answered yet.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct Korrekturbedarf {
+    /// The negative Prüfmitteilung.
+    pub pruefmitteilung_id: String,
+    /// The Bilanzierungsgebiet (EIC) the Summenzeitreihe covers.
+    pub bilanzierungsgebiet_id: String,
+    /// First day of the period the Prüfmitteilung concerns.
+    #[schemars(extend("format" = "date"))]
+    pub period_from: String,
+    /// End of that period, as the Prüfmitteilung names it.
+    #[schemars(extend("format" = "date"))]
+    pub period_to: String,
+    /// The version of the Summenzeitreihe the Prüfmitteilung refuses, RFC 3339
+    /// in UTC; the correction is filed under a higher one.
+    #[schemars(extend("format" = "date-time"))]
+    pub version: String,
+}
+
+impl Korrekturbedarf {
+    fn from_row(
+        (id, gebiet, from, to, version): (
+            Uuid,
+            String,
+            time::Date,
+            time::Date,
+            time::OffsetDateTime,
+        ),
+    ) -> Self {
+        Self {
+            pruefmitteilung_id: id.to_string(),
+            bilanzierungsgebiet_id: gebiet,
+            period_from: from.to_string(),
+            period_to: to.to_string(),
+            version: rfc3339(version).unwrap_or_default(),
+        }
+    }
+}
+
+/// `list_korrekturbedarf`'s answer.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct KorrekturbedarfListe {
+    /// The earliest received first.
+    pub korrekturbedarf: Vec<Korrekturbedarf>,
+    /// How many entries `korrekturbedarf` holds.
+    pub count: usize,
 }
 
 /// Validate and narrow a month key to the column types.
@@ -892,4 +932,41 @@ pub fn router(state: Arc<NetzbilanzMcpState>, _shutdown: CancellationToken) -> R
     Router::new()
         .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The served tool contract is the committed `mcp.snapshot.json`
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it); the Desk generates its types from it.
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let tools: Vec<serde_json::Value> = NetzbilanzMcpHandler::tool_router()
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
+    }
+
+    /// A Korrekturbedarf names its period as calendar dates and its version
+    /// as an RFC 3339 instant — not `time`'s derived serde text.
+    #[test]
+    fn a_korrekturbedarf_carries_dates_and_an_rfc3339_version() {
+        let k = Korrekturbedarf::from_row((
+            Uuid::nil(),
+            "11YN20---------1".to_owned(),
+            time::macros::date!(2026 - 03 - 01),
+            time::macros::date!(2026 - 03 - 31),
+            time::macros::datetime!(2026-04-14 09:30 UTC),
+        ));
+        assert_eq!(k.period_from, "2026-03-01");
+        assert_eq!(k.period_to, "2026-03-31");
+        assert_eq!(k.version, "2026-04-14T09:30:00Z");
+    }
 }

@@ -1,9 +1,9 @@
-//! PostgreSQL implementation of `MaloGridRepository`.
+//! PostgreSQL storage: [`PgMaloGridRepository`].
 
 use mako_markt::{
     domain::{MaloId, Sparte},
     error::MdmError,
-    repository::{MaloGridRecord, MaloGridRepository},
+    repository::MaloGridRecord,
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
 
@@ -46,8 +46,12 @@ fn map_row(row: &PgRow) -> Result<MaloGridRecord, sqlx::Error> {
     })
 }
 
-impl MaloGridRepository for PgMaloGridRepository {
-    async fn upsert(&self, rec: MaloGridRecord) -> Result<(), MdmError> {
+impl PgMaloGridRepository {
+    /// Insert or replace the grid record for a MaLo.
+    ///
+    /// Idempotent — subsequent writes overwrite the previous record.
+    /// `updated_at` is set to `now()` by the repository implementation.
+    pub async fn upsert(&self, rec: MaloGridRecord) -> Result<(), MdmError> {
         let sparte = rec.sparte.to_string();
         sqlx::query(
             r#"
@@ -78,7 +82,8 @@ impl MaloGridRepository for PgMaloGridRepository {
         Ok(())
     }
 
-    async fn find(
+    /// Return the grid record for a MaLo, or `None` if not yet synced.
+    pub async fn find(
         &self,
         malo_id: &MaloId,
         tenant: &str,
@@ -96,7 +101,8 @@ impl MaloGridRepository for PgMaloGridRepository {
             .transpose()
     }
 
-    async fn list_by_nb(
+    /// List all grid records for a given NB GLN and tenant (e.g. for bulk export).
+    pub async fn list_by_nb(
         &self,
         nb_mp_id: &str,
         tenant: &str,
@@ -115,7 +121,8 @@ impl MaloGridRepository for PgMaloGridRepository {
             .collect()
     }
 
-    async fn delete(&self, malo_id: &MaloId, tenant: &str) -> Result<(), MdmError> {
+    /// Delete a grid record (e.g. when MaStR signals decommissioning).
+    pub async fn delete(&self, malo_id: &MaloId, tenant: &str) -> Result<(), MdmError> {
         sqlx::query("DELETE FROM malo_grid WHERE malo_id = $1 AND tenant = $2")
             .bind(malo_id)
             .bind(tenant)

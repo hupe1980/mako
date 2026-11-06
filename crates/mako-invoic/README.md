@@ -59,8 +59,9 @@ ValidationPassed ──SettleInvoice──► Settled     ⇢ REMADV 33001 Zahlu
                  ╰─DisputeInvoice──► Disputed   ⇢ REMADV 33002 / 33003 / 33004
 
 ── Issuer ───────────────────────────────────────────────────────────
-New ──SendInvoic──► InvoicSent ──ReceiveRemadv 33001──► PaymentConfirmed
-                               ╰─ReceiveRemadv 33002/3/4──► PaymentDisputed
+New ──SendInvoic──► InvoicSent   ⇢ INVOIC (the message SendInvoic carries)
+InvoicSent ──ReceiveRemadv 33001──► PaymentConfirmed
+           ╰─ReceiveRemadv 33002/3/4──► PaymentDisputed
 
 ── Payer, after its REMADV was refused ──────────────────────────────
 any settled/sent state ──ReceiveComdis 29001──► ComdisRejected
@@ -74,6 +75,11 @@ the invoice still accepts its REMADV. A dispute carries a `RemadvAntwort`
 (`SG7 AJT`: code + Entscheidungsbaum), and its shape picks 33002, 33003 or 33004
 (REMADV AHB 1.0a § 3). `InvoicData` keeps `bestellung_ref` (`SG1 RFF+ACE`) and
 `rechnungstyp` (`IMD+7081`) beside the BO4E `Rechnung`.
+
+`SendInvoic` carries `nachricht`, the INVOIC (`UNH` … `UNT`) the transport
+boundary built from the `Rechnung` and validated against its Prüfschablone; the
+workflow builds nothing and enqueues it as the `INVOIC` outbox entry in the
+write that records `InvoicSent`.
 
 API documentation: <https://docs.rs/mako-invoic>. The checks an inbound invoice
 runs are [`invoic-checker`](../invoic-checker/)'s; the service is

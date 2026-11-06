@@ -409,6 +409,73 @@ const katalog = JSON.parse(
   readFileSync(resolve(import.meta.dirname, "katalog.fixture.json"), "utf8"),
 );
 
+// The Lieferant's two inbox sources beyond processd: an invoice in dispute,
+// due by its Zahlungsziel, and a held one — in the shapes invoicd and billingd
+// declare (services/{invoicd,billingd}/mcp.snapshot.json).
+async function recordedRechnungen(context: BrowserContext) {
+  const answers: Record<string, unknown> = {
+    list_disputes: {
+      disputes: [
+        {
+          id: "7d1c0e1a-2b3c-4d5e-8f90-1a2b3c4d5e6f",
+          process_id: "c0ffee00-0000-4000-8000-000000000031",
+          pid: 31002,
+          sender_mp_id: "9900357000004",
+          received_at: "2026-11-02T08:00:00Z",
+          bo4e_version: "202607.1.0",
+          frist: "2026-11-09T23:00:00Z",
+        },
+      ],
+      count: 1,
+      saturated: false,
+    },
+    list_review_queue: {
+      records: [
+        {
+          id: "5a5a5a5a-0000-4000-8000-000000000001",
+          malo_id: "41203768152",
+          lf_mp_id: "9900012345678",
+          rechnungsnummer: "R-2026-10-0412",
+          category: "STROM",
+          period_from: "2026-10-01",
+          period_to: "2026-10-31",
+          total_brutto_eur: "1874.20",
+          risk_band: "HELD",
+          risk_score: 82,
+          risk_findings: [
+            {
+              code: "VERBRAUCH_SPRUNG",
+              weight: 60,
+              message: "Verbrauch das Dreifache des Vorjahresmonats",
+              blocking: true,
+            },
+          ],
+          created_at: "2026-11-03T06:00:00Z",
+        },
+      ],
+      count: 1,
+      saturated: false,
+    },
+  };
+  for (const service of ["invoicd", "billingd"]) {
+    await context.route(`**/svc/${service}/mcp`, async (route) => {
+      const message = JSON.parse(route.request().postData() ?? "{}");
+      if (message.id === undefined) return route.fulfill({ status: 202 });
+      const structured =
+        message.method === "tools/call" ? answers[message.params?.name as string] : undefined;
+      await route.fulfill({
+        contentType: "application/json",
+        headers: { "mcp-session-id": "screenshots" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: structured ? { content: [], structuredContent: structured } : {},
+        }),
+      });
+    });
+  }
+}
+
 async function recordedAgentd(context: BrowserContext) {
   // What two skills left for a person: the deadline triage's own sentence,
   // and a model-written row that opens with its disclosure.
@@ -488,40 +555,45 @@ async function recordedAgentd(context: BrowserContext) {
       }),
     }),
   );
-  // Registered last: Playwright asks the newest route first.
+  // Registered last: Playwright asks the newest route first. The same run is
+  // the proposal agentd computed for the Freigabe before anyone asked.
+  const proposal = {
+    run: "run-freigabe-1",
+    status: "succeeded",
+    disclosure: "AI-generated.",
+    saetze: [
+      {
+        text: `Die Marktlokation ${KEY} ist bekannt, die Anmeldung kam am 04.11.2026 an.`,
+        quelle: "makod/get_process_history",
+        belegt: true,
+      },
+      {
+        text: "Ein Ablehnungsgrund aus E_0622 liegt in den gelesenen Daten nicht vor.",
+        quelle: "processd/get_queue_entry",
+        belegt: true,
+      },
+    ],
+    vorschlag: {
+      aktion: "freigeben",
+      antwortcode: "A51",
+      begruendung:
+        "Kein Prüfschritt der Vorprüfung schlägt an; die Anmeldung kann freigegeben werden.",
+      quelle: "processd/get_queue_entry",
+      belegt: true,
+    },
+    schritte: [
+      { quelle: "processd/get_queue_entry", fertig: true },
+      { quelle: "makod/get_process_history", fertig: true },
+    ],
+    hilfreich: null,
+  };
   await context.route("**/svc/agentd/api/v1/runs/run-freigabe-1/antwort", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(proposal) }),
+  );
+  await context.route("**/svc/agentd/api/v1/vorschlaege*", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({
-        run: "run-freigabe-1",
-        status: "succeeded",
-        disclosure: "AI-generated.",
-        saetze: [
-          {
-            text: `Die Marktlokation ${KEY} ist bekannt, die Anmeldung kam am 04.11.2026 an.`,
-            quelle: "makod/get_process_history",
-            belegt: true,
-          },
-          {
-            text: "Ein Ablehnungsgrund aus E_0622 liegt in den gelesenen Daten nicht vor.",
-            quelle: "processd/get_queue_entry",
-            belegt: true,
-          },
-        ],
-        vorschlag: {
-          aktion: "freigeben",
-          antwortcode: "A51",
-          begruendung:
-            "Kein Prüfschritt der Vorprüfung schlägt an; die Anmeldung kann freigegeben werden.",
-          quelle: "processd/get_queue_entry",
-          belegt: true,
-        },
-        schritte: [
-          { quelle: "processd/get_queue_entry", fertig: true },
-          { quelle: "makod/get_process_history", fertig: true },
-        ],
-        hilfreich: null,
-      }),
+      body: JSON.stringify(Object.fromEntries(freigaben.map((f) => [f.id, proposal]))),
     }),
   );
 }
@@ -550,6 +622,7 @@ try {
     await recordedVertragd(context);
     await recordedProcessd(context);
     await recordedAgentd(context);
+    await recordedRechnungen(context);
     const page = await context.newPage();
     await page.clock.install({ time: new Date(NOW) });
     await page.addInitScript(() => localStorage.setItem("mako-desk.rolle", "netz"));
@@ -597,10 +670,10 @@ try {
     await page.getByText(`Kein Prozess für „${UNKNOWN}“`).waitFor();
     await shot(page, "refusal", theme);
 
-    // A Freigabe, the assistant's proposal taken into the form — unsent.
+    // A Freigabe whose proposal was waiting, taken into the form with U — unsent.
     await page.goto(`${base}freigaben`);
-    await page.getByRole("button", { name: "Was schlägst du vor?" }).click();
-    await page.getByRole("button", { name: "In die Entscheidung übernehmen" }).click();
+    await page.getByRole("button", { name: "In die Entscheidung übernehmen" }).waitFor();
+    await page.keyboard.press("u");
     await page.getByText(/Vom Assistenten vorgeschlagen/).waitFor();
     await page.getByRole("button", { name: "Freigeben …" }).click();
     await page.getByRole("button", { name: "Jetzt senden" }).waitFor();
@@ -609,7 +682,10 @@ try {
     // The Lieferant starts from Heute and from the customer.
     await page.addInitScript(() => localStorage.setItem("mako-desk.rolle", "lieferant"));
     await page.goto(`${base}heute`);
-    await page.getByRole("heading", { name: /Noch nicht übermittelt/ }).waitFor();
+    await page
+      .getByRole("list", { name: "Quellen" })
+      .getByText(/Rechnungsdispute: 1/)
+      .waitFor();
     await page
       .getByText(/heute ab/)
       .first()
@@ -662,6 +738,7 @@ try {
   await recordedVertragd(context);
   await recordedProcessd(context);
   await recordedAgentd(context);
+  await recordedRechnungen(context);
   const page = await context.newPage();
   await page.goto(`${base}dev/gallery`);
   await page.getByText("Dunkel").waitFor();

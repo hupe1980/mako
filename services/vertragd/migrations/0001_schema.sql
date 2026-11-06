@@ -72,6 +72,14 @@ CREATE TABLE kunden (
     -- VAT); § 13b is mandatory when its conditions are met, so this is master
     -- data, not a per-invoice choice.
     stromwiederverkaeufer BOOLEAN   NOT NULL DEFAULT false,
+    -- § 27 Abs. 38 Nr. 1/2 UStG admit an invoice to an Unternehmer in an
+    -- electronic format that is not § 14 Abs. 1 Satz 6 UStG only „vorbehaltlich
+    -- der Zustimmung des Empfängers"; § 14 Abs. 1 Satz 6 Nr. 2 UStG makes an
+    -- agreed EDI format an E-Rechnung where its data extract into EN 16931.
+    -- NULL = not recorded, which refuses the grace — never read as either answer.
+    zustimmung_sonstige_erechnung BOOLEAN,
+    edi_zustimmung      BOOLEAN,
+    edi_extrahierbar    BOOLEAN,
     sepa_erlaubt        BOOLEAN     NOT NULL DEFAULT true,
     erp_kunde_id        TEXT,           -- CRM idempotency key
     notizen             TEXT,

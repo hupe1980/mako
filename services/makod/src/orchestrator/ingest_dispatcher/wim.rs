@@ -170,7 +170,7 @@ impl EdifactIngestDispatcher {
             "wim-invoic" => match pid {
                 31009 | 31003 | 31004 => {
                     let cmd = adapters::wim_invoic_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_malo_from_invoic(msg);
+                    let malo_id = extract_invoice_ref_from_invoic(msg);
                     // The window is anchored on the Zahlungsziel the invoice
                     // carries in `DTM+265`, not on a fixed Werktage count, and
                     // where it sits relative to that date depends on who is

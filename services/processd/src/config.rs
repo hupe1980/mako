@@ -232,18 +232,16 @@ pub struct IdentityConfig {
     /// Tenant identifier written to every DB row.  Defaults to `own_mp_id`.
     #[serde(default)]
     pub tenant: String,
-    /// Every MP-ID this operator acts under, for the § 7a Abs. 5 EnWG
-    /// Gleichbehandlung evidence of the process read model.
+    /// The MP-IDs of the Lieferanten belonging to the operator's vertically
+    /// integrated undertaking — each Marktrolle has its own MP-ID
+    /// (Identifikatoren AWH V1.2 § 2.1), so an affiliated Lieferant is never
+    /// `own_mp_id`. An Anmeldung from one of them is the affiliate the § 7a
+    /// Abs. 5 EnWG Gleichbehandlung evidence compares, and the NB module and
+    /// the process read model both read this list.
     ///
-    /// Include each one: the NB Strom BDEW-Codenummer (`99…`), the GNB Gas
-    /// DVGW-Codenummer (`98…`), MSB codes where applicable. When the Lieferant
-    /// on an NB-answered process matches **any** of them it belongs to the
-    /// operator's own vertically integrated undertaking, and the projection
-    /// sets `initiator_is_affiliate`.
-    ///
-    /// Defaults to `[own_mp_id]` when absent (single-MP-ID deployments).
-    #[serde(default)]
-    pub own_mp_ids: Vec<String>,
+    /// Required, `[]` included: a deployment states that it has none rather
+    /// than leaving the control off by omission.
+    pub verbundene_lieferanten: Vec<String>,
 }
 
 // ── makod connection ──────────────────────────────────────────────────────────
@@ -333,7 +331,7 @@ pub fn default_event_types() -> Vec<String> {
         mako_events::mako::PROCESS_FAILED,
         mako_events::mako::APERAK_ACCEPTED,
         mako_events::mako::APERAK_REJECTED,
-        mako_events::mako::APERAK_TIMEOUT,
+        mako_events::mako::ANTWORTFRIST_ABGELAUFEN,
         mako_events::markt::VERSORGUNG_GAP_DETECTED,
         mako_events::markt::VERSORGUNG_EOG_BEGONNEN,
         mako_events::markt::VERSORGUNG_CHANGED,

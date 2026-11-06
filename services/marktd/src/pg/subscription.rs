@@ -1,9 +1,6 @@
-//! PostgreSQL implementation of [`SubscriptionRepository`].
+//! PostgreSQL storage: [`PgSubscriptionRepository`].
 
-use mako_markt::{
-    error::MdmError,
-    repository::{Subscription, SubscriptionRepository},
-};
+use mako_markt::{error::MdmError, repository::Subscription};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
 /// PostgreSQL-backed subscription repository.
@@ -22,8 +19,17 @@ impl PgSubscriptionRepository {
 const SELECT_COLS: &str =
     "subscriber_id, webhook_url, webhook_secret, roles, event_types, sparten, active, version";
 
-impl SubscriptionRepository for PgSubscriptionRepository {
-    async fn upsert(&self, sub: Subscription) -> Result<i64, MdmError> {
+impl PgSubscriptionRepository {
+    /// Insert or update a subscription.
+    ///
+    /// `webhook_secret` is the HMAC signing key and is stored **in plaintext** —
+    /// it is an integrity secret a subscriber uses to verify a delivery came
+    /// from this hub, not a confidentiality key over customer data. Protect it
+    /// with database-level controls (least-privilege grants on `subscriptions`,
+    /// storage encryption); see the marktd README, "Webhook secret at rest".
+    ///
+    /// Returns the new version number.
+    pub async fn upsert(&self, sub: Subscription) -> Result<i64, MdmError> {
         // The version is bumped in SQL and returned: a read-then-write would let
         // two concurrent PUTs settle on the same version, silently losing one.
         let new_version: i64 = sqlx::query_scalar(
@@ -55,7 +61,8 @@ impl SubscriptionRepository for PgSubscriptionRepository {
         Ok(new_version)
     }
 
-    async fn find(&self, subscriber_id: &str) -> Result<Option<Subscription>, MdmError> {
+    /// Return a subscription by subscriber ID.
+    pub async fn find(&self, subscriber_id: &str) -> Result<Option<Subscription>, MdmError> {
         let row: Option<PgRow> = sqlx::query(&format!(
             "SELECT {SELECT_COLS} FROM subscriptions WHERE subscriber_id = $1"
         ))
@@ -67,7 +74,13 @@ impl SubscriptionRepository for PgSubscriptionRepository {
         Ok(row.map(row_to_sub))
     }
 
-    async fn deactivate(&self, subscriber_id: &str) -> Result<bool, MdmError> {
+    /// Deactivate a subscription so it stops matching future fan-outs.
+    ///
+    /// A soft delete by design: `event_delivery` rows reference the subscriber
+    /// and are the § 147 AO / GoBD record that a market event was (or was not)
+    /// delivered, so the row itself must survive. Returns `false` when no such
+    /// subscription exists.
+    pub async fn deactivate(&self, subscriber_id: &str) -> Result<bool, MdmError> {
         // Bumps `version` too, so a concurrent GET/PUT round-trip observes the
         // change rather than re-writing a stale `active = true`.
         let affected = sqlx::query(
@@ -84,7 +97,8 @@ impl SubscriptionRepository for PgSubscriptionRepository {
         Ok(affected > 0)
     }
 
-    async fn list_active(&self) -> Result<Vec<Subscription>, MdmError> {
+    /// List all active subscriptions.
+    pub async fn list_active(&self) -> Result<Vec<Subscription>, MdmError> {
         let rows: Vec<PgRow> = sqlx::query(&format!(
             "SELECT {SELECT_COLS} FROM subscriptions WHERE active = true ORDER BY subscriber_id"
         ))
@@ -95,7 +109,14 @@ impl SubscriptionRepository for PgSubscriptionRepository {
         Ok(rows.into_iter().map(row_to_sub).collect())
     }
 
-    async fn list_matching(
+    /// Return all active subscriptions that match a given event type and role.
+    ///
+    /// Used by the fan-out worker to select delivery targets.
+    ///
+    /// `role` and `sparte` are both `None` when the event does not carry one.
+    /// That means *not scoped by this axis* and matches every subscriber —
+    /// an event with no Marktrolle is not an event for the empty Marktrolle.
+    pub async fn list_matching(
         &self,
         event_type: &str,
         role: Option<&str>,

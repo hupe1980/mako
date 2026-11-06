@@ -262,6 +262,53 @@ async fn a_kunde_without_master_data_yields_empty_buyer_terms() {
         .expect("query succeeds")
         .expect("the Kunde row exists even with no master data");
     assert!(buyer.name.is_none() && buyer.city.is_none() && buyer.post_code.is_none());
+    // `make_kunde` records a B2C party; no consent is recorded.
+    assert!(!buyer.unternehmer);
+    assert_eq!(buyer.zustimmung_sonstige_erechnung, None);
+}
+
+/// The Unternehmer status (§ 14 Abs. 2 Satz 2 Nr. 1 UStG) belongs to the party
+/// the invoice names: a B2B Rechnungsempfänger on a contract recorded as `B2C`
+/// is classified by its own `kundentyp`, not the contract's. The three
+/// e-invoicing consents travel in the same block, and an unrecorded one stays
+/// `None` — never a default either way.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_rechnungsempfaenger_is_classified_by_its_own_kundentyp() {
+    let Some((pool, _pg)) = test_pool("bg7_unternehmer").await else {
+        return;
+    };
+    let tenant = "9800000000013";
+    let kunde = make_kunde(&pool, tenant).await;
+    sqlx::query(
+        "UPDATE kunden SET kundentyp = 'B2B_RLM', haushaltskunde = false, \
+         zustimmung_sonstige_erechnung = true, edi_zustimmung = false WHERE id = $1",
+    )
+    .bind(kunde)
+    .execute(&pool)
+    .await
+    .expect("record a B2B party");
+    // `vertrag_input` records the contract as `B2C`.
+    let v =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("ERP-BG7-UN"))
+            .await
+            .expect("create contract");
+    activate(&pool, v.id).await;
+
+    let buyer = pg::fetch_rechnungsempfaenger_by_malo(&pool, MALO, tenant)
+        .await
+        .expect("query succeeds")
+        .expect("a Kunde is on file for this MaLo");
+    assert!(
+        buyer.unternehmer,
+        "a B2B Rechnungsempfänger on a B2C contract is an Unternehmer"
+    );
+    assert_eq!(buyer.zustimmung_sonstige_erechnung, Some(true));
+    assert_eq!(buyer.edi_zustimmung, Some(false));
+    assert_eq!(
+        buyer.edi_extrahierbar, None,
+        "an unrecorded extractability stays unrecorded"
+    );
 }
 
 /// A Sammelrechnung's buyer is the Rahmenvertrag holder, not a site's customer.

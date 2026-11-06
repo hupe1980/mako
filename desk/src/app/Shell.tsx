@@ -93,6 +93,9 @@ export function Shell() {
               <span className="text-callout text-text-2">Desk</span>
             </div>
             <nav aria-label="Ansichten" className="flex flex-col gap-0.5">
+              <NavItem to="/heute" icon="tray">
+                Heute
+              </NavItem>
               <NavItem to="/ueberblick" icon="bars">
                 Überblick
               </NavItem>
@@ -100,11 +103,6 @@ export function Shell() {
                 Freigaben
                 <FreigabenZahl />
               </NavItem>
-              {rolle === "lieferant" && (
-                <NavItem to="/heute" icon="tray">
-                  Heute
-                </NavItem>
-              )}
               {rolle === "lieferant" && (
                 <NavItem to="/kunden" match="/kunde" icon="person">
                   Kunden

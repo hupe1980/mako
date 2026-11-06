@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import type { Instant } from "./brands";
-import { epochMs } from "./date";
+import { berlinDayNumber, epochMs } from "./date";
 
 export type Urgency = "lapsed" | "critical" | "soon" | "calm";
 
@@ -45,4 +45,28 @@ export function useNow(everyMs = 30_000): number {
     return () => clearInterval(id);
   }, [everyMs]);
   return now;
+}
+
+/** Where an inbox item sits by its Frist: the bands Heute is read in. */
+export type Band = "ueberfaellig" | "heute" | "woche" | "spaeter" | "ohne";
+
+export const BAENDER: { band: Band; titel: string }[] = [
+  { band: "ueberfaellig", titel: "Überfällig" },
+  { band: "heute", titel: "Heute" },
+  { band: "woche", titel: "Nächste 7 Tage" },
+  { band: "spaeter", titel: "Später" },
+  { band: "ohne", titel: "Ohne Frist" },
+];
+
+/**
+ * The band of a Frist the service returned, against `now`: lapsed, due on
+ * today's Berlin calendar day, within the next seven, or later. The edges are
+ * Berlin days, because a Frist is a German one; the instant is the service's.
+ */
+export function band(due: Instant | null | undefined, now: number): Band {
+  if (!due) return "ohne";
+  const at = epochMs(due);
+  if (at <= now) return "ueberfaellig";
+  const tage = berlinDayNumber(at) - berlinDayNumber(now);
+  return tage <= 0 ? "heute" : tage <= 7 ? "woche" : "spaeter";
 }

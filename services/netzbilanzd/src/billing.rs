@@ -258,10 +258,6 @@ pub fn settle(position: &BillingPositionRequest) -> anyhow::Result<SettlementRes
                 mehr_preis_ct_per_kwh: mehr,
                 minder_preis_ct_per_kwh: minder,
                 wiederverkaeufer: mmm.wiederverkaeufer,
-                // netzbilanzd bills as the Netzbetreiber, so the invoice is a
-                // Handelsrechnung. The self-issued Mehrmenge leg (PID 31006) is
-                // written by the receiving party — `invoicd`, in the LF role.
-                selbstausgestellt: false,
             };
             refuse_invalid("MMM", &position.malo_id, validate_mmm_input(&input))?;
             settle_mmm(&input)
@@ -280,6 +276,7 @@ pub fn settle(position: &BillingPositionRequest) -> anyhow::Result<SettlementRes
                 billing_months: msb.billing_months,
                 messdienstleistung_eur: msb.messdienstleistung_eur,
                 steuereinrichtung_eur_per_month: msb.steuereinrichtung_eur_per_month,
+                tagespreise: msb.tagespreise,
                 messstellen_kategorie: msb.messstellen_kategorie,
                 entgeltschuldner: msb.entgeltschuldner,
             };
@@ -336,6 +333,23 @@ pub struct DocumentFacts {
     pub cadence: Option<grid_billing::Rechnungscharakter>,
     /// Abschlagsrechnungen deducted from what is owed.
     pub abschlaege: Vec<grid_billing::Abschlagsverrechnung>,
+    /// The Artikel-ID of each charge the settlement leaves to the price sheet,
+    /// keyed by position kind ([`crate::request::NneRequest::artikel_ids`]).
+    pub artikel_ids: std::collections::BTreeMap<grid_billing::BillingPositionKind, String>,
+}
+
+impl DocumentFacts {
+    /// The Artikel-IDs a settlement request states.
+    #[must_use]
+    pub fn artikel_ids_of(
+        settlement: &SettlementRequest,
+    ) -> std::collections::BTreeMap<grid_billing::BillingPositionKind, String> {
+        match settlement {
+            SettlementRequest::Nne(n) => n.artikel_ids.clone(),
+            SettlementRequest::Msb(m) => m.artikel_ids.clone(),
+            _ => std::collections::BTreeMap::new(),
+        }
+    }
 }
 
 /// Present a settlement as an invoice and check the rendered document.
@@ -352,6 +366,7 @@ pub fn render_and_check(
     facts: DocumentFacts,
 ) -> SettledInvoice {
     let pid = settlement.settlement_type.default_pid();
+    let artikel_ids = facts.artikel_ids;
     let document = InvoiceDocument {
         settlement,
         pid,
@@ -362,7 +377,19 @@ pub fn render_and_check(
         cadence: facts.cadence,
         abschlaege: facts.abschlaege,
     };
-    let rechnung = grid_billing::bo4e::into_rechnung(&document);
+    let mut rechnung = grid_billing::bo4e::into_rechnung(&document);
+    // The positions are numbered in the settlement's order, so the n-th
+    // Rechnungsposition is the n-th settled position and its kind.
+    for (p, (_, settled)) in rechnung
+        .rechnungspositionen
+        .iter_mut()
+        .flatten()
+        .zip(document.numbered_positions())
+    {
+        if let Some(id) = artikel_ids.get(&settled.kind) {
+            p.artikel_id = Some(id.clone());
+        }
+    }
     let report = check(&rechnung, document.settlement.sender_mp_id.as_str(), pid);
     SettledInvoice {
         rechnungsnummer: document.rechnungsnummer,
@@ -379,6 +406,224 @@ pub fn render_and_check(
         report,
         pid,
     }
+}
+
+/// Refuse a draft whose INVOIC could not go out: a fact the AHB requires that
+/// neither the settlement nor anything netzbilanzd reads supplies.
+///
+/// Checked at drafting, before an invoice number is spent, rather than left to
+/// makod's refusal at dispatch. The NN-Rechnung needs its **cadence**: `IMD`
+/// DE 7081 is Muss on 31002 (INVOIC AHB 1.0b), and the settlement does not
+/// carry it ([`grid_billing::bo4e::netznutzungrechnungstyp_for`]). The
+/// NN-Rechnung Strom needs two facts more:
+///
+/// - every charge's **Artikel-ID** — `LIN` DE 7143 admits only `Z09` for a
+///   Strom position from 01.01.2023 (INVOIC AHB 1.0b, 31002,
+///   `[492] ∧ [59]`), and the settlement names no Artikel-ID
+///   ([`grid_billing::bo4e::artikel_code`]);
+/// - the **Lieferschein-MSCONS** — `SG1 RFF+ACE` is Muss for a period ending
+///   after 01.12.2019 (`[492] ∧ [36] ∧ [50]`, S. 12).
+///
+/// # Errors
+///
+/// A sentence naming each missing fact.
+#[must_use = "a refusal must reach the caller"]
+pub fn refuse_unissuable(
+    position: &BillingPositionRequest,
+    settled: &SettledInvoice,
+) -> anyhow::Result<()> {
+    if let SettlementRequest::Msb(m) = &position.settlement {
+        return refuse_unissuable_msb(position, m, settled);
+    }
+    let SettlementRequest::Nne(nne) = &position.settlement else {
+        return Ok(());
+    };
+    let mut fehlt = Vec::new();
+    if settled.rechnung.netznutzungrechnungstyp.is_none() {
+        fehlt.push(
+            "cadence is missing — the NN-Rechnung states its Rechnungstyp (IMD+7081: \
+             Monats-, Turnus-, Zwischen- or Abschlussrechnung)"
+                .to_owned(),
+        );
+    }
+    if nne.sparte != Sparte::Strom {
+        return if fehlt.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(
+                "the NN-Rechnung for MaLo {} cannot go out as an INVOIC: {}",
+                position.malo_id,
+                fehlt.join("; ")
+            )
+        };
+    }
+    for (p, (n, sp)) in settled
+        .rechnung
+        .rechnungspositionen
+        .iter()
+        .flatten()
+        .zip(settled.settlement.positions.iter().enumerate())
+    {
+        if p.artikel_id.is_none() {
+            fehlt.push(format!(
+                "position {} ({}) has no Artikel-ID — state it as artikel_ids.{:?}, from the \
+                 Netznutzungspreisblatt",
+                n + 1,
+                sp.text,
+                sp.kind
+            ));
+        }
+    }
+    let ende_nach_lieferschein_pflicht = position.period_to >= time::macros::date!(2019 - 11 - 30);
+    if ende_nach_lieferschein_pflicht && nne.lieferschein_ref.as_deref().is_none_or(str::is_empty) {
+        fehlt.push(
+            "lieferschein_ref is missing — the NN-Rechnung Strom names the Lieferschein-MSCONS \
+             it settles (SG1 RFF+ACE)"
+                .to_owned(),
+        );
+    }
+    if fehlt.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "the NN-Rechnung for MaLo {} cannot go out as an INVOIC: {}",
+        position.malo_id,
+        fehlt.join("; ")
+    )
+}
+
+/// The MSB-Rechnung's share of [`refuse_unissuable`] (INVOIC AHB 1.0b, 31009):
+///
+/// - the **Bezugsdokument** to a Lieferant (the QUOTES, `[73] ∧ [72]`) or an
+///   ESA (the ORDERS, `[66]`) — `SG1 RFF+ACE`, S. 12;
+/// - from 01.01.2024, **day prices** — `PRI` DE 6411 admits only `DAY`
+///   (`[12] ∧ [65]`) — and an **Artikel-ID** per position — `LIN` DE 7143
+///   only `Z09` (`[65]`, S. 18).
+fn refuse_unissuable_msb(
+    position: &BillingPositionRequest,
+    m: &crate::request::MsbRequest,
+    settled: &SettledInvoice,
+) -> anyhow::Result<()> {
+    use grid_billing::MsbEmpfaengerRolle as R;
+    let mut fehlt = Vec::new();
+    if matches!(m.empfaenger_rolle, R::Lieferant | R::Energieserviceanbieter)
+        && m.bezugsdokument.as_deref().is_none_or(str::is_empty)
+    {
+        fehlt.push(
+            "bezugsdokument is missing — the MSB-Rechnung to a Lieferant names the QUOTES it \
+             answers, to an ESA the ORDERS (SG1 RFF+ACE)"
+                .to_owned(),
+        );
+    }
+    if position.period_from >= time::macros::date!(2024 - 01 - 01) {
+        if m.tagespreise.is_none() {
+            fehlt.push(
+                "tagespreise is missing — from 01.01.2024 the MSB-Rechnung prices per day \
+                 (PRI DAY)"
+                    .to_owned(),
+            );
+        }
+        for (p, sp) in settled
+            .rechnung
+            .rechnungspositionen
+            .iter()
+            .flatten()
+            .zip(&settled.settlement.positions)
+        {
+            if !p.artikel_id.as_deref().is_some_and(|a| a.contains('-')) {
+                fehlt.push(format!(
+                    "{} has no Artikel-ID — state it as artikel_ids.{:?} (Codeliste der \
+                     Artikelnummern und Artikel-ID 5.6, Kap. 3.5)",
+                    sp.text, sp.kind
+                ));
+            }
+        }
+    }
+    if fehlt.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "the MSB-Rechnung for MaLo {} cannot go out as an INVOIC: {}",
+        position.malo_id,
+        fehlt.join("; ")
+    )
+}
+
+pub use grid_billing::bo4e::{Beteiligte, mit_beteiligten};
+
+/// The payload fields of the issuing command that are not the Rechnung —
+/// what makod writes to `SG1 RFF+ACE`, `RFF+Z56` and `IMD` (makod: Issuing
+/// the INVOIC).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Kopfdaten {
+    /// `SG1 RFF+ACE`.
+    pub zugehoeriges_dokument: Option<String>,
+    /// `SG1 RFF+Z56`.
+    pub preise_mp_id: Option<String>,
+    /// `IMD` DE 7081, where BO4E has no variant for it.
+    pub rechnungstyp: Option<&'static str>,
+    /// `DTM+203` Ausführungsdatum.
+    pub ausfuehrungsdatum: Option<time::Date>,
+}
+
+/// The [`Kopfdaten`] of a draft, from its stored settlement input.
+///
+/// - NN-Rechnung Strom: the Lieferschein, and from a period beginning
+///   01.01.2026 the Preise des Netzbetreibers (`[88] ∧ [492]`, INVOIC AHB
+///   1.0b S. 13).
+/// - MSB-Rechnung: to the NB or the LF `IMD++MSB` „Rechnung für
+///   Messstellenbetrieb" (MIG 2.8e 00014, S. 19; 31009 `MSB=X [72] ∨ [76]`),
+///   to an ESA `IMD++KON` „Abrechnung von Konfigurationen
+///   (Universalbestellprozess)"; and the document it answers.
+/// - Rechnung sonstige Leistung: `IMD++Z43` „Rechnung für Sperren und
+///   Wiederinbetriebnahme" (MIG 2.8e 00014, S. 19) — the AWH of the
+///   Sperrprozess —, the Sperrauftrag's ORDERS and the Ausführungsdatum.
+#[must_use]
+pub fn kopfdaten(settlement: &SettlementRequest, period_from: time::Date) -> Kopfdaten {
+    match settlement {
+        SettlementRequest::Nne(n) if n.sparte == Sparte::Strom => Kopfdaten {
+            zugehoeriges_dokument: n.lieferschein_ref.clone(),
+            preise_mp_id: (period_from >= time::macros::date!(2026 - 01 - 01))
+                .then(|| n.preise_mp_id.clone().unwrap_or_else(|| n.nb_mp_id.clone())),
+            ..Kopfdaten::default()
+        },
+        SettlementRequest::GasAwh(a) => Kopfdaten {
+            zugehoeriges_dokument: Some(a.auftrag_ref.clone()),
+            rechnungstyp: Some("Z43"),
+            ausfuehrungsdatum: Some(a.ausfuehrungsdatum),
+            ..Kopfdaten::default()
+        },
+        SettlementRequest::Msb(m) => Kopfdaten {
+            zugehoeriges_dokument: m.bezugsdokument.clone(),
+            rechnungstyp: Some(match m.empfaenger_rolle {
+                grid_billing::MsbEmpfaengerRolle::Energieserviceanbieter => "KON",
+                _ => "MSB",
+            }),
+            ..Kopfdaten::default()
+        },
+        _ => Kopfdaten::default(),
+    }
+}
+
+/// The Rechnung as the INVOIC of its PID states it.
+///
+/// A Rechnung für Sperren carries the Ausführungsdatum and no Zeitraum: the
+/// 31011 column lists the Abrechnungszeitraum (00007/00008) and the
+/// positionsbezogene one (00038/00039) only `[53]`, on the
+/// Blindarbeitrechnung (INVOIC AHB 1.0b), and a Zeitraum stated beside `Z43`
+/// is a segment the column does not admit.
+#[must_use]
+pub fn fuer_die_invoic(
+    mut rechnung: rubo4e::current::Rechnung,
+    settlement: &SettlementRequest,
+) -> rubo4e::current::Rechnung {
+    if matches!(settlement, SettlementRequest::GasAwh(_)) {
+        rechnung.rechnungsperiode = None;
+        for p in rechnung.rechnungspositionen.iter_mut().flatten() {
+            p.lieferungszeitraum = None;
+        }
+    }
+    rechnung
 }
 
 /// Run `invoic-checker` over a rendered document.
@@ -491,6 +736,9 @@ mod tests {
             jahreshoechstleistung_kw: None,
             jahresarbeit_kwh: None,
             tariff_sheet_id: None,
+            artikel_ids: std::collections::BTreeMap::new(),
+            lieferschein_ref: None,
+            preise_mp_id: None,
         })))
     }
 
@@ -563,6 +811,8 @@ mod tests {
                 },
             ],
             tariff_sheet_id: None,
+            auftrag_ref: "ORD-2026-0001".to_owned(),
+            ausfuehrungsdatum: time::macros::date!(2026 - 01 - 14),
         })))
         .expect("settle AWH");
 
@@ -695,6 +945,467 @@ mod tests {
             3,
             "one position per Tarifstufe: {:#?}",
             settled.positions
+        );
+    }
+
+    // ── The INVOIC makod sends for a draft ────────────────────────────────────
+
+    fn partner(
+        name: &str,
+        strasse: &str,
+        plz: &str,
+        ort: &str,
+        ust: &str,
+    ) -> rubo4e::current::Geschaeftspartner {
+        rubo4e::current::Geschaeftspartner {
+            organisationsname: Some(name.to_owned()),
+            adresse: Some(rubo4e::current::Adresse {
+                strasse: Some(strasse.to_owned()),
+                hausnummer: Some("1".to_owned()),
+                postleitzahl: Some(plz.to_owned()),
+                ort: Some(ort.to_owned()),
+                landescode: Some(rubo4e::current::Landescode::De),
+                ..Default::default()
+            }),
+            umsatzsteuer_id: Some(ust.to_owned()),
+            ..Default::default()
+        }
+    }
+
+    /// The parties and the Marktlokation as marktd records them.
+    fn beteiligte() -> Beteiligte {
+        Beteiligte {
+            ersteller: partner(
+                "Stadtnetz Musterstadt GmbH",
+                "Netzweg",
+                "10115",
+                "Berlin",
+                "DE123456789",
+            ),
+            empfaenger: partner(
+                "Lieferant Beispiel AG",
+                "Handelsplatz",
+                "50667",
+                "Köln",
+                "DE987654321",
+            ),
+            marktlokation: rubo4e::current::Marktlokation {
+                lokationsadresse: Some(rubo4e::current::Adresse {
+                    strasse: Some("Lindenallee".to_owned()),
+                    hausnummer: Some("12".to_owned()),
+                    postleitzahl: Some("10115".to_owned()),
+                    ort: Some("Berlin".to_owned()),
+                    landescode: Some(rubo4e::current::Landescode::De),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// The message makod builds for `rechnung` under `pid`, with the payload
+    /// fields netzbilanzd sends beside it.
+    fn invoic(
+        pid: u32,
+        rechnung: &rubo4e::current::Rechnung,
+        kopf: &Kopfdaten,
+    ) -> Result<String, makod::orchestrator::invoic_ausgang::InvoicAusgangError> {
+        invoic_from(pid, rechnung, kopf, "9900357000004", "9900012345678")
+    }
+
+    fn invoic_from(
+        pid: u32,
+        rechnung: &rubo4e::current::Rechnung,
+        kopf: &Kopfdaten,
+        sender: &str,
+        receiver: &str,
+    ) -> Result<String, makod::orchestrator::invoic_ausgang::InvoicAusgangError> {
+        use makod::orchestrator::invoic_ausgang as ausgang;
+        let profile =
+            ausgang::profil(time::macros::date!(2026 - 11 - 06)).expect("INVOIC in force");
+        ausgang::rechnung(
+            profile,
+            rechnung,
+            &ausgang::Kopf {
+                pid,
+                sender,
+                receiver,
+                message_ref: "INV1",
+                buchungsdatum: time::macros::datetime!(2026-02-01 09:00 UTC),
+                zugehoeriges_dokument: kopf.zugehoeriges_dokument.as_deref(),
+                preise_mp_id: kopf.preise_mp_id.as_deref(),
+                rechnungstyp: kopf.rechnungstyp,
+                ausfuehrungsdatum: kopf.ausfuehrungsdatum,
+            },
+        )
+        .map(|m| m.nachricht)
+    }
+
+    /// An NN-Rechnung Strom for January 2026, with the Artikel-IDs of its
+    /// price sheet — Codeliste der Artikelnummern und Artikel-ID 5.6:
+    /// `1-02-0-002` Arbeitspreis (Kap. 3.1.2, S. 18), `1-10-1-001` KWKG,
+    /// `1-10-2-001` Offshore-Netzumlage (Kap. 3.1.10, S. 41), `1-10-4-001`
+    /// § 19 StromNEV (S. 42) — and its Lieferschein.
+    fn nne_strom_zum_versand() -> BillingPositionRequest {
+        use grid_billing::BillingPositionKind as K;
+        let mut position = nne(Sparte::Strom);
+        position.cadence = Some(grid_billing::Rechnungscharakter::Monatsrechnung);
+        if let SettlementRequest::Nne(n) = &mut position.settlement {
+            n.artikel_ids = [
+                (K::NneArbeit, "1-02-0-002"),
+                (K::KwkgUmlage, "1-10-1-001"),
+                (K::OffshoreNetzumlage, "1-10-2-001"),
+                (K::Sect19StromNevUmlage, "1-10-4-001"),
+            ]
+            .into_iter()
+            .map(|(k, id)| (k, id.to_owned()))
+            .collect();
+            n.lieferschein_ref = Some("LS-2026-0001".to_owned());
+        }
+        position
+    }
+
+    fn modul1_januar() -> ArbeitspreisModell {
+        ArbeitspreisModell::Modul1Pauschal {
+            basis: MengePreis {
+                menge_kwh: dec!(1000),
+                preis_ct_per_kwh: dec!(3.5),
+            },
+            pauschale_eur_pro_jahr: dec!(120),
+        }
+    }
+
+    fn drafted(position: &BillingPositionRequest, nummer: &str) -> SettledInvoice {
+        render_and_check(
+            settle(position).expect("settle"),
+            nummer.to_owned(),
+            time::macros::date!(2026 - 02 - 01),
+            time::macros::date!(2026 - 03 - 03),
+            DocumentFacts {
+                cadence: position.cadence,
+                artikel_ids: DocumentFacts::artikel_ids_of(&position.settlement),
+                ..DocumentFacts::default()
+            },
+        )
+    }
+
+    /// A drafted NN-Rechnung Strom, with the parties and the Marktlokation
+    /// dispatch adds, is a 31002 makod sends with no finding: every charge
+    /// carries its Artikel-ID as `Z09`, the Lieferschein is `RFF+ACE`, and a
+    /// period from 01.01.2026 names the Preise des Netzbetreibers.
+    #[test]
+    fn a_dispatched_nn_rechnung_strom_is_a_valid_31002() {
+        let position = nne_strom_zum_versand();
+        let settled = drafted(&position, "NNE-2026-000001");
+        refuse_unissuable(&position, &settled).expect("issuable");
+        let kopf = kopfdaten(&position.settlement, position.period_from);
+
+        // As drafted, the Rechnung names no party and no Marktlokation.
+        let e = invoic(31002, &settled.rechnung, &kopf).expect_err("refused as drafted");
+        assert!(e.places().contains(&"00022".to_owned()), "{e}");
+
+        let r = mit_beteiligten(settled.rechnung, &position.malo_id, beteiligte()).expect("MaLo");
+        let n = invoic(31002, &r, &kopf).unwrap_or_else(|e| panic!("refused: {e}"));
+        assert!(n.contains("LIN+1++1-02-0-002:Z09'"), "{n}");
+        assert!(n.contains("RFF+ACE:LS-2026-0001'"), "{n}");
+        assert!(n.contains("RFF+Z56:9900357000004'"), "{n}");
+        assert!(n.contains("LOC+172+51238696012'"), "{n}");
+        assert!(n.contains("IMD++MVR'"), "{n}");
+    }
+
+    /// A 1 234,567 kWh NN-Rechnung Strom goes out: every position net is in
+    /// cents (`MOA+203` `[930]`) and the Summenteil is their sum.
+    #[test]
+    fn an_nn_rechnung_strom_of_any_quantity_is_a_valid_31002() {
+        let mut position = nne_strom_zum_versand();
+        if let SettlementRequest::Nne(n) = &mut position.settlement {
+            n.arbeitspreis = ArbeitspreisModell::Einheitlich(MengePreis {
+                menge_kwh: dec!(1234.567),
+                preis_ct_per_kwh: dec!(3.517),
+            });
+        }
+        let settled = drafted(&position, "NNE-2026-000004");
+        let kopf = kopfdaten(&position.settlement, position.period_from);
+        let r = mit_beteiligten(settled.rechnung, &position.malo_id, beteiligte()).expect("MaLo");
+        invoic(31002, &r, &kopf).unwrap_or_else(|e| panic!("refused: {e}"));
+    }
+
+    /// A Gas NN-Rechnung with its monthly Verrechnungspreis goes out: the
+    /// months at `QTY+136`, the count `1` `H87` at `QTY+47`.
+    #[test]
+    fn a_gas_nn_rechnung_with_a_grundpreis_is_a_valid_31002() {
+        let mut position = nne(Sparte::Gas);
+        position.cadence = Some(grid_billing::Rechnungscharakter::Monatsrechnung);
+        if let SettlementRequest::Nne(n) = &mut position.settlement {
+            n.nb_mp_id = "9800357000004".to_owned();
+            n.lf_mp_id = "9800012345678".to_owned();
+            n.grundpreis = Some(grid_billing::Grundpreis {
+                eur_per_month: dec!(15),
+                months: dec!(1),
+            });
+        }
+        let settled = drafted(&position, "NNE-2026-000005");
+        assert!(
+            settled.report.outcome != invoic_checker::CheckOutcome::Dispute,
+            "{:?}",
+            settled.report.findings
+        );
+        let r = mit_beteiligten(settled.rechnung, &position.malo_id, beteiligte()).expect("MaLo");
+        let n = invoic_from(
+            31002,
+            &r,
+            &Kopfdaten::default(),
+            "9800357000004",
+            "9800012345678",
+        )
+        .unwrap_or_else(|e| panic!("refused: {e}"));
+        assert!(n.contains("QTY+47:1:H87'QTY+136:1:MON'"), "{n}");
+        assert!(n.contains("PRI+CAL:15::::MON'"), "{n}");
+    }
+
+    /// A drafted Rechnung sonstige Leistung is a 31011 makod sends with no
+    /// finding: `IMD++Z43`, the Sperrauftrag's ORDERS at `RFF+ACE`, the
+    /// Ausführungsdatum at `DTM+203`, each AWH position with its Artikel-ID —
+    /// and no Zeitraum, which the column admits only on a Blindarbeitrechnung.
+    #[test]
+    fn a_dispatched_rechnung_sonstige_leistung_is_a_valid_31011() {
+        let position = position(SettlementRequest::GasAwh(GasAwhRequest {
+            nb_mp_id: "9800357000004".to_owned(),
+            lf_mp_id: "9800012345678".to_owned(),
+            positionen: vec![AwhPositionInput {
+                beschreibung: "Unterbrechung der Anschlussnutzung".to_owned(),
+                anzahl: 1,
+                preis_eur: dec!(60.00),
+                artikel_id: Some("2-01-7-001".to_owned()),
+            }],
+            tariff_sheet_id: None,
+            auftrag_ref: "ORD-2026-0001".to_owned(),
+            ausfuehrungsdatum: time::macros::date!(2026 - 01 - 14),
+        }));
+        let settled = drafted(&position, "AWH-2026-000001");
+        let kopf = kopfdaten(&position.settlement, position.period_from);
+        let r = mit_beteiligten(settled.rechnung, &position.malo_id, beteiligte()).expect("MaLo");
+        let r = fuer_die_invoic(r, &position.settlement);
+        let n = invoic_from(31011, &r, &kopf, "9800357000004", "9800012345678")
+            .unwrap_or_else(|e| panic!("refused: {e}"));
+        assert!(n.contains("DTM+203:20260114:102'IMD++Z43'"), "{n}");
+        assert!(n.contains("RFF+ACE:ORD-2026-0001'"), "{n}");
+        assert!(n.contains("LIN+1++2-01-7-001:Z09'"), "{n}");
+    }
+
+    /// A MSB-Rechnung to the Lieferant for January 2026, priced per day: the
+    /// Preisobergrenze of a verbrauchende Marktlokation `]6.000 kWh/a;
+    /// 10.000 kWh/a]` mit iMS, Artikel-ID `4-02-0-006` (Codeliste 5.6 Kap.
+    /// 3.5.1, S. 52), answering the QUOTES of the accepted Angebot.
+    fn msb_an_lf() -> BillingPositionRequest {
+        use grid_billing::BillingPositionKind as K;
+        position(SettlementRequest::Msb(crate::request::MsbRequest {
+            msb_mp_id: "9900357000004".to_owned(),
+            empfaenger_rolle: grid_billing::MsbEmpfaengerRolle::Lieferant,
+            empfaenger_mp_id: "9900012345678".to_owned(),
+            sparte: Sparte::Strom,
+            grundgebuehr_eur_per_month: Decimal::ZERO,
+            billing_months: 0,
+            tagespreise: Some(grid_billing::MsbTagespreise {
+                grundgebuehr_eur_per_tag: dec!(0.10),
+                steuereinrichtung_eur_per_tag: None,
+            }),
+            artikel_ids: [(K::MsbGrundgebuehr, "4-02-0-006".to_owned())]
+                .into_iter()
+                .collect(),
+            bezugsdokument: Some("QUOTES-2025-0042".to_owned()),
+            messdienstleistung_eur: None,
+            steuereinrichtung_eur_per_month: None,
+            messstellen_kategorie: None,
+            entgeltschuldner: None,
+        }))
+    }
+
+    /// A drafted MSB-Rechnung to the Lieferant is a 31009 makod sends with no
+    /// finding: `IMD++MSB`, the QUOTES at `RFF+ACE`, the Artikel-ID as `Z09`,
+    /// 31 days at `QTY+136` and the price per `DAY`.
+    #[test]
+    fn a_dispatched_msb_rechnung_is_a_valid_31009() {
+        let position = msb_an_lf();
+        let settled = drafted(&position, "MSB-2026-000001");
+        refuse_unissuable(&position, &settled).expect("issuable");
+        let kopf = kopfdaten(&position.settlement, position.period_from);
+        let r = mit_beteiligten(settled.rechnung, &position.malo_id, beteiligte()).expect("MaLo");
+        let n = invoic(31009, &r, &kopf).unwrap_or_else(|e| panic!("refused: {e}"));
+        assert!(n.contains("IMD++MSB'"), "{n}");
+        assert!(n.contains("RFF+ACE:QUOTES-2025-0042'"), "{n}");
+        assert!(
+            n.contains("LIN+1++4-02-0-006:Z09'QTY+47:1:H87'QTY+136:31:DAY'"),
+            "{n}"
+        );
+        assert!(n.contains("PRI+CAL:0.1::::DAY'"), "{n}");
+    }
+
+    /// Without its QUOTES, its day prices or its Artikel-IDs, a MSB-Rechnung
+    /// from 2024 is refused at drafting, each named.
+    #[test]
+    fn a_msb_rechnung_without_what_the_invoic_needs_is_refused() {
+        let mut position = msb_an_lf();
+        if let SettlementRequest::Msb(m) = &mut position.settlement {
+            m.bezugsdokument = None;
+            m.artikel_ids.clear();
+            m.tagespreise = None;
+            m.grundgebuehr_eur_per_month = dec!(3);
+            m.billing_months = 1;
+        }
+        let settled = drafted(&position, "MSB-2026-000002");
+        let e = refuse_unissuable(&position, &settled)
+            .expect_err("refused")
+            .to_string();
+        assert!(e.contains("bezugsdokument"), "{e}");
+        assert!(e.contains("tagespreise"), "{e}");
+        assert!(e.contains("artikel_ids.MsbGrundgebuehr"), "{e}");
+    }
+
+    fn mmm(gemessen: Decimal, bilanziert: Decimal) -> BillingPositionRequest {
+        position(SettlementRequest::Mmm(MmmRequest {
+            nb_mp_id: "9900357000004".to_owned(),
+            lf_mp_id: "9900012345678".to_owned(),
+            sparte: Sparte::Strom,
+            gemessen_kwh: gemessen,
+            bilanziert_kwh: bilanziert,
+            mehr_preis_ct_per_kwh: Some(dec!(9.87)),
+            minder_preis_ct_per_kwh: Some(dec!(9.12)),
+            lastprofil: None,
+            wiederverkaeufer: grid_billing::Wiederverkaeuferstatus::KEINER,
+        }))
+    }
+
+    fn mmm_invoic(position: &BillingPositionRequest, pid: u32) -> String {
+        let settled = drafted(position, "MMM-2026-000001");
+        assert_eq!(settled.pid, pid);
+        let mut b = beteiligte();
+        b.marktlokation.energierichtung = Some(rubo4e::current::Energierichtung::Aussp);
+        let r = mit_beteiligten(settled.rechnung, &position.malo_id, b).expect("MaLo");
+        invoic(pid, &r, &Kopfdaten::default()).unwrap_or_else(|e| panic!("refused: {e}"))
+    }
+
+    /// A Mindermenge is the NB's 31005: the quantity in whole kWh, `IMD`
+    /// DE 7009 from the Marktlokation's Energierichtung.
+    #[test]
+    fn a_mindermenge_is_a_valid_31005() {
+        let n = mmm_invoic(&mmm(dec!(1234.567), dec!(1000)), 31005);
+        assert!(n.contains("IMD++MMM+Z07'"), "{n}");
+        assert!(
+            n.contains("LIN+1++9990001000756:Z01'QTY+47:235:KWH'"),
+            "{n}"
+        );
+    }
+
+    /// A Mehrmenge is the NB's selbst ausgestellte 31006 to the LF: `BGM+389`,
+    /// the LF's Guthaben stated positive, no Korrekturfaktor.
+    #[test]
+    fn a_mehrmenge_is_a_valid_31006() {
+        let n = mmm_invoic(&mmm(dec!(1000), dec!(1234.567)), 31006);
+        assert!(n.contains("BGM+389+"), "{n}");
+        assert!(n.contains("NAD+MS+9900357000004"), "{n}");
+        assert!(
+            n.contains("LIN+1++9990001000748:Z01'QTY+47:235:KWH'"),
+            "{n}"
+        );
+        assert!(n.contains("MOA+203:23.19'PRI+CAL:0.0987'"), "{n}");
+        assert!(!n.contains("QTY+Z17"), "{n}");
+    }
+
+    /// A §14a Modul 1 NN-Rechnung Strom is a 31002 makod sends with no
+    /// finding: the pauschale Reduzierung credited for the period's days at
+    /// its day rate, Artikel-ID `1-02-0-015` (€/Tag; Codeliste der
+    /// Artikelnummern und Artikel-ID 5.6, Kap. 3.1.2, S. 19) — `QTY+136`
+    /// `DAY`, the one time unit the 31002 column admits for Strom from 2023.
+    #[test]
+    fn a_modul_1_nn_rechnung_strom_is_a_valid_31002() {
+        use grid_billing::BillingPositionKind as K;
+        let mut position = nne_strom_zum_versand();
+        if let SettlementRequest::Nne(n) = &mut position.settlement {
+            n.arbeitspreis = modul1_januar();
+            n.artikel_ids
+                .insert(K::NneArbeitModul1, "1-02-0-002".to_owned());
+            n.artikel_ids
+                .insert(K::NneModul1Pauschale, "1-02-0-015".to_owned());
+        }
+        let settled = drafted(&position, "NNE-2026-000006");
+        let kopf = kopfdaten(&position.settlement, position.period_from);
+        let r = mit_beteiligten(settled.rechnung, &position.malo_id, beteiligte()).expect("MaLo");
+        let n = invoic(31002, &r, &kopf).unwrap_or_else(|e| panic!("refused: {e}"));
+        assert!(
+            n.contains("LIN+2++1-02-0-015:Z09'QTY+47:1:H87'QTY+136:31:DAY'"),
+            "{n}"
+        );
+        assert!(
+            n.contains("MOA+203:-10.19'PRI+CAL:-0.328767::::DAY'"),
+            "{n}"
+        );
+    }
+
+    /// A drafted Abschlagsrechnung is a 31001 makod sends with no finding: one
+    /// position, the Abschlag's BDEW-Artikelnummer as `Z01`.
+    #[test]
+    fn a_dispatched_abschlagsrechnung_is_a_valid_31001() {
+        let position = position(SettlementRequest::Abschlag(
+            crate::request::AbschlagRequest {
+                nb_mp_id: "9900357000004".to_owned(),
+                lf_mp_id: "9900012345678".to_owned(),
+                sparte: Sparte::Strom,
+                betrag_netto_eur: dec!(50),
+                grundlage: grid_billing::AbschlagGrundlage::Vorjahresverbrauch,
+            },
+        ));
+        let settled = drafted(&position, "ABS-2026-000001");
+        refuse_unissuable(&position, &settled).expect("issuable");
+        let kopf = kopfdaten(&position.settlement, position.period_from);
+        assert_eq!(
+            kopf,
+            Kopfdaten::default(),
+            "the 31001 column has no RFF+ACE and no RFF+Z56"
+        );
+        let r = mit_beteiligten(settled.rechnung, &position.malo_id, beteiligte()).expect("MaLo");
+        let n = invoic(31001, &r, &kopf).unwrap_or_else(|e| panic!("refused: {e}"));
+        assert!(n.contains("LIN+1++9990001000376:Z01'"), "{n}");
+        assert!(n.contains("IMD++ABS'"), "{n}");
+    }
+
+    /// An NN-Rechnung Strom without its Artikel-IDs, its Lieferschein or its
+    /// cadence is refused at drafting, each named.
+    #[test]
+    fn an_nn_rechnung_strom_without_what_the_invoic_needs_is_refused() {
+        let mut position = nne(Sparte::Strom);
+        let settled = drafted(&position, "NNE-2026-000002");
+        let e = refuse_unissuable(&position, &settled)
+            .expect_err("refused")
+            .to_string();
+        assert!(e.contains("artikel_ids.NneArbeit"), "{e}");
+        assert!(e.contains("lieferschein_ref"), "{e}");
+        assert!(e.contains("cadence"), "{e}");
+
+        // A Gas NN-Rechnung keeps its Artikelnummern and needs no Lieferschein.
+        position = nne(Sparte::Gas);
+        position.cadence = Some(grid_billing::Rechnungscharakter::Monatsrechnung);
+        refuse_unissuable(&position, &drafted(&position, "NNE-2026-000003")).expect("issuable");
+    }
+
+    /// `RFF+Z56` only from a period beginning 01.01.2026 (`[88]`), and only
+    /// on the Strom NN-Rechnung (`[492]`).
+    #[test]
+    fn the_preise_des_netzbetreibers_follow_the_period_and_the_sparte() {
+        let mut position = nne_strom_zum_versand();
+        assert!(
+            kopfdaten(&position.settlement, position.period_from)
+                .preise_mp_id
+                .is_some()
+        );
+        assert_eq!(
+            kopfdaten(&position.settlement, time::macros::date!(2025 - 12 - 01)).preise_mp_id,
+            None
+        );
+        position.settlement = nne(Sparte::Gas).settlement;
+        assert_eq!(
+            kopfdaten(&position.settlement, position.period_from),
+            Kopfdaten::default()
         );
     }
 
@@ -852,6 +1563,7 @@ mod tests {
             billing_months: 0,
             messdienstleistung_eur: None,
             steuereinrichtung_eur_per_month: None,
+            tagespreise: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };

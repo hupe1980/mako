@@ -1243,7 +1243,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
 
-                // Compensation: enqueue an AperakTimeout outbox entry so the
+                // Compensation: enqueue an AntwortfristAbgelaufen outbox entry so the
                 // OutboxErpWorker notifies the ERP that the answer window
                 // published for this Prüfidentifikator lapsed unanswered
                 // (BK6-24-174 GPKE Teil 2).
@@ -1252,7 +1252,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 let mut outbox: Vec<PendingOutbox> = vec![];
                 if let Some(data) = state.initiated_data() {
                     outbox.push(PendingOutbox::new(
-                        "AperakTimeout",
+                        "AntwortfristAbgelaufen",
                         data.new_supplier.as_str(),
                         serde_json::json!({
                             "pid":          data.pruefidentifikator.as_u32(),

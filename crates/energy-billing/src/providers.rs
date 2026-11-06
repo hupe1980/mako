@@ -13,7 +13,7 @@ use crate::context::BillingContext;
 use crate::error::EngineError;
 use crate::position::{
     BillingPosition, BillingWarning, PositionCategory, WarningSeverity, arbeitspreis_position,
-    grundpreis_position, levy_position, validated_eur,
+    grundpreis_position, levy_position,
 };
 use crate::provider::BillingProvider;
 use crate::quantities::{GridInput, Quantities};
@@ -618,7 +618,7 @@ impl BillingProvider for ElectricityProvider {
             .filter(|v| *v != Decimal::ZERO)
         {
             let months_frac = ctx.billed_months();
-            let eur = crate::position::validated_eur(aa_month * months_frac);
+            let eur = aa_month * months_frac;
             let (label, cat) = if aa_month < Decimal::ZERO {
                 (
                     "Rabatt (monatlicher Festbetrag)",
@@ -1657,7 +1657,7 @@ impl BillingProvider for GasProvider {
                 quantity: months_frac,
                 unit: "Monat".to_owned(),
                 unit_price_eur: aa_month,
-                net_eur: crate::position::validated_eur(aa_month * months_frac),
+                net_eur: aa_month * months_frac,
                 category: cat,
                 tags: vec!["auf_abschlag".to_owned(), "gas".to_owned()],
                 applicable_tax_rate: None,
@@ -2746,7 +2746,7 @@ fn bill_eeg_full(
             unit: "kWh".to_owned(),
             unit_price_eur: p.rate_ct_kwh / dec!(100),
             // Positive: generator receives payment (credit note perspective)
-            net_eur: validated_eur(p.eur),
+            net_eur: p.eur,
             category: PositionCategory::Credit,
             tags: vec!["eeg".to_owned(), "eeg_full".to_owned()],
             applicable_tax_rate: None,
@@ -3502,8 +3502,8 @@ impl BillingProvider for DynamicElectricityProvider {
             let series = rate_series(priced_pairs)?;
 
             let total_kwh = series.quantity;
-            // Σ qᵢ·pᵢ exactly, put on the 5-dp position resolution once.
-            let total_eur = crate::position::validated_eur(series.net);
+            // Σ qᵢ·pᵢ exactly; the invoice rounds it once, to the cent.
+            let total_eur = series.net;
             // The weighted-average unit price is the crate's, not ours:
             // `rate_series` computes it while it sums. Re-deriving it as
             // `net ÷ quantity` would be a second division on the figure that
@@ -3706,76 +3706,7 @@ impl BillingProvider for MwStProvider {
         _quantities: &Quantities,
         prior: &[BillingPosition],
     ) -> Result<Vec<BillingPosition>, EngineError> {
-        use std::collections::BTreeMap;
-
-        // Group taxable positions by their effective MwSt rate.
-        // Tax, Abschlag, Info positions are excluded from the tax base.
-        let mut rate_buckets: BTreeMap<String, (Decimal, Decimal)> = BTreeMap::new();
-
-        for p in prior {
-            if matches!(
-                p.category,
-                PositionCategory::Tax | PositionCategory::Abschlag | PositionCategory::Info
-            ) {
-                continue;
-            }
-            let effective_rate = p.applicable_tax_rate.unwrap_or(self.rate).normalize();
-            if effective_rate.is_zero() {
-                continue; // zero rate \u2192 no tax position
-            }
-            // Normalised, exactly as `tax_subtotals_of` groups the BG-23
-            // breakdown: `0.19` and `0.190` are one rate, and bucketing them
-            // apart rounded each half on its own, so `gesamtsteuer` could land
-            // a cent away from `Σ steuerbetraege`.
-            let key = effective_rate.to_string();
-            let entry = rate_buckets
-                .entry(key)
-                .or_insert((effective_rate, Decimal::ZERO));
-            // The rounded line, as `Invoice::from_positions` states it: the tax
-            // is the base printed beside it × rate, never a base no line adds
-            // up to.
-            entry.1 += p.net_eur.round_kfm(2);
-        }
-
-        if rate_buckets.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let mut tax_positions: Vec<BillingPosition> = Vec::with_capacity(rate_buckets.len());
-        for (_key, (rate, net_base)) in rate_buckets {
-            if net_base.is_zero() {
-                continue;
-            }
-            // Rounded to the cent per rate, not carried at 5 dp: the Steuerbetrag
-            // is a document amount (§14 Abs. 4 Nr. 8 UStG) and the BO4E/EN 16931
-            // per-rate breakdown states it to the cent. Summing 5-dp tax layers
-            // and rounding once at the end can land a cent away from the sum of
-            // the stated Steuerbeträge, which breaks the documented invariant
-            // "Σ steuerbetraege == gesamtsteuer" (19 % 1.995 + 7 % 0.525 →
-            // 2.00 + 0.53 = 2.53, not round2(2.52)).
-            let mwst_eur = validated_eur((net_base.abs() * rate).round_kfm(2));
-            // Sign follows the net base (credit invoices → negative MwSt)
-            let mwst_eur = if net_base < Decimal::ZERO {
-                -mwst_eur
-            } else {
-                mwst_eur
-            };
-            let pct = (rate * dec!(100)).normalize();
-            tax_positions.push(BillingPosition {
-                description: format!("Mehrwertsteuer {pct}\u{202f}%"),
-                legal_basis: Some("\u{a7}12 UStG".to_owned()),
-                quantity: Decimal::ONE,
-                unit: "%".to_owned(),
-                unit_price_eur: mwst_eur,
-                net_eur: mwst_eur,
-                category: PositionCategory::Tax,
-                tags: vec!["mwst".to_owned(), "tax".to_owned()],
-                applicable_tax_rate: Some(rate),
-                trace: crate::position::PositionTrace::tax(rate, net_base, "§12 UStG"),
-            });
-        }
-
-        Ok(tax_positions)
+        Ok(mwst_positions(prior, Some(self.rate)))
     }
 
     fn is_tax_pass(&self) -> bool {
@@ -3785,6 +3716,91 @@ impl BillingProvider for MwStProvider {
     fn charged_tax_rate(&self) -> Option<Decimal> {
         Some(self.rate)
     }
+}
+
+/// One `Tax` position per rate group over `prior`'s taxable lines — the tax
+/// pass, and the one derivation a merged invoice re-runs.
+///
+/// A line without its own rate takes `default_rate`; with none it is untaxed,
+/// which is a line the engine never stamped because no tax pass ran.
+pub(crate) fn mwst_positions(
+    prior: &[BillingPosition],
+    default_rate: Option<Decimal>,
+) -> Vec<BillingPosition> {
+    use std::collections::BTreeMap;
+
+    // Group taxable positions by their effective MwSt rate.
+    // Tax, Abschlag, Info positions are excluded from the tax base.
+    let mut rate_buckets: BTreeMap<String, (Decimal, Decimal)> = BTreeMap::new();
+
+    for p in prior {
+        if matches!(
+            p.category,
+            PositionCategory::Tax | PositionCategory::Abschlag | PositionCategory::Info
+        ) {
+            continue;
+        }
+        let effective_rate = p
+            .applicable_tax_rate
+            .or(default_rate)
+            .unwrap_or(Decimal::ZERO)
+            .normalize();
+        if effective_rate.is_zero() {
+            continue; // zero rate \u2192 no tax position
+        }
+        // Normalised, exactly as `tax_subtotals_of` groups the BG-23
+        // breakdown: `0.19` and `0.190` are one rate, and bucketing them
+        // apart rounded each half on its own, so `gesamtsteuer` could land
+        // a cent away from `Σ steuerbetraege`.
+        let key = effective_rate.to_string();
+        let entry = rate_buckets
+            .entry(key)
+            .or_insert((effective_rate, Decimal::ZERO));
+        // The rounded line, as `Invoice::from_positions` states it: the tax
+        // is the base printed beside it × rate, never a base no line adds
+        // up to.
+        entry.1 += p.net_eur.round_kfm(2);
+    }
+
+    if rate_buckets.is_empty() {
+        return vec![];
+    }
+
+    let mut tax_positions: Vec<BillingPosition> = Vec::with_capacity(rate_buckets.len());
+    for (_key, (rate, net_base)) in rate_buckets {
+        if net_base.is_zero() {
+            continue;
+        }
+        // Rounded to the cent per rate, not carried at 5 dp: the Steuerbetrag
+        // is a document amount (§14 Abs. 4 Nr. 8 UStG) and the BO4E/EN 16931
+        // per-rate breakdown states it to the cent. Summing 5-dp tax layers
+        // and rounding once at the end can land a cent away from the sum of
+        // the stated Steuerbeträge, which breaks the documented invariant
+        // "Σ steuerbetraege == gesamtsteuer" (19 % 1.995 + 7 % 0.525 →
+        // 2.00 + 0.53 = 2.53, not round2(2.52)).
+        let mwst_eur = (net_base.abs() * rate).round_kfm(2);
+        // Sign follows the net base (credit invoices → negative MwSt)
+        let mwst_eur = if net_base < Decimal::ZERO {
+            -mwst_eur
+        } else {
+            mwst_eur
+        };
+        let pct = (rate * dec!(100)).normalize();
+        tax_positions.push(BillingPosition {
+            description: format!("Mehrwertsteuer {pct}\u{202f}%"),
+            legal_basis: Some("\u{a7}12 UStG".to_owned()),
+            quantity: Decimal::ONE,
+            unit: "%".to_owned(),
+            unit_price_eur: mwst_eur,
+            net_eur: mwst_eur,
+            category: PositionCategory::Tax,
+            tags: vec!["mwst".to_owned(), "tax".to_owned()],
+            applicable_tax_rate: Some(rate),
+            trace: crate::position::PositionTrace::tax(rate, net_base, "§12 UStG"),
+        });
+    }
+
+    tax_positions
 }
 
 /// The positions every electricity invoice carries regardless of how the

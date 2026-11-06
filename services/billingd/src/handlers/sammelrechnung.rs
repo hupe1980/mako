@@ -194,24 +194,11 @@ pub async fn post_sammelrechnung(
             ),
             zusatz_attribut("mako:billing_run_id", serde_json::json!(run_id)),
         ],
-        sites.rechnungsempfaenger.as_ref().map(|r| {
-            // The holder of the Rahmenvertrag is an Unternehmer where every
-            // site is a B2B segment, not one where every site is B2C, and
-            // unknown otherwise.
-            let segmente: Vec<Option<bool>> = sites
-                .malos
-                .iter()
-                .map(|m| crate::clients::unternehmer_aus_kundentyp(m.kundentyp.as_deref()))
-                .collect();
-            let unternehmer = match segmente.first() {
-                Some(first) if segmente.iter().all(|s| s == first) => *first,
-                _ => None,
-            };
-            energy_billing::Rechnungsempfaenger {
-                unternehmer,
-                ..r.as_context_party()
-            }
-        }),
+        // The holder is classified as itself, not from the sites' segments.
+        sites
+            .rechnungsempfaenger
+            .as_ref()
+            .map(crate::clients::Rechnungsempfaenger::as_context_party),
     )?;
     let (total_netto, total_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 

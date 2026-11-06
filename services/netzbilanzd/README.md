@@ -31,7 +31,8 @@ just dev netzbilanzd   # dev/config/netzbilanzd.toml against the dev PostgreSQL
 |---|---|---|---|
 | 31001 | Abschlagsrechnung Netznutzung (payment on account) | NB → LF | `abschlag` |
 | 31002 | NN-Rechnung (Netznutzungsentgelt + Konzessionsabgabe) | NB → LF | `nne` |
-| 31005 | Mehr-/Mindermengensaldo | NB → LF | `mmm` |
+| 31005 | Mindermenge | NB → LF | `mmm` |
+| 31006 | Mehrmenge — the NB's selbst ausgestellte Rechnung | NB → LF | `mmm` |
 | 31009 | MSB-Rechnung (Messstellenbetrieb) | **MSB → NB / LF / ESA** | `msb` |
 | 31011 | Rechnung sonstige Leistung (GeLi Gas AWH Sperrprozesse) | GNB → LFG | `gas_awh` |
 
@@ -55,6 +56,7 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
       "malo_id": "51238696012",
       "period_from": "2026-01-01",
       "period_to": "2026-01-31",
+      "cadence": "Monatsrechnung",
       "settlement": {
         "billing_type": "nne",
         "nb_mp_id": "9900357000004",
@@ -67,7 +69,15 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
           "satz_ct_per_kwh": "0.11",
           "klasse": "Sondervertragskunde"
         },
-        "netzebene": "Niederspannung"
+        "netzebene": "Niederspannung",
+        "artikel_ids": {
+          "NneArbeit": "1-02-0-002",
+          "Konzessionsabgabe": "1-08-3-001",
+          "KwkgUmlage": "1-10-1-001",
+          "OffshoreNetzumlage": "1-10-2-001",
+          "Sect19StromNevUmlage": "1-10-4-001"
+        },
+        "lieferschein_ref": "LS-2026-000417"
       }
     }]
   }'

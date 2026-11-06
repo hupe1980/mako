@@ -13,6 +13,7 @@
 //! | `let now = now_utc(); … now.day()` | the same, one binding removed |
 //! | SQL `current_date` | the *session* time zone's date |
 //! | SQL `now()::date`, `extract(year FROM now())`, `to_char(now(), …)` | the same |
+//! | SQL `extract(year FROM started_at)`, `date_trunc('month', created_at)`, `created_at::date` on a stored `TIMESTAMPTZ` | the session zone's calendar component of a stored instant |
 //!
 //! The replacements are [`mako_fristen::heute`] / `berlin_date` / `berlin_now`
 //! on the Rust side and the `heute()` SQL function each schema defines. This
@@ -30,6 +31,7 @@
 //! The modules that encode those values are exempt by path; everything else
 //! reading a calendar component off the clock is a business date.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// A single offending site.
@@ -55,10 +57,19 @@ const RULE_SITES: &[&str] = &[
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings = Vec::new();
     let mut scanned = 0usize;
+    let instants = instant_columns(workspace_root);
+    if instants.is_empty() {
+        eprintln!(
+            "check-business-dates: no TIMESTAMPTZ column found in any migration — the layout \
+             has probably changed"
+        );
+        return false;
+    }
     for dir in ["services", "crates", "xtask"] {
         collect(
             &workspace_root.join(dir),
             workspace_root,
+            &instants,
             &mut scanned,
             &mut findings,
         );
@@ -99,7 +110,13 @@ pub fn run(workspace_root: &Path) -> bool {
 
 /// Every `.rs` and `.sql` file under `dir`, counting what it read into
 /// `scanned`.
-fn collect(dir: &Path, root: &Path, scanned: &mut usize, findings: &mut Vec<Finding>) {
+fn collect(
+    dir: &Path,
+    root: &Path,
+    instants: &BTreeSet<String>,
+    scanned: &mut usize,
+    findings: &mut Vec<Finding>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -109,7 +126,7 @@ fn collect(dir: &Path, root: &Path, scanned: &mut usize, findings: &mut Vec<Find
             if path.file_name().is_some_and(|n| n == "target") {
                 continue;
             }
-            collect(&path, root, scanned, findings);
+            collect(&path, root, instants, scanned, findings);
             continue;
         }
         let ext = path.extension().and_then(|e| e.to_str());
@@ -124,7 +141,7 @@ fn collect(dir: &Path, root: &Path, scanned: &mut usize, findings: &mut Vec<Find
             continue;
         };
         *scanned += 1;
-        for (line, i) in offending_lines(&src) {
+        for (line, i) in offending_lines_with(&src, instants) {
             findings.push((path.clone(), i, line));
         }
     }
@@ -147,8 +164,16 @@ const COMPONENTS: &[&str] = &["date", "year", "month", "day"];
 /// Split from the filesystem so the rule is testable against exact text. The
 /// scan is per file rather than per line because the common shape binds the
 /// clock first and reads the component several lines later.
+#[cfg(test)]
 #[must_use]
-pub fn offending_lines(src: &str) -> Vec<(String, usize)> {
+fn offending_lines(src: &str) -> Vec<(String, usize)> {
+    offending_lines_with(src, &BTreeSet::new())
+}
+
+/// The offending lines of `src`, also refusing a calendar component read off one of
+/// `instants` — the stored `TIMESTAMPTZ` columns — outside Berlin.
+#[must_use]
+pub fn offending_lines_with(src: &str, instants: &BTreeSet<String>) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     // Locals currently holding `OffsetDateTime::now_utc()`. Cleared at a
     // top-level item boundary so a `now` parameter elsewhere is not implicated.
@@ -166,6 +191,7 @@ pub fn offending_lines(src: &str) -> Vec<(String, usize)> {
 
         if reads_component_of(line, "now_utc()")
             || sql_reads_the_clock(line)
+            || stored_instant_read_as_date(line, instants)
             || clock_bindings.iter().any(|b| reads_component_of(line, b))
         {
             out.push((line.to_owned(), i + 1));
@@ -267,6 +293,103 @@ fn rebound_name(line: &str) -> Option<String> {
         .then(|| name.to_owned())
 }
 
+/// The columns every migration declares `TIMESTAMPTZ` and none declares
+/// `DATE`, lower-cased — the stored instants a calendar component must be read
+/// out of in Berlin. A name that is a `DATE` somewhere is left out: the SQL
+/// text cannot tell which table a bare column belongs to.
+#[must_use]
+pub fn instant_columns(root: &Path) -> BTreeSet<String> {
+    let mut tz = BTreeSet::new();
+    let mut date = BTreeSet::new();
+    let mut stack = vec![root.join("services"), root.join("crates")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n != "target") {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("sql") {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            declared_columns(&src, &mut tz, &mut date);
+        }
+    }
+    tz.difference(&date).cloned().collect()
+}
+
+/// Add each `name TIMESTAMPTZ` / `name DATE` column declaration of `src`.
+fn declared_columns(src: &str, tz: &mut BTreeSet<String>, date: &mut BTreeSet<String>) {
+    for line in src.lines() {
+        let mut words = line.split_whitespace();
+        let (Some(name), Some(typ)) = (words.next(), words.next()) else {
+            continue;
+        };
+        if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let typ = typ.trim_end_matches(',').to_ascii_uppercase();
+        let rest = words.collect::<Vec<_>>().join(" ").to_ascii_uppercase();
+        let name = name.to_ascii_lowercase();
+        if typ == "TIMESTAMPTZ" || (typ == "TIMESTAMP" && rest.starts_with("WITH TIME ZONE")) {
+            tz.insert(name);
+        } else if typ == "DATE" {
+            date.insert(name);
+        }
+    }
+}
+
+/// Whether `line` reads a calendar date or component out of one of
+/// `instants` without moving it to Berlin first: `EXTRACT(… FROM col)`,
+/// `date_trunc(…, col)`, `col::date`, `date(col)`, the column bare or
+/// table-qualified.
+fn stored_instant_read_as_date(line: &str, instants: &BTreeSet<String>) -> bool {
+    if instants.is_empty() {
+        return false;
+    }
+    let upper = line.to_ascii_uppercase();
+    let squeezed: String = upper.chars().filter(|c| !c.is_whitespace()).collect();
+    if squeezed.contains(&format!("ATTIMEZONE{BERLIN}")) {
+        return false;
+    }
+    // Whitespace collapsed to one space, so `FROM` stays a word.
+    let text = upper.split_whitespace().collect::<Vec<_>>().join(" ");
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    instants.iter().any(|col| {
+        let col = col.to_ascii_uppercase();
+        text.match_indices(&col).any(|(at, _)| {
+            let before = &text[..at];
+            let after = text[at + col.len()..].trim_start();
+            if before.chars().next_back().is_some_and(ident)
+                || after.chars().next().is_some_and(ident)
+            {
+                return false;
+            }
+            // A table qualifier (`p.`) belongs to the column.
+            let lead = match before.strip_suffix('.') {
+                Some(q) => q.trim_end_matches(ident),
+                None => before,
+            }
+            .trim_end();
+            (lead.ends_with(" FROM") && before.contains("EXTRACT(") && after.starts_with(')'))
+                || (before.contains("DATE_TRUNC(") && lead.ends_with(',') && after.starts_with(')'))
+                || after.starts_with("::DATE")
+                || (lead
+                    .strip_suffix("DATE(")
+                    .is_some_and(|l| !l.chars().next_back().is_some_and(ident))
+                    && after.starts_with(')'))
+        })
+    })
+}
+
 /// The one zone a German business date may be read in.
 const BERLIN: &str = "'EUROPE/BERLIN'";
 
@@ -358,6 +481,51 @@ fn civil_value_in_another_zone(squeezed: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::{BTreeSet, declared_columns, offending_lines_with};
+
+    fn instants() -> BTreeSet<String> {
+        ["started_at", "created_at"].map(str::to_owned).into()
+    }
+
+    /// A calendar component of a stored instant is the session zone's unless
+    /// the instant is moved to Berlin first; a DATE column is no instant.
+    #[test]
+    fn a_stored_instant_is_read_in_berlin() {
+        for line in [
+            "SELECT EXTRACT(YEAR FROM started_at) FROM processes",
+            "SELECT extract(month from p.started_at) FROM processes p",
+            "GROUP BY date_trunc('month', created_at)",
+            "WHERE created_at::date = $1",
+            "WHERE date(t.created_at) = $1",
+        ] {
+            assert_eq!(offending_lines_with(line, &instants()).len(), 1, "{line}");
+        }
+        for line in [
+            "SELECT EXTRACT(YEAR FROM started_at AT TIME ZONE 'Europe/Berlin')",
+            "SELECT EXTRACT(YEAR FROM period_from) FROM records",
+            "SELECT started_at FROM processes",
+            "SELECT restarted_at::date FROM x",
+            "let tag = mako_fristen::berlin_date(created_at);",
+        ] {
+            assert!(offending_lines_with(line, &instants()).is_empty(), "{line}");
+        }
+    }
+
+    /// A name that is a DATE in one table is not an instant anywhere: the SQL
+    /// text cannot say which table a bare column is.
+    #[test]
+    fn the_instant_columns_come_from_the_migrations() {
+        let (mut tz, mut date) = (BTreeSet::new(), BTreeSet::new());
+        declared_columns(
+            "    started_at   TIMESTAMPTZ NOT NULL,\n    faellig_am DATE,\n    \
+             stand TIMESTAMP WITH TIME ZONE,\n    stand_tag DATE\n",
+            &mut tz,
+            &mut date,
+        );
+        declared_columns("    faellig_am TIMESTAMPTZ\n", &mut tz, &mut date);
+        let instants: BTreeSet<String> = tz.difference(&date).cloned().collect();
+        assert_eq!(instants, ["stand", "started_at"].map(str::to_owned).into());
+    }
 
     /// A scan that reaches no file has checked nothing, and must say so rather
     /// than report the clean line.

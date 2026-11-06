@@ -472,9 +472,9 @@ proptest! {
         })));
 
         // The Regelsatz levy is the whole difference to the Befreiung — the
-        // line as the invoice states it: the engine's 10⁻⁵ EUR amount, rounded
-        // to the cent.
-        let line = |x: Decimal| energy_billing::round_money(energy_billing::round_money(x, 5), 2);
+        // line as the invoice states it: the exact amount, rounded once to the
+        // cent (a five-decimal step first turns ….xx4995 into a cent too much).
+        let line = |x: Decimal| energy_billing::round_money(x, 2);
         let levy = regel.total_by_tag("stromsteuer");
         prop_assert_eq!(levy, line(kwh * dec!(0.0205)));
         prop_assert_eq!(befreit.total_by_tag("stromsteuer"), Decimal::ZERO);

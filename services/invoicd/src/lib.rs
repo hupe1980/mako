@@ -35,7 +35,6 @@
 //! |---|---|
 //! | [`routing`] | Which PID is checked how and answered with what |
 //! | [`handler`] | The inbound webhook pipeline |
-//! | [`selbstausstellen`] | The self-issued Mehrmengen-Rechnung (PID 31006) |
 //! | [`server`] | Router, operator API, [`mako_service::Daemon`] impl |
 //! | [`pg`] | The receipt store |
 //! | [`erp_outbox`] | Retry worker for ERP notifications |
@@ -64,5 +63,4 @@ pub mod mcp_server;
 pub mod payment_overdue;
 pub mod pg;
 pub mod routing;
-pub mod selbstausstellen;
 pub mod server;

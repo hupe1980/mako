@@ -1,0 +1,509 @@
+[
+  {
+    "name": "get_billing_summary",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "year",
+        "month"
+      ],
+      "properties": {
+        "year": {
+          "description": "Calendar year.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "month": {
+          "description": "Calendar month, 1–12.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_draft",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "description": "The draft UUID.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_submission_run",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "description": "UUID of the submission run.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_submission_status",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "description": "Maximum recent runs to include (default 10).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_corrections",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sender_mp_id": {
+          "description": "Issuing party MP-ID — the MSB for PID 31009, the NB otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipient_mp_id": {
+          "description": "Billed party MP-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "description": "BDEW Prüfidentifikator: 31001, 31002, 31005, 31009 or 31011.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "sparte": {
+          "description": "`Strom` or `Gas`. PID 31002 (NN-Rechnung) and 31005 (Mehr-/Mindermengen)\nare shared between the Sparten, so the Prüfidentifikator alone cannot\nseparate a gas invoice from an electricity one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "`draft` · `dispatched` · `paid` · `disputed` · `rejected`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rechnungsart": {
+          "description": "`RECHNUNG` · `STORNORECHNUNG` · `KORREKTURRECHNUNG`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "check_outcome": {
+          "description": "`invoic-checker` verdict: `Ok` · `Warn` · `Dispute`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Maximum rows (default 50, capped at 500).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_disputed",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sender_mp_id": {
+          "description": "Issuing party MP-ID — the MSB for PID 31009, the NB otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipient_mp_id": {
+          "description": "Billed party MP-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "description": "BDEW Prüfidentifikator: 31001, 31002, 31005, 31009 or 31011.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "sparte": {
+          "description": "`Strom` or `Gas`. PID 31002 (NN-Rechnung) and 31005 (Mehr-/Mindermengen)\nare shared between the Sparten, so the Prüfidentifikator alone cannot\nseparate a gas invoice from an electricity one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "`draft` · `dispatched` · `paid` · `disputed` · `rejected`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rechnungsart": {
+          "description": "`RECHNUNG` · `STORNORECHNUNG` · `KORREKTURRECHNUNG`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "check_outcome": {
+          "description": "`invoic-checker` verdict: `Ok` · `Warn` · `Dispute`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Maximum rows (default 50, capped at 500).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_drafts",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sender_mp_id": {
+          "description": "Issuing party MP-ID — the MSB for PID 31009, the NB otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipient_mp_id": {
+          "description": "Billed party MP-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "description": "BDEW Prüfidentifikator: 31001, 31002, 31005, 31009 or 31011.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "sparte": {
+          "description": "`Strom` or `Gas`. PID 31002 (NN-Rechnung) and 31005 (Mehr-/Mindermengen)\nare shared between the Sparten, so the Prüfidentifikator alone cannot\nseparate a gas invoice from an electricity one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "`draft` · `dispatched` · `paid` · `disputed` · `rejected`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rechnungsart": {
+          "description": "`RECHNUNG` · `STORNORECHNUNG` · `KORREKTURRECHNUNG`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "check_outcome": {
+          "description": "`invoic-checker` verdict: `Ok` · `Warn` · `Dispute`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Maximum rows (default 50, capped at 500).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_failed_submissions",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "description": "Maximum results (default 20).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_korrekturbedarf",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Korrekturbedarf": {
+          "description": "One open Korrekturbedarf: a negative Prüfmitteilung no corrected\nSummenzeitreihe has answered yet.",
+          "type": "object",
+          "properties": {
+            "pruefmitteilung_id": {
+              "description": "The negative Prüfmitteilung.",
+              "type": "string"
+            },
+            "bilanzierungsgebiet_id": {
+              "description": "The Bilanzierungsgebiet (EIC) the Summenzeitreihe covers.",
+              "type": "string"
+            },
+            "period_from": {
+              "description": "First day of the period the Prüfmitteilung concerns.",
+              "type": "string",
+              "format": "date"
+            },
+            "period_to": {
+              "description": "End of that period, as the Prüfmitteilung names it.",
+              "type": "string",
+              "format": "date"
+            },
+            "version": {
+              "description": "The version of the Summenzeitreihe the Prüfmitteilung refuses, RFC 3339\nin UTC; the correction is filed under a higher one.",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "pruefmitteilung_id",
+            "bilanzierungsgebiet_id",
+            "period_from",
+            "period_to",
+            "version"
+          ]
+        }
+      },
+      "required": [
+        "korrekturbedarf",
+        "count"
+      ],
+      "type": "object",
+      "properties": {
+        "korrekturbedarf": {
+          "description": "The earliest received first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Korrekturbedarf"
+          }
+        },
+        "count": {
+          "description": "How many entries `korrekturbedarf` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "list_kostenblatt_gaps",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "year",
+        "month"
+      ],
+      "properties": {
+        "year": {
+          "description": "Calendar year.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "month": {
+          "description": "Calendar month, 1–12.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_pending_kostenblatt",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "year",
+        "month"
+      ],
+      "properties": {
+        "year": {
+          "description": "Calendar year.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "month": {
+          "description": "Calendar month, 1–12.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_undispatched",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "older_than_hours": {
+          "description": "Report drafts older than this many hours (default 48).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  }
+]

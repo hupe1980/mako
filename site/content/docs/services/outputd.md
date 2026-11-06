@@ -64,8 +64,11 @@ für dessen Unternehmen" outside the graces of § 27 Abs. 38 UStG. Such a reques
 states `empfaenger_unternehmer`, and for an Unternehmer `leistung_ausgefuehrt`
 (the supply's last day) and, where Nr. 2 decides, `gesamtumsatz_vorjahr_eur`;
 outputd applies the decision billingd's paper path takes, on today's Berlin
-date as the übermittelt date, and answers **`422 PAPIER_UNZULAESSIG`** where
-paper is not admitted or a fact is missing. A `POST` beside `PORTAL`, `EMAIL`
+date as the übermittelt date: paper passes for a supply executed 2025–2026 and
+übermittelt by 31.12.2026 (Nr. 1), and for a 2027 supply übermittelt by
+31.12.2027 whose issuer's 2026 Gesamtumsatz is „nicht mehr als 800 000 Euro"
+(Nr. 2). Otherwise — or where a fact is missing — it answers
+**`422 PAPIER_UNZULAESSIG`**. A `POST` beside `PORTAL`, `EMAIL`
 or `ERP` is a copy of a document that also went out electronically and is
 queued.
 
@@ -179,7 +182,7 @@ operator's file:
 | `DATE_NOT_REPRESENTABLE` | 422 | a document date the PDF date format cannot carry |
 | `NO_SPECIMEN` | 422 | this kind has no preview specimen — publish it instead |
 | `RENDER_BUDGET_EXCEEDED` | 422 | the template is doing far more work than one document needs |
-| `INTERNAL` | 500 | an unexpected failure; the cause is logged, never returned |
+| `INTERNAL` | 500 | an unexpected failure; the cause is logged, never returned — the body carries an `error_id` the log line carries |
 
 ## Templates
 

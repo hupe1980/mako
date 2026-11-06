@@ -552,8 +552,13 @@ pub enum InvoicCommand {
         /// `IMD+7081` — the Rechnungstyp; `KON` is the ESA Use-Case.
         rechnungstyp: Option<String>,
     },
-    /// **Issuer role:** record an outbound INVOIC so the payer's REMADV
-    /// correlates back to it.
+    /// **Issuer role:** send an outbound INVOIC and record it, so the payer's
+    /// REMADV correlates back to it.
+    ///
+    /// The workflow builds nothing. The transport boundary builds the INVOIC
+    /// from the `Rechnung` and validates it against the Prüfschablone of `pid`
+    /// before constructing this command; `handle` enqueues `nachricht` as the
+    /// `INVOIC` outbox entry in the same write that records `InvoicSent`.
     SendInvoic {
         /// BDEW Prüfidentifikator of the outbound invoice.
         pid: Pruefidentifikator,
@@ -565,6 +570,9 @@ pub enum InvoicCommand {
         document_date: String,
         /// Invoice reference — the REMADV correlation key.
         invoice_ref: MessageRef,
+        /// The message, `UNH` … `UNT` as EDIFACT text, built and validated
+        /// before the command. The renderer only wraps it in the interchange.
+        nachricht: String,
     },
     /// **Issuer role:** an inbound REMADV answered the outbound invoice.
     ReceiveRemadv {
@@ -921,6 +929,7 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 recipient,
                 document_date,
                 invoice_ref,
+                nachricht,
             } => {
                 if !F::SENDS_INVOIC {
                     return Err(WorkflowError::rejected(format!(
@@ -938,14 +947,38 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                         F::pid_hint(),
                     )));
                 }
-                Ok(vec![InvoicEvent::InvoicSent {
-                    pruefidentifikator: pid,
-                    sender,
-                    recipient,
-                    document_date,
-                    invoice_ref,
-                }]
-                .into())
+                // An INVOIC that is not a message cannot be sent, and recording
+                // it as sent would leave a process waiting for a REMADV to an
+                // invoice the payer never received.
+                if !nachricht.starts_with("UNH+") || !nachricht.contains("UNT+") {
+                    return Err(WorkflowError::rejected(
+                        "SendInvoic carries no INVOIC message (UNH … UNT)".to_owned(),
+                    ));
+                }
+                let outbox = vec![
+                    PendingOutbox::new(
+                        "INVOIC",
+                        recipient.as_str(),
+                        serde_json::json!({
+                            "pid":         pid.as_u32(),
+                            "sender":      sender.as_str(),
+                            "receiver":    recipient.as_str(),
+                            "invoice_ref": invoice_ref.as_str(),
+                            "nachricht":   nachricht,
+                        }),
+                    )
+                    .caused_by(0),
+                ];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![InvoicEvent::InvoicSent {
+                        pruefidentifikator: pid,
+                        sender,
+                        recipient,
+                        document_date,
+                        invoice_ref,
+                    }],
+                    outbox,
+                ))
             }
 
             InvoicCommand::ReceiveRemadv {

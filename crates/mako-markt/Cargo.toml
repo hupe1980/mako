@@ -1,7 +1,7 @@
 [package]
 name             = "mako-markt"
 version.workspace = true
-description      = "Master-data domain for the German energy market: validated MaLo, MeLo and MP-IDs, the BO4E gate and repository traits"
+description      = "Master-data domain for the German energy market: validated MaLo, MeLo and MP-IDs, the BO4E gate and the master-data record types"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,9 +12,6 @@ keywords         = ["energy", "mako", "bdew", "market-data", "bo4e"]
 categories       = ["data-structures"]
 
 [features]
-## Enables the two in-memory test doubles — `InMemoryVersorgungsStatusRepository`
-## and `InMemoryNbEnergiemixRepository`.  Must never appear in production builds.
-testing = []
 ## Enables `MakodClient` — the typed HTTP client for the `makod` admin and
 ## command APIs.  Pulls in `reqwest` (TLS, JSON).  Enable this only in
 ## binaries that call `makod` directly (e.g. `marktd`).

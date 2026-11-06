@@ -1132,7 +1132,7 @@
           "enum": [
             "initiated",
             "running",
-            "aperak_timeout",
+            "antwortfrist_abgelaufen",
             "completed",
             "rejected",
             "failed",

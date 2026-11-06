@@ -4,84 +4,37 @@
 //! payload-extraction helpers live in `super`.
 
 use super::*;
-// ── INVOIC ────────────────────────────────────────────────────────────────────
+// ── INVOIC ──────────────────────────────────────────────────────────────────
 
-/// Render an INVOIC (Invoice) envelope from domain-intent JSON.
+/// Wrap the INVOIC an issuing process enqueued in its interchange.
 ///
-/// This produces a valid EDIFACT envelope with header segments (UNH, BGM, DTM,
-/// NAD+MS, NAD+MR, UNT). The UNS+D detail section is intentionally empty —
-/// invoices requiring line items and amounts must be rendered by the billing
-/// module that has access to the BO4E Rechnung data.
-///
-/// The empty-detail INVOIC is conformant at the EDIFACT interchange level;
-/// the receiving system will respond with REMADV acknowledging receipt.
+/// The message itself was built from the BO4E `Rechnung` and validated against
+/// the Prüfschablone of its PID at the command (`orchestrator::invoic_ausgang`),
+/// before `SendInvoic` recorded it; this renderer builds nothing and only adds
+/// `UNB` … `UNZ` around it, with the sender and receiver its `NAD+MS` /
+/// `NAD+MR` carry.
 ///
 /// Payload fields:
 ///
-/// | Field           | Required | Description                                   |
-/// |-----------------|----------|-----------------------------------------------|
-/// | `sender`        | no       | Sender MP-ID (falls back to `tenant_party_id`)  |
-/// | `receiver`      | no       | Receiver MP-ID (falls back to `msg.recipient`)  |
-/// | `document_id`   | no       | BGM document identifier (Rechnungsnummer)     |
-/// | `document_code` | no       | BGM type code (default `"380"`)               |
-/// | `document_date` | no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
-/// | `message_ref`   | no       | Derived from `causation_event_id` when absent |
-/// | `antwort_code`  | no       | `SG7 AJT` DE 4465 — the Antwortcode on an Abweisung |
-/// | `antwort_codeliste`   | no       | `SG7 AJT` DE 1082 — the EBD the code comes from |
-/// | `ablehnungsgrund` | no     | Free-text reason, rendered as `FTX+ACB`        |
+/// | Field       | Required | Description                                     |
+/// |-------------|----------|-------------------------------------------------|
+/// | `nachricht` | yes      | The INVOIC, `UNH` … `UNT`, as EDIFACT text       |
+/// | `sender`    | yes      | Sender MP-ID — `NAD+MS`, `UNB` DE 0004           |
+/// | `receiver`  | yes      | Receiver MP-ID — `NAD+MR`, `UNB` DE 0010         |
 ///
-/// # An Abweisung must state why
-///
-/// `AJT` is what carries the reason: DE 4465 the code, DE 1082 the EBD. The
-/// REMADV twin of UTILMD's `STS+E01++<code>:<ebd>`.
+/// An entry without a `nachricht` is refused: an INVOIC without its positions,
+/// tax and totals is not an invoice, and putting one on the wire is worse than
+/// sending none.
 pub(super) fn render_invoic(
     p: &serde_json::Value,
     msg: &OutboxMessage,
-    registry: &MpIdRegistry,
+    _registry: &MpIdRegistry,
 ) -> Result<RenderedInterchange, RenderError> {
     let mt = "INVOIC";
-
-    let sender = p
-        .get("sender")
-        .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_mp_id());
-    let receiver = p
-        .get("receiver")
-        .and_then(|v| v.as_str())
-        .unwrap_or(msg.recipient.as_ref());
-    let document_id = p.get("document_id").and_then(|v| v.as_str());
-    let document_code = p.get("document_code").and_then(|v| v.as_str());
-    let doc_date = p
-        .get("document_date")
-        .and_then(|v| v.as_str())
-        .map(normalise_date);
-    let message_ref = p
-        .get("message_ref")
-        .and_then(|v| v.as_str())
-        .map(msg_ref_from_uuid)
-        .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
-
-    let release = active_release(MessageType::Invoic, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
-
-    let mut builder = builders::InvoicBuilder::new(release)
-        .sender(sender)
-        .receiver(receiver)
-        .message_ref(message_ref);
-
-    if let Some(id) = document_id {
-        builder = builder.document_id(id);
-    }
-    if let Some(code) = document_code {
-        builder = builder.document_code(code);
-    }
-    if let Some(d) = doc_date.as_deref() {
-        builder = builder.document_date(d);
-    }
-    finish_interchange(builder.serialize(), sender, receiver, msg)
+    let nachricht = require_str(p, mt, "nachricht")?;
+    let sender = require_str(p, mt, "sender")?;
+    let receiver = require_str(p, mt, "receiver")?;
+    finish_interchange(Ok(nachricht.as_bytes().to_vec()), sender, receiver, msg)
 }
 
 // ── REMADV ────────────────────────────────────────────────────────────────────

@@ -56,6 +56,189 @@ pub const LEDGER_SCHEMA: &str = "doubleentry";
 /// The production ledger type — a doubleentry [`PostgresStore`] for one deployment.
 pub type PgLedger = Ledger<PostgresStore<P>>;
 
+// ── Errors ─────────────────────────────────────────────────────────────────────
+
+/// What the ledger answers when it does not do what it was asked.
+///
+/// The variants are the distinction a caller has to act on. A refusal and an
+/// unknown entry are answers about the request; an integrity failure and a
+/// storage failure are this service's fault and carry no detail a caller can
+/// correct. Folding them into one string makes a database outage read as a
+/// rejected period (`422`) or an absent entry (`404`).
+#[derive(Debug, thiserror::Error)]
+pub enum LedgerError {
+    /// The ledger refused the request for what it asked — an invalid period,
+    /// a zero amount, a reused idempotency key, a booking into a sealed period.
+    #[error("{0}")]
+    Refused(String),
+    /// What the request names is not in the books — an unknown entry, a
+    /// period that was never sealed.
+    #[error("{0}")]
+    NotFound(String),
+    /// The books do not verify: a seal chain that does not chain, a closing
+    /// balance that no longer reproduces its seal, a stored row that does not
+    /// match its content hash.
+    #[error("ledger integrity: {0}")]
+    Integrity(String),
+    /// The store underneath failed — the database, the connection, the schema.
+    #[error("ledger store failed: {context}")]
+    Storage {
+        /// The operation the failure interrupted.
+        context: String,
+        /// The store's own error, kept for the log.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+/// The ledger's result type.
+pub type LedgerResult<T> = Result<T, LedgerError>;
+
+impl LedgerError {
+    /// A refusal of what the request carried.
+    fn refused(context: impl std::fmt::Display, e: impl std::fmt::Display) -> Self {
+        Self::Refused(format!("{context}: {e}"))
+    }
+
+    /// A failure of this service that is not the store's: a value it built
+    /// itself that does not hold, or stored state it cannot rebuild.
+    fn fault(
+        context: impl Into<String>,
+        e: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Self::Storage {
+            context: context.into(),
+            source: e.into(),
+        }
+    }
+
+    /// An invariant the ledger relies on did not hold.
+    fn invariant(what: &'static str) -> Self {
+        Self::fault(what, what)
+    }
+
+    /// Classify a store error by what it says about the request.
+    fn store<E: StoreError>(context: impl Into<String>) -> impl FnOnce(E) -> Self {
+        let context = context.into();
+        move |e| match e.kind() {
+            StoreErrorKind::Refused => Self::Refused(format!("{context}: {e}")),
+            StoreErrorKind::NotFound => Self::NotFound(format!("{context}: {e}")),
+            StoreErrorKind::Integrity => Self::Integrity(format!("{context}: {e}")),
+            StoreErrorKind::Storage => Self::Storage {
+                context,
+                source: Box::new(e),
+            },
+        }
+    }
+}
+
+impl From<LedgerError> for mako_service::ApiError {
+    /// A refusal is `422` with its reason and an unknown subject `404`; an
+    /// integrity or storage failure is a `500` whose `error_id` the log line
+    /// carries, with the store's text kept out of the body.
+    fn from(e: LedgerError) -> Self {
+        match e {
+            LedgerError::Refused(msg) => Self::unprocessable(msg),
+            LedgerError::NotFound(msg) => Self::not_found(msg),
+            e @ (LedgerError::Integrity(_) | LedgerError::Storage { .. }) => Self::internal(e),
+        }
+    }
+}
+
+/// What a store error says about the request that met it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreErrorKind {
+    /// The store refused the operation for what it asked.
+    Refused,
+    /// The operation named something the store does not hold.
+    NotFound,
+    /// The stored books do not verify.
+    Integrity,
+    /// The store itself failed.
+    Storage,
+}
+
+/// A [`LedgerStore`] error the ledger can classify.
+///
+/// A variant the backend adds later is a storage failure until it is named
+/// here: answering an unrecognised failure `500` sends an operator to the log,
+/// while answering it `422` tells a caller to change a request that was fine.
+pub trait StoreError: std::error::Error + Send + Sync + 'static {
+    /// What this error says about the request.
+    fn kind(&self) -> StoreErrorKind;
+}
+
+fn period_kind(e: &doubleentry::period::PeriodError) -> StoreErrorKind {
+    match e {
+        doubleentry::period::PeriodError::Unknown { .. } => StoreErrorKind::NotFound,
+        _ => StoreErrorKind::Refused,
+    }
+}
+
+fn sealed_balance_kind(e: &doubleentry::seal::SealedBalanceError) -> StoreErrorKind {
+    use doubleentry::seal::SealedBalanceError as E;
+    match e {
+        E::NotSealed { .. } | E::UndefinedPeriod { .. } => StoreErrorKind::NotFound,
+        // Restated, RegistryMismatch, and whatever the crate adds: the books no
+        // longer reproduce what was sealed.
+        _ => StoreErrorKind::Integrity,
+    }
+}
+
+fn account_kind(e: &doubleentry::account::AccountError) -> StoreErrorKind {
+    match e {
+        doubleentry::account::AccountError::UnknownAccount { .. } => StoreErrorKind::NotFound,
+        // A stored binding that does not rebuild.
+        _ => StoreErrorKind::Integrity,
+    }
+}
+
+impl StoreError for doubleentry::storage::postgres::PostgresError {
+    fn kind(&self) -> StoreErrorKind {
+        use doubleentry::storage::postgres::PostgresError as E;
+        match self {
+            E::Integrity(_)
+            | E::Malformed(_)
+            | E::MissingNode { .. }
+            | E::Nodes(_)
+            | E::PartialLog { .. }
+            | E::Accumulator(_)
+            | E::Seal(_) => StoreErrorKind::Integrity,
+            E::SealedBalance(e) => sealed_balance_kind(e),
+            E::Account(e) => account_kind(e),
+            E::Period(e) => period_kind(e),
+            E::IdempotencyConflict { .. }
+            | E::Proof(_)
+            | E::Money(_)
+            | E::Clearing(_)
+            | E::UnknownOriginal { .. }
+            | E::AlreadyReversed { .. }
+            | E::ReversalOfReversal { .. }
+            | E::NotAnInversion { .. }
+            | E::ClearingNotResettable { .. }
+            | E::DuplicateId { .. }
+            | E::AncestorHasPostings { .. }
+            | E::AccountRebound { .. }
+            | E::LimitBreached { .. } => StoreErrorKind::Refused,
+            // Database, WrongSearchPath, WrongLedger, and any variant added later.
+            _ => StoreErrorKind::Storage,
+        }
+    }
+}
+
+impl StoreError for doubleentry::storage::MemoryStoreError {
+    fn kind(&self) -> StoreErrorKind {
+        use doubleentry::storage::MemoryStoreError as E;
+        match self {
+            E::Journal(_) | E::Proof(_) | E::Money(_) => StoreErrorKind::Refused,
+            E::Account(e) => account_kind(e),
+            E::SealedBalance(e) => sealed_balance_kind(e),
+            E::Period(e) => period_kind(e),
+            _ => StoreErrorKind::Storage,
+        }
+    }
+}
+
 // ── IBAN lookup hash (app-layer, keyed BLAKE3 — replaces the pgcrypto digest) ──
 
 /// Derives the 32-byte IBAN-hash key from a deployment secret.
@@ -372,7 +555,10 @@ pub struct Ledger<S: LedgerStore<P>> {
     policy: LedgerPolicy,
 }
 
-impl<S: LedgerStore<P>> Ledger<S> {
+impl<S: LedgerStore<P>> Ledger<S>
+where
+    S::Error: StoreError,
+{
     /// Opens the ledger over `store`, restoring the account tree from storage and
     /// ensuring the fixed GL chart exists.
     ///
@@ -383,33 +569,33 @@ impl<S: LedgerStore<P>> Ledger<S> {
     /// # Errors
     ///
     /// Propagates storage and registry errors.
-    pub async fn load(store: S) -> anyhow::Result<Self> {
+    pub async fn load(store: S) -> LedgerResult<Self> {
         let records = store
             .accounts()
             .await
-            .map_err(|e| anyhow::anyhow!("load accounts: {e}"))?;
+            .map_err(LedgerError::store("load accounts"))?;
         let mut registry = AccountRegistry::from_records(records)
-            .map_err(|e| anyhow::anyhow!("rebuild registry: {e}"))?;
+            .map_err(|e| LedgerError::fault("rebuild registry", e))?;
 
         // Opening date for the GL chart: the epoch of the ledger. Booking dates
         // are always after this, so the open-window check never rejects a GL leg.
         let epoch = Date::from_calendar_date(2000, time::Month::January, 1)
-            .map_err(|e| anyhow::anyhow!("epoch: {e}"))?;
+            .map_err(|e| LedgerError::fault("epoch", e))?;
 
         let mut to_persist: Vec<AccountRecord> = Vec::new();
         let mut ensure = |registry: &mut AccountRegistry,
                           path: &str,
                           kind: AccountKind|
-         -> anyhow::Result<AccountId> {
+         -> LedgerResult<AccountId> {
             let parsed = AccountPath::parse(path)
-                .map_err(|e| anyhow::anyhow!("account path {path}: {e}"))?;
+                .map_err(|e| LedgerError::fault(format!("account path {path}"), e))?;
             if let Some(id) = registry.id_of(&parsed) {
                 return Ok(id);
             }
             let account = Account::new(parsed, epoch).with_kind(kind);
             let id = registry
                 .register(account.clone())
-                .map_err(|e| anyhow::anyhow!("register {path}: {e}"))?;
+                .map_err(|e| LedgerError::fault(format!("register {path}"), e))?;
             to_persist.push(AccountRecord { id, account });
             Ok(id)
         };
@@ -440,7 +626,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
             store
                 .register_account(record)
                 .await
-                .map_err(|e| anyhow::anyhow!("persist GL account: {e}"))?;
+                .map_err(LedgerError::store("persist GL account"))?;
         }
 
         Ok(Self {
@@ -458,13 +644,13 @@ impl<S: LedgerStore<P>> Ledger<S> {
     }
 
     /// The Kontokorrent path for a Marktlokation.
-    fn kontokorrent_path(lf_mp_id: &str, malo_id: &str) -> anyhow::Result<AccountPath> {
+    fn kontokorrent_path(lf_mp_id: &str, malo_id: &str) -> LedgerResult<AccountPath> {
         AccountPath::parse(&format!("Kontokorrent:{lf_mp_id}:{malo_id}"))
-            .map_err(|e| anyhow::anyhow!("kontokorrent path for {malo_id}: {e}"))
+            .map_err(|e| LedgerError::refused(format!("kontokorrent path for {malo_id}"), e))
     }
 
     /// Resolves an existing Kontokorrent, or `None` if the customer has never been booked.
-    fn resolve(&self, lf_mp_id: &str, malo_id: &str) -> anyhow::Result<Option<AccountId>> {
+    fn resolve(&self, lf_mp_id: &str, malo_id: &str) -> LedgerResult<Option<AccountId>> {
         let path = Self::kontokorrent_path(lf_mp_id, malo_id)?;
         let registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
         Ok(registry.id_of(&path))
@@ -479,7 +665,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         lf_mp_id: &str,
         malo_id: &str,
         opened_on: Date,
-    ) -> anyhow::Result<AccountId> {
+    ) -> LedgerResult<AccountId> {
         let path = Self::kontokorrent_path(lf_mp_id, malo_id)?;
 
         // A new binding to persist, produced under the lock. `None` = the account
@@ -493,7 +679,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
             let account = Account::new(path.clone(), opened_on).with_kind(AccountKind::Asset);
             let id = registry
                 .register(account.clone())
-                .map_err(|e| anyhow::anyhow!("register kontokorrent {malo_id}: {e}"))?;
+                .map_err(|e| LedgerError::refused(format!("register kontokorrent {malo_id}"), e))?;
             Some(AccountRecord { id, account })
         };
 
@@ -506,7 +692,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
             // Unreachable in practice (we returned above), kept for exhaustiveness.
             None => self
                 .resolve(lf_mp_id, malo_id)?
-                .ok_or_else(|| anyhow::anyhow!("kontokorrent vanished after registration")),
+                .ok_or_else(|| LedgerError::invariant("kontokorrent vanished after registration")),
         }
     }
 
@@ -519,12 +705,15 @@ impl<S: LedgerStore<P>> Ledger<S> {
     ///
     /// Returns an error for a zero amount, an invalid field, a failed validation,
     /// or a storage failure (including an idempotency conflict).
-    pub async fn post(&self, req: PostEntry) -> anyhow::Result<Posted> {
+    pub async fn post(&self, req: PostEntry) -> LedgerResult<Posted> {
         if req.amount_ct == 0 {
-            anyhow::bail!("refusing to post a zero-amount entry ({})", req.entry_type);
+            return Err(LedgerError::Refused(format!(
+                "refusing to post a zero-amount entry ({})",
+                req.entry_type
+            )));
         }
         let abs = i64::try_from(req.amount_ct.unsigned_abs())
-            .map_err(|_| anyhow::anyhow!("amount out of range"))?;
+            .map_err(|_| LedgerError::Refused("amount out of range".into()))?;
         let amount = Eur::from_minor(abs);
 
         let customer = self
@@ -539,20 +728,20 @@ impl<S: LedgerStore<P>> Ledger<S> {
         };
 
         let key = IdempotencyKey::new(req.idempotency.into_bytes())
-            .map_err(|e| anyhow::anyhow!("idempotency key: {e}"))?;
+            .map_err(|e| LedgerError::refused("idempotency key", e))?;
 
         let mut provenance = Provenance::none()
             .with_source("accountingd")
-            .map_err(|e| anyhow::anyhow!("provenance source: {e}"))?;
+            .map_err(|e| LedgerError::fault("provenance source", e))?;
         if let Some(correlation) = &req.correlation {
             provenance = provenance
                 .with_correlation(correlation)
-                .map_err(|e| anyhow::anyhow!("provenance correlation: {e}"))?;
+                .map_err(|e| LedgerError::refused("provenance correlation", e))?;
         }
         if let Some(actor) = &req.actor {
             provenance = provenance
                 .with_actor(actor)
-                .map_err(|e| anyhow::anyhow!("provenance actor: {e}"))?;
+                .map_err(|e| LedgerError::refused("provenance actor", e))?;
         }
 
         let mut draft = Entry::new(EntryId::generate(), key, req.booking_date)
@@ -561,19 +750,19 @@ impl<S: LedgerStore<P>> Ledger<S> {
             .credit(credit, amount, Currency::EUR)
             .with_kind(
                 Label::new(req.entry_type.as_str())
-                    .map_err(|e| anyhow::anyhow!("entry kind: {e}"))?,
+                    .map_err(|e| LedgerError::refused("entry kind", e))?,
             )
             .with_provenance(provenance);
         if let Some(description) = &req.description {
             draft = draft.with_description(
                 Description::new(description.as_str())
-                    .map_err(|e| anyhow::anyhow!("description: {e}"))?,
+                    .map_err(|e| LedgerError::refused("description", e))?,
             );
         }
         if let Some(document) = &req.document {
             draft = draft.with_document(
                 DocumentRef::unverified(document.as_str())
-                    .map_err(|e| anyhow::anyhow!("document ref: {e}"))?,
+                    .map_err(|e| LedgerError::refused("document ref", e))?,
             );
         }
         if let Some((original_id, original_date)) = req.reverses {
@@ -588,20 +777,20 @@ impl<S: LedgerStore<P>> Ledger<S> {
                 calendar: &calendar,
                 policy: &self.policy,
             };
-            draft
-                .seal(&ctx)
-                .map_err(|errors| anyhow::anyhow!("ledger validation rejected entry: {errors}"))?
+            draft.seal(&ctx).map_err(|errors| {
+                LedgerError::refused("ledger validation rejected entry", errors)
+            })?
         };
 
         let recorded = self
             .store
             .append(&EntryBatch::single(balanced))
             .await
-            .map_err(|e| anyhow::anyhow!("append entry: {e}"))?;
+            .map_err(LedgerError::store("append entry"))?;
         let first = recorded
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow::anyhow!("append returned no record"))?;
+            .ok_or_else(|| LedgerError::invariant("append returned no record"))?;
         Ok(Posted {
             id: first.id,
             is_new: first.is_new,
@@ -615,7 +804,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
     /// # Errors
     ///
     /// Propagates storage errors.
-    pub async fn balance_ct(&self, lf_mp_id: &str, malo_id: &str) -> anyhow::Result<i64> {
+    pub async fn balance_ct(&self, lf_mp_id: &str, malo_id: &str) -> LedgerResult<i64> {
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
             return Ok(0);
         };
@@ -628,10 +817,10 @@ impl<S: LedgerStore<P>> Ledger<S> {
             .store
             .balance(key, BalanceQuery::all())
             .await
-            .map_err(|e| anyhow::anyhow!("read balance: {e}"))?;
+            .map_err(LedgerError::store("read balance"))?;
         Ok(balance
             .signed_net()
-            .map_err(|e| anyhow::anyhow!("net balance: {e}"))?
+            .map_err(|e| LedgerError::fault("net balance", e))?
             .to_minor())
     }
 
@@ -644,7 +833,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         &self,
         lf_mp_id: &str,
         malo_id: &str,
-    ) -> anyhow::Result<Vec<OpenItem<P>>> {
+    ) -> LedgerResult<Vec<OpenItem<P>>> {
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
             return Ok(Vec::new());
         };
@@ -670,11 +859,11 @@ impl<S: LedgerStore<P>> Ledger<S> {
     ///
     /// A per-Marktlokation Kontokorrent holds a handful of open invoices, so this
     /// is one page in practice; it is written to be right when it is not.
-    async fn all_open_items(&self, key: BalanceKey) -> anyhow::Result<Vec<OpenItem<P>>> {
+    async fn all_open_items(&self, key: BalanceKey) -> LedgerResult<Vec<OpenItem<P>>> {
         self.store
             .all_open_items(key)
             .await
-            .map_err(|e| anyhow::anyhow!("open items: {e}"))
+            .map_err(LedgerError::store("open items"))
     }
 
     /// Booking date + log position for every posting on the account, from the
@@ -682,7 +871,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
     async fn posting_meta(
         &self,
         key: BalanceKey,
-    ) -> anyhow::Result<std::collections::HashMap<PostingRef, (Date, u64, Option<String>)>> {
+    ) -> LedgerResult<std::collections::HashMap<PostingRef, (Date, u64, Option<String>)>> {
         let mut meta = std::collections::HashMap::new();
         // A posting cursor, not an entry cursor: one entry can put several lines
         // on the same account, so a page boundary falling inside an entry would
@@ -694,7 +883,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
                 .store
                 .statement(key, BalanceQuery::all(), cursor)
                 .await
-                .map_err(|e| anyhow::anyhow!("statement: {e}"))?;
+                .map_err(LedgerError::store("statement"))?;
             for line in &page.lines {
                 meta.insert(
                     line.posting,
@@ -730,7 +919,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         lf_mp_id: &str,
         malo_id: &str,
         on: Date,
-    ) -> anyhow::Result<Option<ClearingId>> {
+    ) -> LedgerResult<Option<ClearingId>> {
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
             return Ok(None);
         };
@@ -808,7 +997,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
                 items,
             })
             .await
-            .map_err(|e| anyhow::anyhow!("record clearing: {e}"))?;
+            .map_err(LedgerError::store("record clearing"))?;
         Ok(Some(id))
     }
 
@@ -823,7 +1012,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         &self,
         lf_mp_id: &str,
         malo_id: &str,
-    ) -> anyhow::Result<Vec<OpenReceivable>> {
+    ) -> LedgerResult<Vec<OpenReceivable>> {
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
             return Ok(Vec::new());
         };
@@ -872,13 +1061,13 @@ impl<S: LedgerStore<P>> Ledger<S> {
     /// Propagates storage errors. An unresolvable entry is `None`, not an
     /// error — the caller is building a page, and a missing reference degrades
     /// one line rather than failing the document.
-    pub async fn document_of(&self, entry_id: uuid::Uuid) -> anyhow::Result<Option<String>> {
+    pub async fn document_of(&self, entry_id: uuid::Uuid) -> LedgerResult<Option<String>> {
         let id = EntryId::from_uuid(entry_id);
         let stored = self
             .store
             .get(id)
             .await
-            .map_err(|e| anyhow::anyhow!("entry {entry_id}: {e}"))?;
+            .map_err(LedgerError::store(format!("entry {entry_id}")))?;
         Ok(stored.and_then(|s| s.entry.document().map(|d| d.id.as_str().to_owned())))
     }
 
@@ -890,12 +1079,12 @@ impl<S: LedgerStore<P>> Ledger<S> {
     /// # Errors
     ///
     /// Propagates storage errors.
-    pub async fn trial_balance(&self) -> anyhow::Result<Vec<TrialBalanceLine>> {
+    pub async fn trial_balance(&self) -> LedgerResult<Vec<TrialBalanceLine>> {
         let tb = self
             .store
             .trial_balance(BalanceQuery::all())
             .await
-            .map_err(|e| anyhow::anyhow!("trial balance: {e}"))?;
+            .map_err(LedgerError::store("trial balance"))?;
         let mut agg: std::collections::BTreeMap<String, (i64, i64)> =
             std::collections::BTreeMap::new();
         {
@@ -932,11 +1121,11 @@ impl<S: LedgerStore<P>> Ledger<S> {
     /// # Errors
     ///
     /// Propagates storage/clearing errors (unknown or already-reset clearing).
-    pub async fn reset_clearing(&self, id: ClearingId, on: Date) -> anyhow::Result<()> {
+    pub async fn reset_clearing(&self, id: ClearingId, on: Date) -> LedgerResult<()> {
         self.store
             .reset_clearing(id, on)
             .await
-            .map_err(|e| anyhow::anyhow!("reset clearing: {e}"))
+            .map_err(LedgerError::store("reset clearing"))
     }
 
     /// A page of the customer's statement (movements + running balance).
@@ -956,7 +1145,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         malo_id: &str,
         query: BalanceQuery<'_>,
         cursor: PostingCursor,
-    ) -> anyhow::Result<StatementPage<P>> {
+    ) -> LedgerResult<StatementPage<P>> {
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
             return Ok(StatementPage {
                 opening: doubleentry::Balance::ZERO,
@@ -972,7 +1161,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         self.store
             .statement(key, query, cursor)
             .await
-            .map_err(|e| anyhow::anyhow!("statement: {e}"))
+            .map_err(LedgerError::store("statement"))
     }
 
     /// True when the customer has any **debit** (charge) booked on or before
@@ -990,7 +1179,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         lf_mp_id: &str,
         malo_id: &str,
         cutoff: Date,
-    ) -> anyhow::Result<bool> {
+    ) -> LedgerResult<bool> {
         use doubleentry::Direction;
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
             return Ok(false);
@@ -1006,7 +1195,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
                 .store
                 .statement(key, BalanceQuery::through(cutoff), cursor)
                 .await
-                .map_err(|e| anyhow::anyhow!("statement: {e}"))?;
+                .map_err(LedgerError::store("statement"))?;
             if page.lines.iter().any(|l| l.direction == Direction::Debit) {
                 return Ok(true);
             }
@@ -1032,7 +1221,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         lf_mp_id: &str,
         malo_id: &str,
         year: i32,
-    ) -> anyhow::Result<std::collections::HashMap<String, i64>> {
+    ) -> LedgerResult<std::collections::HashMap<String, i64>> {
         use doubleentry::Direction;
         let mut sums: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
@@ -1048,9 +1237,9 @@ impl<S: LedgerStore<P>> Ledger<S> {
         // lands in the year it belongs to.
         let (from, to) = (
             Date::from_calendar_date(year, time::Month::January, 1)
-                .map_err(|e| anyhow::anyhow!("year {year}: {e}"))?,
+                .map_err(|e| LedgerError::refused(format!("year {year}"), e))?,
             Date::from_calendar_date(year, time::Month::December, 31)
-                .map_err(|e| anyhow::anyhow!("year {year}: {e}"))?,
+                .map_err(|e| LedgerError::refused(format!("year {year}"), e))?,
         );
         let mut cursor = PostingCursor::start();
         loop {
@@ -1058,7 +1247,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
                 .store
                 .statement(key, BalanceQuery::between(from, to), cursor)
                 .await
-                .map_err(|e| anyhow::anyhow!("statement: {e}"))?;
+                .map_err(LedgerError::store("statement"))?;
             for line in &page.lines {
                 let signed = match line.direction {
                     Direction::Debit => line.amount.to_minor(),
@@ -1068,7 +1257,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
                     .store
                     .get(line.posting.entry)
                     .await
-                    .map_err(|e| anyhow::anyhow!("get entry: {e}"))?
+                    .map_err(LedgerError::store("get entry"))?
                     .and_then(|stored| stored.entry.kind().map(|k| k.as_str().to_owned()))
                     .unwrap_or_default();
                 *sums.entry(kind).or_default() += signed;
@@ -1095,13 +1284,13 @@ impl<S: LedgerStore<P>> Ledger<S> {
         kind: &str,
         year: i32,
         month: u8,
-    ) -> anyhow::Result<Vec<KindEntry>> {
+    ) -> LedgerResult<Vec<KindEntry>> {
         // Map Kontokorrent account handles back to (lf_mp, malo).
         let records = self
             .store
             .accounts()
             .await
-            .map_err(|e| anyhow::anyhow!("load accounts: {e}"))?;
+            .map_err(LedgerError::store("load accounts"))?;
         let mut konto: std::collections::HashMap<AccountId, (String, String)> =
             std::collections::HashMap::new();
         for rec in &records {
@@ -1120,7 +1309,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
                 .store
                 .page(cursor)
                 .await
-                .map_err(|e| anyhow::anyhow!("page log: {e}"))?;
+                .map_err(LedgerError::store("page log"))?;
             for rec in &page.records {
                 let entry = &rec.entry;
                 if entry.kind().map(|k| k.as_str()) != Some(kind) {
@@ -1160,11 +1349,11 @@ impl<S: LedgerStore<P>> Ledger<S> {
     /// # Errors
     ///
     /// Propagates storage errors.
-    pub async fn seals(&self) -> anyhow::Result<Vec<Seal>> {
+    pub async fn seals(&self) -> LedgerResult<Vec<Seal>> {
         self.store
             .seals()
             .await
-            .map_err(|e| anyhow::anyhow!("read seals: {e}"))
+            .map_err(LedgerError::store("read seals"))
     }
 
     /// The date the books are closed through — the latest end date among sealed
@@ -1191,7 +1380,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
     /// # Errors
     ///
     /// Returns an error when a seal is inconsistent or the chain is broken.
-    pub async fn verify_seals(&self) -> anyhow::Result<usize> {
+    pub async fn verify_seals(&self) -> LedgerResult<usize> {
         // The chain is bound to this ledger's identity: a seal names the books
         // it attests to inside its own hash, so a seal lifted from another
         // deployment cannot be pushed onto ours.
@@ -1199,7 +1388,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         for seal in self.seals().await? {
             chain
                 .push(seal)
-                .map_err(|e| anyhow::anyhow!("seal chain broken: {e}"))?;
+                .map_err(|e| LedgerError::Integrity(format!("seal chain broken: {e}")))?;
         }
         Ok(chain.len())
     }
@@ -1211,29 +1400,26 @@ impl<S: LedgerStore<P>> Ledger<S> {
     /// # Errors
     ///
     /// Returns an error when the entry is unknown or not yet sequenced.
-    pub async fn prove_entry(
-        &self,
-        id: EntryId,
-    ) -> anyhow::Result<(Hash, InclusionProof, TreeHead)> {
+    pub async fn prove_entry(&self, id: EntryId) -> LedgerResult<(Hash, InclusionProof, TreeHead)> {
         let stored = self
             .store
             .get(id)
             .await
-            .map_err(|e| anyhow::anyhow!("get entry: {e}"))?
-            .ok_or_else(|| anyhow::anyhow!("entry not found"))?;
+            .map_err(LedgerError::store("get entry"))?
+            .ok_or_else(|| LedgerError::NotFound("entry not found".to_owned()))?;
         let index = stored
             .require_index()
-            .map_err(|e| anyhow::anyhow!("entry not sequenced: {e}"))?;
+            .map_err(|e| LedgerError::NotFound(e.to_string()))?;
         let head = self
             .store
             .head()
             .await
-            .map_err(|e| anyhow::anyhow!("head: {e}"))?;
+            .map_err(LedgerError::store("head"))?;
         let proof = self
             .store
             .prove_inclusion(index)
             .await
-            .map_err(|e| anyhow::anyhow!("inclusion proof: {e}"))?;
+            .map_err(LedgerError::store("inclusion proof"))?;
         Ok((stored.content_hash, proof, head))
     }
 
@@ -1278,8 +1464,8 @@ impl<S: LedgerStore<P>> Ledger<S> {
         period_id: &str,
         lf_mp_id: &str,
         malo_id: &str,
-    ) -> anyhow::Result<SealedBalanceOutcome<P>> {
-        let id = PeriodId::new(period_id).map_err(|e| anyhow::anyhow!("period id: {e}"))?;
+    ) -> LedgerResult<SealedBalanceOutcome<P>> {
+        let id = PeriodId::new(period_id).map_err(|e| LedgerError::refused("period id", e))?;
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
             // Never booked at all, so not an account the registry can speak
             // about either — the same answer the seal would give.
@@ -1300,7 +1486,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         self.store
             .prove_sealed_balance(&id, key)
             .await
-            .map_err(|e| anyhow::anyhow!("prove sealed balance: {e}"))
+            .map_err(LedgerError::store("prove sealed balance"))
     }
 
     /// Proves the log has only ever been **appended to** since it had `old_size`
@@ -1317,22 +1503,22 @@ impl<S: LedgerStore<P>> Ledger<S> {
     pub async fn prove_append_only(
         &self,
         old_size: u64,
-    ) -> anyhow::Result<(ConsistencyProof, TreeHead, TreeHead)> {
+    ) -> LedgerResult<(ConsistencyProof, TreeHead, TreeHead)> {
         let now = self
             .store
             .head()
             .await
-            .map_err(|e| anyhow::anyhow!("head: {e}"))?;
+            .map_err(LedgerError::store("head"))?;
         let then = self
             .store
             .head_at(old_size)
             .await
-            .map_err(|e| anyhow::anyhow!("head at {old_size}: {e}"))?;
+            .map_err(LedgerError::store(format!("head at {old_size}")))?;
         let proof = self
             .store
             .prove_consistency(old_size)
             .await
-            .map_err(|e| anyhow::anyhow!("consistency proof: {e}"))?;
+            .map_err(LedgerError::store("consistency proof"))?;
         Ok((proof, then, now))
     }
 }
@@ -1345,16 +1531,16 @@ impl Ledger<PostgresStore<P>> {
     /// # Errors
     ///
     /// Propagates connection, migration, and registry errors.
-    pub async fn connect(database_url: &str, tenant: &str) -> anyhow::Result<Self> {
-        let ledger_id =
-            LedgerId::new(tenant).map_err(|e| anyhow::anyhow!("ledger id {tenant}: {e}"))?;
+    pub async fn connect(database_url: &str, tenant: &str) -> LedgerResult<Self> {
+        let ledger_id = LedgerId::new(tenant)
+            .map_err(|e| LedgerError::refused(format!("ledger id {tenant}"), e))?;
         let store = PostgresStore::<P>::connect_with(database_url, ledger_id, LEDGER_SCHEMA)
             .await
-            .map_err(|e| anyhow::anyhow!("connect ledger store: {e}"))?;
+            .map_err(LedgerError::store("connect ledger store"))?;
         store
             .migrate()
             .await
-            .map_err(|e| anyhow::anyhow!("migrate ledger schema: {e}"))?;
+            .map_err(LedgerError::store("migrate ledger schema"))?;
         let ledger = Self::load(store).await?;
         // Reconstruct the period calendar from storage so that sealed periods keep
         // rejecting backdated postings across restarts (Festschreibung).
@@ -1370,15 +1556,10 @@ impl Ledger<PostgresStore<P>> {
     /// # Errors
     ///
     /// Returns an error for an invalid period id/range or a storage failure.
-    pub async fn seal_period(
-        &self,
-        period_id: &str,
-        start: Date,
-        end: Date,
-    ) -> anyhow::Result<Seal> {
-        let id = PeriodId::new(period_id).map_err(|e| anyhow::anyhow!("period id: {e}"))?;
+    pub async fn seal_period(&self, period_id: &str, start: Date, end: Date) -> LedgerResult<Seal> {
+        let id = PeriodId::new(period_id).map_err(|e| LedgerError::refused("period id", e))?;
         let period = Period::new(id.clone(), start, end)
-            .map_err(|e| anyhow::anyhow!("period range: {e}"))?;
+            .map_err(|e| LedgerError::refused("period range", e))?;
 
         // The store owns period state. Defining is idempotent for an unchanged
         // range, so a re-run of a close that failed verification does not need
@@ -1386,11 +1567,11 @@ impl Ledger<PostgresStore<P>> {
         self.store
             .define_period(&period)
             .await
-            .map_err(|e| anyhow::anyhow!("define period: {e}"))?;
+            .map_err(LedgerError::store("define period"))?;
         self.store
             .transition_period(&id, PeriodState::Closing)
             .await
-            .map_err(|e| anyhow::anyhow!("close period: {e}"))?;
+            .map_err(LedgerError::store("close period"))?;
 
         // Seals in the same storage transaction that advances the period to
         // Sealed, so a seal is never recorded for a period the books still
@@ -1399,7 +1580,7 @@ impl Ledger<PostgresStore<P>> {
             .store
             .seal_period(&id)
             .await
-            .map_err(|e| anyhow::anyhow!("seal period: {e}"))?;
+            .map_err(LedgerError::store("seal period"))?;
 
         self.refresh_calendar().await?;
         Ok(seal)
@@ -1415,14 +1596,14 @@ impl Ledger<PostgresStore<P>> {
     /// # Errors
     ///
     /// Propagates storage errors and an inconsistent stored calendar.
-    async fn refresh_calendar(&self) -> anyhow::Result<()> {
+    async fn refresh_calendar(&self) -> LedgerResult<()> {
         let periods = self
             .store
             .periods()
             .await
-            .map_err(|e| anyhow::anyhow!("read periods: {e}"))?;
+            .map_err(LedgerError::store("read periods"))?;
         let calendar = PeriodCalendar::from_periods(periods)
-            .map_err(|e| anyhow::anyhow!("rebuild period calendar: {e}"))?;
+            .map_err(|e| LedgerError::fault("rebuild period calendar", e))?;
         *self.calendar.lock().unwrap_or_else(|e| e.into_inner()) = calendar;
         Ok(())
     }
@@ -1432,11 +1613,14 @@ impl Ledger<PostgresStore<P>> {
 async fn store_register_account<S: LedgerStore<P>>(
     store: &S,
     record: &AccountRecord,
-) -> anyhow::Result<()> {
+) -> LedgerResult<()>
+where
+    S::Error: StoreError,
+{
     store
         .register_account(record)
         .await
-        .map_err(|e| anyhow::anyhow!("persist account: {e}"))
+        .map_err(LedgerError::store("persist account"))
 }
 
 #[cfg(test)]

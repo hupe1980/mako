@@ -28,11 +28,6 @@
 //! webhook_url   = "http://invoicd:8280/webhook"
 //! subscriber_id = "invoicd"
 //!
-//! # Required only for POST /api/v1/selbstausstellen (PID 31006).
-//! # [edmd]
-//! # url     = "http://edmd:8380"
-//! # api_key = "env:INVOICD_EDMD_API_KEY"
-//!
 //! [check]
 //! # All tolerances are relative (0.01 = 1 %)
 //! arithmetic_tolerance = 0.01
@@ -40,7 +35,7 @@
 //! tariff_tolerance     = 0.03
 //! require_tariff       = false
 //! # EUR above which a Warn outcome triggers a Dispute (0.0 = never)
-//! auto_dispute_threshold_eur = 0.0
+//! auto_dispute_threshold_eur = "0.00"
 //!
 //! # [oidc]
 //! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -66,10 +61,6 @@ pub struct Config {
     pub subscription: SubscriptionConfig,
     #[serde(default)]
     pub check: CheckSectionConfig,
-    /// `edmd` connection — required by `POST /api/v1/selbstausstellen`, which
-    /// reads the measured quantity for the Bilanzierungsmonat from it.
-    #[serde(default)]
-    pub edmd: EdmdConfig,
     /// Optional ERP webhook for outbound payment CloudEvents (A8).
     #[serde(default)]
     pub erp: ErpConfig,
@@ -149,13 +140,6 @@ impl Config {
             require_tariff: self.check.require_tariff,
             max_zahlungsziel_days: self.check.max_zahlungsziel_days,
         }
-    }
-
-    /// Threshold in `Amount<5>` raw units (10⁻⁵ EUR) — the resolution of
-    /// `CheckReport::total_net_invoic.to_raw()`, converted from the TOML EUR value.
-    #[must_use]
-    pub fn auto_dispute_threshold_raw(&self) -> i64 {
-        (self.check.auto_dispute_threshold_eur * 100_000.0_f64).round() as i64
     }
 }
 
@@ -262,22 +246,6 @@ pub struct MarktdConfig {
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-/// `edmd` connection — required by `POST /api/v1/selbstausstellen` (PID 31006).
-///
-/// A Mehrmengen-Rechnung settles measured against balanced energy, and `edmd`
-/// holds the measured half. Omitted, that endpoint answers 503; nothing else in
-/// the service needs it.
-pub struct EdmdConfig {
-    /// `edmd` base URL.  Example: `http://edmd:8380`
-    #[serde(default)]
-    pub url: Option<String>,
-    /// Bearer token.  Use `"env:INVOICD_EDMD_API_KEY"`.
-    #[serde(default)]
-    pub api_key: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 pub struct WebhookConfig {
     /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
     /// Use `"env:INVOICD_INBOUND_SECRET"`.
@@ -329,10 +297,11 @@ pub struct CheckSectionConfig {
     /// When `true`, a missing PRICAT entry escalates from `Warn` to `Dispute`.
     #[serde(default)]
     pub require_tariff: bool,
-    /// INVOIC net-amount (EUR) above which a `Warn` outcome becomes a `Dispute`.
-    /// `0.0` (default) means `Warn` is always auto-approved.
+    /// INVOIC net amount in EUR, a string (`"250.00"`), above which a `Warn`
+    /// outcome becomes a `Dispute`. `"0"` (default) means `Warn` is always
+    /// auto-approved.
     #[serde(default)]
-    pub auto_dispute_threshold_eur: f64,
+    pub auto_dispute_threshold_eur: rust_decimal::Decimal,
     /// Maximum Zahlungsziel (payment term) in days from `rechnungsdatum` to
     /// `faelligkeitsdatum` (`SG8 DTM+265`). Set to `0` to disable this check.
     /// Default: `30` days per §7 Allgemeine Festlegungen V6.1d.
@@ -353,6 +322,32 @@ fn default_max_zahlungsziel_days() -> u16 {
     30
 }
 
+impl CheckSectionConfig {
+    /// Threshold in `Amount<5>` raw units (10⁻⁵ EUR) — the resolution of
+    /// `CheckReport::total_net_invoic.to_raw()` — converted exactly from the
+    /// configured EUR amount.
+    ///
+    /// # Errors
+    ///
+    /// A negative threshold, or one finer than 10⁻⁵ EUR, which the comparison
+    /// could only round.
+    pub fn auto_dispute_threshold_raw(&self) -> anyhow::Result<i64> {
+        let eur = self.auto_dispute_threshold_eur;
+        anyhow::ensure!(
+            eur >= rust_decimal::Decimal::ZERO,
+            "check.auto_dispute_threshold_eur {eur} is negative"
+        );
+        invoic_checker::EuroAmount::from_decimal(eur)
+            .map(invoic_checker::EuroAmount::to_raw)
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "check.auto_dispute_threshold_eur {eur} is not an EUR amount of at most \
+                     five decimal places"
+                )
+            })
+    }
+}
+
 impl Default for CheckSectionConfig {
     fn default() -> Self {
         Self {
@@ -360,7 +355,7 @@ impl Default for CheckSectionConfig {
             total_tolerance: default_total_tolerance(),
             tariff_tolerance: default_tariff_tolerance(),
             require_tariff: false,
-            auto_dispute_threshold_eur: 0.0,
+            auto_dispute_threshold_eur: rust_decimal::Decimal::ZERO,
             max_zahlungsziel_days: default_max_zahlungsziel_days(),
         }
     }
@@ -399,40 +394,57 @@ pub use mako_service::config::{resolve_env, resolve_env_secret};
 mod tests {
     use super::*;
 
-    fn config_with_threshold(eur: f64) -> CheckSectionConfig {
+    fn config_with_threshold(eur: rust_decimal::Decimal) -> CheckSectionConfig {
         CheckSectionConfig {
             auto_dispute_threshold_eur: eur,
             ..CheckSectionConfig::default()
         }
     }
 
-    /// The threshold and `EuroAmount::to_raw()` must share one unit (10⁻⁵ EUR):
-    /// an invoice total exactly at the threshold does not escalate, one raw unit
-    /// above does.
+    /// The threshold and `EuroAmount::to_raw()` share one unit (10⁻⁵ EUR) and
+    /// compare exactly: an invoice total at the threshold does not escalate,
+    /// one raw unit above does.
     #[test]
     fn threshold_matches_euro_amount_raw_units() {
-        let check = config_with_threshold(250.0);
-        let threshold_raw = (check.auto_dispute_threshold_eur * 100_000.0).round() as i64;
-
-        let at = invoic_checker::EuroAmount::from_decimal_rounded(
-            rust_decimal::dec!(250.00),
-            invoic_checker::amount::Rounding::HalfAwayFromZero,
-        )
-        .unwrap();
-        assert_eq!(at.to_raw(), threshold_raw);
-        assert!(
-            at.to_raw() <= threshold_raw,
-            "exactly at threshold: no escalation"
+        let threshold_raw = config_with_threshold(rust_decimal::dec!(0.30))
+            .auto_dispute_threshold_raw()
+            .expect("a representable threshold");
+        assert_eq!(threshold_raw, 30_000);
+        let raw = |d| {
+            invoic_checker::EuroAmount::from_decimal_rounded(
+                d,
+                invoic_checker::amount::Rounding::HalfAwayFromZero,
+            )
+            .unwrap()
+            .to_raw()
+        };
+        // 0,10 + 0,20 EUR is 0,30 EUR exactly, so it sits at the threshold.
+        assert_eq!(
+            raw(rust_decimal::dec!(0.10) + rust_decimal::dec!(0.20)),
+            threshold_raw
         );
-
-        let above = invoic_checker::EuroAmount::from_decimal_rounded(
-            rust_decimal::dec!(250.00001),
-            invoic_checker::amount::Rounding::HalfAwayFromZero,
-        )
-        .unwrap();
         assert!(
-            above.to_raw() > threshold_raw,
-            "one raw unit above escalates"
+            raw(rust_decimal::dec!(0.30001)) > threshold_raw,
+            "one raw unit above"
+        );
+    }
+
+    /// The TOML value is read as a decimal string, never through a float.
+    #[test]
+    fn the_threshold_is_read_as_a_decimal_string() {
+        let cfg: CheckSectionConfig =
+            serde_json::from_str(r#"{"auto_dispute_threshold_eur": "250.00"}"#).unwrap();
+        assert_eq!(cfg.auto_dispute_threshold_raw().unwrap(), 25_000_000);
+        assert!(
+            config_with_threshold(rust_decimal::dec!(-1))
+                .auto_dispute_threshold_raw()
+                .is_err()
+        );
+        assert!(
+            config_with_threshold(rust_decimal::dec!(0.000001))
+                .auto_dispute_threshold_raw()
+                .is_err(),
+            "finer than 10⁻⁵ EUR"
         );
     }
 }

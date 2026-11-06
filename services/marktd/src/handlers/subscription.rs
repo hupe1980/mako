@@ -36,10 +36,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use mako_markt::{
-    cloudevents::MarktEvent,
-    repository::{Subscription, SubscriptionRepository},
-};
+use mako_markt::{cloudevents::MarktEvent, repository::Subscription};
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::{Deserialize, Serialize};

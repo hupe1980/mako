@@ -58,7 +58,7 @@ fn the_published_reference_config_parses_and_subscribes_to_every_default_type() 
 fn a_reference_that_narrows_the_subscription_is_refused() {
     let planted = "[http]\naddr = \"0.0.0.0:8580\"\n\
                    [database]\nurl = \"env:DATABASE_URL\"\n\
-                   [identity]\nown_mp_id = \"9900357000004\"\n\
+                   [identity]\nown_mp_id = \"9900357000004\"\nverbundene_lieferanten = []\n\
                    [makod]\nurl = \"http://makod:8080\"\napi_key = \"k\"\n\
                    [marktd]\nurl = \"http://marktd:8180\"\napi_key = \"k\"\n\
                    [subscription]\nevent_types = [\"de.mako.process.initiated\"]\n";

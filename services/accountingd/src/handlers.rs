@@ -68,10 +68,37 @@ fn account_not_found(malo_id: &str) -> axum::response::Response {
 /// its text.
 fn refusal(e: impl Into<anyhow::Error>) -> ApiError {
     let e = e.into();
-    if e.chain().any(|c| c.is::<sqlx::Error>()) {
+    let ledger_fault = e.chain().any(|c| {
+        matches!(
+            c.downcast_ref::<crate::ledger::LedgerError>(),
+            Some(
+                crate::ledger::LedgerError::Storage { .. }
+                    | crate::ledger::LedgerError::Integrity(_)
+            )
+        )
+    });
+    if ledger_fault || e.chain().any(|c| c.is::<sqlx::Error>()) {
         ApiError::internal(e)
     } else {
         ApiError::unprocessable(format!("{e:#}"))
+    }
+}
+
+/// The answer to a failed ledger-backed read or write.
+///
+/// A [`LedgerError`](crate::ledger::LedgerError) anywhere in the chain decides
+/// it: a refusal is `422` with its reason, an unknown subject `404`, and only an
+/// integrity or storage failure `500` with an `error_id`. A refusal is never
+/// answered `500`: a CloudEvent redelivered into the same refusal books nothing,
+/// and an operator sent to the log finds a request to correct, not an outage.
+/// Any other failure is `500`.
+fn ledger_failure(e: impl Into<anyhow::Error>) -> ApiError {
+    use crate::ledger::LedgerError;
+    let e = e.into();
+    match e.chain().find_map(|c| c.downcast_ref::<LedgerError>()) {
+        Some(LedgerError::Refused(msg)) => ApiError::unprocessable(msg.clone()),
+        Some(LedgerError::NotFound(msg)) => ApiError::not_found(msg.clone()),
+        _ => ApiError::internal(e),
     }
 }
 
@@ -195,7 +222,7 @@ pub async fn get_ledger(
     .await
     {
         Ok(window) => Json(window).into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
+        Err(e) => ledger_failure(e).into_response(),
     }
 }
 
@@ -243,7 +270,7 @@ pub async fn get_kontoauszug(
     });
     let window = match list_ledger(&ledger, lf_mp_id, &malo_id, query, 500).await {
         Ok(e) => e,
-        Err(e) => return ApiError::internal(e).into_response(),
+        Err(e) => return ledger_failure(e).into_response(),
     };
     // Eröffnungs- und Schlusssaldo: the two figures that make the page add up.
     // The closing figure is the opening plus everything on it, not the account's
@@ -362,7 +389,7 @@ pub async fn get_abschlaege(
     .await
     {
         Ok(v) => v,
-        Err(e) => return ApiError::internal(e).into_response(),
+        Err(e) => return ledger_failure(e).into_response(),
     };
     let include_open = q.include_open.unwrap_or(false);
     let out: Vec<serde_json::Value> = all
@@ -654,7 +681,7 @@ pub async fn ingest_webhook(
                 )
                 .await
                 {
-                    return ApiError::internal(e.context(format!(
+                    return ledger_failure(e.context(format!(
                         "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
                     )))
                     .into_response();
@@ -679,7 +706,7 @@ pub async fn ingest_webhook(
                     )
                     .await
                 {
-                    return ApiError::internal(e.context(format!(
+                    return ledger_failure(e.context(format!(
                         "Abschlag-Verrechnung for MaLo {malo_id} — returning 500 so the sender \
                          redelivers; without it the customer owes the period twice"
                     )))
@@ -748,7 +775,7 @@ pub async fn ingest_webhook(
                 )
                 .await
                 {
-                    return ApiError::internal(e.context(format!(
+                    return ledger_failure(e.context(format!(
                         "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
                     )))
                     .into_response();
@@ -859,7 +886,7 @@ pub async fn ingest_webhook(
                 )
                 .await
                 {
-                    return ApiError::internal(e.context(format!(
+                    return ledger_failure(e.context(format!(
                         "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
                     )))
                     .into_response();
@@ -1024,7 +1051,7 @@ pub async fn ingest_webhook(
                 )
                 .await
                 {
-                    return ApiError::internal(e.context(format!(
+                    return ledger_failure(e.context(format!(
                         "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
                     )))
                     .into_response();
@@ -2391,7 +2418,7 @@ pub async fn abwendung_angebot(
     let verzug_ct =
         match crate::pg::refresh_verzug(&ledger, &pool, &cfg.tenant, &malo_id, &lf_mp_id).await {
             Ok(v) => v,
-            Err(e) => return internal(e),
+            Err(e) => return ledger_failure(e).into_response(),
         };
     // § 41g Abs. 1 S. 7–9: 6–18 Monate in der Regel, 12–24 Monate über 300 EUR.
     let (min_monate, max_monate) = if verzug_ct > 30_000 {
@@ -2777,7 +2804,7 @@ pub async fn place_einwand(
             })),
         )
             .into_response(),
-        Err(e) => internal(e),
+        Err(e) => ledger_failure(e).into_response(),
     }
 }
 
@@ -2867,7 +2894,7 @@ pub async fn close_einwand(
         Ok(None) => {
             ApiError::not_found(format!("open objection {einwand_id} not found")).into_response()
         }
-        Err(e) => internal(e),
+        Err(e) => ledger_failure(e).into_response(),
     }
 }
 
@@ -3392,7 +3419,7 @@ pub async fn post_buchen(
             })),
         )
             .into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
+        Err(e) => ledger_failure(e).into_response(),
     }
 }
 
@@ -3617,7 +3644,7 @@ pub async fn settle_jahresabschluss(
     let sums = match ledger.year_kind_sums(lf_mp_id, malo_id, year).await {
         Ok(s) => s,
         Err(e) => {
-            return Err(SettleError(ApiError::internal(e)));
+            return Err(SettleError(ApiError::from(e)));
         }
     };
     let JahresabschlussSums {
@@ -3778,7 +3805,7 @@ pub async fn settle_jahresabschluss(
                 {
                     Ok(id) => settlement_entry_id = Some(id),
                     Err(e) => {
-                        return Err(SettleError(ApiError::internal(e)));
+                        return Err(SettleError(ledger_failure(e)));
                     }
                 }
             }
@@ -4166,7 +4193,7 @@ pub async fn get_open_items(
             "open_items": items,
         }))
         .into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
+        Err(e) => ledger_failure(e).into_response(),
     }
 }
 
@@ -4307,7 +4334,7 @@ pub async fn post_reconcile(
         .await
     {
         Ok(result) => Json(result).into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
+        Err(e) => ledger_failure(e).into_response(),
     }
 }
 
@@ -4373,7 +4400,7 @@ pub async fn post_seal_period(
     };
     match ledger.seal_period(&period_id, start, end).await {
         Ok(seal) => (StatusCode::CREATED, Json(seal_json(&seal))).into_response(),
-        Err(e) => refusal(e).into_response(),
+        Err(e) => ApiError::from(e).into_response(),
     }
 }
 
@@ -4389,7 +4416,7 @@ pub async fn get_seals(
     }
     let seals = match ledger.seals().await {
         Ok(s) => s,
-        Err(e) => return ApiError::internal(e).into_response(),
+        Err(e) => return ApiError::from(e).into_response(),
     };
     let verified = ledger.verify_seals().await;
     Json(serde_json::json!({
@@ -4440,12 +4467,15 @@ pub async fn get_entry_proof(
             }))
             .into_response()
         }
-        // The ledger reports a missing entry and a failed proof through the
-        // same error, so both answer as the entry this caller cannot see.
-        Err(e) => {
+        // An entry the ledger does not hold, or holds but has not sequenced
+        // yet, answers as the entry this caller cannot see.
+        Err(
+            e @ (crate::ledger::LedgerError::NotFound(_) | crate::ledger::LedgerError::Refused(_)),
+        ) => {
             tracing::warn!(error = %e, %entry_id, "accountingd: inclusion proof failed");
             ApiError::NotFound.into_response()
         }
+        Err(e) => ApiError::from(e).into_response(),
     }
 }
 
@@ -4481,12 +4511,16 @@ pub async fn get_period_balance_proof(
         .await
     {
         Ok(o) => o,
-        // The ledger reports an unknown period and a failed proof through the
-        // same error, so both answer as the period this caller cannot see.
-        Err(e) => {
+        // A period that was never sealed, or a period id the ledger refuses,
+        // answers as the period this caller cannot see. A closing balance that
+        // no longer reproduces its seal is an integrity failure and a `500`.
+        Err(
+            e @ (crate::ledger::LedgerError::NotFound(_) | crate::ledger::LedgerError::Refused(_)),
+        ) => {
             tracing::warn!(error = %e, %period_id, "accountingd: sealed-balance proof failed");
             return ApiError::NotFound.into_response();
         }
+        Err(e) => return ApiError::from(e).into_response(),
     };
 
     // Two ways to have nothing to prove, and they are different sentences. The
@@ -4599,7 +4633,10 @@ pub async fn get_consistency_proof(
         // examined nothing is indistinguishable from a real verification. The
         // ledger refuses to build one; an auditor gets the refusal, not
         // reassurance.
-        Err(e) => ApiError::bad_request(e.to_string()).into_response(),
+        Err(
+            e @ (crate::ledger::LedgerError::NotFound(_) | crate::ledger::LedgerError::Refused(_)),
+        ) => ApiError::bad_request(e.to_string()).into_response(),
+        Err(e) => ApiError::from(e).into_response(),
     }
 }
 
@@ -4628,7 +4665,7 @@ pub async fn get_trial_balance(
             }))
             .into_response()
         }
-        Err(e) => ApiError::internal(e).into_response(),
+        Err(e) => ApiError::from(e).into_response(),
     }
 }
 
@@ -4663,7 +4700,7 @@ pub async fn post_clear(
             "message": "nothing left to match",
         }))
         .into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
+        Err(e) => ApiError::from(e).into_response(),
     }
 }
 
@@ -4891,7 +4928,7 @@ pub async fn post_run_eeg_payouts(
         .await
     {
         Ok(c) => c,
-        Err(e) => return ApiError::internal(e).into_response(),
+        Err(e) => return ApiError::from(e).into_response(),
     };
 
     let mut generated = 0usize;
@@ -5749,7 +5786,7 @@ pub async fn post_sepa_reversal(
                 Ok(id) => Some(id),
                 Err(e) => {
                     tracing::error!(error = %e, "accountingd: SEPA_STORNO ledger post failed");
-                    return ApiError::internal(anyhow::anyhow!("reversal ledger post failed: {e}"))
+                    return ledger_failure(e.context("reversal ledger post failed"))
                         .into_response();
                 }
             }

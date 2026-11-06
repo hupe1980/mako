@@ -19,14 +19,23 @@ not a rewrite. AI-first means one typed surface: the services speak MCP, agents
 and the operator Desk read the same tools, and a model reads, explains and
 proposes while code computes every Frist, amount and verdict.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/content/docs/guide/desk/freigaben-dark.png">
+    <img alt="mako Desk: a Freigabe with the assistant's checked proposal taken into the decision form, unsent" src="site/content/docs/guide/desk/freigaben-light.png" width="860">
+  </picture>
+  <br>
+  <sub>mako Desk — the assistant's proposal was waiting on the Freigabe; <kbd>U</kbd> fills the form, a person checks it and sends.</sub>
+</p>
+
 | Layer | What it is |
 |---|---|
 | **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon — 71 workflows over 472 Prüfidentifikatoren |
 | **Market data** | `mako-markt` library · `marktd` hub (PostgreSQL, durable CloudEvents fan-out, OIDC/JWT) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer management** | `accountingd` ledger · `portald` portal · `outputd` documents · `vertragd` contracts · `productd` catalogue |
-| **Agent surface** | 11 of the 14 services expose an MCP server — **165 tools** — and `agentd` is the governed consumer: 29 specialists (27 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
-| **Operator UI** | `desk/` — mako Desk: processes and their Verlauf, customers, Freigaben, and an assistant that cites every sentence and proposes what a person sends. The `mako-desk` image runs behind an OIDC gateway; `just desk` for development ([guide](https://hupe1980.github.io/mako/docs/guide/desk/), [AGENTS](desk/AGENTS.md)) |
+| **Agent surface** | 11 of the 14 services expose an MCP server — **166 tools** — and `agentd` is the governed consumer: 29 specialists (27 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
+| **Operator UI** | `desk/` — mako Desk: processes and their Verlauf, customers, Heute, Freigaben, and an assistant that cites every sentence and has a proposal waiting on every decision a person sends. The `mako-desk` image runs behind an OIDC gateway; `just desk` for development ([guide](https://hupe1980.github.io/mako/docs/guide/desk/), [AGENTS](desk/AGENTS.md)) |
 | **Testing** | `makotest` — Python toolkit over the same Rust core: check digits, the answer Fristen, Entscheidungsbaum codes, AHB-validated EDIFACT, answering counterparties, a `pytest` plugin ([README](makotest/README.md)) |
 
 ## Quick start
@@ -122,7 +131,7 @@ Each crate's README carries its scope, PIDs and regulatory sources.
 | [`mako-as4`](crates/mako-as4/) | BDEW AS4-Profil over `asx-rs` — sign, encrypt, signed receipts |
 | [`mako-engine`](crates/mako-engine/) | Event-sourced runtime — `Workflow`, `Process`, event store, outbox, deadlines |
 | [`mako-fristen`](crates/mako-fristen/) | BDEW Werktage, the MaKo holiday table, the per-PID Antwortfristen |
-| [`mako-markt`](crates/mako-markt/) | Master data — 94 active `rubo4e::current` types behind one gate, validated `MaloId` / `MeloId` / `MarktpartnerId`, repository traits |
+| [`mako-markt`](crates/mako-markt/) | Master data — 95 active `rubo4e::current` types behind one gate, validated `MaloId` / `MeloId` / `MarktpartnerId`, the master-data record types |
 | [`mako-gpke`](crates/mako-gpke/) | GPKE Strom — Lieferantenwechsel, Stammdatenänderung, Sperrung, PARTIN, INVOIC |
 | [`mako-geli-gas`](crates/mako-geli-gas/) | GeLi Gas — Lieferantenwechsel Gas, Stammdatenänderung, Sperrprozesse |
 | [`mako-wim`](crates/mako-wim/) | WiM, Strom and Gas — MSB-Wechsel, Geräteübernahme, Preisanfrage, INSRPT, ESA |
@@ -156,7 +165,7 @@ config, deployment — is [mako docs · Services](https://hupe1980.github.io/mak
 | [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement runs — NNE, KA, MMM, MSB, AWH, and the MaBiS Summenzeitreihen filed with the BIKO; issues the INVOIC · 12 MCP tools |
 | [`einsd`](services/einsd/) | `:9180` | NB · LF | Einspeiser registry and EEG/KWKG settlement · 20 MCP tools + 6 prompts |
 | [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle · 7 MCP tools |
-| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 12 MCP tools |
+| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 13 MCP tools |
 | [`accountingd`](services/accountingd/) | `:9380` | LF | Massenkontokorrent — tamper-evident double-entry ledger, SEPA, Mahnwesen |
 | [`outputd`](services/outputd/) | `:9880` | — | Customer communications — renders and delivers what other services computed |
 | [`portald`](services/portald/) | `:9480` | LF | Customer portal read-model gateway and the § 41 EnWG self-service writes; no MCP server |

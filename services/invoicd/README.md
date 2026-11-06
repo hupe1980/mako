@@ -2,8 +2,7 @@
 
 `invoicd` (`:8280`) checks every INVOIC a market partner sends this deployment
 (the Lieferant by default), records it as a Buchungsbeleg (§ 147 AO) and answers
-the counterparty — accept or dispute — through `makod`. It also issues the
-self-issued Mehrmengen-Rechnung (PID 31006).
+the counterparty — accept or dispute — through `makod`.
 
 ## Run it
 
@@ -55,7 +54,6 @@ arithmetic-only check whatever its PID. Command names come from
 | `Warn` | warnings, auto-approved below `auto_dispute_threshold_eur` |
 | `Dispute` | rejected; the answer carries the findings as `ablehnungsgrund` |
 | `Resolved` | dispute closed by an operator |
-| `Dispatched` | self-issued document sent; awaiting the NB's REMADV |
 
 A `Warn` escalates to `Dispute` only above `auto_dispute_threshold_eur`
 (default `0.0`: every warning is approved).
@@ -72,15 +70,13 @@ A `Warn` escalates to `Dispute` only above `auto_dispute_threshold_eur`
 | `POST` | `/api/v1/receipts/{id}/confirm-payment` | `write-receipt` |
 | `POST` | `/api/v1/receipts/{id}/dispatch-answer` | `write-receipt` |
 | `POST` | `/api/v1/receipts/{id}/resolve-dispute` | `write-receipt` |
-| `POST` | `/api/v1/selbstausstellen` | `dispatch-selbstausstellen` |
 | `GET` | `/invoicd/metrics` | — (internal) |
 
 Write actions are restricted to the `LF` role (`policies/invoicd.cedar`).
 `/webhook` answers `204` once an event is finished with — answered, deliberately
 unanswered or dead-lettered — and `503` when the reference data (Preisblatt,
 Mehr-/Mindermengenpreise, ESA-Angebot) could not be read from `marktd`, so the
-sender redelivers. `POST /api/v1/selbstausstellen` takes `malo_id`, `nb_mp_id`,
-`year`, `month` and `bilanziert_kwh`; the measured half comes from `edmd`.
+sender redelivers.
 
 ## Configuration
 
@@ -118,13 +114,8 @@ arithmetic_tolerance       = 0.01   # relative; 0.01 = 1 %
 total_tolerance            = 0.01
 tariff_tolerance           = 0.03
 require_tariff             = false  # true: a missing PRICAT entry disputes
-auto_dispute_threshold_eur = 0.0    # 0.0 = never escalate a Warn
+auto_dispute_threshold_eur = "0.00"    # EUR as a string; "0.00" = never escalate a Warn
 max_zahlungsziel_days      = 30     # § 7 Allgemeine Festlegungen V6.1d
-
-# Required only for POST /api/v1/selbstausstellen.
-[edmd]
-url     = "http://edmd:8380"
-api_key = "env:INVOICD_EDMD_API_KEY"
 
 [erp]
 webhook_url = "https://erp.example.com/webhooks/invoicd"

@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 0c8e323e53f8c8526cf68b18c00db91798a20ddfad1ac1f6969830cd06a6c35f # shrinks to ap = 0.5, kwh = 1.0
+cc 9f0135f3f952d5bd82d6f41db4c64aafbaa43eba9d94eaedfc1ecf9318863e06 # shrinks to ap = 0.5, kwh = 19908.493656737162

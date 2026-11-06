@@ -8,6 +8,10 @@ export const DIENST: Record<Service | "agentd", string> = {
   makod: "Marktkommunikation",
   processd: "Prozessüberwachung",
   vertragd: "Kundenverwaltung",
+  billingd: "Abrechnung",
+  invoicd: "Rechnungseingang",
+  edmd: "Messwerte",
+  netzbilanzd: "Netzentgelte",
   agentd: "Assistent",
 };
 
@@ -15,12 +19,8 @@ export const DIENST: Record<Service | "agentd", string> = {
 const ALLE: Record<string, string> = {
   ...DIENST,
   marktd: "Marktstammdaten",
-  billingd: "Abrechnung",
-  invoicd: "Rechnungseingang",
   accountingd: "Kundenkonten",
-  edmd: "Messwerte",
   einsd: "EEG-Abrechnung",
-  netzbilanzd: "Netzentgelte",
   productd: "Produktkatalog",
   portald: "Kundenportal",
   sperrd: "Sperrungen",

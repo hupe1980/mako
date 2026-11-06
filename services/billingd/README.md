@@ -22,7 +22,7 @@ just dev billingd      # dev/config/billingd.toml against the dev PostgreSQL
 | **Rechnungsnummer** | fortlaufend per tenant (§ 14 Abs. 4 Nr. 4 UStG): `RE-` invoice, `SR-` Sammelrechnung, `ST-` Storno, `VG-` § 41e Gutschrift |
 | **Errors** | one envelope with a stable code — `{"error":{"code":"PERIOD_ALREADY_BILLED",…}}` |
 | **Events** | CloudEvents to `erp_webhook_url` through the transactional outbox, HMAC-signed |
-| **MCP** | 12 read-only tools at `/mcp` |
+| **MCP** | 13 read-only tools at `/mcp` |
 
 ## Routes
 

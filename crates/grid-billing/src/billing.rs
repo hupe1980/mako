@@ -49,8 +49,14 @@ fn ct_to_eur(ct: Decimal) -> Decimal {
 /// document does not carry, so every recipient's own arithmetic check
 /// disagrees with it. Rounding here is idempotent for a caller that already
 /// rounded.
+///
+/// The product is rounded **once**, kaufmännisch, to the cent: the INVOIC
+/// states a position's net in `SG27 MOA+203` (MIG 2.8e 00041), whose DE 5004
+/// carries `[930]` „max. 2 Nachkommastellen" (INVOIC AHB 1.0b, S. 20). The
+/// settlement's totals are the sum of the nets so formed, so the Summenteil
+/// and the positions agree to the cent.
 pub(crate) fn pos_net(qty: Decimal, unit_price_eur: Decimal) -> Decimal {
-    (qty.round_kfm(3) * unit_price_eur.round_kfm(6)).round_kfm(5)
+    (qty.round_kfm(3) * unit_price_eur.round_kfm(6)).round_kfm(2)
 }
 
 fn kwh_pos_traced(
@@ -70,6 +76,7 @@ fn kwh_pos_traced(
         unit_price_eur: unit_price_eur.round_kfm(6),
         net_eur: pos_net(kwh, unit_price_eur),
         spot_price_formula: None,
+        artikel_id: None,
 
         trace: CalculationTrace {
             explanation: format!(
@@ -83,7 +90,7 @@ fn kwh_pos_traced(
             legal_refs,
             tariff_source,
             regulatory_reduction_factor: None,
-            rounding_note: Some("quantity rounded to 3 dp; unit price to 6 dp; net to 5 dp"),
+            rounding_note: Some("quantity rounded to 3 dp; unit price to 6 dp; net to the cent"),
         },
     }
 }
@@ -105,6 +112,7 @@ fn monat_pos_traced(
         unit_price_eur: unit_price_eur.round_kfm(6),
         net_eur: pos_net(months, unit_price_eur),
         spot_price_formula: None,
+        artikel_id: None,
 
         trace: CalculationTrace {
             explanation: format!(
@@ -118,7 +126,42 @@ fn monat_pos_traced(
             legal_refs,
             tariff_source,
             regulatory_reduction_factor: None,
-            rounding_note: Some("quantity rounded to 3 dp; unit price to 6 dp; net to 5 dp"),
+            rounding_note: Some("quantity rounded to 3 dp; unit price to 6 dp; net to the cent"),
+        },
+    }
+}
+
+/// A charge priced per day: the period's days at the day rate.
+fn tag_pos_traced(
+    text: &str,
+    kind: BillingPositionKind,
+    tage: Decimal,
+    unit_price_eur: Decimal,
+    legal_refs: Vec<LegalReference>,
+) -> SettlementPosition {
+    let gross_eur = tage * unit_price_eur;
+    SettlementPosition {
+        text: text.to_owned(),
+        kind,
+        quantity: tage,
+        unit: QuantityUnit::Tag,
+        unit_price_eur: unit_price_eur.round_kfm(6),
+        net_eur: pos_net(tage, unit_price_eur),
+        spot_price_formula: None,
+        artikel_id: None,
+        trace: CalculationTrace {
+            explanation: format!(
+                "{tage} Tage × {:.6} EUR/Tag = {:.5} EUR",
+                unit_price_eur,
+                gross_eur.round_kfm(5)
+            ),
+            input_quantity: tage,
+            input_unit_price_eur: unit_price_eur,
+            gross_eur,
+            legal_refs,
+            tariff_source: None,
+            regulatory_reduction_factor: None,
+            rounding_note: Some("unit price to 6 dp; net to the cent"),
         },
     }
 }
@@ -345,6 +388,20 @@ fn push_netzumlagen(
         });
     }
 
+    // A tabled §19 row published under a reservation may still be replaced by
+    // the ÜNB; the run says so, once per year it prices from that row.
+    if input.sect19_umlage_ct_per_kwh.is_none() {
+        for (jahr, _) in &abschnitte {
+            if let Some(vorbehalt) = crate::umlagen::sect19_stromnev_vorbehalt(*jahr) {
+                warnings.push(SettlementWarning {
+                    severity: WarningSeverity::Warning,
+                    code: "UMLAGE_UNTER_VORBEHALT",
+                    message: format!("Aufschlag für besondere Netznutzung {jahr}: {vorbehalt}"),
+                });
+            }
+        }
+    }
+
     let mut summe = Decimal::ZERO;
     for kind in NETZUMLAGEN {
         let label = netzumlage_label(kind);
@@ -420,6 +477,7 @@ fn push_netzumlagen(
                     unit_price_eur: price_eur.round_kfm(6),
                     net_eur,
                     spot_price_formula: None,
+                    artikel_id: None,
                     trace: CalculationTrace {
                         explanation: format!(
                             "{menge_kwh:.3} kWh × {price_eur:.6} EUR/kWh = {:.5} EUR ({anteil})",
@@ -588,32 +646,6 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         &mut warnings,
     );
 
-    // The share of a year credited has to be the share of a year served. The
-    // range check on [`Jahresanteil`] cannot see the period, so `1` — a valid
-    // share — passes it and credits the whole annual pauschale on every monthly
-    // run, twelve times over the year.
-    //
-    // Loose on purpose, like the Messstellenbetrieb month count: a period may
-    // run from the 15th to the 14th or cover a Gerätewechsel, so anything within
-    // half a month of the period's own share passes. What it catches is the
-    // order-of-magnitude mismatch, which is the error worth catching.
-    if let ArbeitspreisModell::Modul1Pauschal { jahresanteil, .. } = &input.arbeitspreis {
-        let aus_periode = input.period.jahresanteil();
-        let anteil = jahresanteil.get();
-        if (anteil - aus_periode).abs() > rust_decimal::dec!(0.042) {
-            warnings.push(SettlementWarning {
-                severity: WarningSeverity::Warning,
-                code: "MODUL1_JAHRESANTEIL_MISMATCH",
-                message: format!(
-                    "crediting {anteil} of the §14a Modul 1 Jahrespauschale over a period of \
-                     {} days (≈ {aus_periode:.6} of a year) — check the period or the \
-                     Jahresanteil",
-                    input.period.days()
-                ),
-            });
-        }
-    }
-
     // Sparte determines settlement type and Arbeit legal reference
     let (settlement_type, arbeit_ref) = match input.sparte {
         Sparte::Gas => (
@@ -730,6 +762,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 unit_price_eur: price_eur,
                 net_eur,
                 spot_price_formula: None,
+                artikel_id: None,
                 trace: CalculationTrace {
                     explanation: format!(
                         "{:.3} kWh/h × {:.6} EUR (= {:.6} EUR/a × {anteil:.6} of a year, \
@@ -755,7 +788,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     regulatory_reduction_factor: None,
                     rounding_note: Some(
                         "annual rate pro-rated by calendar days over each year the period \
-                         touches, at that year's own length; unit price to 6 dp; net to 5 dp",
+                         touches, at that year's own length; unit price to 6 dp; net to the cent",
                     ),
                 },
             };
@@ -810,7 +843,6 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         ArbeitspreisModell::Modul1Pauschal {
             basis,
             pauschale_eur_pro_jahr,
-            jahresanteil,
         } => {
             // Two positions, because Modul 1 is not a rate change: the energy is
             // billed at the published Arbeitspreis in full, and the pauschale is
@@ -837,57 +869,56 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             total += p.net_eur;
             positions.push(p);
 
-            // A position states a quantity and a unit price whose product is
-            // its net — that is the arithmetic the recipient re-runs, and a
-            // position stating a period total as a *unit* price fails it by the
-            // whole pro-rating factor. The pauschale is published per year, so
-            // the rate is the negated annual amount and the quantity is the
-            // share of a year billed. Six decimal places on the share, because
-            // three would bill a month at 0.083 of a year — a 0.4 % error.
-            // The credit is computed from the exact share, not from a rounded
-            // one: six decimal places on a twelfth leave 0.048 EUR of a 120 EUR
-            // pauschale uncredited over a year, on every §14a Modul 1 offtake.
-            let anteil = jahresanteil.get();
-            let rate_eur = -pauschale_eur_pro_jahr.round_kfm(6);
-            let credit_eur = (anteil * rate_eur).round_kfm(5);
-            // Nine decimal places on the stated share: enough that the
-            // recipient's own re-multiplication lands inside the checker's
-            // tolerance, and short enough to read on an invoice.
-            let anteil = anteil.round_kfm(9);
-            let c = SettlementPosition {
-                text: "§14a Modul 1 pauschale Reduzierung".to_owned(),
-                kind: BillingPositionKind::NneArbeitModul1,
-                quantity: anteil,
-                unit: QuantityUnit::Jahr,
-                unit_price_eur: rate_eur,
-                net_eur: credit_eur,
-                spot_price_formula: None,
-                trace: CalculationTrace {
-                    explanation: format!(
-                        "{anteil:.9} Jahresanteil × {rate_eur:.6} EUR/Jahr \
-                         = {credit_eur:.5} EUR (Gutschrift)"
-                    ),
-                    input_quantity: anteil,
-                    input_unit_price_eur: rate_eur,
-                    gross_eur: anteil * rate_eur,
-                    legal_refs: vec![
-                        LegalReference::Sect14aEnwg {
-                            module: Sect14aModule::Modul1,
-                        },
-                        LegalReference::BnetzaDecision {
-                            reference: "BK8-22/010-A",
-                        },
-                    ],
-                    tariff_source: tariff_src.clone(),
-                    regulatory_reduction_factor: None,
-                    rounding_note: Some(
-                        "annual rate to 6 dp; net to 5 dp off the exact Jahresanteil, so twelve \
-                         monthly credits sum to the annual pauschale",
-                    ),
-                },
-            };
-            total += c.net_eur;
-            positions.push(c);
+            // The credit is the pauschale for the period's days: the annual
+            // amount over the days of each calendar year the period touches,
+            // one position per year, because a year's own length is its
+            // divisor. The INVOIC states it per Tag — the Codeliste der
+            // Artikelnummern und Artikel-ID 5.6 prices the Modul-1
+            // Reduzierung in €/Tag (`1-02-0-015`, Kap. 3.1.2, S. 19), and from
+            // 01.01.2023 the 31002 column admits only `DAY` as a Strom time
+            // unit (`QTY+136` DE 6411 `MON`/`ANN` only `[51] ∨ [493]`). The net
+            // is the exact pro-rata amount rounded once to the cent, the day
+            // rate the annual amount over the year's days to 6 places.
+            for (jahr, tage) in input.period.tage_je_jahr() {
+                let jahrestage = Decimal::from(time::util::days_in_year(jahr));
+                let tage = Decimal::from(tage);
+                let rate_eur = -(*pauschale_eur_pro_jahr / jahrestage).round_kfm(6);
+                let credit_eur = -(*pauschale_eur_pro_jahr * tage / jahrestage).round_kfm(2);
+                let c = SettlementPosition {
+                    text: "§14a Modul 1 pauschale Reduzierung".to_owned(),
+                    kind: BillingPositionKind::NneModul1Pauschale,
+                    quantity: tage,
+                    unit: QuantityUnit::Tag,
+                    unit_price_eur: rate_eur,
+                    net_eur: credit_eur,
+                    spot_price_formula: None,
+                    artikel_id: None,
+                    trace: CalculationTrace {
+                        explanation: format!(
+                            "{pauschale_eur_pro_jahr} EUR/Jahr × {tage} / {jahrestage} Tage \
+                             ({jahr}) = {credit_eur:.2} EUR (Gutschrift)"
+                        ),
+                        input_quantity: tage,
+                        input_unit_price_eur: rate_eur,
+                        gross_eur: -(*pauschale_eur_pro_jahr * tage / jahrestage),
+                        legal_refs: vec![
+                            LegalReference::Sect14aEnwg {
+                                module: Sect14aModule::Modul1,
+                            },
+                            LegalReference::BnetzaDecision {
+                                reference: "BK8-22/010-A",
+                            },
+                        ],
+                        tariff_source: tariff_src.clone(),
+                        regulatory_reduction_factor: None,
+                        rounding_note: Some(
+                            "day rate to 6 dp; net to the cent off the exact pro-rata pauschale",
+                        ),
+                    },
+                };
+                total += c.net_eur;
+                positions.push(c);
+            }
         }
 
         // §14a Modul 2 — the device's own Arbeitspreis, reduced by a percentage.
@@ -910,6 +941,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 unit_price_eur: reduced_eur,
                 net_eur: pos_net(basis.menge_kwh, reduced_eur),
                 spot_price_formula: None,
+                artikel_id: None,
                 trace: CalculationTrace {
                     explanation: format!(
                         "{:.3} kWh × {:.6} EUR/kWh (= {:.6} × {factor} Modul 2) = {:.5} EUR",
@@ -933,7 +965,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     tariff_source: tariff_src.clone(),
                     regulatory_reduction_factor: Some(factor),
                     rounding_note: Some(
-                        "quantity rounded to 3 dp; unit price to 6 dp; net to 5 dp",
+                        "quantity rounded to 3 dp; unit price to 6 dp; net to the cent",
                     ),
                 },
             };
@@ -1010,7 +1042,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     lp.preis_eur_per_kw.round_kfm(6),
                     QuantityUnit::Kw,
                     "Jahreshöchstleistung × Jahresleistungspreis",
-                    "unit price to 6 dp; net to 5 dp",
+                    "unit price to 6 dp; net to the cent",
                 )
             }
             crate::types::LeistungspreisSystem::Monat { monate } => {
@@ -1035,7 +1067,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     lp.preis_eur_per_kw.round_kfm(6),
                     QuantityUnit::Kw,
                     "Höchstleistung × Monate × Monatsleistungspreis",
-                    "unit price to 6 dp; net to 5 dp",
+                    "unit price to 6 dp; net to the cent",
                 )
             }
         };
@@ -1048,6 +1080,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             unit_price_eur: price_eur,
             net_eur,
             spot_price_formula: None,
+            artikel_id: None,
             trace: CalculationTrace {
                 explanation: format!(
                     "{erklaerung}: {menge:.3} kW × {price_eur:.6} EUR/kW = {net_eur:.5} EUR"
@@ -1094,6 +1127,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 unit_price_eur: preis_eur.round_kfm(6),
                 net_eur: pos_net(mehrarbeit, preis_eur),
                 spot_price_formula: None,
+                artikel_id: None,
                 trace: CalculationTrace {
                     explanation: format!(
                         "{:.3} kvarh bezogen − {:.3} kvarh frei ({:.3} kWh × {}) \
@@ -1113,7 +1147,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     tariff_source: tariff_src.clone(),
                     regulatory_reduction_factor: None,
                     rounding_note: Some(
-                        "quantity rounded to 3 dp; unit price to 6 dp; net to 5 dp",
+                        "quantity rounded to 3 dp; unit price to 6 dp; net to the cent",
                     ),
                 },
             };
@@ -1257,6 +1291,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             unit_price_eur: ct_to_eur(ka_ct).round_kfm(6),
             net_eur: pos_net(ka_base_kwh, ct_to_eur(ka_ct)),
             spot_price_formula: None,
+            artikel_id: None,
             trace: CalculationTrace {
                 explanation: format!(
                     "{ka_base_kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR{ka_klasse_note}",
@@ -1271,7 +1306,9 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 }],
                 tariff_source: tariff_src.clone(),
                 regulatory_reduction_factor: None,
-                rounding_note: Some("quantity rounded to 3 dp; unit price to 6 dp; net to 5 dp"),
+                rounding_note: Some(
+                    "quantity rounded to 3 dp; unit price to 6 dp; net to the cent",
+                ),
             },
         };
         total += p.net_eur;
@@ -1336,6 +1373,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             unit_price_eur: rate_eur.round_kfm(6),
             net_eur: net,
             spot_price_formula: Some(formula),
+            artikel_id: None,
             trace: CalculationTrace {
                 explanation,
                 input_quantity: interval.menge_kwh,
@@ -1346,7 +1384,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 legal_refs: vec![arbeit_ref.clone()],
                 tariff_source: tariff_src.clone(),
                 regulatory_reduction_factor: None,
-                rounding_note: Some("rate ct→EUR 6 dp; net 5 dp"),
+                rounding_note: Some("rate ct→EUR 6 dp; net to the cent"),
             },
         };
         total += p.net_eur;
@@ -1430,7 +1468,8 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             })
             .map(|p| p.net_eur)
             .sum();
-        let reduction = -(nne_basis * (Decimal::ONE - v.vereinbarter_prozentsatz)).round_kfm(5);
+        // In cents, like every net ([`pos_net`]).
+        let reduction = -(nne_basis * (Decimal::ONE - v.vereinbarter_prozentsatz)).round_kfm(2);
         if !reduction.is_zero() {
             let art_label = match v.art {
                 crate::sect19::Sect19Art::AtypischeNetznutzung => "atypische Netznutzung",
@@ -1447,11 +1486,13 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     (v.vereinbarter_prozentsatz * HUNDRED).normalize()
                 ),
                 kind: BillingPositionKind::Sect19IndividuellesEntgelt,
+                // One reduction, priced as a whole: a count, not a month.
                 quantity: Decimal::ONE,
-                unit: QuantityUnit::Monat,
+                unit: QuantityUnit::Stueck,
                 unit_price_eur: reduction,
                 net_eur: reduction,
                 spot_price_formula: None,
+                artikel_id: None,
                 trace: CalculationTrace {
                     explanation: format!(
                         "-(1 − {}) × {nne_basis:.5} EUR Netzentgelt = {reduction:.5} EUR \
@@ -1471,7 +1512,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     ],
                     tariff_source: None,
                     regulatory_reduction_factor: Some(v.vereinbarter_prozentsatz),
-                    rounding_note: Some("net to 5 dp"),
+                    rounding_note: Some("net to the cent"),
                 },
             };
             total += p.net_eur;
@@ -1543,9 +1584,22 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
         });
     }
 
+    // Before 01.07.2018 the parties could treat the Mehr-/Mindermenge Strom as
+    // a sonstige Leistung, both on 31005 (INVOIC AHB 1.0b Kap. 3, S. 5); mako
+    // bills it as the Lieferung it is since, and has no arm for that case.
+    if input.period.from() < time::macros::date!(2018 - 07 - 01) {
+        return Err(BillingError::InvalidInput {
+            reason: "a Mehr-/Mindermenge before 01.07.2018 is not billed by mako".to_owned(),
+        });
+    }
+
     let mehr_eur = ct_to_eur(input.mehr_preis_ct_per_kwh);
     let minder_eur = ct_to_eur(input.minder_preis_ct_per_kwh);
-    let diff = input.actual_kwh - input.profil_kwh;
+    // The Mehr-/Mindermenge is stated in whole kWh: `QTY+47` DE 6060 of the
+    // MMM-Rechnung carries `[902] ∧ [937]` „keine Nachkommastelle" (INVOIC AHB
+    // 1.0b, 31005–31008, S. 40). The difference is rounded once, kaufmännisch,
+    // and priced from the rounded figure the invoice states.
+    let diff = (input.actual_kwh - input.profil_kwh).round_kfm(0);
 
     // Resolved once from the period; every decision below matches on the regime
     // rather than re-comparing dates, so a future turnover is a new variant the
@@ -1600,7 +1654,15 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
     // references. A self-issued Mehrmenge leg is a third: the AHB marks it
     // *Selbstausgestellt*, and that is carried by the settlement type because
     // the BO4E rendering reads `netznutzungrechnungsart` from it.
-    let mmm_settlement_type = if input.selbstausgestellt {
+    //
+    // Which one follows from the sign of the difference. The Mehr-/Mindermenge
+    // is a Lieferung, and „Für die Abbildung der Mehr-/Mindermenge als
+    // „Lieferung" wird der Anwendungsfall, der mit dem Prüfidentifikator 31005
+    // gekennzeichnet ist, zur Abrechnung der Mindermenge und der
+    // Anwendungsfall, der mit dem Prüfidentifikator 31006 gekennzeichnet ist,
+    // zur Abrechnung der Mehrmenge genutzt" (INVOIC AHB 1.0b Kap. 3, S. 5); the
+    // NB issues both to the LF (PID-Übersicht 4.0, 31005/31006: NB an LF).
+    let mmm_settlement_type = if diff < Decimal::ZERO {
         SettlementType::MmmSelbstausstellt
     } else {
         match input.sparte {
@@ -1625,25 +1687,27 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
     } else {
         Decimal::ZERO
     };
-    // A Mehrmenge is a credit, and the credit is carried by the **rate**. The
-    // quantity is a metered energy and stays positive; negating the net instead
-    // would leave a position whose stated quantity times its stated unit price
-    // is the opposite of its stated net, which every recipient's own line
-    // arithmetic reads as a 200 % error.
-    let mehr_price_eur = -mehr_eur.round_kfm(6);
+    // The Mehrmenge goes out on the NB's selbst ausgestellte Rechnung — a
+    // Gutschrift for the LF's Lieferung, whose amount is the LF's Guthaben
+    // („Eine Mehrmenge führt zu einem Guthaben des LF beim NB", BDEW-AWH
+    // Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und
+    // Gas V2.1, Kap. 6.5.2, S. 24), so it is stated positive at the
+    // Mehrmengenpreis.
+    let mehr_price_eur = mehr_eur.round_kfm(6);
     let mehr_net = pos_net(mehr_kwh, mehr_price_eur);
     let p1 = SettlementPosition {
-        text: "Mehrmengen (Gutschrift)".to_owned(),
+        text: "Mehrmengen".to_owned(),
         kind: BillingPositionKind::Mehrmenge,
         quantity: mehr_kwh.round_kfm(3),
         unit: QuantityUnit::Kwh,
         unit_price_eur: mehr_price_eur,
         net_eur: mehr_net,
         spot_price_formula: None,
+        artikel_id: None,
 
         trace: CalculationTrace {
             explanation: format!(
-                "{mehr_kwh:.3} kWh × {mehr_price_eur:.6} EUR/kWh = {mehr_net:.5} EUR (Gutschrift)"
+                "{mehr_kwh:.3} kWh × {mehr_price_eur:.6} EUR/kWh = {mehr_net:.5} EUR"
             ),
             input_quantity: mehr_kwh,
             input_unit_price_eur: mehr_price_eur,
@@ -1651,7 +1715,7 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
             legal_refs: mmm_refs.clone(),
             tariff_source: None,
             regulatory_reduction_factor: None,
-            rounding_note: Some("Mehrmengen are credit positions — the Mehrmengenpreis is negated"),
+            rounding_note: None,
         },
     };
 
@@ -1670,6 +1734,7 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
         unit_price_eur: minder_eur.round_kfm(6),
         net_eur: minder_net,
         spot_price_formula: None,
+        artikel_id: None,
 
         trace: CalculationTrace {
             explanation: format!(
@@ -1687,7 +1752,10 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
         },
     };
 
-    let total_eur = (p1.net_eur + p2.net_eur).round_kfm(2);
+    // One leg per document: the 31006 carries the Mehrmenge, the 31005 the
+    // Mindermenge.
+    let position = if diff < Decimal::ZERO { p1 } else { p2 };
+    let total_eur = position.net_eur;
     ensure_representable_eur(total_eur.abs())?;
 
     // A Mehr-/Mindermenge is a **Lieferung** of the commodity, not a network
@@ -1715,7 +1783,7 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
         period: input.period,
         sender_mp_id: input.nb_mp_id.clone(),
         recipient_mp_id: input.lf_mp_id.clone(),
-        positions: vec![p1, p2],
+        positions: vec![position],
         total_eur,
         steuer,
         warnings,
@@ -1781,12 +1849,13 @@ pub fn settle_abschlag(input: &AbschlagInput) -> Result<SettlementResult, Billin
     let position = SettlementPosition {
         text: format!("Abschlag Netznutzung ({})", input.grundlage.label()),
         kind: BillingPositionKind::NneAbschlag,
-        // No quantity and no unit price: the amount *is* the position.
+        // One Abschlag: the amount *is* the position.
         quantity: Decimal::ONE,
-        unit: QuantityUnit::Monat,
+        unit: QuantityUnit::Stueck,
         unit_price_eur: betrag,
         net_eur: betrag,
         spot_price_formula: None,
+        artikel_id: None,
         trace: CalculationTrace {
             explanation: format!(
                 "Abschlag {betrag:.2} EUR für {} – {} ({})",
@@ -1868,7 +1937,25 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
             reason: "grundgebuehr_eur_per_month must be non-negative".to_owned(),
         });
     }
-    if input.billing_months == 0 {
+    if let Some(t) = input.tagespreise {
+        if !input.grundgebuehr_eur_per_month.is_zero()
+            || input.steuereinrichtung_eur_per_month.is_some()
+        {
+            return Err(BillingError::InvalidInput {
+                reason: "tagespreise and a per-month Grundgebühr or Steuerungseinrichtung \
+                         price one charge twice; state one of them"
+                    .to_owned(),
+            });
+        }
+        if t.grundgebuehr_eur_per_tag < Decimal::ZERO
+            || t.steuereinrichtung_eur_per_tag
+                .is_some_and(|v| v < Decimal::ZERO)
+        {
+            return Err(BillingError::InvalidInput {
+                reason: "tagespreise must be non-negative".to_owned(),
+            });
+        }
+    } else if input.billing_months == 0 {
         return Err(BillingError::InvalidInput {
             reason: "billing_months must be at least 1".to_owned(),
         });
@@ -1945,10 +2032,21 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
             // is spread over the months the period bills before annualising —
             // for the monthly settlement that is the common case, that is the
             // fee itself twelve times over.
-            let msl_monatlich = input.messdienstleistung_eur.unwrap_or(Decimal::ZERO)
-                / Decimal::from(input.billing_months);
-            let netto_annual =
-                (input.grundgebuehr_eur_per_month + msl_monatlich) * Decimal::from(12);
+            let msl = input.messdienstleistung_eur.unwrap_or(Decimal::ZERO);
+            // Priced per day, the charge is a year of days: the day rate times
+            // the length of the year the period ends in, the flat fee spread
+            // over the period's days first.
+            let jahrestage = Decimal::from(time::util::days_in_year(input.period.to().year()));
+            let netto_annual = match input.tagespreise {
+                Some(t) => {
+                    (t.grundgebuehr_eur_per_tag + msl / Decimal::from(input.period.days()))
+                        * jahrestage
+                }
+                None => {
+                    (input.grundgebuehr_eur_per_month + msl / Decimal::from(input.billing_months))
+                        * Decimal::from(12)
+                }
+            };
             let brutto_annual = (netto_annual * (Decimal::ONE + satz / HUNDRED)).round_kfm(2);
             if brutto_annual > pog {
                 warnings.push(SettlementWarning {
@@ -1968,8 +2066,13 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
             // per party. Measuring it against the Abs. 1 figure would refuse a
             // lawful charge; folding it into that figure would grant it headroom
             // the Absatz does not.
-            if let Some(steuer_monatlich) = input.steuereinrichtung_eur_per_month {
-                let steuer_netto_annual = steuer_monatlich * Decimal::from(12);
+            let steuer_annual = match input.tagespreise {
+                Some(t) => t.steuereinrichtung_eur_per_tag.map(|v| v * jahrestage),
+                None => input
+                    .steuereinrichtung_eur_per_month
+                    .map(|v| v * Decimal::from(12)),
+            };
+            if let Some(steuer_netto_annual) = steuer_annual {
                 let steuer_brutto_annual =
                     (steuer_netto_annual * (Decimal::ONE + satz / HUNDRED)).round_kfm(2);
                 let cap = crate::msbg::STEUEREINRICHTUNG_OBERGRENZE_EUR_PER_JAHR;
@@ -1999,7 +2102,7 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
     // mismatch, which is the error worth catching.
     let period_months = Decimal::from(input.period.days()) / rust_decimal::dec!(30.44);
     let billed = Decimal::from(input.billing_months);
-    if (billed - period_months).abs() > Decimal::ONE {
+    if input.tagespreise.is_none() && (billed - period_months).abs() > Decimal::ONE {
         warnings.push(SettlementWarning {
             severity: WarningSeverity::Warning,
             code: "BILLING_MONTHS_MISMATCH",
@@ -2015,32 +2118,46 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
     let mut total = Decimal::ZERO;
 
     let months = Decimal::from(input.billing_months);
-    let p = monat_pos_traced(
-        "Grundgebühr Messstellenbetrieb",
-        BillingPositionKind::MsbGrundgebuehr,
-        months,
-        input.grundgebuehr_eur_per_month,
-        vec![
-            LegalReference::MsbG {
-                paragraph: "§§6–7"
-            },
-            LegalReference::MsbG { paragraph: "§30" },
-        ],
-        None,
-    );
+    let tage = Decimal::from(input.period.days());
+    let grund_refs = vec![
+        LegalReference::MsbG {
+            paragraph: "§§6–7"
+        },
+        LegalReference::MsbG { paragraph: "§30" },
+    ];
+    let p = match input.tagespreise {
+        Some(t) => tag_pos_traced(
+            "Grundgebühr Messstellenbetrieb",
+            BillingPositionKind::MsbGrundgebuehr,
+            tage,
+            t.grundgebuehr_eur_per_tag,
+            grund_refs,
+        ),
+        None => monat_pos_traced(
+            "Grundgebühr Messstellenbetrieb",
+            BillingPositionKind::MsbGrundgebuehr,
+            months,
+            input.grundgebuehr_eur_per_month,
+            grund_refs,
+            None,
+        ),
+    };
     total += p.net_eur;
     positions.push(p);
 
     if let Some(msl_eur) = input.messdienstleistung_eur {
-        let msl: Decimal = msl_eur.round_kfm(5);
+        // In cents, like every net ([`pos_net`]).
+        let msl: Decimal = msl_eur.round_kfm(2);
         let p = SettlementPosition {
             text: "Messdienstleistung".to_owned(),
             kind: BillingPositionKind::Messdienstleistung,
+            // A flat fee for the period: a count, not a month.
             quantity: Decimal::ONE,
-            unit: QuantityUnit::Monat,
+            unit: QuantityUnit::Stueck,
             unit_price_eur: msl,
             net_eur: msl,
             spot_price_formula: None,
+            artikel_id: None,
 
             trace: CalculationTrace {
                 explanation: format!("Messdienstleistung Pauschale {msl:.5} EUR"),
@@ -2052,7 +2169,7 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
                 }],
                 tariff_source: None,
                 regulatory_reduction_factor: None,
-                rounding_note: Some("flat fee — rounded to 5 dp"),
+                rounding_note: Some("flat fee — rounded to the cent"),
             },
         };
         total += p.net_eur;
@@ -2060,15 +2177,28 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
     }
 
     // §30 Abs. 2 MsbG — its own position, because it carries its own ceiling.
-    if let Some(steuer) = input.steuereinrichtung_eur_per_month {
-        let p = monat_pos_traced(
-            "Steuerungseinrichtung am Netzanschlusspunkt",
-            BillingPositionKind::MsbSteuereinrichtung,
-            months,
-            steuer,
-            vec![LegalReference::MsbG { paragraph: "§30" }],
-            None,
-        );
+    let steuer_pos = match input.tagespreise {
+        Some(t) => t.steuereinrichtung_eur_per_tag.map(|steuer| {
+            tag_pos_traced(
+                "Steuerungseinrichtung am Netzanschlusspunkt",
+                BillingPositionKind::MsbSteuereinrichtung,
+                tage,
+                steuer,
+                vec![LegalReference::MsbG { paragraph: "§30" }],
+            )
+        }),
+        None => input.steuereinrichtung_eur_per_month.map(|steuer| {
+            monat_pos_traced(
+                "Steuerungseinrichtung am Netzanschlusspunkt",
+                BillingPositionKind::MsbSteuereinrichtung,
+                months,
+                steuer,
+                vec![LegalReference::MsbG { paragraph: "§30" }],
+                None,
+            )
+        }),
+    };
+    if let Some(p) = steuer_pos {
         total += p.net_eur;
         positions.push(p);
     }
@@ -2143,6 +2273,7 @@ pub fn reverse(original: &SettlementResult, grund: KorrekturGrund) -> Settlement
             unit_price_eur: -p.unit_price_eur,
             net_eur: -p.net_eur,
             spot_price_formula: p.spot_price_formula.clone(),
+            artikel_id: None,
             trace: CalculationTrace {
                 explanation: format!("Storno: {} (negated)", p.trace.explanation),
                 input_quantity: p.trace.input_quantity,
@@ -2338,12 +2469,15 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         let net = pos_net(qty, awh.preis_eur);
         positions.push(SettlementPosition {
             text: awh.beschreibung.clone(),
-            kind: BillingPositionKind::GasAwhSonstige, // service layer refines if artikel_id present
+            kind: BillingPositionKind::GasAwhSonstige,
             quantity: qty,
-            unit: QuantityUnit::Monat, // AWH positions have no standard EDIFACT unit; Monat placeholder
+            // `anzahl` Aufträge at a €/Auftrag price.
+            unit: QuantityUnit::Stueck,
             unit_price_eur: awh.preis_eur.round_kfm(6),
             net_eur: net,
             spot_price_formula: None,
+            // The price sheet's code travels with the position it prices.
+            artikel_id: awh.artikel_id.clone(),
 
             trace: CalculationTrace {
                 explanation: format!(
@@ -2358,7 +2492,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
                 legal_refs: awh_legal_refs.clone(),
                 tariff_source: tariff_src.clone(),
                 regulatory_reduction_factor: None,
-                rounding_note: Some("net rounded to 5 dp"),
+                rounding_note: Some("net rounded to the cent"),
             },
         });
         total += net;
@@ -2410,7 +2544,6 @@ fn modul1(pauschale_eur_pro_jahr: Decimal) -> ArbeitspreisModell {
             preis_ct_per_kwh: rust_decimal::dec!(3.5),
         },
         pauschale_eur_pro_jahr,
-        jahresanteil: crate::types::Jahresanteil::MONAT,
     }
 }
 
@@ -2558,9 +2691,100 @@ mod tests {
             billing_months: 1,
             messdienstleistung_eur: None,
             steuereinrichtung_eur_per_month: None,
+            tagespreise: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         }
+    }
+
+    /// Priced per day, the Grundgebühr bills the period's days at the day
+    /// rate — the unit the 31009 column admits from 01.01.2024.
+    #[test]
+    fn a_msb_settlement_priced_per_day_bills_the_periods_days() {
+        let mut i = base_msb();
+        i.grundgebuehr_eur_per_month = Decimal::ZERO;
+        i.tagespreise = Some(crate::types::MsbTagespreise {
+            grundgebuehr_eur_per_tag: d("0.10"),
+            steuereinrichtung_eur_per_tag: Some(d("0.05")),
+        });
+        let r = settle_msb(&i).expect("settles");
+        let p = &r.positions[0];
+        assert_eq!(
+            (p.quantity, p.unit, p.net_eur),
+            (d("31"), QuantityUnit::Tag, d("3.10"))
+        );
+        let s = &r.positions[1];
+        assert_eq!(
+            (s.kind, s.unit, s.net_eur),
+            (
+                BillingPositionKind::MsbSteuereinrichtung,
+                QuantityUnit::Tag,
+                d("1.55")
+            )
+        );
+        assert_eq!(r.total_eur, d("4.65"));
+
+        // A monthly figure beside the day rates is two prices for one charge.
+        i.grundgebuehr_eur_per_month = d("3.00");
+        assert!(settle_msb(&i).is_err());
+    }
+
+    /// A Mehrmenge is the Lieferant's Lieferung to the Netzbetreiber and goes
+    /// out as the selbst ausgestellte Rechnung 31006 the NB issues — a
+    /// Gutschrift whose amounts are the LF's Guthaben, so positive; a
+    /// Mindermenge is the NB's Forderung on the 31005. INVOIC AHB 1.0b Kap. 3
+    /// (S. 5): „Für die Abbildung der Mehr-/Mindermenge als „Lieferung" wird
+    /// der Anwendungsfall, der mit dem Prüfidentifikator 31005 gekennzeichnet
+    /// ist, zur Abrechnung der Mindermenge und der Anwendungsfall, der mit dem
+    /// Prüfidentifikator 31006 gekennzeichnet ist, zur Abrechnung der
+    /// Mehrmenge genutzt."
+    #[test]
+    fn a_mehrmenge_is_the_nbs_31006_and_a_mindermenge_its_31005() {
+        let mut i = base_mmm();
+        i.actual_kwh = d("1000");
+        i.profil_kwh = d("1200");
+        let r = settle_mmm(&i).expect("settles");
+        assert_eq!(r.settlement_type, SettlementType::MmmSelbstausstellt);
+        assert_eq!(
+            (r.sender_mp_id.as_str(), r.recipient_mp_id.as_str()),
+            ("9900357000004", "9900012345678")
+        );
+        assert_eq!(r.positions.len(), 1, "the Mehrmenge alone");
+        let p = &r.positions[0];
+        assert_eq!(
+            (p.kind, p.quantity, p.unit_price_eur, p.net_eur),
+            (
+                BillingPositionKind::Mehrmenge,
+                d("200"),
+                d("0.04"),
+                d("8.00")
+            )
+        );
+        assert_eq!(r.total_eur, d("8.00"), "the LF's Guthaben, stated positive");
+
+        i.actual_kwh = d("1600");
+        i.profil_kwh = d("1500");
+        let r = settle_mmm(&i).expect("settles");
+        assert_eq!(r.settlement_type, SettlementType::MmmStrom);
+        assert_eq!(r.positions.len(), 1, "the Mindermenge alone");
+        assert_eq!(r.positions[0].kind, BillingPositionKind::Mindermenge);
+        assert_eq!(r.total_eur, d("2.00"));
+    }
+
+    /// The Mehr-/Mindermenge is a whole number of kWh, priced as stated.
+    #[test]
+    fn a_mehr_mindermenge_is_stated_in_whole_kwh() {
+        let mut i = base_mmm();
+        i.actual_kwh = d("1600.4");
+        i.profil_kwh = d("1500");
+        let r = settle_mmm(&i).expect("settles");
+        let minder = &r.positions[0];
+        assert_eq!(minder.kind, BillingPositionKind::Mindermenge);
+        assert_eq!(minder.quantity, d("100"));
+        assert_eq!(minder.net_eur, d("2.00"), "100 kWh × 2 ct");
+        i.actual_kwh = d("1600.5");
+        let r = settle_mmm(&i).expect("settles");
+        assert_eq!(r.positions[0].quantity, d("101"), "half a kWh rounds up");
     }
 
     fn base_mmm() -> MmmInput {
@@ -2575,7 +2799,6 @@ mod tests {
             mehr_preis_ct_per_kwh: d("4.0"),
             minder_preis_ct_per_kwh: d("2.0"),
             wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
-            selbstausgestellt: false,
         }
     }
 
@@ -2593,10 +2816,12 @@ mod tests {
         const PPM: Decimal = dec!(10_000);
         const MILLION: Decimal = dec!(1_000_000);
         let computed = p.quantity * p.unit_price_eur;
-        if computed.is_zero() {
-            return p.net_eur.is_zero();
-        }
-        (p.net_eur - computed).abs() * MILLION <= computed.abs() * PPM
+        // A net is stated in cents, so the product rounded to the cent is
+        // exactly what the position states; beyond that, the recipient's
+        // relative tolerance.
+        p.net_eur == computed.round_kfm(2)
+            || (!computed.is_zero()
+                && (p.net_eur - computed).abs() * MILLION <= computed.abs() * PPM)
     }
 
     /// Every settlement this crate can emit, named, for the invariant below.
@@ -3041,7 +3266,7 @@ mod tests {
             .expect("the excess is billed");
         assert_eq!(p.quantity, d("115.700"));
         assert_eq!(p.unit, QuantityUnit::Kvarh);
-        assert_eq!(p.net_eur, d("2.31400"));
+        assert_eq!(p.net_eur, d("2.31"));
         // The basis is the NB's Preisblatt under StromNEV §17 — not §18.
         assert!(
             p.trace.legal_refs.iter().any(
@@ -3328,22 +3553,20 @@ mod tests {
             mehr_preis_ct_per_kwh: d("4.0"),
             minder_preis_ct_per_kwh: d("2.0"),
             wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
-            selbstausgestellt: false,
         };
         let r = settle_mmm(&input).unwrap();
         // 100 kWh over profile × 2.0 ct = 2.00 EUR charged at the Mindermengen price.
         assert_eq!(r.total_eur, d("2.00"));
-        assert_eq!(
-            r.positions[0].net_eur,
-            Decimal::ZERO,
-            "no Mehrmenge position"
-        );
-        assert_eq!(r.positions[1].quantity, d("100.000"));
+        assert_eq!(r.positions.len(), 1, "no Mehrmenge position");
+        assert_eq!(r.positions[0].kind, BillingPositionKind::Mindermenge);
+        assert_eq!(r.positions[0].quantity, d("100"));
     }
 
     /// measured < profiled is an **ungewollte Mehrmenge** — the NB took the
     /// surplus and reimburses it. GPKE (BK6-24-174) Teil 1 Kap. 8.4 Nr. 3:
     /// "so vergütet der Netzbetreiber dem Lieferanten [...] diese Differenzmenge".
+    /// The NB states the reimbursement on its selbst ausgestellte Rechnung,
+    /// positive.
     #[test]
     fn under_consumption_is_a_mehrmenge_credit() {
         let input = MmmInput {
@@ -3357,17 +3580,13 @@ mod tests {
             mehr_preis_ct_per_kwh: d("4.0"),
             minder_preis_ct_per_kwh: d("2.0"),
             wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
-            selbstausgestellt: false,
         };
         let r = settle_mmm(&input).unwrap();
-        // 100 kWh under profile × 4.0 ct = 4.00 EUR credited at the Mehrmengen price.
-        assert_eq!(r.total_eur, d("-4.00"));
-        assert_eq!(r.positions[0].net_eur, d("-4.00000"));
-        assert_eq!(
-            r.positions[1].net_eur,
-            Decimal::ZERO,
-            "no Mindermenge position"
-        );
+        // 100 kWh under profile × 4.0 ct = 4.00 EUR, the LF's Guthaben.
+        assert_eq!(r.total_eur, d("4.00"));
+        assert_eq!(r.settlement_type, SettlementType::MmmSelbstausstellt);
+        assert_eq!(r.positions.len(), 1, "no Mindermenge position");
+        assert_eq!(r.positions[0].net_eur, d("4.00"));
     }
 
     /// The two quantities must never both be non-zero.
@@ -3378,10 +3597,10 @@ mod tests {
             i.actual_kwh = d(actual);
             i.profil_kwh = d(profil);
             let r = settle_mmm(&i).unwrap();
-            assert!(
-                r.positions[0].quantity == Decimal::ZERO
-                    || r.positions[1].quantity == Decimal::ZERO,
-                "{actual}/{profil}: both positions carry a quantity"
+            assert_eq!(
+                r.positions.len(),
+                1,
+                "{actual}/{profil}: one leg per document"
             );
         }
     }
@@ -3401,6 +3620,7 @@ mod tests {
             billing_months: 1,
             messdienstleistung_eur: None,
             steuereinrichtung_eur_per_month: None,
+            tagespreise: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };
@@ -3425,6 +3645,7 @@ mod tests {
             billing_months: 3,
             messdienstleistung_eur: Some(d("8.00")),
             steuereinrichtung_eur_per_month: None,
+            tagespreise: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };
@@ -3768,6 +3989,7 @@ mod tests {
             billing_months: 1,
             messdienstleistung_eur: None,
             steuereinrichtung_eur_per_month: None,
+            tagespreise: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };
@@ -3994,7 +4216,9 @@ mod tests {
         assert_eq!(levies.len(), 3, "all three levies must appear");
 
         let levy_total: Decimal = levies.iter().map(|p| p.net_eur).sum();
-        assert_eq!(levy_total.round_kfm(2), dec!(44.19));
+        // The sum of three nets each rounded to the cent — what the invoice
+        // states and adds up.
+        assert_eq!(levy_total, dec!(44.20));
         assert!(r.is_clean(), "a covered year must raise no warning");
     }
 
@@ -4021,16 +4245,16 @@ mod tests {
     /// refused, naming each missing rate — billing it without them understates
     /// the invoice by three levies the ÜNB reclaim.
     #[test]
-    fn a_2027_strom_period_without_an_override_is_refused() {
+    fn a_strom_period_of_an_untabled_year_without_an_override_is_refused() {
         let mut i = base_nne();
         i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::A;
-        i.period = SettlementPeriod::new(date!(2027 - 01 - 01), date!(2027 - 01 - 31)).unwrap();
-        let err = settle_nne(&i).expect_err("a 2027 period without Umlagen rates must refuse");
+        i.period = SettlementPeriod::new(date!(2028 - 01 - 01), date!(2028 - 01 - 31)).unwrap();
+        let err = settle_nne(&i).expect_err("a 2028 period without Umlagen rates must refuse");
         let msg = err.to_string();
         for levy in ["§19 StromNEV", "Offshore-Netzumlage", "KWKG-Umlage"] {
             assert!(msg.contains(levy), "{levy} must be named: {msg}");
         }
-        assert!(msg.contains("2027"), "{msg}");
+        assert!(msg.contains("2028"), "{msg}");
     }
 
     /// An override for each levy is the supplied rate, so the period settles.
@@ -4056,6 +4280,35 @@ mod tests {
             })
             .count();
         assert_eq!(levies, 3);
+        // The caller's §19 rate replaces the reserved row, so nothing is said.
+        assert!(
+            r.warnings
+                .iter()
+                .all(|w| w.code != "UMLAGE_UNTER_VORBEHALT")
+        );
+    }
+
+    /// A 2027 period priced from the tabled §19 row says the ÜNB published it
+    /// under the § 24d EnWG reservation, and still settles at the published rate.
+    #[test]
+    fn a_2027_period_priced_from_the_reserved_row_says_so() {
+        let mut i = base_nne();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::A;
+        i.period = SettlementPeriod::new(date!(2027 - 01 - 01), date!(2027 - 01 - 31)).unwrap();
+        let r = settle_nne(&i).expect("the 2027 rows are tabled");
+        let w: Vec<_> = r
+            .warnings
+            .iter()
+            .filter(|w| w.code == "UMLAGE_UNTER_VORBEHALT")
+            .collect();
+        assert_eq!(w.len(), 1);
+        assert!(w[0].message.contains("07.12.2026"), "{}", w[0].message);
+        let s19 = r
+            .positions
+            .iter()
+            .find(|p| p.kind == BillingPositionKind::Sect19StromNevUmlage)
+            .expect("a §19 line");
+        assert_eq!(s19.unit_price_eur, dec!(0.02027));
     }
 
     /// One missing levy refuses the period and only that one is named.
@@ -4063,32 +4316,31 @@ mod tests {
     fn a_single_missing_levy_is_named_alone() {
         let mut i = base_nne();
         i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::A;
-        i.period = SettlementPeriod::new(date!(2027 - 01 - 01), date!(2027 - 01 - 31)).unwrap();
+        i.period = SettlementPeriod::new(date!(2028 - 01 - 01), date!(2028 - 01 - 31)).unwrap();
         i.sect19_umlage_ct_per_kwh = Some(dec!(1.6));
         i.offshore_umlage_ct_per_kwh = Some(dec!(1.0));
         let msg = settle_nne(&i).expect_err("KWKG has no rate").to_string();
-        assert!(msg.contains("KWKG-Umlage 2027"), "{msg}");
+        assert!(msg.contains("KWKG-Umlage 2028"), "{msg}");
         assert!(!msg.contains("Offshore"), "{msg}");
     }
 
-    /// A Dec 2026 / Jan 2027 period is priced per year: the 2027 half has no
-    /// row, so the period is refused naming 2027 — it is not billed at the
-    /// 2026 rates throughout.
+    /// A Dec 2027 / Jan 2028 period is priced per year: the 2028 half has no
+    /// row, so the period is refused naming 2028 — it is not billed at the
+    /// 2027 rates throughout.
     #[test]
     fn a_period_crossing_1_january_is_refused_when_the_new_year_has_no_rate() {
         let mut i = base_nne();
         i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::A;
-        i.period = SettlementPeriod::new(date!(2026 - 12 - 15), date!(2027 - 01 - 15)).unwrap();
+        i.period = SettlementPeriod::new(date!(2027 - 12 - 15), date!(2028 - 01 - 15)).unwrap();
         let msg = settle_nne(&i)
-            .expect_err("the 2027 days have no Umlagen rate")
+            .expect_err("the 2028 days have no Umlagen rate")
             .to_string();
-        assert!(msg.contains("KWKG-Umlage 2027"), "{msg}");
-        assert!(!msg.contains("2026"), "the 2026 days are tabled: {msg}");
+        assert!(msg.contains("KWKG-Umlage 2028"), "{msg}");
+        assert!(!msg.contains("2027"), "the 2027 days are tabled: {msg}");
     }
 
     /// A 15.12.2026–15.01.2027 period carries each levy as two positions, each
     /// at its own year's rate, the quantity split by days (17 of 32 in 2026).
-    /// The 2027 row here stands in for the ÜNB publication.
     #[test]
     fn a_period_crossing_1_january_bills_each_levy_per_year() {
         use crate::umlagen::Letztverbrauchergruppe as G;
@@ -4122,7 +4374,10 @@ mod tests {
         assert!(kwkg[1].text.contains("2027"), "{}", kwkg[1].text);
         let sum: Decimal = positions.iter().map(|p| p.net_eur).sum();
         assert_eq!(sum, summe);
-        assert!(warnings.is_empty());
+        // The real 2027 §19 row was published under a reservation; the run says
+        // so and says nothing else.
+        let codes: Vec<&str> = warnings.iter().map(|w| w.code).collect();
+        assert_eq!(codes, ["UMLAGE_UNTER_VORBEHALT"]);
     }
 
     /// An override is one rate; across 1 January it would price both years at
@@ -4286,6 +4541,7 @@ mod tests {
                 billing_months: 1,
                 messdienstleistung_eur: None,
                 steuereinrichtung_eur_per_month: None,
+                tagespreise: None,
                 messstellen_kategorie: None,
                 entgeltschuldner: None,
             };
@@ -4675,6 +4931,7 @@ mod tests {
             billing_months: 0,
             messdienstleistung_eur: None,
             steuereinrichtung_eur_per_month: None,
+            tagespreise: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };
@@ -4724,20 +4981,51 @@ mod tests {
         assert_eq!(r.positions.len(), 2, "the Arbeit position plus the credit");
         // 1500 kWh × 3.5 ct = 52.50 EUR, billed in full.
         assert_eq!(r.positions[0].net_eur, d("52.50000"));
-        // A twelfth of a year at 120 EUR/Jahr. The credit is computed from the
-        // exact twelfth, so twelve of them come to the published 120 EUR and
-        // not to 119.99952.
+        // January's 31 of 365 days at 120 EUR/Jahr: 10,19 EUR.
         let credit = &r.positions[1];
-        assert_eq!(credit.quantity, d("0.083333333"));
-        assert_eq!(credit.unit, QuantityUnit::Jahr);
-        assert_eq!(credit.unit_price_eur, d("-120.000000"));
-        assert_eq!(credit.net_eur, d("-10.00000"));
+        assert_eq!(credit.quantity, d("31"));
+        assert_eq!(credit.unit, QuantityUnit::Tag);
+        assert_eq!(credit.net_eur, d("-10.19"));
+        assert_eq!(r.total_eur, d("42.31"));
+
+        // A whole year credits the published pauschale exactly, and twelve
+        // monthly runs come to it within their twelve cent roundings.
+        let credit_for = |from: time::Date, to: time::Date| {
+            let mut i = base_nne();
+            i.period = SettlementPeriod::new(from, to).expect("period");
+            i.arbeitspreis = modul1(d("120.00"));
+            settle_nne(&i).expect("settles").positions[1..]
+                .iter()
+                .map(|p| p.net_eur)
+                .sum::<Decimal>()
+        };
         assert_eq!(
-            credit.net_eur * Decimal::from(12),
-            d("-120.00000"),
-            "twelve monthly credits are the annual pauschale"
+            credit_for(date!(2026 - 01 - 01), date!(2026 - 12 - 31)),
+            d("-120.00")
         );
-        assert_eq!(r.total_eur, d("42.50"));
+        let monate: Decimal = (1..=12u8)
+            .map(|m| {
+                let von = time::Date::from_calendar_date(2026, m.try_into().unwrap(), 1).unwrap();
+                let bis = von.replace_day(von.month().length(2026)).unwrap();
+                credit_for(von, bis)
+            })
+            .sum();
+        assert!((monate + d("120.00")).abs() <= d("0.06"), "{monate}");
+
+        // A period across a year boundary credits each year at its own length.
+        let mut i = base_nne();
+        i.period =
+            SettlementPeriod::new(date!(2023 - 12 - 15), date!(2024 - 01 - 14)).expect("period");
+        i.arbeitspreis = modul1(d("120.00"));
+        let r = settle_nne(&i).expect("settles");
+        let tage: Vec<_> = r.positions[1..]
+            .iter()
+            .map(|p| (p.quantity, p.unit_price_eur))
+            .collect();
+        assert_eq!(
+            tage,
+            vec![(d("17"), d("-0.328767")), (d("14"), d("-0.327869"))]
+        );
 
         assert!(
             r.positions[1].text.contains("pauschale"),
@@ -4761,7 +5049,6 @@ mod tests {
                     preis_ct_per_kwh: d("3.5"),
                 },
                 pauschale_eur_pro_jahr: d("120.00"),
-                jahresanteil: crate::types::Jahresanteil::MONAT,
             };
             settle_nne(&i).unwrap().positions[1].net_eur
         };
@@ -4778,52 +5065,23 @@ mod tests {
         assert_eq!(r.total_eur, d("52.50"));
     }
 
-    /// **Invariant: the Modul 1 credit is a rate times a quantity.**
+    /// **Invariant: the Modul 1 credit is a day rate times the period's days.**
     ///
-    /// The position states the Netzbetreiber's published annual pauschale as the
-    /// unit price and the share of a year billed as the quantity, so the two
-    /// multiply out to the net. Stating the period's whole credit as the *unit*
-    /// price instead leaves the position out by the pro-rating factor — an
-    /// arithmetic error of about 1 100 % on a monthly run, far outside the
-    /// checker's 1 % tolerance, which makes the invoice undispatchable.
+    /// The annual pauschale over the year's days is the unit price, the
+    /// period's days the quantity: 120 EUR / 365 × 31 = 10,19 EUR for January
+    /// 2026, the product of the two figures the position states.
     #[test]
-    fn the_modul1_credit_states_the_annual_rate_as_its_unit_price() {
+    fn the_modul1_credit_states_the_day_rate_as_its_unit_price() {
         let mut i = base_nne();
         i.arbeitspreis = super::modul1(d("120.00"));
         let credit = &settle_nne(&i).expect("settles").positions[1];
 
-        assert_eq!(credit.unit_price_eur, d("-120.000000"), "EUR per year");
-        assert_eq!(
-            credit.quantity,
-            d("0.083333333"),
-            "the share of a year billed"
-        );
+        assert_eq!(credit.kind, BillingPositionKind::NneModul1Pauschale);
+        assert_eq!(credit.unit, QuantityUnit::Tag);
+        assert_eq!(credit.unit_price_eur, d("-0.328767"), "EUR per Tag");
+        assert_eq!(credit.quantity, d("31"), "the days billed");
+        assert_eq!(credit.net_eur, d("-10.19"));
         assert!(multiplies_out(credit));
-    }
-
-    /// **Invariant: a Jahresanteil is a share of a year.**
-    ///
-    /// Outside `(0, 1]` it is not one, and the type refuses it before any
-    /// arithmetic sees it — including when it arrives over the wire, which is
-    /// where an unconstrained `Decimal` reached the engine unchecked.
-    #[test]
-    fn a_jahresanteil_outside_the_unit_interval_is_refused() {
-        use crate::types::Jahresanteil;
-
-        for bad in ["-1", "0", "1.5"] {
-            assert!(
-                Jahresanteil::new(d(bad)).is_err(),
-                "{bad} is not a share of a year"
-            );
-            assert!(
-                serde_json::from_str::<Jahresanteil>(&format!("\"{bad}\"")).is_err(),
-                "{bad} must be refused on the wire too"
-            );
-        }
-        assert_eq!(
-            Jahresanteil::new(Decimal::ONE).expect("a whole year"),
-            Jahresanteil::JAHR
-        );
     }
 
     /// **Invariant: a negative pauschale is refused, not billed.**
@@ -4839,39 +5097,6 @@ mod tests {
             settle_nne(&i),
             Err(BillingError::InvalidInput { .. })
         ));
-    }
-
-    /// **Invariant: the share credited is the share served.**
-    ///
-    /// `1` is a valid Jahresanteil and the wrong one for a month: it credits the
-    /// whole annual pauschale on every monthly run, twelve times over the year.
-    /// The range check cannot see the period, so the settlement measures the two
-    /// against each other.
-    #[test]
-    fn a_jahresanteil_that_disagrees_with_the_period_is_reported() {
-        use crate::types::Jahresanteil;
-
-        let modul1_with = |anteil: Jahresanteil| {
-            let mut i = base_nne();
-            i.arbeitspreis = ArbeitspreisModell::Modul1Pauschal {
-                basis: MengePreis {
-                    menge_kwh: d("1500"),
-                    preis_ct_per_kwh: d("3.5"),
-                },
-                pauschale_eur_pro_jahr: d("120.00"),
-                jahresanteil: anteil,
-            };
-            settle_nne(&i).expect("settles")
-        };
-        let flagged = |r: &SettlementResult| {
-            r.warnings
-                .iter()
-                .any(|w| w.code == "MODUL1_JAHRESANTEIL_MISMATCH")
-        };
-
-        // The period is one month.
-        assert!(flagged(&modul1_with(Jahresanteil::JAHR)));
-        assert!(!flagged(&modul1_with(Jahresanteil::MONAT)));
     }
 
     /// **Invariant: a period's share of a year is measured year by year.**
@@ -5471,8 +5696,6 @@ mod proptests {
                     // of consumption.
                     pauschale_eur_pro_jahr: (Decimal::ONE - factor)
                         * Decimal::from(1200u32),
-                    // The period is a full year, so the whole pauschale is due.
-                    jahresanteil: crate::types::Jahresanteil::JAHR,
                 };
                 if let Ok(reduced) = settle_nne(&reduced_input) {
                     prop_assert!(
@@ -5552,7 +5775,6 @@ mod proptests {
                         preis_ct_per_kwh: ct,
                     },
                     pauschale_eur_pro_jahr: Decimal::new(pauschale_eur as i64, 2),
-                    jahresanteil: crate::types::Jahresanteil::MONAT,
                 },
             ] {
                 input.arbeitspreis = arbeitspreis;
@@ -5677,8 +5899,8 @@ mod modul3_tests {
             .find(|p| p.kind == BillingPositionKind::NneArbeitSpotpreis)
             .expect("spot position must be present");
 
-        // 2.5 kWh × 0.018 EUR/kWh = 0.045 EUR
-        assert_eq!(spot_pos.net_eur, d("0.04500"), "spot net_eur");
+        // 2.5 kWh × 0.018 EUR/kWh = 0.045 EUR, stated as 0.05 EUR
+        assert_eq!(spot_pos.net_eur, d("0.05"), "spot net_eur");
         assert_eq!(spot_pos.quantity, d("2.500"));
         assert_eq!(spot_pos.unit, QuantityUnit::Kwh);
 
@@ -5765,10 +5987,10 @@ mod modul3_tests {
             .filter(|p| p.kind == BillingPositionKind::NneArbeitSpotpreis)
             .collect();
         assert_eq!(modul3.len(), 2);
-        // Interval 1: 1.25 kWh × 0.02 EUR/kWh = 0.025 EUR
-        assert_eq!(modul3[0].net_eur, d("0.02500"));
-        // Interval 2: 1.75 kWh × 0.015 EUR/kWh = 0.02625 EUR
-        assert_eq!(modul3[1].net_eur, d("0.02625"));
+        // Interval 1: 1.25 kWh × 0.02 EUR/kWh = 0.025 EUR, stated as 0.03 EUR
+        assert_eq!(modul3[0].net_eur, d("0.03"));
+        // Interval 2: 1.75 kWh × 0.015 EUR/kWh = 0.02625 EUR, stated as 0.03 EUR
+        assert_eq!(modul3[1].net_eur, d("0.03"));
         // Each interval states its own rate, so the two formulas differ.
         let f0 = modul3[0].spot_price_formula.as_ref().unwrap();
         let f1 = modul3[1].spot_price_formula.as_ref().unwrap();

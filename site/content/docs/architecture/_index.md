@@ -140,7 +140,7 @@ The pure, zero-I/O crates domain logic lives in:
 |---|---|---|
 | `edi-energy` | EDIFACT parse / validate / build | `parse()`, `Platform`, `ValidationReport` |
 | `mako-engine` | Event-sourced process runtime | `Workflow`, `Process`, `EventStore`, `AtomicAppend`, `OutboxStore`, `DeadlineStore` |
-| `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
+| `mako-markt` | Market data domain and record types | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
 | `mako-fristen` | The German market calendar | `heute`/`berlin_date`/`berlin_midnight`; `add_werktage`, `deadline_at_werktage`; `antwort`/`meldung`/`vorlauf` per-PID windows |
 | `grid-billing` | NNE/KA/MMM/MSB grid settlement | `settle_nne`, `SettlementResult` with `CalculationTrace`; `reverse()`; opt-in `bo4e` → `into_rechnung()` |
 | `energy-billing` | Multi-product retail billing (LF) | `Product` (13 categories) through `BillingEngine`; §14a loads, Strom-/Energiesteuer, HT/NT, §41a EPEX; optional `eeg` and `bo4e` features |
@@ -181,7 +181,7 @@ graph TD
     subgraph daemons ["Production daemons"]
         netzbilanzd["netzbilanzd :8680<br/>NB billing"]
         einsd["einsd :9180<br/>EEG settlement"]
-        billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>12 MCP tools"]
+        billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>13 MCP tools"]
         outputd["outputd :9880<br/>customer documents<br/>Typst templates · ZUGFeRD carrier"]
         invoicd["invoicd :8280<br/>INVOIC plausibility"]
     end
@@ -535,8 +535,8 @@ acknowledges; `429`/`5xx` back off; any other `4xx` dead-letters. See
    whether the window the label names is still open.
 3. If it is, the workflow records the lapse — the outcome its Festlegung gives
    the silence, or `FristAbgelaufen` where it gives none — in one write, with an
-   `AperakTimeout` outbox entry where it carries one.
-4. That entry reaches the ERP as `de.mako.aperak.timeout` through
+   `AntwortfristAbgelaufen` outbox entry where it carries one.
+4. That entry reaches the ERP as `de.mako.antwortfrist.abgelaufen` through
    `OutboxErpWorker`.
 
 See [Compensation](@/docs/architecture/compensation.md).

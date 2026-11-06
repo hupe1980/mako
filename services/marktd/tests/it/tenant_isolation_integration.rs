@@ -18,9 +18,8 @@
 
 use mako_markt::error::MdmError;
 use mako_markt::repository::{
-    NbContractRecord, NbContractRepository as _, NetzzugangAktion, NetzzugangAntrag,
-    NetzzugangAntragTyp, NetzzugangStatus, Saison, Tarifzone, ZaehlzeitRegisterUpsert,
-    ZaehlzeitRepository as _, ZaehlzeitSaisonUpsert,
+    NbContractRecord, NetzzugangAktion, NetzzugangAntrag, NetzzugangAntragTyp, NetzzugangStatus,
+    Saison, Tarifzone, ZaehlzeitRegisterUpsert, ZaehlzeitSaisonUpsert,
 };
 use marktd::pg::{PgNbContractRepository, PgNetzzugangRepository, PgZaehlzeitRepository};
 use sqlx::PgPool;

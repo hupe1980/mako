@@ -596,7 +596,9 @@ Content-Type: application/json
 `PUT /api/v1/reading-orders/{id}/complete` files its Zählerstand into the same
 store — for an SLP point that is the whole billing path. An order names its
 `sparte` (a value in the wrong dimension is refused), optionally its
-`obis_code`, and the completion carries `abgelesen_am`.
+`obis_code`, and the completion carries `abgelesen_am`. The order becomes
+`AUSGEFUEHRT` only once its Zählerstand is filed: a refused or failed reading
+write answers the error and leaves the order open.
 
 ### Substitute values (§ 60 Abs. 1 MsbG)
 
@@ -1511,7 +1513,7 @@ the REST write action.
 | `get_device_history` | MSB device history as narrative text |
 | `get_quality_warnings` | Quality grade and findings over a window, with the Sparte's preset |
 | `list_reading_orders` | Reading orders for a MaLo |
-| `list_overdue_reading_orders` | § 40b Abs. 1 EnWG gaps |
+| `list_overdue_reading_orders` | § 40b Abs. 1 EnWG gaps, typed; `frist` is the end of the Berlin day `ausfuehrt_bis` |
 | `trigger_jahresablesung` | Launch or preview the annual campaign (`write-reading-order`) |
 | `trigger_substitution` | Generate and store § 60 Abs. 1 MsbG Ersatzwerte (`write-timeseries`) |
 | `get_correction_history` | Correction audit trail (§ 147 Abs. 1 AO / § 146 Abs. 4 AO) |

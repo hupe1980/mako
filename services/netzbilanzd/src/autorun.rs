@@ -247,6 +247,14 @@ pub struct GgvNneRequest {
     /// and an equal split is not an attribution — it is a guess that bills one
     /// tenant for another's consumption.
     pub tenant_consumption: std::collections::BTreeMap<String, Decimal>,
+    /// The Artikel-ID of each charge, keyed by position kind — the same price
+    /// sheet prices every tenant ([`crate::request::NneRequest::artikel_ids`]).
+    #[serde(default)]
+    pub artikel_ids: std::collections::BTreeMap<grid_billing::BillingPositionKind, String>,
+    /// The Lieferschein-MSCONS each tenant's NN-Rechnung settles, keyed by
+    /// MaLo-ID ([`crate::request::NneRequest::lieferschein_ref`]).
+    #[serde(default)]
+    pub lieferschein_refs: std::collections::BTreeMap<String, String>,
 }
 
 /// `POST /api/v1/billing/ggv-nne/{ggv_malo_id}`
@@ -342,6 +350,9 @@ pub async fn post_ggv_nne(
                 jahreshoechstleistung_kw: None,
                 jahresarbeit_kwh: None,
                 tariff_sheet_id: None,
+                artikel_ids: req.artikel_ids.clone(),
+                lieferschein_ref: req.lieferschein_refs.get(tenant_malo).cloned(),
+                preise_mp_id: None,
             })),
         });
     }

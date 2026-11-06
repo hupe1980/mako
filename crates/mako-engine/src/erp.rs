@@ -134,8 +134,9 @@ pub enum ErpEventType {
         #[serde(skip_serializing_if = "Option::is_none")]
         erc_code: Option<ErcCode>,
     },
-    /// No APERAK received within the regulatory SLA window (deadline expired).
-    AperakTimeout,
+    /// The business Antwortfrist published for the Prüfidentifikator lapsed
+    /// unanswered. Not an APERAK delivery window: that reaches no workflow.
+    AntwortfristAbgelaufen,
     /// A CONTRL syntax acknowledgement was received.
     ContrlReceived,
     /// The process reached its terminal success state
@@ -204,7 +205,7 @@ impl ErpEventType {
             Self::ProcessInitiated => "process_initiated",
             Self::AperakAccepted => "aperak_accepted",
             Self::AperakRejected { .. } => "aperak_rejected",
-            Self::AperakTimeout => "aperak_timeout",
+            Self::AntwortfristAbgelaufen => "antwortfrist_abgelaufen",
             Self::ContrlReceived => "contrl_received",
             Self::ProcessCompleted => "process_completed",
             Self::MaloIdentified => "malo_identified",
@@ -229,7 +230,7 @@ impl ErpEventType {
             Self::ProcessInitiated => mako_events::mako::PROCESS_INITIATED,
             Self::AperakAccepted => mako_events::mako::APERAK_ACCEPTED,
             Self::AperakRejected { .. } => mako_events::mako::APERAK_REJECTED,
-            Self::AperakTimeout => mako_events::mako::APERAK_TIMEOUT,
+            Self::AntwortfristAbgelaufen => mako_events::mako::ANTWORTFRIST_ABGELAUFEN,
             Self::ContrlReceived => mako_events::mako::CONTRL_RECEIVED,
             Self::ProcessCompleted => mako_events::mako::PROCESS_COMPLETED,
             Self::MaloIdentified => mako_events::mako::MALO_IDENTIFIED,

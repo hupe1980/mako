@@ -119,7 +119,7 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
             total_completed: count(ProcessState::Completed),
             total_rejected: count(ProcessState::Rejected),
             total_failed: count(ProcessState::Failed),
-            total_aperak_timeout: count(ProcessState::AperakTimeout),
+            total_antwortfrist_abgelaufen: count(ProcessState::AntwortfristAbgelaufen),
             total_frist_breached: breached,
             total_with_frist: with_frist,
             frist_compliance_rate: (with_frist > 0)

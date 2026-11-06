@@ -317,7 +317,6 @@ async fn a_gas_mabis_zaehlpunkt_cannot_be_recorded() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_tariff_zone_resolves_from_typed_weekday_and_wall_clock_columns() {
-    use mako_markt::repository::ZaehlzeitRepository as _;
     use marktd::pg::PgZaehlzeitRepository;
     use time::macros::datetime;
 

@@ -278,6 +278,12 @@ period with:
 The price is converted at the year's EBeV emission factor for Erdgas. A
 position the steps leave without a price is refused with `BEHG_PREIS_FEHLT`,
 naming the year, unless it carries its own `behg_gas_ct_per_kwh`.
+
+The Strom- and Energiesteuer are read the same way: the position's own
+`stromsteuer_ct_per_kwh` / `energiesteuer_gas_ct_per_kwh` wins, otherwise the
+Stichtag year's row of the dated series (§ 3 StromStG, § 2 Abs. 3 Satz 1 Nr. 4
+EnergieStG); a year the series has not read is refused with
+`STEUERSATZ_FEHLT`, naming the tax and the year.
 ---
 
 ## § 41c EnWG comparison feed
@@ -440,7 +446,7 @@ integrator's to add (net, then VAT on top):
 ```
 Jahresgesamtkosten = jahreskosten_supply_brutto_eur
                    + NNE_brutto (from marktd PreisblattNetznutzung by PLZ)
-                   + Stromsteuer (2.05 ct/kWh × verbrauch_kwh / 100)
+                   + Stromsteuer (the year's § 3 StromStG rate × verbrauch_kwh / 100)
 ```
 
 ### Pagination

@@ -24,7 +24,7 @@ use mako_markt::{
     cloudevents::{EventExtensions, MarktEvent},
     domain::{MarktpartnerId, Sparte},
     error::MdmError,
-    repository::{PartnerRecord, PartnerRepository, PriCatRepository as _},
+    repository::PartnerRecord,
 };
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
@@ -87,6 +87,18 @@ pub struct PartnerUpsertRequest {
     #[serde(default)]
     #[schema(value_type = Object)]
     pub geschaeftspartner: Option<Bo4e<Geschaeftspartner>>,
+    /// The partner's Zustimmung to receiving invoices as EDI@Energy INVOIC
+    /// (§ 27 Abs. 38 Nr. 1 and 3 UStG). Omitted or `null` is „not recorded",
+    /// and makod refuses an outbound INVOIC to the partner on it.
+    #[serde(default)]
+    pub edi_zustimmung: Option<bool>,
+    /// Whether the EDI format agreed with this partner allows the complete
+    /// extraction of the invoice data into an EN 16931 format — an E-Rechnung
+    /// under § 14 Abs. 1 Satz 6 Nr. 2 UStG. Omitted or `null` is „not
+    /// recorded"; from a supply in 2027 that no grace reaches, makod refuses an
+    /// outbound INVOIC on it.
+    #[serde(default)]
+    pub edi_extrahierbar: Option<bool>,
 }
 
 /// `PUT /api/v1/partners/:gln`
@@ -152,6 +164,8 @@ pub async fn put_partner(
         rollencodetyp: body.rollencodetyp,
         makoadresse: body.makoadresse,
         geschaeftspartner,
+        edi_zustimmung: body.edi_zustimmung,
+        edi_extrahierbar: body.edi_extrahierbar,
         version: 0,
         updated_at: time::OffsetDateTime::UNIX_EPOCH,
     };
@@ -293,6 +307,8 @@ pub async fn get_partner(
                 "rollencodetyp":      p.rollencodetyp,
                 "makoadresse":        p.makoadresse,
                 "geschaeftspartner":  geschaeftspartner,
+                "edi_zustimmung":     p.edi_zustimmung,
+                "edi_extrahierbar":   p.edi_extrahierbar,
                 "version":            p.version,
                 "updated_at":         p.updated_at.to_string(),
             });

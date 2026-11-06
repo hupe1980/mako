@@ -6,5 +6,6 @@ mod cedar_actions;
 mod dev_config;
 mod dtm_qualifiers;
 mod receipts_pg;
+mod receiving_has_no_grace;
 mod startup;
 mod startup_posture;

@@ -37,6 +37,7 @@ a model-backed specialist.
 |---|---|
 | `POST /webhook` | CloudEvent ingest. Admission commits before the answer: `202` admitted, `204` no subscriber, `429` transient (quota), `422` unprocessable, dead-lettered |
 | `GET /api/v1/hinweise` | the open worklist rows the caller may answer, each filed under its Anker |
+| `GET /api/v1/vorschlaege?freigabe=…` | each Freigabe's waiting proposal, computed once per entry by the `[vorschlaege]` tick; starts no run |
 | `GET /api/v1/runs/{run}/antwort` | the answer, sentence by sentence, each checked against the call it cites |
 | `POST /api/v1/runs/{run}/bewertung` | a person's „hilfreich" verdict on an answer or a Hinweis, or what became of a proposal (sent, edited, dismissed), kept beside the run |
 | `POST /api/v1/runs` | start a run: `202` with the run ids, read at `/api/v1/oversight/runs/{run}`; honours `Idempotency-Key`, refuses an unknown field |
@@ -133,8 +134,8 @@ vertragd    = "http://vertragd:9780/mcp"
 
 | Specialist | Capability | Shape | Reach | Subscribes to |
 |---|---|---|---|---|
-| `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
-| `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
+| `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.mako.aperak.*` |
+| `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.obs.deadline.approaching` |
 | `billing-agent` | `billing` | `tool-calling` | 9 on accountingd, billingd, invoicd, marktd | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
 | `netzbilanz-agent` | `netzbilanz` | `tool-calling` | 7 on marktd, netzbilanzd | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue`, `de.netzbilanz.invoic.disputed` |
 | `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | 6 on accountingd, billingd, invoicd | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |

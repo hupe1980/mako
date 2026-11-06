@@ -43,6 +43,22 @@ chosen by contract type and customer:
   a commercial customer under 10 000 kWh a year is a Haushaltskunde. It defaults
   to `kundentyp == "B2C"` and is correctable.
 
+### What the `rechnungsempfaenger` block tells billing about e-invoicing
+
+`GET /vertraege/by-malo/{id}`, `GET /rahmenvertraege/{id}/malos` and
+`GET /ggv/{ggv_id}/betreiber` name the party the invoice is addressed to, and
+carry beside the address the facts § 27 Abs. 38 UStG turns on — read off that
+party's `kunden` row, never off the contract:
+
+| Field | Source | Unrecorded |
+|---|---|---|
+| `unternehmer` | the Rechnungsempfänger's own `kundentyp`: `B2C` no, `B2B_*` yes (§ 14 Abs. 2 Satz 2 Nr. 1 UStG) | — always answered |
+| `zustimmung_sonstige_erechnung` | `kunden.zustimmung_sonstige_erechnung` — Zustimmung to another electronic format (§ 27 Abs. 38 Nr. 1/2 UStG) | `null`, refuses that grace |
+| `edi_zustimmung` · `edi_extrahierbar` | `kunden.edi_*` — the EDI agreement, and whether its data extract into EN 16931 (§ 14 Abs. 1 Satz 6 Nr. 2 UStG) | `null`, refuses the EDI route |
+
+All three are set through `POST /kunden` and `PUT /kunden/{id}`; an absent
+field on `PUT` keeps the stored value.
+
 ## Nothing is dispatched from a detached task
 
 A Lieferbeginn, a Schlussablesung and a billing account are obligations, so the

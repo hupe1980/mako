@@ -79,6 +79,13 @@ pub struct KundeRow {
     pub zahlungsziel_tage: i32,
     /// § 13b Abs. 2 Nr. 5 lit. b UStG reverse-charge master data.
     pub stromwiederverkaeufer: bool,
+    /// § 27 Abs. 38 Nr. 1/2 UStG Zustimmung to another electronic format;
+    /// `None` = not recorded.
+    pub zustimmung_sonstige_erechnung: Option<bool>,
+    /// EDI agreement (§ 14 Abs. 1 Satz 6 Nr. 2 UStG); `None` = not recorded.
+    pub edi_zustimmung: Option<bool>,
+    /// Whether the agreed EDI extracts into EN 16931; `None` = not recorded.
+    pub edi_extrahierbar: Option<bool>,
     pub sepa_erlaubt: bool,
     pub erp_kunde_id: Option<String>,
     pub notizen: Option<String>,

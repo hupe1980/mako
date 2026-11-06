@@ -89,7 +89,7 @@ pub use parse::{
     parse_interchange,
 };
 pub use platform::Platform;
-pub use profile::{Profile, Pruefschablone};
+pub use profile::{Completion, Profile, Pruefschablone, SeedError, SkeletonParties, Unstated};
 pub use pruefidentifikator::{Pruefidentifikator, ablehnung_pid, answer_pids, bestaetigung_pid};
 pub use registry::{
     DEFAULT_RECEIVE_TOLERANCE_DAYS, ProcessContext, ReleaseRegistry, TransitionState,

@@ -1461,6 +1461,12 @@ pub struct Rechnungsempfaenger {
     /// addressed to one person and delivered to another.
     #[serde(default)]
     pub email: Option<String>,
+    /// Whether this party is a Unternehmer receiving for his Unternehmen
+    /// (§ 14 Abs. 2 Satz 2 Nr. 1 UStG), as `vertragd` classifies the
+    /// Rechnungsempfänger itself — not the contract it is billed under.
+    /// Absent = not recorded, which the § 27 Abs. 38 UStG paper path refuses.
+    #[serde(default)]
+    pub unternehmer: Option<bool>,
 }
 
 impl Rechnungsempfaenger {
@@ -1482,9 +1488,7 @@ impl Rechnungsempfaenger {
             city: self.city.clone(),
             country: self.country.clone(),
             vat_id: self.vat_id.clone(),
-            // The segment lives on the contract, not on the party; the caller
-            // that holds the contract sets it.
-            unternehmer: None,
+            unternehmer: self.unternehmer,
         }
     }
 }
@@ -1515,23 +1519,6 @@ pub struct VertragFacts {
     pub vertragsende: Option<time::Date>,
     /// Notice period in months.
     pub kuendigungsfrist_monate: i32,
-    /// `B2C` | `B2B_SLP` | `B2B_RLM` | `B2B_HV` — the customer segment
-    /// `vertragd` stores on the contract. See [`unternehmer_aus_kundentyp`].
-    #[serde(default)]
-    pub kundentyp: Option<String>,
-}
-
-/// Whether a `vertragd` customer segment is a Unternehmer receiving for his
-/// Unternehmen (§ 14 Abs. 2 Satz 2 Nr. 1 UStG): `B2C` is not, every `B2B_*`
-/// segment is, and anything else is unknown — which the e-invoicing duty
-/// treats as a refusal, never as either answer.
-#[must_use]
-pub fn unternehmer_aus_kundentyp(kundentyp: Option<&str>) -> Option<bool> {
-    match kundentyp? {
-        "B2C" => Some(false),
-        k if k.starts_with("B2B_") => Some(true),
-        _ => None,
-    }
 }
 
 impl VertragFacts {
@@ -1582,8 +1569,6 @@ pub struct RahmenvertragMaloEntry {
         reason = "reached only in some feature or target combinations"
     )]
     pub product_code: Option<String>,
-    /// The site's customer segment — see [`unternehmer_aus_kundentyp`].
-    pub kundentyp: Option<String>,
 }
 
 /// A §41e EnWG Aggregatorvertrag as returned by `vertragd`.
@@ -1899,6 +1884,47 @@ mod vertragsart_tests {
                 "{wire} must reach the engine as itself"
             );
         }
+    }
+
+    /// The Unternehmer status belongs to the party the invoice names: a B2B
+    /// Rechnungsempfänger on a contract recorded as `B2C` is classified as an
+    /// Unternehmer, and a block that does not carry the status leaves it
+    /// unrecorded rather than read off the contract.
+    #[test]
+    fn the_recipient_is_classified_from_its_own_block() {
+        let on_b2c_contract = |rechnungsempfaenger: serde_json::Value| -> VertragByMalo {
+            serde_json::from_value(serde_json::json!({
+                "vertrag": {
+                    "id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+                    "kundentyp": "B2C",
+                    "vertragsbeginn": "2026-01-01",
+                    "vertragsende": null,
+                    "kuendigungsfrist_monate": 1,
+                },
+                "rechnungsempfaenger": rechnungsempfaenger,
+                "naechstmoeglicher_kuendigungstermin": null,
+            }))
+            .expect("the by-malo answer must deserialise")
+        };
+        let party = |v: VertragByMalo| {
+            v.rechnungsempfaenger
+                .expect("the block is on the wire")
+                .as_context_party()
+        };
+        assert_eq!(
+            party(on_b2c_contract(serde_json::json!({
+                "name": "Muster GmbH", "unternehmer": true
+            })))
+            .unternehmer,
+            Some(true),
+        );
+        assert_eq!(
+            party(on_b2c_contract(
+                serde_json::json!({ "name": "Muster GmbH" })
+            ))
+            .unternehmer,
+            None,
+        );
     }
 
     // ── Tiered Preisstaffeln ──────────────────────────────────────────────

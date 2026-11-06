@@ -1,5 +1,5 @@
 // One Desk, worn one Rolle at a time (FR-030). The Rolle decides the accent,
-// the sidebar and — once the inbox lands — its sources; switching clears every
+// the sidebar and its Heute sources; switching clears every
 // cached read, so no row of one Rolle can render under another.
 
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,10 +14,10 @@ export const ROLLEN: Record<
   Rolle,
   { label: string; marktrolle: string; key: string; home: "/heute" | "/kunden" | "/prozess" }
 > = {
-  netz: { label: "Netz", marktrolle: "NB", key: "1", home: "/prozess" },
+  netz: { label: "Netz", marktrolle: "NB", key: "1", home: "/heute" },
   lieferant: { label: "Lieferant", marktrolle: "LF", key: "2", home: "/heute" },
-  messstelle: { label: "Messstelle", marktrolle: "MSB", key: "3", home: "/prozess" },
-  energieservice: { label: "Energieservice", marktrolle: "ESA", key: "4", home: "/prozess" },
+  messstelle: { label: "Messstelle", marktrolle: "MSB", key: "3", home: "/heute" },
+  energieservice: { label: "Energieservice", marktrolle: "ESA", key: "4", home: "/heute" },
 };
 
 const ORDER: Rolle[] = ["netz", "lieferant", "messstelle", "energieservice"];

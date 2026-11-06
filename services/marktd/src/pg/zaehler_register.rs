@@ -1,10 +1,10 @@
-//! PostgreSQL implementation of [`ZaehlzeitRepository`] for `marktd`.
+//! PostgreSQL storage: [`PgZaehlzeitRepository`] for `marktd`.
 
 use mako_markt::{
     error::MdmError,
     repository::{
-        ZaehlzeitRegisterRecord, ZaehlzeitRegisterUpsert, ZaehlzeitRepository,
-        ZaehlzeitSaisonRecord, ZaehlzeitSaisonUpsert,
+        ZaehlzeitRegisterRecord, ZaehlzeitRegisterUpsert, ZaehlzeitSaisonRecord,
+        ZaehlzeitSaisonUpsert,
     },
 };
 use sqlx::{PgPool, Row};
@@ -21,8 +21,10 @@ impl PgZaehlzeitRepository {
     }
 }
 
-impl ZaehlzeitRepository for PgZaehlzeitRepository {
-    async fn upsert_register(
+impl PgZaehlzeitRepository {
+    /// Create or update the register of `zaehler_id` the body identifies, and
+    /// return it as stored.
+    pub async fn upsert_register(
         &self,
         zaehler_id: &str,
         tenant: &str,
@@ -56,7 +58,8 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
         row_to_register(&row)
     }
 
-    async fn list_registers_by_zaehler(
+    /// Return all registers for a given `zaehler_id`.
+    pub async fn list_registers_by_zaehler(
         &self,
         zaehler_id: &str,
         tenant: &str,
@@ -77,13 +80,19 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
         rows.iter().map(row_to_register).collect()
     }
 
+    /// Create or update a window of `register_id`, which must be one of
+    /// `tenant`'s registers, and return it as stored.
+    ///
+    /// # Errors
+    /// [`MdmError::NotFound`] when `tenant` holds no register `register_id`.
+    ///
     /// Upsert one season window of a register.
     ///
     /// `zaehler_saisons` carries no tenant of its own — it is scoped through
     /// its `zaehler_register` parent, so the row is written only against a
     /// register of the caller's tenant: a register id from another tenant's
     /// path writes nothing and is refused as not found.
-    async fn upsert_saison(
+    pub async fn upsert_saison(
         &self,
         register_id: Uuid,
         tenant: &str,
@@ -119,10 +128,12 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
         row_to_saison(&row)
     }
 
+    /// Return all `ZaehlzeitSaison` entries for a register.
+    ///
     /// The season windows of one register, scoped through the register's own
     /// tenant: `zaehler_saisons` carries none, and `register_id` reaches this
     /// from a request path.
-    async fn list_saisons_by_register(
+    pub async fn list_saisons_by_register(
         &self,
         register_id: Uuid,
         tenant: &str,
@@ -144,7 +155,10 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
         rows.iter().map(row_to_saison).collect()
     }
 
-    async fn resolve_tariff_zone(
+    /// Resolve the applicable tariff zone (`HT`|`NT`|`EINZEL`) for a Zähler at
+    /// a given local datetime.  Returns `None` if no matching window is found
+    /// (treat as `EINZEL` in that case).
+    pub async fn resolve_tariff_zone(
         &self,
         zaehler_id: &str,
         tenant: &str,

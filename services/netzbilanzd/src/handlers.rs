@@ -222,9 +222,12 @@ pub async fn draft_positions(
             billing::DocumentFacts {
                 cadence: position.cadence,
                 abschlaege,
+                artikel_ids: billing::DocumentFacts::artikel_ids_of(&position.settlement),
                 ..billing::DocumentFacts::default()
             },
         );
+        billing::refuse_unissuable(position, &settled)
+            .map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
         let id = store(
             &mut tx,
             cfg,
@@ -549,12 +552,13 @@ pub async fn dispatch_draft(
     Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(makod): Extension<Arc<MakodClient>>,
+    Extension(marktd): Extension<Arc<MarktdClient>>,
     Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&cedar, &claims, "dispatch-settlement", &cfg.tenant)?;
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
-    let outcome = dispatch_one(&mut tx, &makod, &cfg, id).await?;
+    let outcome = dispatch_one(&mut tx, &makod, &marktd, &cfg, id).await?;
     emit(
         &mut tx,
         &cfg,
@@ -590,6 +594,7 @@ struct DispatchOutcome {
 async fn dispatch_one(
     conn: &mut sqlx::PgConnection,
     makod: &MakodClient,
+    marktd: &MarktdClient,
     cfg: &NetzbilanzConfig,
     id: Uuid,
 ) -> ApiResult<DispatchOutcome> {
@@ -620,6 +625,14 @@ async fn dispatch_one(
         rechnung.fremdkosten = Some(Box::new(typed));
     }
 
+    // The parties and the Marktlokation, as marktd records them now: the
+    // INVOIC names each party's Firmenname and Anschrift (`NAD+MS`/`NAD+MR`)
+    // and the Lieferanschrift and ID of the Marktlokation (`NAD+DP`,
+    // `LOC+172`), none of which the settlement carries.
+    let beteiligte = beteiligte(marktd, &row).await?;
+    let mut rechnung = billing::mit_beteiligten(rechnung, &row.malo_id, beteiligte)
+        .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+
     // The outbound gate, at the one point where this document is *assembled at
     // runtime* rather than emitted whole by an engine: a stored Rechnung plus a
     // separately stored Fremdkosten, each valid when it was written, combined
@@ -649,6 +662,49 @@ async fn dispatch_one(
     }
 
     let command = makod_command(pid, &row.sparte)?;
+    let settlement: SettlementRequest = serde_json::from_value(row.settlement_input.clone())
+        .map_err(|e| {
+            ApiError::Internal(anyhow::Error::new(e).context("stored settlement input"))
+        })?;
+    let kopf = billing::kopfdaten(&settlement, row.period_from);
+    // `DTM+171` of a Stornorechnung is the Ursprungsrechnung's `DTM+137`
+    // (MIG 2.8e 00019): the Rechnungsdatum the original went out with.
+    let original_rechnungsdatum = match row.original_draft_id {
+        Some(original_id) if row.rechnungsart == "STORNORECHNUNG" => {
+            let original = pg::fetch_draft(&mut *conn, &cfg.tenant, original_id)
+                .await
+                .map_err(ApiError::Internal)?
+                .ok_or_else(|| {
+                    ApiError::Internal(anyhow::anyhow!(
+                        "Storno {id} names original draft {original_id}, which does not exist"
+                    ))
+                })?;
+            // `IMD` is Muss on the Stornorechnung too (31004): it states the
+            // Rechnungstyp of the document it cancels.
+            if rechnung.netznutzungrechnungstyp.is_none() {
+                rechnung.netznutzungrechnungstyp = original
+                    .rechnung
+                    .get("netznutzungrechnungstyp")
+                    .cloned()
+                    .and_then(|t| serde_json::from_value(t).ok());
+            }
+            let datum = original
+                .rechnung
+                .get("rechnungsdatum")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            if datum.is_null() {
+                return Err(ApiError::unprocessable(format!(
+                    "the Ursprungsrechnung {} states no rechnungsdatum — the Stornorechnung \
+                     names it (DTM+171)",
+                    original.rechnungsnummer
+                )));
+            }
+            datum
+        }
+        _ => serde_json::Value::Null,
+    };
+    let rechnung = billing::fuer_die_invoic(rechnung, &settlement);
     let payload =
         serde_json::to_value(&rechnung).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
     let accepted = makod
@@ -669,6 +725,11 @@ async fn dispatch_one(
                     "pid":             pid,
                     "sparte":          row.sparte,
                     "rechnung":        payload,
+                    "zugehoeriges_dokument":   kopf.zugehoeriges_dokument,
+                    "preise_mp_id":            kopf.preise_mp_id,
+                    "rechnungstyp":            kopf.rechnungstyp,
+                    "ausfuehrungsdatum":       kopf.ausfuehrungsdatum.map(|d| d.to_string()),
+                    "original_rechnungsdatum": original_rechnungsdatum,
                 }),
             },
         )
@@ -727,6 +788,48 @@ async fn dispatch_one(
     })
 }
 
+/// The parties and the Marktlokation of a draft, as marktd records them.
+///
+/// Each is a refusal when marktd has none: the INVOIC would otherwise go out
+/// with a party or a Lieferanschrift made up, and makod refuses that too —
+/// this says which record to fix.
+async fn beteiligte(marktd: &MarktdClient, row: &pg::DraftRow) -> ApiResult<billing::Beteiligte> {
+    let partner = |mp_id: &str, rolle: &'static str, nad: &'static str| {
+        let mp_id = mp_id.to_owned();
+        async move {
+            marktd
+                .get_geschaeftspartner(&mp_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!("marktd: {e}")))?
+                .ok_or_else(|| {
+                    ApiError::unprocessable(format!(
+                        "marktd records no Geschäftspartner for the {rolle} {mp_id} — the INVOIC \
+                         names its Firmenname and Anschrift ({nad}); record it with \
+                         PUT /api/v1/partners/{mp_id}"
+                    ))
+                })
+        }
+    };
+    let ersteller = partner(&row.sender_mp_id, "Rechnungsersteller", "NAD+MS").await?;
+    let empfaenger = partner(&row.recipient_mp_id, "Rechnungsempfänger", "NAD+MR").await?;
+    let marktlokation = marktd
+        .get_marktlokation(&row.malo_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("marktd: {e}")))?
+        .ok_or_else(|| {
+            ApiError::unprocessable(format!(
+                "marktd records no Marktlokation {} — the INVOIC names its Lieferanschrift \
+                 (NAD+DP) and ID (LOC+172)",
+                row.malo_id
+            ))
+        })?;
+    Ok(billing::Beteiligte {
+        ersteller,
+        empfaenger,
+        marktlokation,
+    })
+}
+
 /// The `makod` command that carries a given Prüfidentifikator.
 ///
 /// The INVOIC commands are Sparte-neutral, like the PIDs they carry: 31001,
@@ -739,7 +842,9 @@ fn makod_command(pid: u32, _sparte: &str) -> ApiResult<&'static str> {
         // it is Sparte-specific.
         (31001, ()) => Ok(mako_markt::commands::INVOIC_NNE_ABSCHLAG_STELLEN),
         (31002, ()) => Ok(mako_markt::commands::INVOIC_NNE_STELLEN),
-        (31005, ()) => Ok(mako_markt::commands::INVOIC_MMM_STELLEN),
+        // The Mindermenge (31005) and the Mehrmenge (31006, selbst
+        // ausgestellt) are both the NB's MMM-Rechnung to the LF.
+        (31005 | 31006, ()) => Ok(mako_markt::commands::INVOIC_MMM_STELLEN),
         (31009, ()) => Ok(mako_markt::commands::WIM_MSB_RECHNUNG_STELLEN),
         // BK7-24-01-009 §5.4 — the GNB bills the LFG for abrechnungswürdige
         // Handlungen performed during the Sperrprozess.
@@ -830,6 +935,7 @@ pub async fn post_dispatch_batch(
     Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(makod): Extension<Arc<MakodClient>>,
+    Extension(marktd): Extension<Arc<MarktdClient>>,
     Extension(cfg): Cfg,
     Json(req): Json<DispatchBatchRequest>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
@@ -845,7 +951,7 @@ pub async fn post_dispatch_batch(
     let mut failures = Vec::new();
     for id in req.draft_ids {
         let mut tx = pool.begin().await.map_err(ApiError::from)?;
-        match dispatch_one(&mut tx, &makod, &cfg, id).await {
+        match dispatch_one(&mut tx, &makod, &marktd, &cfg, id).await {
             Ok(outcome) => {
                 let committed = async {
                     emit(
@@ -1033,6 +1139,7 @@ pub async fn post_storno(
         due_date,
         billing::DocumentFacts {
             correction_of: Some(original.rechnungsnummer.clone()),
+            artikel_ids: billing::DocumentFacts::artikel_ids_of(&position.settlement),
             ..billing::DocumentFacts::default()
         },
     );
@@ -1262,8 +1369,11 @@ pub async fn post_korrektur(
             correction_of: Some(original.rechnungsnummer.clone()),
             cadence: req.cadence,
             abschlaege,
+            artikel_ids: billing::DocumentFacts::artikel_ids_of(&position.settlement),
         },
     );
+    billing::refuse_unissuable(&position, &settled)
+        .map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
     let korrektur_id = store(
         &mut tx,
         &cfg,

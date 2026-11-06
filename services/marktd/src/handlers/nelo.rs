@@ -36,7 +36,7 @@ use axum::{
 use mako_markt::{
     domain::Sparte,
     error::MdmError,
-    repository::{NeLoRecord, NeLoRepository, PageResult},
+    repository::{NeLoRecord, PageResult},
 };
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;

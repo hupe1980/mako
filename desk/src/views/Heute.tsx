@@ -1,231 +1,402 @@
-import { useInfiniteQuery, useQueries, useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import type { ReactNode } from "react";
-import { GridList, GridListItem } from "react-aria-components";
-import { DIENST, nichtErreichbar } from "../app/dienste";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { NAECHSTE, UEBERNEHMEN, VORIGE } from "../app/keys";
 import { useRolle } from "../app/rollen";
-import type { MaloKunde } from "../data/gen/vertragd";
-import { call, ServiceUnavailable } from "../data/mcp";
-import { Button } from "../design/Button";
+import type { Answer, Hinweis } from "../data/agent";
 import { FristUhr } from "../design/FristUhr";
-import { Icon } from "../design/Icon";
-import { EmptyState, Notice, Panel } from "../design/Panel";
+import { Icon, type IconName } from "../design/Icon";
+import { EmptyState, Panel } from "../design/Panel";
 import { formatCount } from "../format/count";
-import { Hinweise } from "./Hinweise";
-import { monogram } from "./kundenSuche";
-import { ANMELDUNG_PIDS, Lage } from "./Lage";
+import { epochMs } from "../format/date";
+import { BAENDER, type Band, band, useNow } from "../format/frist";
+import type { Eintrag, QuelleId, Stand } from "../inbox/model";
+import { alsEintrag, useBenannt, useHinweise, useQuellen, useVorschlaege } from "../inbox/quellen";
+import { Bewertung } from "./Bewertung";
+import { Fragen } from "./Fragen";
+import { Entscheiden } from "./Freigaben";
+import { Lage } from "./Lage";
 
-const PAGE = 50;
+/** What a row's glyph says about where it came from. */
+const GLYPH: Record<QuelleId, IconName> = {
+  freigaben: "check",
+  ueberfaellig: "warn",
+  anmeldungen: "flow",
+  nicht_uebermittelt: "tray",
+  korrekturbedarf: "bars",
+  ableseauftraege: "clock",
+  dispute: "doc",
+  pruefposten: "doc",
+  hinweise: "sparkle",
+};
 
-const ROW =
-  "focus-ring flex cursor-default items-center gap-4 border-b border-separator px-5 py-3 outline-none last:border-b-0 data-[focused]:bg-fill data-[hovered]:bg-fill";
+/** At most this many rows in the DOM, however many items wait (SC-008). */
+const SICHTBAR = 100;
 
-function Person({ name, sub }: { name: string | null | undefined; sub: ReactNode }) {
+/**
+ * Every source's items as one list: one item per id, the agent's Hinweise
+ * attached to the item that carries their Anker — and those no item carries
+ * listed in their own right — ordered by the Frist the service returned,
+ * items without one last.
+ */
+function zusammenfuehren(
+  staende: Stand[],
+  hinweise: Hinweis[],
+): { eintraege: Eintrag[]; zu: Map<string, Hinweis[]> } {
+  const gesehen = new Map<string, Eintrag>();
+  for (const s of staende)
+    for (const e of s.eintraege) if (!gesehen.has(e.id)) gesehen.set(e.id, e);
+  const eintraege = [...gesehen.values()];
+  const zu = new Map<string, Hinweis[]>();
+  for (const h of hinweise) {
+    const traeger = eintraege.find((e) => h.anker.some((a) => e.bezug.includes(a.wert)));
+    if (traeger) zu.set(traeger.id, [...(zu.get(traeger.id) ?? []), h]);
+    else eintraege.push(alsEintrag(h));
+  }
+  eintraege.sort((a, b) => {
+    if (!a.frist || !b.frist) return a.frist ? -1 : b.frist ? 1 : 0;
+    return epochMs(a.frist) - epochMs(b.frist);
+  });
+  return { eintraege, zu };
+}
+
+function HinweisZeile({ h }: { h: Hinweis }) {
   return (
-    <>
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-body font-semibold text-accent">
-        {monogram(name)}
+    <p className="m-0 flex gap-2 rounded-[10px] border border-ai-border bg-ai-fill px-3 py-2 text-body text-text">
+      <Icon name="sparkle" size={14} className="mt-0.5 shrink-0 text-ai" />
+      <span className="min-w-0">
+        <span className="font-semibold text-ai">{h.titel ?? h.skill ?? "Assistent"}: </span>
+        <span className="italic">{h.text}</span>
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-callout font-medium text-text">
-          {name ?? "Ohne Namen"}
-        </span>
-        <span className="block text-body text-text-2">{sub}</span>
-      </span>
-    </>
+    </p>
   );
 }
 
 /**
- * Waiting on the Netzbetreiber, the earliest Frist first. The order is
- * processd's — a keyset page at a time — so the most urgent Anmeldung is on
- * top however many are open; each page is named in one vertragd call.
+ * The proposal waiting on a Freigabe, one line under its row: model-written,
+ * so set apart and carrying the disclosure; `U` takes it into the decision.
  */
-function Wartend() {
-  const router = useRouter();
-  const { rolle } = useRolle();
-  const pages = useInfiniteQuery({
-    queryKey: [rolle, "processd", "list_open_processes", ANMELDUNG_PIDS],
-    queryFn: ({ pageParam }) =>
-      call("processd", "list_open_processes", {
-        pids: ANMELDUNG_PIDS,
-        limit: PAGE,
-        ...(pageParam ? { nach: pageParam } : {}),
-      }),
-    initialPageParam: "",
-    getNextPageParam: (last) => last.weiter ?? undefined,
-    refetchInterval: 30_000,
-  });
-  const loaded = pages.data?.pages ?? [];
-  const namen = useQueries({
-    queries: loaded.map((p) => {
-      const malos = p.prozesse.flatMap((r) => (r.malo_id ? [r.malo_id] : []));
-      return {
-        queryKey: [rolle, "vertragd", "kunden_zu_malos", malos],
-        queryFn: () => call("vertragd", "kunden_zu_malos", { malos }),
-        enabled: malos.length > 0,
-        staleTime: 60_000,
-      };
-    }),
-  });
-  const kunde = new Map<string, MaloKunde>();
-  for (const n of namen) for (const k of n.data?.kunden ?? []) kunde.set(k.malo_id, k);
-  const rows = loaded.flatMap((p) => p.prozesse);
-
-  return (
-    <section aria-labelledby="wartend" className="flex flex-col gap-2">
-      <h2 id="wartend" className="m-0 px-1 text-callout font-semibold">
-        Warten auf Antwort
-      </h2>
-      {pages.isError && (
-        <Notice
-          tone="failure"
-          title={
-            pages.error instanceof ServiceUnavailable
-              ? nichtErreichbar(pages.error.service)
-              : "Die offenen Anmeldungen ließen sich nicht lesen"
-          }
-        >
-          {pages.error.message}
-        </Notice>
-      )}
-      {pages.data && rows.length === 0 && (
-        <Panel>
-          <EmptyState title="Alles beantwortet.">
-            Keine Anmeldung wartet auf den Netzbetreiber.
-          </EmptyState>
-        </Panel>
-      )}
-      {rows.length > 0 && (
-        <Panel className="overflow-hidden">
-          <GridList
-            aria-label="Warten auf Antwort"
-            onAction={(key) => {
-              const k = kunde.get(String(key));
-              if (k) router.navigate({ to: "/kunde/$id", params: { id: k.kunden_id } });
-              else router.navigate({ to: "/prozess", search: { key: String(key) } });
-            }}
-            className="outline-none"
-          >
-            {rows.map((p) => {
-              const k = p.malo_id ? kunde.get(p.malo_id) : undefined;
-              const id = p.malo_id ?? p.process_id;
-              return (
-                <GridListItem key={p.process_id} id={id} textValue={k?.name ?? id} className={ROW}>
-                  <Person
-                    name={k?.name}
-                    sub={
-                      <>
-                        <span className="font-mono">{id}</span> · PID{" "}
-                        <span className="font-mono">{p.pid}</span>
-                        {k?.kunden_nr && (
-                          <>
-                            {" · "}
-                            <span className="font-mono">{k.kunden_nr}</span>
-                          </>
-                        )}
-                      </>
-                    }
-                  />
-                  {p.deadline_at ? (
-                    <FristUhr due={p.deadline_at} />
-                  ) : (
-                    <span className="text-body text-text-2">keine Frist</span>
-                  )}
-                  <Icon name="chevron" size={16} className="text-text-2" />
-                </GridListItem>
-              );
-            })}
-          </GridList>
-          {pages.hasNextPage && (
-            <div className="border-t border-separator px-5 py-3">
-              <Button
-                variant="ghost"
-                isDisabled={pages.isFetchingNextPage}
-                onPress={() => pages.fetchNextPage()}
-              >
-                {pages.isFetchingNextPage ? "Lädt …" : `Nächste ${PAGE}`}
-              </Button>
-            </div>
-          )}
-        </Panel>
-      )}
-      <p className="m-0 px-1 text-caption text-text-2">
-        Reihenfolge und Fristen aus der {DIENST.processd} · ↑↓ wählen, ↵ öffnet den Kunden
+function VorschlagZeile({ a }: { a: Answer }) {
+  const v = a.vorschlag;
+  if (!v) {
+    if (a.status !== "running") return null;
+    return (
+      <p className="m-0 flex items-center gap-2 text-caption text-ai">
+        <Icon name="sparkle" size={12} className="animate-pulse" />
+        Der Assistent bereitet einen Vorschlag vor …
       </p>
-    </section>
-  );
-}
-
-/** Angemeldet in vertragd, but no makod process carries it yet — so no Frist. */
-function NichtUebermittelt() {
-  const router = useRouter();
-  const { rolle } = useRolle();
-  const ohne = useQuery({
-    queryKey: [rolle, "vertragd", "list_anmeldungen", "ohne_prozess"],
-    queryFn: () => call("vertragd", "list_anmeldungen", { ohne_prozess: true, limit: PAGE }),
-    refetchInterval: 60_000,
-  });
-  if (!ohne.data || ohne.data.gesamt === 0) return null;
-  const rows = ohne.data.anmeldungen;
+    );
+  }
   return (
-    <section aria-labelledby="ohne" className="flex flex-col gap-2">
-      <h2 id="ohne" className="m-0 px-1 text-callout font-semibold">
-        Noch nicht übermittelt{" "}
-        <span className="font-normal text-text-2">{formatCount(ohne.data.gesamt)}</span>
-      </h2>
-      <Panel className="overflow-hidden">
-        <GridList
-          aria-label="Noch nicht übermittelt"
-          onAction={(key) =>
-            router.navigate({ to: "/kunde/$id", params: { id: String(key).split("|")[0] ?? "" } })
-          }
-          className="outline-none"
-        >
-          {rows.map((a) => (
-            <GridListItem
-              key={`${a.kunden_id}|${a.malo_id}`}
-              id={`${a.kunden_id}|${a.malo_id}`}
-              textValue={a.name ?? a.malo_id}
-              className={ROW}
-            >
-              <Person
-                name={a.name}
-                sub={
-                  <>
-                    <span className="font-mono">{a.malo_id}</span> · {a.sparte} · Vertrag{" "}
-                    <span className="font-mono">{a.vertrags_nr}</span>
-                  </>
-                }
-              />
-              <Icon name="chevron" size={16} className="text-text-2" />
-            </GridListItem>
-          ))}
-        </GridList>
-        {ohne.data.gesamt > rows.length && (
-          <p className="m-0 border-t border-separator px-5 py-3 text-body text-text-2">
-            Die ersten {formatCount(rows.length)} von {formatCount(ohne.data.gesamt)}, nach Namen.
-          </p>
+    <p className="m-0 flex gap-2 rounded-[10px] border border-ai-border bg-ai-fill px-3 py-2 text-body text-text">
+      <Icon name="sparkle" size={14} className="mt-0.5 shrink-0 text-ai" />
+      <span className="min-w-0 flex-1">
+        <span className="font-semibold text-ai">
+          {a.disclosure} Vorschlag: {v.aktion === "freigeben" ? "Freigeben" : "Ablehnen"}
+          {v.antwortcode && <span className="ml-1 font-mono">{v.antwortcode}</span>}
+          {" — "}
+        </span>
+        <span className="italic">{v.begruendung}</span>
+        {!v.belegt && (
+          <span className="ml-2 inline-flex h-5 items-center gap-1 rounded-full bg-soon-fill px-2 align-middle text-caption font-semibold text-soon">
+            <Icon name="warn" size={11} />
+            nicht belegt
+          </span>
         )}
-      </Panel>
-    </section>
+      </span>
+      <kbd
+        aria-hidden
+        className="shrink-0 self-center rounded-[6px] border border-ai-border px-1.5 font-sans text-caption text-ai"
+      >
+        U
+      </kbd>
+    </p>
   );
 }
 
-/** Heute for the Lieferant: what waits on an answer, the next Frist first. */
+function Zeile({
+  e,
+  hinweise,
+  vorschlag,
+  sofort,
+  aktiv,
+  offen,
+  index,
+  onFocus,
+  onOeffnen,
+  onEntschieden,
+  zeilen,
+}: {
+  e: Eintrag;
+  hinweise: Hinweis[];
+  /** The proposal waiting on a Freigabe row. */
+  vorschlag: Answer | undefined;
+  /** `U` opened the decision: take the proposal into it. */
+  sofort: boolean;
+  aktiv: boolean;
+  /** The item's decision is open under it. */
+  offen: boolean;
+  index: number;
+  onFocus: (i: number) => void;
+  onOeffnen: (id: string | null) => void;
+  onEntschieden: () => void;
+  zeilen: RefObject<(HTMLButtonElement | null)[]>;
+}) {
+  const router = useRouter();
+  const ai = e.quelle === "hinweise";
+  return (
+    <li className="border-b border-separator last:border-b-0">
+      <button
+        type="button"
+        ref={(el) => {
+          zeilen.current[index] = el;
+        }}
+        tabIndex={aktiv ? 0 : -1}
+        aria-expanded={e.freigabe ? offen : undefined}
+        onFocus={() => onFocus(index)}
+        onClick={() => {
+          // A Freigabe is decided here; everything else opens its view.
+          if (e.freigabe) onOeffnen(offen ? null : e.id);
+          else if (e.ziel) router.navigate(e.ziel);
+        }}
+        className={`focus-ring flex w-full cursor-default items-start gap-4 border-0 px-5 py-3 text-left outline-none data-[aktiv=true]:bg-fill hover:bg-fill ${ai ? "bg-ai-fill" : "bg-transparent"}`}
+        data-aktiv={aktiv}
+      >
+        <span
+          className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full ${ai ? "bg-ai-fill text-ai" : "bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-accent"}`}
+        >
+          <Icon name={GLYPH[e.quelle]} size={16} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span
+            className={`block truncate text-callout font-medium text-text ${e.kennung ? "font-mono" : ""}`}
+          >
+            {e.titel}
+          </span>
+          <span className={`block text-body ${ai ? "text-text italic" : "text-text-2"}`}>
+            {e.grund}
+          </span>
+          {e.detail && (
+            <span className="block truncate font-mono text-caption text-text-2">{e.detail}</span>
+          )}
+        </span>
+        <span className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
+          {e.frist ? (
+            <FristUhr due={e.frist} />
+          ) : (
+            <span className="text-body text-text-2">keine Frist</span>
+          )}
+          {e.freigabe && (
+            <span className="text-caption text-accent">{offen ? "schließen" : "entscheiden"}</span>
+          )}
+        </span>
+      </button>
+      {vorschlag && !offen && (
+        <div className="pr-5 pb-3 pl-[4.25rem]">
+          <VorschlagZeile a={vorschlag} />
+        </div>
+      )}
+      {hinweise.length > 0 && (
+        <div className="flex flex-col gap-2 pr-5 pb-3 pl-[4.25rem]">
+          {hinweise.map((h) => (
+            <div key={h.task}>
+              <HinweisZeile h={h} />
+              {aktiv && h.run && (
+                <div className="mt-1.5">
+                  <Bewertung run={h.run} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {offen && e.freigabe && (
+        <div className="flex flex-col gap-3 border-t border-separator bg-fill/40 px-5 py-4">
+          <Entscheiden f={e.freigabe} onDone={onEntschieden} sofort={sofort} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+/** One quiet line per source: its count, or its refusal in its own words. */
+function Quellenzeile({ staende, agent }: { staende: Stand[]; agent: string | null }) {
+  return (
+    <ul
+      aria-label="Quellen"
+      className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 px-1 text-caption text-text-2"
+    >
+      {staende.map((s) => (
+        <li key={s.quelle} className={s.fehler ? "text-critical" : undefined}>
+          {s.label}:{" "}
+          {s.fehler
+            ? s.fehler
+            : s.laedt
+              ? "lädt …"
+              : `${formatCount(s.eintraege.length)}${s.mehr ? "+" : ""}`}
+        </li>
+      ))}
+      {agent && <li>Assistent: nicht erreichbar</li>}
+    </ul>
+  );
+}
+
+/**
+ * Heute: everything that waits on a person in the Rolle worn, one list in
+ * Frist bands. The agent's Hinweise sit under the item they concern; `⌘J`
+ * asks the assistant about the item in focus (FR-006, FR-007, FR-031).
+ */
 export function HeuteView() {
+  const { rolle } = useRolle();
+  const staende = useQuellen(rolle);
+  const { hinweise, fehler: agentFehler } = useHinweise();
+  const now = useNow();
+  const gemischt = useMemo(() => zusammenfuehren(staende, hinweise), [staende, hinweise]);
+  const eintraege = useBenannt(gemischt.eintraege, rolle === "lieferant");
+  const { zu } = gemischt;
+  const [aktiv, setAktiv] = useState(0);
+  const [offen, setOffen] = useState<string | null>(null);
+  const [sofort, setSofort] = useState<string | null>(null);
+  const client = useQueryClient();
+  const zeilen = useRef<(HTMLButtonElement | null)[]>([]);
+  const sichtbar = eintraege.slice(0, SICHTBAR);
+  const laedt = staende.some((s) => s.laedt) && eintraege.length === 0;
+  const freigabeIds = sichtbar.flatMap((e) => (e.freigabe ? [e.freigabe.id] : []));
+  const vorschlaege = useVorschlaege(freigabeIds);
+  const bereit = [...vorschlaege.values()].filter((a) => a.vorschlag).length;
+
+  const gruppen = BAENDER.map(({ band: b, titel }) => ({
+    b,
+    titel,
+    zeilen: sichtbar.map((e, i) => ({ e, i })).filter(({ e }) => band(e.frist, now) === b),
+  })).filter((g) => g.zeilen.length > 0);
+  const zahl = (b: Band) => gruppen.find((g) => g.b === b)?.zeilen.length ?? 0;
+
+  // J/K and the arrows step through every band as one list.
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      // The arrows move only from a row; J and K from anywhere but a field.
+      const pfeil = ev.key === "ArrowDown" || ev.key === "ArrowUp";
+      if (pfeil && !zeilen.current.some((z) => z === document.activeElement)) return;
+      // U on a Freigabe row opens its decision with the proposal taken in;
+      // once the decision is open, the form answers U itself.
+      const fokussiert = sichtbar[aktiv];
+      if (UEBERNEHMEN.match?.(ev) && fokussiert?.freigabe && offen !== fokussiert.id) {
+        if (!vorschlaege.get(fokussiert.freigabe.id)?.vorschlag) return;
+        ev.preventDefault();
+        setSofort(fokussiert.id);
+        setOffen(fokussiert.id);
+        return;
+      }
+      const vor = ev.key === "ArrowDown" || NAECHSTE.match?.(ev);
+      const zurueck = ev.key === "ArrowUp" || VORIGE.match?.(ev);
+      if (!vor && !zurueck) return;
+      ev.preventDefault();
+      const n = Math.min(sichtbar.length, SICHTBAR);
+      if (n === 0) return;
+      const next = (aktiv + (vor ? 1 : -1) + n) % n;
+      setAktiv(next);
+      zeilen.current[next]?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  const fokus = sichtbar[aktiv];
+
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
       <header>
         <h1 className="m-0 text-large font-bold tracking-tight">Heute</h1>
         <p className="m-0 mt-1 text-callout text-text-2">
-          Was auf eine Antwort wartet — die nächste Frist zuerst.
+          {eintraege.length === 0
+            ? "Was auf Sie wartet — die nächste Frist zuerst."
+            : [
+                zahl("ueberfaellig") && `${formatCount(zahl("ueberfaellig"))} überfällig`,
+                zahl("heute") && `${formatCount(zahl("heute"))} heute fällig`,
+                `${formatCount(eintraege.length)} insgesamt`,
+                bereit > 0 && `${formatCount(bereit)} mit Vorschlag`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
         </p>
       </header>
-      <Lage />
-      <Hinweise />
-      <Wartend />
-      <NichtUebermittelt />
+      {rolle === "lieferant" && <Lage />}
+
+      {laedt && (
+        <Panel className="flex flex-col gap-3 p-5">
+          <span className="sr-only">Lädt …</span>
+          <div className="skeleton h-4 w-2/3" />
+          <div className="skeleton h-4 w-1/2" />
+          <div className="skeleton h-4 w-3/5" />
+        </Panel>
+      )}
+
+      {!laedt && eintraege.length === 0 && (
+        <Panel>
+          <EmptyState title="Alles erledigt.">Nichts wartet auf Sie.</EmptyState>
+        </Panel>
+      )}
+
+      {gruppen.map((g) => (
+        <section key={g.b} aria-labelledby={`band-${g.b}`} className="flex flex-col gap-2">
+          <h2
+            id={`band-${g.b}`}
+            className={`m-0 flex items-baseline gap-2 px-1 text-callout font-semibold ${g.b === "ueberfaellig" ? "text-critical" : ""}`}
+          >
+            {g.titel}
+            <span className="font-normal text-text-2">{formatCount(g.zeilen.length)}</span>
+          </h2>
+          <Panel className="overflow-hidden">
+            <ol aria-label={g.titel} className="m-0 list-none p-0">
+              {g.zeilen.map(({ e, i }) => (
+                <Zeile
+                  key={e.id}
+                  e={e}
+                  hinweise={zu.get(e.id) ?? []}
+                  vorschlag={e.freigabe ? vorschlaege.get(e.freigabe.id) : undefined}
+                  sofort={sofort === e.id}
+                  aktiv={i === aktiv}
+                  offen={offen === e.id}
+                  index={i}
+                  onFocus={setAktiv}
+                  onOeffnen={(id) => {
+                    setSofort(null);
+                    setOffen(id);
+                  }}
+                  onEntschieden={() => {
+                    setOffen(null);
+                    void client.invalidateQueries();
+                  }}
+                  zeilen={zeilen}
+                />
+              ))}
+            </ol>
+          </Panel>
+        </section>
+      ))}
+
+      {eintraege.length > SICHTBAR && (
+        <p className="m-0 px-1 text-body text-text-2">
+          Die ersten {formatCount(SICHTBAR)} von {formatCount(eintraege.length)} — der Rest folgt,
+          sobald diese erledigt sind.
+        </p>
+      )}
+
+      {fokus?.anker && !offen && (
+        <section aria-label={`Fragen zu ${fokus.titel}`} className="flex flex-col gap-2">
+          <h2 className="m-0 px-1 text-callout font-semibold">
+            Fragen zu <span className={fokus.kennung ? "font-mono" : ""}>{fokus.titel}</span>
+          </h2>
+          <Fragen key={JSON.stringify(fokus.anker)} anker={fokus.anker} />
+        </section>
+      )}
+
+      <Quellenzeile staende={staende} agent={agentFehler} />
+      <p className="m-0 px-1 text-caption text-text-2">
+        J K oder ↑↓ wählen · ↵ öffnet, eine Freigabe wird hier entschieden (A / R, U übernimmt den
+        Vorschlag) · ⌘J fragt den Assistenten zum gewählten Eintrag
+      </p>
     </div>
   );
 }

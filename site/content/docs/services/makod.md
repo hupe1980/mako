@@ -922,15 +922,19 @@ stable machine reason in `code`, the key to branch on:
 | `404` | `process_not_found` | No active process for the business key (answer commands) |
 | `409` | `duplicate_process` | A live process holds the business key — treat as success |
 | `409` | `ambiguous_process` | More than one live process for the key — a data-integrity issue |
+| `409` | `duplicate_invoice` | An INVOIC with this `invoice_ref` was already issued; `process_id` names its process |
 | `409` | `invalid_state` | The process refuses the command in its current state |
 | `422` | `missing_idempotency_key` | No `Idempotency-Key` |
 | `422` | `command_rejected` — `reason` `unknown_command` · `marktrolle_required` · `role_not_permitted` · `role_not_configured` | Name not registered · multi-role without `marktrolle` · role not allowed for this command · role not in `--marktrollen` |
 | `422` | `idempotency_key_reuse` | Key used for a different command or payload |
 | `422` | `malo_not_found` | `malo_id` not in the MaLo cache — seed it via `PUT /admin/malo/{malo_id}` |
 | `422` | `invalid_payload` | Missing or malformed payload field |
+| `422` | `edi_unzulaessig` | The recipient's recorded EDI agreement does not carry this INVOIC — see [Outbound INVOIC and the E-Rechnung](#outbound-invoic-and-the-e-rechnung) |
+| `422` | `invoic_nicht_darstellbar` | The `rechnung` cannot go out as the INVOIC of its PID; `places` lists the MIG `Nr`s — see [Issuing the INVOIC](#issuing-the-invoic) |
 | `500` | — | Storage or engine failure — the body carries an `error_id` the log line carries, never the cause |
 | `501` | `not_implemented` | Registered but not dispatchable in this build — do not retry automatically |
 | `503` | `idempotency_unavailable` | The idempotency record could not be read — retry |
+| `503` | `marktd_unavailable` | marktd, which holds an INVOIC recipient's EDI agreement, did not answer — retry |
 
 **Success `202 Accepted`:**
 
@@ -1064,10 +1068,9 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `gpke.zuordnung-lf.bestaetigen` | `LF` | GPKE | 55608 | LFN confirms the Ankündigung Zuordnung LF (55607); `bilanzkreis` rides `SG8 SEQ+Z79` |
 | `gpke.zuordnung-lf.ablehnen` | `LF` | GPKE | 55609 | LFN rejects the Ankündigung Zuordnung LF |
 | `maloid.lieferbeginn.fortsetzen` | `LF` | GPKE | 55001 | Resume an Anmeldung once the MaLo-ID arrived from the MaLo-ID-Vergabe |
-| `gpke.abrechnung.selbstausstellen` | `LF` | GPKE | 31006 | LF issues the MMM invoice itself (Gutschriftverfahren) |
 | `invoic.nne-abschlag.stellen` | `NB` or `GNB` | Sparte-neutral | 31001 | Abschlagsrechnung Netznutzung |
 | `invoic.nne.stellen` | `NB` or `GNB` | Sparte-neutral | 31002 | Netznutzungsabrechnung — one PID in both Sparten |
-| `invoic.mmm.stellen` | `NB` or `GNB` | Sparte-neutral | 31005 | Mehr-/Mindermengenrechnung — one PID in both Sparten |
+| `invoic.mmm.stellen` | `NB` or `GNB` | Sparte-neutral | 31005, 31006 | Mehr-/Mindermengenrechnung: the Mindermenge as 31005, a `rechnung` with `netznutzungrechnungsart` `SELBSTAUSGESTELLT` — the Mehrmenge — as 31006; both PIDs in both Sparten |
 | `wim.msb-rechnung.stellen` | `NB` or `MSB` | WiM | 31009 | MSB invoices the NB/LF/ESA for Messstellenbetrieb |
 | `geli.lieferende.ablehnen` | `GNB` | GeLi Gas | 44006 | GNB rejects the Abmeldung (`G_0007`) |
 | `geli.nb-lieferende.ablehnen` | `LFG` | GeLi Gas | 44009 | LFG rejects the GNB-initiated Lieferende |
@@ -1103,8 +1106,8 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `invoic.sonstige-leistung.stellen` | `NB` or `GNB` | Sparte-neutral | 31011 | Rechnung sonstige Leistung (GPKE Teil 2 · AWH Sperrprozesse Gas) |
 | `invoic.sonstige-leistung.annehmen` | `LF`, `LFG`, `LFN`, `LFA` | Sparte-neutral | 31011 | LF accepts the invoice (REMADV) |
 | `invoic.sonstige-leistung.ablehnen` | `LF`, `LFG`, `LFN`, `LFA` | Sparte-neutral | 31011 | LF disputes the invoice (REMADV) |
-| `gabi.rechnung.annehmen` | `BKV` · `MGV` | GaBi Gas | 31007 | Settles a GaBi Gas invoice — the MGV the aggregated MMM-Rechnung 31007/31008, the BKV the Kapazitätsrechnung 31010 |
-| `gabi.rechnung.ablehnen` | `BKV` · `MGV` | GaBi Gas | 31007 | Disputes one — same family, same two roles |
+| `gabi.rechnung.annehmen` | `MGV` | GaBi Gas | 31007 | Settles the aggregated MMM-Rechnung 31007/31008. The Kapazitätsrechnung 31010 runs NB → KN, a role no deployment holds |
+| `gabi.rechnung.ablehnen` | `MGV` | GaBi Gas | 31007 | Disputes one |
 | `gabi.nominierung.senden` | `BKV` | GaBi Gas (DVGW) | 70030 | Nominates a gas day: `positionen` state point, direction and `kwh_pro_h` per period |
 | `gabi.nominierung.beantworten` | `NB` · `MGV` | GaBi Gas (DVGW) | 70036 | Answers a nomination — `entscheidung` `bestaetigt` / `teilweise` / `abgelehnt`, with `bestaetigte_positionen` when curtailed |
 | `gabi.mehrmindermengen.melden` | `NB` | GaBi Gas (DVGW) | 70095 | Reports a Netzkonto's Mehr-/Mindermenge (SSQNOT); `verfahren` `slp` or `rlm` |
@@ -1117,6 +1120,59 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 The ESA commands are listed under [ESA messages](#esa-messages) and the §20b
 commands under [Netzzugangsplattform](#netzzugangsplattform).
 Commands listing two Marktrollen always require `marktrolle`.
+
+### Outbound INVOIC and the E-Rechnung {#outbound-invoic-and-the-e-rechnung}
+
+Every command that issues an INVOIC (`invoic.nne-abschlag.stellen`,
+`invoic.nne.stellen`, `invoic.mmm.stellen`, `wim.msb-rechnung.stellen`,
+`invoic.sonstige-leistung.stellen`) is
+checked first: an EDI invoice to a Marktpartner stands as an E-Rechnung when
+its agreed format extracts into EN 16931 (§ 14 Abs. 1 Satz 6 Nr. 2 UStG), or
+under § 27 Abs. 38 Nr. 1 or 3 UStG — each only with the recipient's Zustimmung.
+
+| Input | Read from |
+|---|---|
+| Supply date | `rechnung.rechnungsperiode.enddatum` |
+| Issue date | `rechnung.rechnungsdatum` |
+| Transmission date | today, Europe/Berlin |
+| Zustimmung, extractability | [marktd's partner record](@/docs/services/marktd.md#trading-partners): `edi_zustimmung`, `edi_extrahierbar` |
+
+A missing date is `invalid_payload`; anything unrecorded is `422
+edi_unzulaessig`, the provision in `detail`. A December-2026 invoice sent in
+January 2027 needs `edi_extrahierbar = true` on file.
+
+### Issuing the INVOIC {#issuing-the-invoic}
+
+After the check, the command builds the INVOIC from `rechnung`, validates it
+against the Prüfschablone of its PID, and spawns the issuing process keyed by
+`invoice_ref` in the write that enqueues the message. `invoice_ref` must be
+`rechnung.rechnungsnummer`; the same `invoice_ref` again is `409
+duplicate_invoice`. A `rechnung` with `ist_storno` goes out as Stornorechnung
+31004 (`wim-invoic`).
+
+What BO4E has no field for travels beside `rechnung`:
+
+| Payload field | INVOIC place | When the column requires it |
+|---|---|---|
+| `zugehoeriges_dokument` | `SG1 RFF+ACE` | 31002 Strom (the Lieferschein-MSCONS), 31011 `Z43` (the ORDERS), 31009 to the LF (the QUOTES) |
+| `preise_mp_id` | `SG1 RFF+Z56` | 31002 Strom, period from 01.01.2026 |
+| `rechnungstyp` | `IMD` DE 7081 | a code BO4E's `netznutzungrechnungstyp` lacks: `MSB`, `KON`, `TEC` (31009), `Z43`–`Z45` (31011), `SOR` |
+| `ausfuehrungsdatum` | `DTM+203` (`YYYY-MM-DD`) | 31011 `Z43` |
+| `original_rechnungsdatum` | `DTM+171` (RFC 3339) | every Storno |
+
+A position's `artikel_id` goes out as `Z09` when it is an Artikel-ID
+(`1-02-0-002`) and as `Z01` when it is a 13-digit BDEW-Artikelnummer; the
+column decides which it admits. The MMM-Rechnung's `IMD` DE 7009 is
+`marktlokation.energierichtung`; a Mehrmenge position carries `QTY+Z17:-1`
+and its price as an amount, the credit's sign in the factor. A position with
+a `zeitbezogene_menge` states it at `QTY+136`.
+
+A place the AHB requires and the command does not fill — a party's
+`organisationsname` or address, the `marktlokation`, a position's
+`artikel_id` — is refused as `422 invoic_nicht_darstellbar` with its MIG `Nr`
+in `places`, never completed with a made-up value; so is a value that breaks
+its format (a 36-character name, three Nachkommastellen where `[930]` admits
+two).
 
 ### ERP payload fields per command
 
@@ -1786,10 +1842,10 @@ outcomes.
 
 | Fired deadline | What happens | What the operator sees |
 |---|---|---|
-| A delivery window (APERAK, CONTRL) | No workflow is consulted; the outbox worker discharges it on delivery, so firing means a miss | `ERROR REGULATORY ALERT: delivery window expired …`, `makod_aperak_missed_total` |
+| A delivery window (APERAK, CONTRL) | No workflow is consulted; the outbox worker discharges it on delivery, so firing means a miss | `ERROR REGULATORY ALERT: delivery window expired …`, `makod_delivery_window_missed_total` |
 | A label not in the workflow's `DEADLINE_LABELS`, or a workflow with no driver in this build | Nothing acts | `ERROR deadline fired under a label its workflow does not own` |
 | An owned label whose window is closed (the answer went out or came in) | Nothing acts | nothing |
-| An owned label whose window is open | The Festlegung's outcome for the silence, or `FristAbgelaufen` where it gives none | `WARN Frist lapsed with its window still open`; the workflow's `de.mako.aperak.timeout` where it carries one |
+| An owned label whose window is open | The Festlegung's outcome for the silence, or `FristAbgelaufen` where it gives none | `WARN Frist lapsed with its window still open`; the workflow's `de.mako.antwortfrist.abgelaufen` where it carries one |
 
 `FristAbgelaufen` is a breach to act on, not an outcome: the process keeps
 waiting, and a late answer still goes out or still lands.
@@ -1834,7 +1890,7 @@ output.
 | `makod_dead_letter_recorded_total` | `reason` | Any. `not_dispatchable` is a mako coverage bug; `missing_interchange_party` a defect in the sender's message |
 | `makod_inbound_messages_total` | `pid`, `result` | `result = "error"` |
 | `makod_validation_failed_total` | `message_type`, `release` | A counterparty sends non-conformant messages |
-| **`makod_aperak_missed_total`** | `label` | **> 0** — an undelivered APERAK (APERAK AHB 1.1 §2.4.1 Strom / §2.3.1 Gas) |
+| **`makod_delivery_window_missed_total`** | `label` | **> 0** — an undelivered APERAK (APERAK AHB 1.1 §2.4.1 Strom / §2.3.1 Gas) or CONTRL (CONTRL AHB 1.0 §2.3.1); `label` names the window |
 
 | Gauge (unlabelled) | Reads | Alert condition |
 |---|---|---|
@@ -1855,8 +1911,8 @@ output.
   an accepted APERAK is not a completion.
 - `makod_validation_failed_total` counts inbound messages once each at the
   ingest boundary; parse failures are dead letters instead.
-- `makod_aperak_missed_total` counts APERAK windows still registered at their
-  due time — the outbox worker discharges a window on delivery.
+- `makod_delivery_window_missed_total` counts APERAK and CONTRL windows still
+  registered at their due time — the outbox worker discharges a window on delivery.
 
 ### Inbound rate limiting
 

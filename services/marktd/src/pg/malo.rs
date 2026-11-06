@@ -1,10 +1,10 @@
-//! PostgreSQL implementation of [`MaloRepository`].
+//! PostgreSQL storage: [`PgMaloRepository`].
 
 use mako_markt::{
     bo4e::MaloShadowColumns,
     domain::{MaloId, Sparte},
     error::MdmError,
-    repository::{MaloFilter, MaloRecord, MaloRepository, PageResult, Rollenzuordnung},
+    repository::{MaloFilter, MaloRecord, PageResult, Rollenzuordnung},
 };
 use rubo4e::current::Marktlokation;
 use sqlx::{PgConnection, PgPool, Row, postgres::PgRow};
@@ -201,8 +201,19 @@ impl PgMaloRepository {
     }
 }
 
-impl MaloRepository for PgMaloRepository {
-    async fn upsert(
+impl PgMaloRepository {
+    /// Insert or update a `MARKTLOKATION`.
+    ///
+    /// Validates optimistic concurrency via `if_match` (the caller's ETag).
+    /// Pass `None` for unconditional upsert (first write).
+    ///
+    /// Returns the new version number.
+    /// `data` is the **typed** BO — not a `serde_json::Value`. The repository
+    /// serialises the JSONB and derives the shadow columns from it
+    /// ([`MaloShadowColumns`]), so a payload
+    /// that has not been through BO4E validation cannot reach storage and a
+    /// column cannot disagree with the document it shadows.
+    pub async fn upsert(
         &self,
         malo_id: &MaloId,
         sparte: Sparte,
@@ -232,7 +243,10 @@ impl MaloRepository for PgMaloRepository {
         Ok(new_version)
     }
 
-    async fn find(&self, malo_id: &MaloId, at: Date) -> Result<Option<MaloRecord>, MdmError> {
+    /// Return the `MARKTLOKATION` with `rollenzuordnung` valid at `at`.
+    ///
+    /// `at` defaults to today (German local date).
+    pub async fn find(&self, malo_id: &MaloId, at: Date) -> Result<Option<MaloRecord>, MdmError> {
         let row: Option<PgRow> = sqlx::query(
             r#"SELECT m.malo_id,
                       m.sparte,
@@ -278,7 +292,14 @@ impl MaloRepository for PgMaloRepository {
         Ok(row.map(row_to_malo))
     }
 
-    async fn list(&self, filter: MaloFilter, at: Date) -> Result<PageResult<MaloRecord>, MdmError> {
+    /// Return a paged list filtered by the given predicates.
+    ///
+    /// `at` is the reference date for `rollenzuordnung` validity.
+    pub async fn list(
+        &self,
+        filter: MaloFilter,
+        at: Date,
+    ) -> Result<PageResult<MaloRecord>, MdmError> {
         let sparte_str = filter.sparte.map(|s| s.to_string());
         let size = filter.size.clamp(1, 500);
         let limit = i64::from(size);
@@ -358,7 +379,17 @@ impl MaloRepository for PgMaloRepository {
         })
     }
 
-    async fn patch_typenmerkmal(
+    /// Patch the `bilanzierungsmethode` and/or `fallgruppe` typed columns on an
+    /// existing MaLo row **without** touching the JSONB payload or version.
+    ///
+    /// Called by `marktd` event_ingest when it receives
+    /// `de.mako.process.initiated` (PID 55001/44001) carrying
+    /// `bilanzierungsmethode` and/or `fallgruppe` extracted from the UTILMD
+    /// `TM+EM` / `TM+Z10` segments by the `makod` adapter.
+    ///
+    /// No-ops silently when the MaLo row does not yet exist — the values will
+    /// be set on the first `PUT /api/v1/malos` call instead.
+    pub async fn patch_typenmerkmal(
         &self,
         malo_id: &mako_markt::domain::MaloId,
         bilanzierungsmethode: Option<&str>,
@@ -372,7 +403,18 @@ impl MaloRepository for PgMaloRepository {
         Self::patch_typenmerkmal_tx(&mut conn, malo_id, bilanzierungsmethode, fallgruppe).await
     }
 
-    async fn patch_stammdaten(
+    /// Apply a UTILMD Stammdatenänderung (GPKE Teil 4 / GeLi Gas) to the typed
+    /// MaLo columns — the granular counterpart of
+    /// [`patch_typenmerkmal`](Self::patch_typenmerkmal) over the full
+    /// changeable attribute set.
+    ///
+    /// Each `Some` field overwrites its column; each `None` leaves it unchanged
+    /// (`COALESCE`). The JSONB payload and the optimistic `version` are **not**
+    /// touched — a Stammdatenänderung is authoritative master data arriving over
+    /// EDIFACT, not an operator edit. Returns `true` when a row was updated and
+    /// `false` when the MaLo is not yet known locally (the change is then a
+    /// no-op; the row is created by the next `PUT /api/v1/malos`).
+    pub async fn patch_stammdaten(
         &self,
         malo_id: &mako_markt::domain::MaloId,
         patch: &mako_markt::repository::MaloStammdatenPatch,

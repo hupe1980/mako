@@ -1339,16 +1339,22 @@ pub fn extract_melo_from_orders(msg: &AnyMessage) -> String {
         .to_owned()
 }
 
-/// Extract the INVOIC sender/document reference for MaLo correlation.
-///
-/// INVOIC messages do not carry a LOC or IDE segment. Use the message reference
-/// (UNH DE 0062) as the correlation key — workflows that receive INVOIC messages
-/// as initial commands are keyed on the invoice reference, not a MaLo.
+/// The Rechnungsnummer of an inbound INVOIC — `BGM` DE1004 (INVOIC MIG,
+/// place 00004) — the key its process is registered under, so the REMADV
+/// and COMDIS that name it in `DOC` DE1004 find it. Not the UNH message
+/// reference: that numbers the message inside its interchange and is reused
+/// by every sender.
 ///
 /// Returns an empty string when the message is not an INVOIC.
-pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
+pub fn extract_invoice_ref_from_invoic(msg: &AnyMessage) -> String {
     match msg {
-        AnyMessage::Invoic(_) => msg.message_ref().to_owned(),
+        AnyMessage::Invoic(i) => i
+            .segments()
+            .iter()
+            .find(|s| s.tag == "BGM")
+            .and_then(|s| s.component_str(1, 0))
+            .unwrap_or_default()
+            .to_owned(),
         _ => String::new(),
     }
 }
@@ -1697,38 +1703,36 @@ pub fn extract_melo_from_insrpt(msg: &AnyMessage) -> String {
         .to_owned()
 }
 
-/// Extract the original invoice message-reference from a REMADV for process correlation.
+/// The Rechnungsnummer a REMADV answers, for process correlation.
 ///
-/// BDEW convention: the REMADV carries `RFF+Z13:<original_message_ref>` where the
-/// reference value is the UNH message-reference (DE 0062) of the originating INVOIC.
-/// This matches the key used when spawning the billing process (`extract_malo_from_invoic`).
-///
-/// Falls back to the REMADV's own `msg.message_ref()` when the RFF+Z13 is absent.
+/// It is `DOC` DE1004 „Dokumentennummer" (REMADV MIG, place 00012) — the
+/// number the INVOIC stated in `BGM` DE1004 and the key the invoice's process
+/// is registered under. `RFF+Z13` is the REMADV's own Prüfidentifikator and
+/// names no invoice. The first `DOC` is read; empty when there is none, which
+/// the caller skips as uncorrelatable.
 pub fn extract_invoice_ref_from_remadv(msg: &AnyMessage) -> String {
-    let AnyMessage::Remadv(r) = msg else {
-        return msg.message_ref().to_owned();
-    };
-    r.segments()
-        .iter()
-        .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("Z13"))
-        .and_then(|s| s.component_str(0, 1))
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| msg.message_ref().to_owned())
+    match msg {
+        AnyMessage::Remadv(r) => dokumentennummer(r.segments()),
+        _ => String::new(),
+    }
 }
 
-/// Extract the original invoice message-reference from a COMDIS for process correlation.
-///
-/// Same `RFF+Z13` convention as [`extract_invoice_ref_from_remadv`].
+/// The Rechnungsnummer a COMDIS answers — `DOC` DE1004 (COMDIS MIG, place
+/// 00010), as for [`extract_invoice_ref_from_remadv`].
 pub fn extract_invoice_ref_from_comdis(msg: &AnyMessage) -> String {
-    let AnyMessage::Comdis(c) = msg else {
-        return msg.message_ref().to_owned();
-    };
-    c.segments()
+    match msg {
+        AnyMessage::Comdis(c) => dokumentennummer(c.segments()),
+        _ => String::new(),
+    }
+}
+
+fn dokumentennummer(segments: &[edifact_rs::Segment]) -> String {
+    segments
         .iter()
-        .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("Z13"))
-        .and_then(|s| s.component_str(0, 1))
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| msg.message_ref().to_owned())
+        .find(|s| s.tag == "DOC")
+        .and_then(|s| s.component_str(1, 0))
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// Detect the BDEW format version to dispatch a message under.

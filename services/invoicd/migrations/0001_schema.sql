@@ -34,20 +34,17 @@ CREATE TABLE invoic_receipts (
 
     -- The EDIFACT INVOIC message reference (BGM 1004) — the business key makod
     -- routes an answer command by, so a re-dispatch that has only the receipt
-    -- row still needs it. NULL for outbound self-issued documents, which are
-    -- identified by `rechnungsnummer` instead.
-    invoice_ref             TEXT,
-    -- Invoice number of a document this service issued (outbound only).
+    -- row still needs it. A receipt without one could never be answered.
+    invoice_ref             TEXT        NOT NULL,
+    -- The Rechnungsnummer the document states — the duplicate check reads it.
     rechnungsnummer         TEXT,
 
     -- BDEW Prüfidentifikator that triggered this receipt.
     pid                     SMALLINT    NOT NULL,
-    -- 'inbound' (NB/MSB → LF) | 'outbound' (LF selbstausgestellt, PID 31006)
-    direction               TEXT        NOT NULL CHECK (direction IN ('inbound', 'outbound')),
 
     -- BDEW-Codenummer / GLN of the sender.
     sender_mp_id            TEXT        NOT NULL,
-    -- Receiver GLN (this tenant for inbound; the NB for outbound).
+    -- Receiver MP-ID: this tenant.
     receiver_gln            TEXT,
 
     -- MaLo-ID extracted from the Rechnung at ingest (indexed; no JSONB scan).
@@ -64,8 +61,7 @@ CREATE TABLE invoic_receipts (
                                 'AcceptedPartial',  -- accepted with remarks (Storno)
                                 'Warn',             -- warnings, auto-approved
                                 'Dispute',          -- rejected
-                                'Resolved',         -- dispute closed by an operator
-                                'Dispatched'        -- outbound sent; awaiting the NB's REMADV
+                                'Resolved'          -- dispute closed by an operator
                             )),
                             -- No 'Paid': `outcome` is the plausibility verdict on
                             -- the invoice, and settlement is a different axis —
@@ -105,12 +101,6 @@ CREATE TABLE invoic_receipts (
 
     tenant                  TEXT        NOT NULL,
 
-    -- An inbound receipt without its message reference cannot be answered:
-    -- there is nothing to route the REMADV by. Refuse the row rather than
-    -- discover it when the Zahlungsziel is a day out.
-    CONSTRAINT invoic_inbound_has_message_ref CHECK (
-        direction <> 'inbound' OR invoice_ref IS NOT NULL
-    ),
     -- A dispute resolution has both parts or neither.
     CONSTRAINT invoic_resolution_timed CHECK (
         (outcome = 'Resolved') = (dispute_resolved_at IS NOT NULL)
@@ -132,8 +122,7 @@ CREATE INDEX invoic_sender_received   ON invoic_receipts (sender_mp_id, received
 -- Prüfschritt 50 („Rechnungsnummer wurde bereits verwendet", `A05`) of every
 -- invoice tree in `mako_pruefung::rechnung`. § 14 Abs. 4 Nr. 4 UStG makes the
 -- Rechnungsnummer einmalig **per Rechnungssteller**, so that pair is the key;
--- the partial predicate skips the outbound rows and the ones that never carried
--- a number.
+-- the partial predicate skips the rows that never carried a number.
 CREATE INDEX invoic_sender_rechnungsnummer
     ON invoic_receipts (tenant, sender_mp_id, rechnungsnummer)
     WHERE rechnungsnummer IS NOT NULL;
@@ -157,8 +146,6 @@ CREATE INDEX invoic_overdue_pending   ON invoic_receipts (tenant, pay_by)
 -- The ERP outbox claim (see pg::receipts::claim_erp_pending).
 CREATE INDEX invoic_erp_pending       ON invoic_receipts (tenant, erp_next_attempt_at)
     WHERE erp_notified_at IS NULL AND erp_attempts < 5;
--- Inbound vs. outbound summary.
-CREATE INDEX invoic_direction_tenant  ON invoic_receipts (tenant, direction, received_at DESC);
 
 -- ── Dead-letter queue ─────────────────────────────────────────────────────────
 --

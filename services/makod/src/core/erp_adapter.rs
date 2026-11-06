@@ -708,7 +708,7 @@ fn terminal_outcome(event: &ErpEventType) -> Option<ProcessOutcome> {
     match event {
         ErpEventType::ProcessCompleted => Some(ProcessOutcome::Accepted),
         ErpEventType::AperakRejected { .. } => Some(ProcessOutcome::Rejected),
-        ErpEventType::AperakTimeout => Some(ProcessOutcome::Timeout),
+        ErpEventType::AntwortfristAbgelaufen => Some(ProcessOutcome::Timeout),
         ErpEventType::ProcessFailed { .. } => Some(ProcessOutcome::Cancelled),
         _ => None,
     }
@@ -740,7 +740,7 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
     Some(match msg_type {
         "AperakAccepted" => ErpEventType::AperakAccepted,
         "AperakRejected" => ErpEventType::AperakRejected { erc_code: None },
-        "AperakTimeout" => ErpEventType::AperakTimeout,
+        "AntwortfristAbgelaufen" => ErpEventType::AntwortfristAbgelaufen,
         "ContrlReceived" => ErpEventType::ContrlReceived,
         "ProcessCompleted" => ErpEventType::ProcessCompleted,
         "ProcessInitiated" => ErpEventType::ProcessInitiated,
@@ -784,7 +784,7 @@ mod tests {
         for msg_type in [
             "AperakAccepted",
             "AperakRejected",
-            "AperakTimeout",
+            "AntwortfristAbgelaufen",
             "ContrlReceived",
             "ProcessCompleted",
             "ProcessInitiated",
@@ -856,7 +856,7 @@ mod terminal_outcome_tests {
             Some(ProcessOutcome::Rejected)
         );
         assert_eq!(
-            terminal_outcome(&ErpEventType::AperakTimeout),
+            terminal_outcome(&ErpEventType::AntwortfristAbgelaufen),
             Some(ProcessOutcome::Timeout)
         );
         assert_eq!(
@@ -884,7 +884,7 @@ mod terminal_outcome_tests {
             "ProcessCompleted",
             "AperakAccepted",
             "AperakRejected",
-            "AperakTimeout",
+            "AntwortfristAbgelaufen",
             "ContrlReceived",
             "MaloIdentified",
             "DispatchConfirmed",

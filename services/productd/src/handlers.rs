@@ -1055,6 +1055,9 @@ pub mod grund {
     pub const BEHG_PREIS_FEHLT: &str = "BEHG_PREIS_FEHLT";
     /// The product's `mwst_rate_override` is not a rate.
     pub const MWST_SATZ_UNGUELTIG: &str = "MWST_SATZ_UNGUELTIG";
+    /// The Stichtag's year has no read Strom- or Energiesteuer rate and the
+    /// position states none.
+    pub const STEUERSATZ_FEHLT: &str = "STEUERSATZ_FEHLT";
 }
 
 /// A refusal before it knows which position it belongs to.
@@ -1100,6 +1103,9 @@ pub struct PricingContext {
     /// § 13b Abs. 2 Nr. 5 Buchst. b i.V.m. Abs. 5 UStG they owe the tax and the
     /// quotation states none.
     pub reverse_charge_13b: bool,
+    /// The Stichtag's year, which selects the Strom- and Energiesteuer rate
+    /// from their dated series; `None` where no tax is priced.
+    pub steuerjahr: Option<i32>,
 }
 
 /// The context the public comparison feed prices under: supply only, so no Gas
@@ -1107,6 +1113,7 @@ pub struct PricingContext {
 const FEED_PRICING_CONTEXT: PricingContext = PricingContext {
     behg_gas_ct_per_kwh: Err(String::new()),
     reverse_charge_13b: false,
+    steuerjahr: None,
 };
 
 /// The Erdgas CO₂ cost in ct/kWh_Hs a quotation is priced at for its Stichtag.
@@ -1371,9 +1378,30 @@ pub fn compute_cost_breakdown(
         .unwrap_or(Decimal::ZERO);
 
     let sparte_upper = pos.sparte.to_uppercase();
+    // A rate the position states wins; otherwise the Stichtag year's row of the
+    // dated series, and a year the series has not read refuses — a constant
+    // would quote a tax rate nobody has checked for that year.
+    let steuer = |gesetz: &str, satz: Option<Decimal>, serie: fn(i32) -> Option<Decimal>| {
+        satz.or_else(|| ctx.steuerjahr.and_then(serie))
+            .ok_or_else(|| {
+                Unpreisbar::new(
+                    grund::STEUERSATZ_FEHLT,
+                    format!(
+                        "für {} ist kein {gesetz}-Satz gelesen; der Satz ist an der Position \
+                     anzugeben",
+                        ctx.steuerjahr
+                            .map_or_else(|| "den Stichtag".to_owned(), |j| j.to_string())
+                    ),
+                )
+            })
+    };
     let levies_ct_per_kwh = if sparte_upper.contains("GAS") {
-        // § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG: 5,50 EUR/MWh = 0,55 ct/kWh.
-        let energiesteuer = pos.energiesteuer_gas_ct_per_kwh.unwrap_or(dec!(0.55));
+        // § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG, from the one dated series.
+        let energiesteuer = steuer(
+            "Energiesteuer",
+            pos.energiesteuer_gas_ct_per_kwh,
+            energy_billing::energiesteuer_gas_for_year,
+        )?;
         let behg = match (pos.behg_gas_ct_per_kwh, &ctx.behg_gas_ct_per_kwh) {
             (Some(ct), _) => ct,
             (None, Ok(ct)) => *ct,
@@ -1393,9 +1421,12 @@ pub fn compute_cost_breakdown(
         };
         energiesteuer + behg
     } else if sparte_upper.contains("STROM") {
-        // § 3 StromStG: 20,50 EUR/MWh, from the one Stromsteuer series.
-        pos.stromsteuer_ct_per_kwh
-            .unwrap_or(grid_billing::STROMSTEUER_REGELSATZ_CT_PER_KWH)
+        // § 3 StromStG, from the one dated series.
+        steuer(
+            "Stromsteuer",
+            pos.stromsteuer_ct_per_kwh,
+            grid_billing::stromsteuer_for_year,
+        )?
     } else {
         // Fernwärme and Wasser bear neither Strom- nor Energiesteuer on the
         // delivery itself — what is owed is taxed in the fuel upstream — so
@@ -1582,6 +1613,7 @@ async fn pricing_context(
     PricingContext {
         behg_gas_ct_per_kwh,
         reverse_charge_13b,
+        steuerjahr: Some(stichtag.year()),
     }
 }
 

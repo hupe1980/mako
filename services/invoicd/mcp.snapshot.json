@@ -1,0 +1,210 @@
+[
+  {
+    "name": "get_check_result",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the receipt whose plausibility findings you want.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_receipt",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the receipt row (from list response).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_zahlungsstatus",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "MaLo-ID (11-digit Marktlokations-ID) to query.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_disputes",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Disput": {
+          "description": "One disputed INVOIC receipt.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The receipt.",
+              "type": "string"
+            },
+            "process_id": {
+              "description": "The market process the INVOIC arrived in.",
+              "type": "string"
+            },
+            "pid": {
+              "description": "BDEW Prüfidentifikator of the INVOIC.",
+              "type": "integer",
+              "format": "int16",
+              "minimum": -32768,
+              "maximum": 32767
+            },
+            "sender_mp_id": {
+              "description": "MP-ID of the Rechnungssteller.",
+              "type": "string"
+            },
+            "received_at": {
+              "description": "RFC 3339 in UTC.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "bo4e_version": {
+              "description": "BO4E schema version of the stored Rechnung.",
+              "type": "string"
+            },
+            "frist": {
+              "description": "The end of the Berlin day of the Zahlungsziel (SG8 DTM+265), RFC 3339\nin UTC; `None` when the INVOIC carries no Zahlungsziel.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "process_id",
+            "pid",
+            "sender_mp_id",
+            "received_at",
+            "bo4e_version"
+          ]
+        }
+      },
+      "required": [
+        "disputes",
+        "count",
+        "saturated"
+      ],
+      "type": "object",
+      "properties": {
+        "disputes": {
+          "description": "The most recent first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Disput"
+          }
+        },
+        "count": {
+          "description": "How many receipts `disputes` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "At least 200 receipts matched: more may be disputed than were listed.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_exceptions",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_overdue_remadv",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "summarize_billing_month",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "year",
+        "month"
+      ],
+      "type": "object",
+      "properties": {
+        "year": {
+          "description": "Year (e.g. 2026).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "month": {
+          "description": "Month 1–12.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      }
+    },
+    "outputSchema": null
+  }
+]

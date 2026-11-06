@@ -28,10 +28,7 @@
 
 use std::sync::Arc;
 
-use mako_markt::{
-    cloudevents::MarktEvent,
-    repository::{MmmPreisStromRepository, MmmaPreisGasRepository},
-};
+use mako_markt::cloudevents::MarktEvent;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use tokio_util::sync::CancellationToken;

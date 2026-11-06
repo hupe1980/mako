@@ -529,6 +529,13 @@ All three are `O(log n)` and verifiable without this service.
   `"no_row"` (nameable, but nothing booked on or before the period's end).
 - The **consistency proof** refuses `since=0`: every log extends the empty tree,
   so it would verify against anything. Watch `vacuous` in the answer.
+- **Refusal, absence and failure answer differently** on every ledger-backed
+  route, the CloudEvent ingest included. What the ledger refuses — a period
+  that ends before it starts, a booking into a sealed period, a Kontokorrent it
+  cannot name — is `422`; an unknown entry or an unsealed period is `404` (on
+  the proof routes, a refusal answers `404` too). A ledger store that fails, or
+  a closing balance that no longer reproduces its seal, is `500` with an
+  `error_id` the log line carries.
 
 ---
 

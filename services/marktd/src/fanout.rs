@@ -6,7 +6,7 @@
 //!
 //! **Phase 1 — fan-out.** Claim undelivered `event_log` rows
 //! (`WHERE fanned_out_at IS NULL … FOR UPDATE SKIP LOCKED`). For each, resolve
-//! the matching subscribers ([`SubscriptionRepository::list_matching`]) and, in
+//! the matching subscribers ([`PgSubscriptionRepository::list_matching`]) and, in
 //! one transaction, insert an `event_delivery` row per subscriber
 //! (`ON CONFLICT DO NOTHING`) and stamp `event_log.fanned_out_at = now()`. This
 //! snapshots the subscriber set atomically and is idempotent under crash: a
@@ -49,7 +49,7 @@
 
 use std::time::Duration;
 
-use mako_markt::repository::SubscriptionRepository;
+use crate::pg::PgSubscriptionRepository;
 use serde_json::Value;
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
@@ -113,15 +113,13 @@ pub const NOTIFY_CHANNEL: &str = "event_log";
 /// cannot promise. It also reaches every replica rather than the one process
 /// that served the write, and the claim is `FOR UPDATE SKIP LOCKED`, so they
 /// partition the work.
-pub fn spawn<S>(
+pub fn spawn(
     pool: PgPool,
-    sub_repo: S,
+    sub_repo: PgSubscriptionRepository,
     http: reqwest::Client,
     config: FanoutConfig,
     shutdown: CancellationToken,
-) where
-    S: SubscriptionRepository + Clone + Send + Sync + 'static,
-{
+) {
     tokio::spawn(async move {
         let worker = Worker {
             pool: pool.clone(),
@@ -197,17 +195,14 @@ async fn wait_for_notify(listener: &mut Option<sqlx::postgres::PgListener>) -> b
     }
 }
 
-struct Worker<S> {
+struct Worker {
     pool: PgPool,
-    sub_repo: S,
+    sub_repo: PgSubscriptionRepository,
     http: reqwest::Client,
     config: FanoutConfig,
 }
 
-impl<S> Worker<S>
-where
-    S: SubscriptionRepository,
-{
+impl Worker {
     /// Run Phase 1 then Phase 2 repeatedly until neither makes progress, so a
     /// backlog is drained promptly on a single wake-up.
     async fn drain(&self) {

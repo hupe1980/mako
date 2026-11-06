@@ -212,6 +212,15 @@ pub enum QuantityUnit {
     /// Calendar years — the unit of a charge whose published rate is annual and
     /// whose quantity is the fraction of a year the settlement period covers.
     Jahr,
+    /// Days — the unit of a charge whose published rate is per day (the
+    /// Codeliste der Artikelnummern und Artikel-ID 5.6 states the MSB's
+    /// Artikel-IDs in €/Tag, Kap. 3.5).
+    Tag,
+    /// A count of items — the Abschlag, one Auftrag. INVOIC `QTY+47` writes it
+    /// `H87`, the Mengenangabe the Codeliste der Artikelnummern und Artikel-ID
+    /// 5.6 gives the Abschlag (Kap. 2, S. 6) and a €/Auftrag Artikel-ID
+    /// (Kap. 3.2, S. 47).
+    Stueck,
 }
 
 // ── Sect14aModule ─────────────────────────────────────────────────────────────
@@ -722,7 +731,9 @@ pub enum WarningSeverity {
 /// | `GasAwhEntsperrung` | `Entsperrkosten` | PID 31011 AWH reconnection |
 /// | `GasAwhSonstige` | `EntgeltAbrechnung` | PID 31011 other AWH |
 /// | `Blindmehrarbeit` | `Blindmehrarbeit` | Reactive energy excess |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum BillingPositionKind {
     /// The single line of an Abschlagsrechnung — a payment on account.
     ///
@@ -742,9 +753,13 @@ pub enum BillingPositionKind {
     /// §14a Modul 3 Niedertarif (NT) Arbeit — zeitvariables Netzentgelt, low band.
     /// → `BdewArtikelnummer::Wirkarbeit`
     NneArbeitNt,
-    /// §14a Modul 1 Arbeit — pauschale Reduzierung applied to the Arbeitspreis.
+    /// §14a Modul 1 Arbeit — the energy at its published Arbeitspreis.
     /// → `BdewArtikelnummer::Wirkarbeit` (same article, different rate)
     NneArbeitModul1,
+    /// §14a Modul 1 — the pauschale Reduzierung, credited per day. Strom only;
+    /// its Artikel-ID is the price sheet's (`1-02-0-015` in the Grundpreis-/
+    /// Arbeitspreissystem, Codeliste 5.6 Kap. 3.1.2).
+    NneModul1Pauschale,
     /// §14a Modul 2 Arbeit — prozentuale Reduzierung of the device's Arbeitspreis.
     /// → `BdewArtikelnummer::Wirkarbeit` (same article, different rate)
     NneArbeitModul2,
@@ -829,13 +844,14 @@ impl BillingPositionKind {
     /// Every variant, so a guard can walk the whole enum instead of a list that
     /// drifts. A wildcard-free `match` in the crate's tests anchors it: adding a
     /// variant without listing it here fails to compile.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::NneAbschlag,
         Self::NneArbeit,
         Self::NneArbeitHt,
         Self::NneArbeitSt,
         Self::NneArbeitNt,
         Self::NneArbeitModul1,
+        Self::NneModul1Pauschale,
         Self::NneArbeitModul2,
         Self::NneArbeitSpotpreis,
         Self::NneLeistung,
@@ -870,6 +886,7 @@ impl BillingPositionKind {
             | Self::NneArbeitSt
             | Self::NneArbeitNt
             | Self::NneArbeitModul1
+            | Self::NneModul1Pauschale
             | Self::NneArbeitModul2
             | Self::NneArbeitSpotpreis
             | Self::NneLeistung
@@ -899,7 +916,8 @@ impl BillingPositionKind {
 /// Carries raw numbers for the service layer to map into the required format
 /// (BO4E `Rechnungsposition`, EN16931 UBL, etc.).
 ///
-/// Invariant: `net_eur == (quantity × unit_price_eur).round_kfm(5)`.
+/// Invariant: `net_eur == (quantity × unit_price_eur).round_kfm(2)` — one
+/// kaufmännische rounding to the cent, the precision INVOIC `MOA+203` admits.
 /// The pricing formula behind a spot-linked Netzentgelt position.
 ///
 /// Modelled as a value object rather than a serialised BO4E document. The engine
@@ -967,12 +985,17 @@ pub struct SettlementPosition {
     pub unit: QuantityUnit,
     /// Unit price in EUR.
     pub unit_price_eur: Decimal,
-    /// Net amount in EUR, rounded to 5 decimal places.
+    /// Net amount in EUR, rounded once to the cent.
     ///
     /// May be negative for credit positions (Mindermengen, Gutschriften).
     pub net_eur: Decimal,
     /// The formula behind the rate, where one applied.
     pub spot_price_formula: Option<SpotPriceFormula>,
+    /// The Artikel-ID the input states for this charge — an AWH position's
+    /// price-sheet code (`AwhPositionInput::artikel_id`). `None` where the
+    /// code follows from the [`BillingPositionKind`] or is the price sheet's to
+    /// supply ([`crate::bo4e::artikel_code`]).
+    pub artikel_id: Option<String>,
     /// Why this amount is what it is.
     pub trace: CalculationTrace,
 }
@@ -999,9 +1022,9 @@ impl BillingPositionKind {
         use BillingPositionKind as K;
         use SettlementType as ST;
         match (self, settlement_type) {
-            // An Abschlag prices nothing, so it carries no Artikelnummer: the
-            // codelist names charges, and a payment on account is not one.
-            (K::NneAbschlag, _) => None,
+            // The Abschlag has its own Artikelnummer, marked for 31001
+            // (Codeliste der Artikelnummern und Artikel-ID 5.6, Kap. 2, S. 6).
+            (K::NneAbschlag, _) => Some("ABSCHLAG"),
             // Gas NNE keeps the classic codes — BK6-20-160 changed Strom only.
             (
                 K::NneArbeit
@@ -1045,7 +1068,7 @@ impl BillingPositionKind {
             // codelist has no article number for it.
             (K::DezentraleEinspeisung, _) => None,
             // A reduction over Strom NNE positions, which carry Artikel-IDs.
-            (K::Sect19IndividuellesEntgelt, _) => None,
+            (K::Sect19IndividuellesEntgelt | K::NneModul1Pauschale, _) => None,
             // Capacity is the gas Leistung analogue and keeps the classic code.
             (K::GasKapazitaetsentgelt, ST::NneGas) => Some("LEISTUNG"),
             (K::GasKapazitaetsentgelt, _) => None,
@@ -1053,6 +1076,36 @@ impl BillingPositionKind {
             (K::KwkgUmlage, _) => Some("ABGABE_KWKG"),
         }
     }
+}
+
+/// The 13-digit BDEW-Artikelnummer of a codelist name
+/// [`BillingPositionKind::artikelnummer`] emits — what INVOIC `LIN` DE 7140
+/// carries with DE 7143 `Z01`.
+///
+/// Source: Codeliste der Artikelnummern und Artikel-ID 5.6, Kap. 2
+/// „Codeliste der Artikelnummern", S. 5–7. `None` for a name the table does
+/// not hold, never a guessed code.
+#[must_use]
+pub fn bdew_artikelnummer_code(name: &str) -> Option<&'static str> {
+    Some(match name {
+        // S. 5
+        "LEISTUNG" => "9990001000053",
+        "GRUNDPREIS" => "9990001000087",
+        "WIRKARBEIT" => "9990001000269",
+        // S. 6
+        "ABGABE_KWKG" => "9990001000334",
+        "ABSCHLAG" => "9990001000376",
+        "KONZESSIONSABGABE" => "9990001000417",
+        "BLINDMEHRARBEIT" => "9990001000508",
+        "ENTGELT_MESSUNG_ABLESUNG" => "9990001000615",
+        "ENTGELT_EINBAU_BETRIEB_WARTUNG_MESSTECHNIK" => "9990001000623",
+        // S. 7
+        "PARAGRAF_19_STROM_NEV_UMLAGE" => "9990001000681",
+        "OFFSHORE_HAFTUNGSUMLAGE" => "9990001000706",
+        "MEHRMENGE" => "9990001000748",
+        "MINDERMENGE" => "9990001000756",
+        _ => return None,
+    })
 }
 
 // ── Arbeitspreis model ────────────────────────────────────────────────────────
@@ -1145,65 +1198,6 @@ impl<'de> serde::Deserialize<'de> for Reduktionsfaktor {
     }
 }
 
-/// A §14a **Modul 1** Jahresanteil — the fraction of a year the settlement
-/// period covers, by which the Netzbetreiber's annual pauschale is credited.
-///
-/// A newtype for the same reason as [`Reduktionsfaktor`]: the range carries the
-/// meaning. Outside `(0, 1]` the figure is not a share of a year — `1` on a
-/// monthly run credits the whole annual pauschale twelve times over the year,
-/// and a negative value turns the credit into a charge against the customer.
-///
-/// The range is necessary and not sufficient: `1` is a valid share of a year and
-/// the wrong one for a month. [`crate::settle_nne`] therefore also measures the
-/// share against the settlement period and warns when the two disagree.
-///
-/// It travels as a JSON **string** like every other `Decimal` on this crate's
-/// wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub struct Jahresanteil(Decimal);
-
-impl Jahresanteil {
-    /// A twelfth — one calendar month of a year.
-    ///
-    /// One twelfth to the full precision `Decimal` carries. A shorter constant
-    /// under-credits: at six decimal places twelve monthly credits of a 120 EUR
-    /// pauschale come to 119.99952 EUR, and the operator keeps the difference on
-    /// every plant, every year.
-    pub const MONAT: Self = Self(rust_decimal::dec!(0.0833333333333333333333333333));
-
-    /// A whole year.
-    pub const JAHR: Self = Self(Decimal::ONE);
-
-    /// Build a share of a year.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::error::BillingError::InvalidInput`] outside `(0, 1]`.
-    pub fn new(anteil: Decimal) -> Result<Self, crate::error::BillingError> {
-        if anteil <= Decimal::ZERO || anteil > Decimal::ONE {
-            return Err(crate::error::BillingError::InvalidInput {
-                reason: format!("§14a Modul 1 Jahresanteil must be in (0, 1], got {anteil}"),
-            });
-        }
-        Ok(Self(anteil))
-    }
-
-    /// The share as a fraction of a year.
-    #[must_use]
-    pub const fn get(self) -> Decimal {
-        self.0
-    }
-}
-
-/// Deserialising goes through [`Jahresanteil::new`], so a share that arrives
-/// over the wire is range-checked exactly like one built in process.
-impl<'de> serde::Deserialize<'de> for Jahresanteil {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let raw = <Decimal as serde::Deserialize>::deserialize(d)?;
-        Self::new(raw).map_err(serde::de::Error::custom)
-    }
-}
-
 /// A metered quantity priced at a rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1255,10 +1249,9 @@ pub enum ArbeitspreisModell {
         ///
         /// A published amount, so it is non-negative; [`crate::settle_nne`]
         /// refuses a negative one, which would turn the credit into a charge.
+        /// It is credited for the settlement period's days, each calendar year
+        /// at its own length.
         pauschale_eur_pro_jahr: Decimal,
-        /// The fraction of a year this settlement period covers, so the annual
-        /// pauschale is credited pro rata.
-        jahresanteil: Jahresanteil,
     },
 
     /// **§14a Modul 2** — the Arbeitspreis reduced by a percentage.
@@ -1639,6 +1632,21 @@ impl SettlementPeriod {
     #[must_use]
     pub fn days(&self) -> i64 {
         (self.to - self.from).whole_days() + 1
+    }
+
+    /// The period's days in each calendar year it touches, in order.
+    #[must_use]
+    pub fn tage_je_jahr(&self) -> Vec<(i32, i64)> {
+        (self.from.year()..=self.to.year())
+            .filter_map(|jahr| {
+                let beginn = time::Date::from_ordinal_date(jahr, 1).ok()?;
+                let ende =
+                    time::Date::from_ordinal_date(jahr, time::util::days_in_year(jahr)).ok()?;
+                let von = self.from.max(beginn);
+                let bis = self.to.min(ende);
+                (von <= bis).then(|| (jahr, (bis - von).whole_days() + 1))
+            })
+            .collect()
     }
 
     /// The share of a year the period covers.
@@ -2164,17 +2172,6 @@ pub struct MmmInput {
     /// parties, gas needs the recipient — which is why this is a status rather
     /// than a `reverse_charge: bool` the caller has to reason out.
     pub wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus,
-    /// The receiving party issues this invoice itself (Gutschriftverfahren).
-    ///
-    /// PID 31006 (Strom) / 31008 (Gas) is the Mehrmenge leg written by the
-    /// party that would otherwise receive it, which the AHB marks as
-    /// *Selbstausgestellt* rather than *Handelsrechnung*. That distinction is
-    /// on the wire (`IMD+7081` and the Rechnungsart), so it has to come from
-    /// the settlement rather than be stamped on the document afterwards:
-    /// labelling an ordinary [`SettlementType::MmmStrom`] with PID 31006
-    /// produces a message that states Handelsrechnung under a
-    /// Selbstausstellung Prüfidentifikator.
-    pub selbstausgestellt: bool,
 }
 
 // ── AbschlagInput ─────────────────────────────────────────────────────────────
@@ -2290,6 +2287,18 @@ pub struct MsbInput {
     /// checked at all.
     pub steuereinrichtung_eur_per_month: Option<Decimal>,
 
+    /// The Entgelte per **Tag**, as the Preisblatt states them where it prices
+    /// by the day — the Codeliste der Artikelnummern und Artikel-ID 5.6 states
+    /// the 31009 Artikel-IDs in €/Tag (Kap. 3.5), and from 01.01.2024 the
+    /// 31009 column admits only `DAY` as the price's unit (INVOIC AHB 1.0b,
+    /// `PRI` DE 6411 `DAY=X [12] ∧ [65]`).
+    ///
+    /// When set, the Grundgebühr and the Steuerungseinrichtung bill the
+    /// period's days at these rates; `grundgebuehr_eur_per_month` is then
+    /// zero, `steuereinrichtung_eur_per_month` is `None`, and
+    /// `billing_months` is not consulted.
+    pub tagespreise: Option<MsbTagespreise>,
+
     /// Which §30 MsbG case this metering point falls under.
     ///
     /// Fixes the Preisobergrenze the charge is checked against. `None` skips the
@@ -2302,6 +2311,18 @@ pub struct MsbInput {
     /// §30 MsbG splits the ceiling between the Netzbetreiber and the
     /// Letztverbraucher, so the applicable cap depends on who is being billed.
     pub entgeltschuldner: Option<crate::msbg::Entgeltschuldner>,
+}
+
+/// The Messstellenbetrieb Entgelte per day ([`MsbInput::tagespreise`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsbTagespreise {
+    /// Grundgebühr Messstellenbetrieb in **EUR/Tag**.
+    pub grundgebuehr_eur_per_tag: Decimal,
+    /// Einbau und Betrieb einer Steuerungseinrichtung (§30 Abs. 2 MsbG) in
+    /// **EUR/Tag**.
+    #[serde(default)]
+    pub steuereinrichtung_eur_per_tag: Option<Decimal>,
 }
 
 /// Recipient of a MSB-Rechnung (PID 31009).
@@ -2530,7 +2551,7 @@ pub fn validate_msb_input(input: &MsbInput) -> ValidationResult {
             ),
         });
     }
-    if input.billing_months == 0 {
+    if input.billing_months == 0 && input.tagespreise.is_none() {
         r.push(SettlementWarning {
             severity: WarningSeverity::Error,
             code: "ZERO_BILLING_MONTHS",
@@ -2715,7 +2736,6 @@ mod input_model_tests {
                 preis_ct_per_kwh: dec!(3.5),
             },
             pauschale_eur_pro_jahr: dec!(120),
-            jahresanteil: Jahresanteil::MONAT,
         };
         assert_eq!(
             modul1.menge_kwh(),
@@ -2743,7 +2763,6 @@ mod input_model_tests {
                         preis_ct_per_kwh: dec!(1),
                     },
                     pauschale_eur_pro_jahr: dec!(120),
-                    jahresanteil: Jahresanteil::MONAT,
                 },
                 Some(M::Modul1),
             ),

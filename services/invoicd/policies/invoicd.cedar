@@ -35,10 +35,7 @@ permit(
 // rather than granted to every authenticated reader.
 permit(
     principal,
-    action in [
-        Action::"write-receipt",
-        Action::"dispatch-selbstausstellen"
-    ],
+    action == Action::"write-receipt",
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&

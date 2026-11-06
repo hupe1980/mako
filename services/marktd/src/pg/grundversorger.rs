@@ -1,10 +1,6 @@
-//! PostgreSQL implementation of `GrundversorgerRepository`.
+//! PostgreSQL storage: [`PgGrundversorgerRepository`].
 
-use mako_markt::{
-    domain::Sparte,
-    error::MdmError,
-    repository::{GrundversorgerRecord, GrundversorgerRepository},
-};
+use mako_markt::{domain::Sparte, error::MdmError, repository::GrundversorgerRecord};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
 #[derive(Clone, Debug)]
@@ -38,8 +34,9 @@ fn map_row(row: &PgRow) -> Result<GrundversorgerRecord, sqlx::Error> {
     })
 }
 
-impl GrundversorgerRepository for PgGrundversorgerRepository {
-    async fn find(
+impl PgGrundversorgerRepository {
+    /// Fetch the Grundversorger for a Netzbetreiber and Sparte.
+    pub async fn find(
         &self,
         tenant: &str,
         nb_mp_id: &str,
@@ -64,7 +61,8 @@ impl GrundversorgerRepository for PgGrundversorgerRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn upsert(&self, rec: &GrundversorgerRecord) -> Result<(), MdmError> {
+    /// Insert or update the Grundversorger entry.
+    pub async fn upsert(&self, rec: &GrundversorgerRecord) -> Result<(), MdmError> {
         sqlx::query(
             r"INSERT INTO grundversorger
                   (tenant, nb_mp_id, sparte, gv_mp_id, festgestellt_am,

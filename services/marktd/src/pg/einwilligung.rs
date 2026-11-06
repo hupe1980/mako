@@ -1,11 +1,11 @@
-//! PostgreSQL implementation of [`EinwilligungRepository`] — the ESA consent
+//! PostgreSQL storage: [`PgEinwilligungRepository`] — the ESA consent
 //! registry (§49 Abs. 2 Nr. 9 MsbG).
 
 use mako_markt::{
     error::MdmError,
     repository::{
         ConsentCode, ConsentDecision, ConsentPerspective, EinwilligungRecord,
-        EinwilligungRepository, EsaFrameworkAgreement, EsaMessproduktAngebot, EsaMessproduktPreis,
+        EsaFrameworkAgreement, EsaMessproduktAngebot, EsaMessproduktPreis,
     },
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
@@ -138,8 +138,10 @@ fn map_consent(row: &PgRow) -> Result<EinwilligungRecord, sqlx::Error> {
     })
 }
 
-impl EinwilligungRepository for PgEinwilligungRepository {
-    async fn grant(&self, rec: EinwilligungRecord) -> Result<Uuid, MdmError> {
+impl PgEinwilligungRepository {
+    /// Grant a consent, superseding any active consent for the same
+    /// `(tenant, esa, Anschlussnutzer)`. Returns the new consent id.
+    pub async fn grant(&self, rec: EinwilligungRecord) -> Result<Uuid, MdmError> {
         let mut tx = self
             .pool
             .begin()
@@ -185,7 +187,12 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         Ok(id)
     }
 
-    async fn get(&self, tenant: &str, id: Uuid) -> Result<Option<EinwilligungRecord>, MdmError> {
+    /// Fetch a consent by id (tenant-scoped).
+    pub async fn get(
+        &self,
+        tenant: &str,
+        id: Uuid,
+    ) -> Result<Option<EinwilligungRecord>, MdmError> {
         sqlx::query("SELECT * FROM esa_einwilligungen WHERE tenant = $1 AND id = $2")
             .bind(tenant)
             .bind(id)
@@ -198,7 +205,8 @@ impl EinwilligungRepository for PgEinwilligungRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn list_for_esa(
+    /// List active (non-revoked) consents for an ESA.
+    pub async fn list_for_esa(
         &self,
         tenant: &str,
         esa_mp_id: &str,
@@ -224,7 +232,13 @@ impl EinwilligungRepository for PgEinwilligungRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn revoke(&self, tenant: &str, id: Uuid) -> Result<Option<EinwilligungRecord>, MdmError> {
+    /// Revoke a consent (Art. 7(3)). Returns the revoked record when it existed
+    /// and was still active, so the caller can fire the 17008 Abbestellung.
+    pub async fn revoke(
+        &self,
+        tenant: &str,
+        id: Uuid,
+    ) -> Result<Option<EinwilligungRecord>, MdmError> {
         // Atomic: flip revoked_at only when still active, and return the row so
         // the caller can fire the 17008 Abbestellung exactly once.
         sqlx::query(
@@ -243,7 +257,26 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn revoke_expired(
+    /// Close out every consent whose **`valid_to` has passed**, returning the
+    /// records so the caller can stop the deliveries they authorised.
+    ///
+    /// # Why expiry is not a quieter revocation
+    ///
+    /// A consent is the ESA's whole legal basis (§ 49 Abs. 2 Nr. 9 MsbG), and
+    /// `E_0256` Prüfschritt 8 makes its lapse market-visible: the MSB refuses a
+    /// *new* Bestellung with `A08` („widerrufen **oder ihre Gültigkeit ist
+    /// abgelaufen**"). But nothing in the protocol stops a delivery that is
+    /// already running — the only stop signal is the ORDERS 17008, and it is
+    /// the ESA that has to send it.
+    ///
+    /// Nothing else closes that gap: the gate refuses only *new* orders, the
+    /// registry's listing drops the row, and the MSB keeps sending until it is
+    /// told to stop.
+    ///
+    /// Idempotent by construction: it stamps `revoked_at` in the same statement
+    /// that selects, so a second sweep returns nothing and the 17008 is sent
+    /// once per consent.
+    pub async fn revoke_expired(
         &self,
         now: time::Date,
         tenant: &str,
@@ -276,7 +309,8 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn upsert_framework(&self, rec: EsaFrameworkAgreement) -> Result<(), MdmError> {
+    /// Upsert a framework agreement.
+    pub async fn upsert_framework(&self, rec: EsaFrameworkAgreement) -> Result<(), MdmError> {
         sqlx::query(
             "INSERT INTO esa_framework_agreements \
                  (tenant, msb_mp_id, esa_mp_id, signed_at, edi_agreement, cert_state) \
@@ -297,7 +331,8 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         Ok(())
     }
 
-    async fn get_framework(
+    /// Fetch a framework agreement.
+    pub async fn get_framework(
         &self,
         tenant: &str,
         msb_mp_id: &str,
@@ -327,7 +362,13 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn upsert_esa_preise(&self, preise: &[EsaMessproduktPreis]) -> Result<(), MdmError> {
+    /// Record the prices of an accepted Angebot, replacing whatever was on
+    /// record for the same subscription and validity start.
+    ///
+    /// Written when the MSB confirms the Bestellung (ORDRSP 19011): that is the
+    /// moment the offer becomes the agreement, and before it there is nothing
+    /// an invoice could be checked against.
+    pub async fn upsert_esa_preise(&self, preise: &[EsaMessproduktPreis]) -> Result<(), MdmError> {
         if preise.is_empty() {
             return Ok(());
         }
@@ -377,7 +418,27 @@ impl EinwilligungRepository for PgEinwilligungRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn esa_messprodukt_angebot(
+    /// The prices in force between an ESA and an MSB on `at`.
+    ///
+    /// Across **all** of that pair's subscriptions, deliberately: an INVOIC
+    /// 31009 bills a Rahmenvertrag rather than a single Meldepunkt, and its
+    /// positions name Artikel-IDs without saying which subscription each
+    /// belongs to. Narrowing to one would refuse every position of the others.
+    /// Whether this MSB serves a Kapitel-4.6 Messprodukt on `at`, and in which
+    /// Abo mode.
+    ///
+    /// `E_0252` Prüfschritt 2 and `E_0256` Prüfschritte 4/5 ask a **commercial**
+    /// question the Codeliste cannot answer: which of the *optional* products
+    /// this MSB carries. Without a record both walks escalate every optional
+    /// order to an operator, which is the single change that moves most of them
+    /// to a decision.
+    ///
+    /// `Ok(None)` means the catalogue holds no entry for that product on that
+    /// date — „not carried" for an optional product, and **irrelevant** for a
+    /// Pflichtprodukt, which §34 Abs. 2 S. 2 Nr. 10 MsbG obliges the MSB to
+    /// serve whatever its catalogue says. The caller applies that rule; this
+    /// method reports only what is on file.
+    pub async fn esa_messprodukt_angebot(
         &self,
         tenant: &str,
         msb_mp_id: &str,
@@ -414,7 +475,8 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn upsert_esa_messprodukt_katalog(
+    /// Record (or replace) what this MSB serves, for one validity window.
+    pub async fn upsert_esa_messprodukt_katalog(
         &self,
         eintraege: &[EsaMessproduktAngebot],
     ) -> Result<(), MdmError> {
@@ -444,7 +506,21 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         Ok(())
     }
 
-    async fn esa_messprodukt_of_bestellung(
+    /// Which **Messprodukt** an ORDERS 17007 Belegnummer subscribed to.
+    ///
+    /// `esa_messprodukt_preise` is the only place that mapping exists outside
+    /// the running `makod` process: `makod` files the accepted Angebot there on
+    /// the ORDRSP 19011 with the Bestellung's Belegnummer beside the product.
+    ///
+    /// `edmd`'s Typ-2 delivery surveillance needs it because the Codeliste
+    /// publishes a delivery cadence **per product** — the Rohdaten products say
+    /// „unverzüglich, jedoch spätestens bis 9:30 Uhr", the aufbereitete-Daten
+    /// ones defer to WiM Teil 2 Kap. 2.5.5 — and an inbound MSCONS 13027 names
+    /// only the Belegnummer (`SG1 RFF+AGI`), never the product.
+    ///
+    /// `Ok(None)` when no accepted offer names that Belegnummer, which is the
+    /// ordinary state for a delivery whose sender omitted the Muss.
+    pub async fn esa_messprodukt_of_bestellung(
         &self,
         tenant: &str,
         bestellung_ref: &str,
@@ -463,7 +539,7 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn esa_preise_at(
+    pub async fn esa_preise_at(
         &self,
         tenant: &str,
         esa_mp_id: &str,
@@ -506,7 +582,14 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn consent_check(
+    /// Gate an ESA message for `location_id` against the registry.
+    ///
+    /// A revoked consent or an unestablished framework agreement always blocks.
+    /// A *missing* consent record depends on `perspective`: lenient
+    /// ([`ConsentPerspective::MsbInbound`]) treats it as self-assertion and
+    /// allows; strict ([`ConsentPerspective::EsaOutbound`]) treats it as no
+    /// lawful basis and blocks.
+    pub async fn consent_check(
         &self,
         tenant: &str,
         esa_mp_id: &str,

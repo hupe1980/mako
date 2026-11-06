@@ -242,16 +242,6 @@ const PROCEDURE_EXPLANATIONS: &[(&str, &str, &str)] = &[
         "netzbilanzd's own submission schedule, an operating time and not a Frist",
     ),
     (
-        "mako-agent.yaml",
-        "3 Werktage",
-        "the Gas Initialprozess APERAK window, APERAK AHB 1.1 § 2.3.1",
-    ),
-    (
-        "mako-agent.yaml",
-        "12:00",
-        "names the APERAK windows of the event, APERAK AHB 1.1 § 2.3/§ 2.4.1",
-    ),
-    (
         "productd-agent.yaml",
         "18:00",
         "the EPEX import's operating cut-off, not a Frist",

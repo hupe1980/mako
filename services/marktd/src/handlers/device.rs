@@ -13,10 +13,7 @@
 use std::sync::Arc;
 
 use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
-use mako_markt::repository::{
-    DeviceRepository, GeraetKonfiguration, Konfigurationsparameter, SteuerbareRessourceRepository,
-    TechnischeRessourceRepository,
-};
+use mako_markt::repository::{GeraetKonfiguration, Konfigurationsparameter};
 use mako_service::cedar::CedarEnforcer;
 use mako_service::{ApiError, ApiResult, Json};
 use rubo4e::current::{
@@ -1115,8 +1112,7 @@ pub async fn list_technische_ressourcen_by_malo(
 pub type ZaehlzeitRepoExt = Arc<crate::pg::PgZaehlzeitRepository>;
 
 use mako_markt::repository::{
-    ZaehlzeitRegisterRecord, ZaehlzeitRegisterUpsert, ZaehlzeitRepository, ZaehlzeitSaisonRecord,
-    ZaehlzeitSaisonUpsert,
+    ZaehlzeitRegisterRecord, ZaehlzeitRegisterUpsert, ZaehlzeitSaisonRecord, ZaehlzeitSaisonUpsert,
 };
 
 /// `PUT /api/v1/zaehler/{zaehler_id}/register`

@@ -26,7 +26,7 @@
 //! | ORDCHG | `pid`, `sender`, `receiver`, `korrelation_ref` |
 //! | ORDRSP | `pid` (ESA 19011–19014), `sender`, `receiver`, `korrelation_ref`, `abonnement`, `antwort_code`, `antwort_codeliste`, `document_id`, `document_date`, `message_ref` |
 //! | QUOTES | `pid` (ESA 15003), `sender`, `receiver`, `korrelation_ref`, `bindungsfrist_tage`, `fruehester_start`, `messprodukt`, `artikel_ids`, `preise`, `document_id`, `document_date`, `message_ref` |
-//! | INVOIC | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
+//! | INVOIC | `nachricht` (the message, built and validated at the command), `sender`, `receiver` |
 //! | REMADV | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
 //! | IFTSTA | `pid` (WiM 21042), `sender`, `receiver`, `sts_code`, `korrelation_ref`, `beendigung_zum`, `document_id`, `document_date`, `message_ref` |
 //! | ALOCAT / NOMINT / NOMRES / SSQNOT | `pid`, `validity_period`, `positions` (DVGW; see `dvgw.rs`) — `document`, `sender`, `receiver`, `clearingnummer`, `original_nomination`, `document_number`, `message_ref` optional |
@@ -165,7 +165,7 @@ pub fn is_suppressed(err: &RenderError) -> bool {
 /// # Errors
 ///
 /// - [`RenderError::InsufficientPayload`] — the payload is intent-only
-///   (MSCONS, INVOIC, REMADV, …); the caller should fall back to JSON.
+///   (a message type with no renderer); the caller should fall back to JSON.
 /// - [`RenderError::MissingField`] — a required JSON field is absent.
 /// - [`RenderError::NoActiveProfile`] — no profile active on today's date.
 /// - [`RenderError::BuilderError`] — the `edi-energy` builder failed.

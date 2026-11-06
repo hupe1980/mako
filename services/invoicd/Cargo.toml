@@ -26,7 +26,6 @@ mako-fristen   = { workspace = true }
 mako-invoic    = { path = "../../crates/mako-invoic" }
 invoic-checker  = { workspace = true }
 mako-markt      = { workspace = true, features = ["makod-client", "marktd-client"] }
-grid-billing    = { workspace = true, features = ["bo4e"] }
 rubo4e          = { workspace = true }
 rust_decimal    = { workspace = true }
 

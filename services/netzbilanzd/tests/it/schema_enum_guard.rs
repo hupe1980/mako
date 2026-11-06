@@ -5,8 +5,8 @@
 //! case: the code compiles, the type says a value is legal, and Postgres refuses
 //! the statement at run time.
 //!
-//! - `invoice_drafts.pid` lists five, `SettlementType::default_pid` answers ten
-//!   things including `31006` and `0`.
+//! - `invoice_drafts.pid` lists six, `SettlementType::default_pid` answers ten
+//!   things including `0`.
 //! - `invoice_drafts.steuer_kategorie` lists two, `billing::TaxCategory` has ten
 //!   codes.
 //!
@@ -29,24 +29,26 @@ const SCHEMA: &str = include_str!("../../migrations/0001_schema.sql");
 /// Exhaustive on purpose: a sixth arm stops this file compiling, which is the
 /// signal wanted — `invoice_drafts.pid` would otherwise refuse its INSERT at
 /// run time. Adding one means deciding its PID and widening the `CHECK`.
-fn pid_of(request: &SettlementRequest) -> u32 {
+fn pid_of(request: &SettlementRequest) -> &'static [u32] {
     match request {
-        SettlementRequest::Abschlag(_) => 31_001,
-        SettlementRequest::Nne(_) => 31_002,
-        SettlementRequest::Mmm(_) => 31_005,
-        SettlementRequest::Msb(_) => 31_009,
-        SettlementRequest::GasAwh(_) => 31_011,
+        SettlementRequest::Abschlag(_) => &[31_001],
+        SettlementRequest::Nne(_) => &[31_002],
+        // The Mindermenge goes out as 31005, the Mehrmenge as the selbst
+        // ausgestellte 31006 — the sign of the settlement decides.
+        SettlementRequest::Mmm(_) => &[31_005, 31_006],
+        SettlementRequest::Msb(_) => &[31_009],
+        SettlementRequest::GasAwh(_) => &[31_011],
     }
 }
 
 /// Every PID an arm settles as, as the column spells them.
-const REACHABLE_PIDS: &[&str] = &["31001", "31002", "31005", "31009", "31011"];
+const REACHABLE_PIDS: &[&str] = &["31001", "31002", "31005", "31006", "31009", "31011"];
 
 /// The `pid` list is exactly the PIDs the five request arms produce.
 ///
-/// `SettlementType::default_pid` also answers `31006` (MMM selbstausgestellt)
-/// and `0` (Redispatch-Kostenblatt, dezentrale Einspeisung); neither is
-/// reachable from a `SettlementRequest`, so neither belongs in the column.
+/// `SettlementType::default_pid` also answers `0` (Redispatch-Kostenblatt,
+/// dezentrale Einspeisung), which no `SettlementRequest` reaches, so it does
+/// not belong in the column.
 #[test]
 fn the_pid_list_is_the_reachable_settlement_pids() {
     assert_agrees_in(SCHEMA, "invoice_drafts", "pid", REACHABLE_PIDS);
@@ -58,7 +60,7 @@ fn the_pid_list_is_the_reachable_settlement_pids() {
 /// drift from it — the exact defect this file exists to stop, one level up.
 #[test]
 fn the_constant_agrees_with_the_match() {
-    let from_match: Vec<String> = [31_001_u32, 31_002, 31_005, 31_009, 31_011]
+    let from_match: Vec<String> = [31_001_u32, 31_002, 31_005, 31_006, 31_009, 31_011]
         .iter()
         .map(ToString::to_string)
         .collect();
@@ -71,7 +73,7 @@ fn the_constant_agrees_with_the_match() {
         "`REACHABLE_PIDS` and the arms of `pid_of` disagree"
     );
     // `pid_of` is referenced so the exhaustive match is compiled, not dead.
-    let _ = pid_of as fn(&SettlementRequest) -> u32;
+    let _ = pid_of as fn(&SettlementRequest) -> &'static [u32];
 }
 
 /// Both Sparten, and only those two.

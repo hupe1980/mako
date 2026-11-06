@@ -703,16 +703,16 @@ pub(super) async fn dispatch_geli_gas_invoic(
     .await
 }
 
-/// Dispatch an outbound INVOIC 31011 (GNB/VNB issuer role).
+/// Issue an outbound INVOIC 31011 (GNB/VNB issuer role).
 ///
-/// `netzbilanzd` settles the AWH positions and renders the document; this
-/// records the process so the payer's inbound REMADV correlates back to it.
-/// Mirrors `wim.msb-rechnung.stellen`, which does the same for PID 31009.
+/// `netzbilanzd` settles the AWH positions; this builds the INVOIC from the
+/// payload's `rechnung` and spawns the process the payer's inbound REMADV
+/// correlates back to ([`super::invoic_stellen`]). Mirrors
+/// `wim.msb-rechnung.stellen`, which does the same for PID 31009.
 async fn dispatch_geli_gas_awh_send_invoic(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let invoice_ref = extract_invoice_ref(payload)?;
     let sender = payload
         .get("sender_mp_id")
         .or_else(|| payload.get("nb_mp_id"))
@@ -725,20 +725,15 @@ async fn dispatch_geli_gas_awh_send_invoic(
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_owned();
-    let invoice_ref_clone = invoice_ref.clone();
-    dispatch_to_process::<GeliGasSperrprozesseInvoicWorkflow, _>(
+    super::e_rechnung::edi_pruefen(state.marktd_client.as_deref(), payload, &recipient).await?;
+    super::invoic_stellen::invoic_stellen::<GeliGasSperrprozesseInvoicWorkflow>(
         state,
-        &invoice_ref,
-        GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
-        move || InvoicCommand::SendInvoic {
-            pid: mako_engine::types::Pruefidentifikator::new(31011)
-                .expect("valid AWH Sperrprozesse PID"),
-            sender: mako_engine::types::MarktpartnerCode::new(sender.as_str()),
-            recipient: mako_engine::types::MarktpartnerCode::new(recipient.as_str()),
-            document_date: time::OffsetDateTime::now_utc()
-                .format(&time::format_description::well_known::Iso8601::DEFAULT)
-                .unwrap_or_default(),
-            invoice_ref: mako_engine::types::MessageRef::new(invoice_ref_clone.clone()),
+        payload,
+        super::invoic_stellen::Ausstellung {
+            workflow_name: GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
+            pid: 31011,
+            sender: &sender,
+            recipient: &recipient,
         },
     )
     .await

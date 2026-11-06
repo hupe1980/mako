@@ -1,4 +1,4 @@
-//! PostgreSQL implementations of [`MmmaPreisGasRepository`] and [`MmmPreisStromRepository`].
+//! PostgreSQL storage: [`PgMmmaPreisGasRepository`] and [`PgMmmPreisStromRepository`].
 //!
 //! Both tables are populated via REST (`PUT /api/v1/mmma-preise/gas/{year}/{month}` and
 //! `PUT /api/v1/mmm-preise/strom/{year}/{month}`) and queried by `netzbilanzd` (billing
@@ -6,9 +6,7 @@
 
 use mako_markt::{
     error::MdmError,
-    repository::{
-        MmmPreisStromRecord, MmmPreisStromRepository, MmmaPreisGasRecord, MmmaPreisGasRepository,
-    },
+    repository::{MmmPreisStromRecord, MmmaPreisGasRecord},
 };
 use rust_decimal::Decimal;
 use sqlx::Row as _;
@@ -16,7 +14,10 @@ use time::Date;
 
 // ── Gas ───────────────────────────────────────────────────────────────────────
 
-/// PostgreSQL-backed [`MmmaPreisGasRepository`].
+/// Read/write access to Gas MMM Abrechnungspreise.
+///
+/// `netzbilanzd` fetches these instead of requiring manual ERP input per billing run.
+/// `invoicd` uses them for MMM position plausibility check.
 #[derive(Clone, Debug)]
 pub struct PgMmmaPreisGasRepository {
     pool: sqlx::PgPool,
@@ -29,8 +30,9 @@ impl PgMmmaPreisGasRepository {
     }
 }
 
-impl MmmaPreisGasRepository for PgMmmaPreisGasRepository {
-    async fn upsert_gas(
+impl PgMmmaPreisGasRepository {
+    /// Upsert the Gas MMM price pair for a billing month + Marktgebiet.
+    pub async fn upsert_gas(
         &self,
         price_month: Date,
         marktgebiet: &str,
@@ -58,7 +60,8 @@ impl MmmaPreisGasRepository for PgMmmaPreisGasRepository {
         Ok(())
     }
 
-    async fn find_gas(
+    /// Return the Gas MMM prices for a billing month. Returns `None` if not yet imported.
+    pub async fn find_gas(
         &self,
         price_month: Date,
         marktgebiet: &str,
@@ -84,7 +87,8 @@ impl MmmaPreisGasRepository for PgMmmaPreisGasRepository {
         }))
     }
 
-    async fn list_gas(&self, limit: i64) -> Result<Vec<MmmaPreisGasRecord>, MdmError> {
+    /// List all Gas MMM price records, newest first.
+    pub async fn list_gas(&self, limit: i64) -> Result<Vec<MmmaPreisGasRecord>, MdmError> {
         let rows = sqlx::query(
             r#"SELECT price_month, marktgebiet, mehr_ct_kwh, minder_ct_kwh, source, updated_at
                FROM mmma_preise_gas
@@ -112,7 +116,7 @@ impl MmmaPreisGasRepository for PgMmmaPreisGasRepository {
 
 // ── Strom ─────────────────────────────────────────────────────────────────────
 
-/// PostgreSQL-backed [`MmmPreisStromRepository`].
+/// Read/write access to the Strom Mehr-/Mindermengenpreise.
 #[derive(Clone, Debug)]
 pub struct PgMmmPreisStromRepository {
     pool: sqlx::PgPool,
@@ -125,8 +129,8 @@ impl PgMmmPreisStromRepository {
     }
 }
 
-impl MmmPreisStromRepository for PgMmmPreisStromRepository {
-    async fn upsert_strom(
+impl PgMmmPreisStromRepository {
+    pub async fn upsert_strom(
         &self,
         price_month: Date,
         mehr_ct_kwh: Decimal,
@@ -152,7 +156,10 @@ impl MmmPreisStromRepository for PgMmmPreisStromRepository {
         Ok(())
     }
 
-    async fn find_strom(&self, price_month: Date) -> Result<Option<MmmPreisStromRecord>, MdmError> {
+    pub async fn find_strom(
+        &self,
+        price_month: Date,
+    ) -> Result<Option<MmmPreisStromRecord>, MdmError> {
         let row = sqlx::query(
             r#"SELECT price_month, mehr_ct_kwh, minder_ct_kwh, source, updated_at
                FROM mmm_preise_strom

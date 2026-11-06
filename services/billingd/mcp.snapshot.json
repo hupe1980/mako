@@ -1,0 +1,571 @@
+[
+  {
+    "name": "check_billing_anomaly",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "lf_mp_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": "string"
+        },
+        "lf_mp_id": {
+          "description": "LF MP-ID (BDEW-Codenummer).",
+          "type": "string"
+        },
+        "threshold_pct": {
+          "description": "Anomaly threshold in percent (default 20 — alert when deviation > 20%).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "explain_invoice_position",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "record_id"
+      ],
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "description": "UUID of the billing record containing the position.",
+          "type": "string"
+        },
+        "position_number": {
+          "description": "1-based position number from the invoice (positionsnummer). Mutually exclusive with description_keyword.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "description_keyword": {
+          "description": "Keyword to match in the position description (positionstext). Mutually exclusive with position_number.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_billing_record",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the billing record.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_billing_summary",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lf_mp_id": {
+          "description": "LF MP-ID (BDEW-Codenummer).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "description": "Filter by outcome (generated/dispatched/paid/disputed).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Max results (default 20, max 100).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_policy",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_xrechnung",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the billing record.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_billing_records",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lf_mp_id": {
+          "description": "LF MP-ID (BDEW-Codenummer).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "description": "Filter by outcome (generated/dispatched/paid/disputed).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Max results (default 20, max 100).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_corrections",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lf_mp_id": {
+          "description": "LF MP-ID (BDEW-Codenummer).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "description": "Filter by outcome (generated/dispatched/paid/disputed).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Max results (default 20, max 100).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_product_categories",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_review_queue",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "ReviewBand": {
+          "description": "The band `list_review_queue` narrows to.",
+          "oneOf": [
+            {
+              "description": "Dispatched; queued for analyst review.",
+              "type": "string",
+              "const": "REVIEW"
+            },
+            {
+              "description": "Not dispatched until an analyst releases it.",
+              "type": "string",
+              "const": "HELD"
+            }
+          ]
+        }
+      },
+      "properties": {
+        "band": {
+          "description": "`REVIEW` or `HELD`; unset lists both.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewBand"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "description": "Max results (default 50, clamped to 1–200).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Pruefposten": {
+          "description": "One billing record on the analyst review queue.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The billing record — what `POST /api/v1/billing/{id}/release` addresses.",
+              "type": "string"
+            },
+            "malo_id": {
+              "description": "11-digit MaLo-ID.",
+              "type": "string"
+            },
+            "lf_mp_id": {
+              "description": "MP-ID of the Lieferant that issued the invoice.",
+              "type": "string"
+            },
+            "rechnungsnummer": {
+              "description": "§ 14 Abs. 4 Nr. 4 UStG Rechnungsnummer.",
+              "type": "string"
+            },
+            "category": {
+              "description": "Billing category (`STROM`, `GAS`, …).",
+              "type": "string"
+            },
+            "period_from": {
+              "description": "First day of the billed period.",
+              "type": "string",
+              "format": "date"
+            },
+            "period_to": {
+              "description": "End of the billed period.",
+              "type": "string",
+              "format": "date"
+            },
+            "total_brutto_eur": {
+              "description": "Gross total in EUR, a decimal string.",
+              "type": "string"
+            },
+            "risk_band": {
+              "description": "`REVIEW` (dispatched, queued for review) or `HELD` (not dispatched).",
+              "type": "string"
+            },
+            "risk_score": {
+              "description": "Deterministic risk score 0–100.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int16",
+              "minimum": -32768,
+              "maximum": 32767
+            },
+            "risk_findings": {
+              "description": "The coded findings the score is the sum of.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RiskFinding"
+              }
+            },
+            "created_at": {
+              "description": "RFC 3339 in UTC.",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "malo_id",
+            "lf_mp_id",
+            "rechnungsnummer",
+            "category",
+            "period_from",
+            "period_to",
+            "total_brutto_eur",
+            "risk_band",
+            "risk_findings",
+            "created_at"
+          ]
+        },
+        "RiskFinding": {
+          "description": "One scored observation about an invoice. The full set is persisted as\n`billing_records.risk_findings` — the audit-proof explanation of the score.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "Stable machine-readable code (e.g. `TAX_BREAKDOWN_MISMATCH`).",
+              "type": "string"
+            },
+            "weight": {
+              "description": "Points this finding contributes to the score.",
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "message": {
+              "description": "Human-readable reason with the concrete values that triggered it.",
+              "type": "string"
+            },
+            "blocking": {
+              "description": "This finding holds the invoice on its own, whatever the score says.\n\nMost findings are *evidence* — they say an invoice looks unusual, and\nthe score decides how much attention that earns. A few are *verdicts*:\na period straddling a statutory rate boundary has no correct single\nrate, so part of what was billed is wrong no matter what else is true.\nExpressing a verdict as a large weight leaves it at the mercy of\n`hold_at`, which an operator may raise.",
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "required": [
+            "code",
+            "weight",
+            "message"
+          ]
+        }
+      },
+      "required": [
+        "records",
+        "count",
+        "saturated"
+      ],
+      "type": "object",
+      "properties": {
+        "records": {
+          "description": "The highest risk score first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Pruefposten"
+          }
+        },
+        "count": {
+          "description": "How many records `records` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "At least `limit` records matched: more may be waiting than were listed.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_vpp_settlements",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "lf_mp_id": {
+          "description": "The aggregator's MP-ID; unset lists every LF.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vpp_id": {
+          "description": "The VPP's Marktlokation; unset lists every VPP.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Page size. Defaults to 20, clamped to 100.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "preview_billing",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "lf_mp_id",
+        "period_from",
+        "period_to"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": "string"
+        },
+        "lf_mp_id": {
+          "description": "LF MP-ID.",
+          "type": "string"
+        },
+        "nb_mp_id": {
+          "description": "NB MP-ID (§41 Abs. 1 Nr. 5 EnWG). Resolved from marktd when omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "period_from": {
+          "description": "Billing period start (YYYY-MM-DD).",
+          "type": "string"
+        },
+        "period_to": {
+          "description": "Billing period end (YYYY-MM-DD).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "validate_tariff_config",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "tariff_json"
+      ],
+      "type": "object",
+      "properties": {
+        "tariff_json": {
+          "description": "TariffInput JSON string to validate (same format as productd product JSONB).",
+          "type": "string"
+        },
+        "metering_mode": {
+          "description": "Metering mode to test against (SLP, RLM, IMSYS). Relevant for §41a check.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "malo_id": {
+          "description": "Optional MaLo-ID for context (informational only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  }
+]

@@ -325,6 +325,7 @@ fn remadv_antwort(payload: &serde_json::Value) -> Option<mako_invoic::RemadvAntw
 // remaining submodules hold one market-communication domain each. Everything
 // is re-exported here so the flat `crate::commands_api::*` paths keep working.
 
+mod e_rechnung;
 mod ersteinbau;
 mod esa;
 mod gabi_gas;
@@ -334,6 +335,7 @@ mod gpke;
 mod handler;
 pub mod idempotency;
 mod iftsta;
+mod invoic_stellen;
 mod mabis;
 mod netzbilanz;
 mod netzzugang;
@@ -344,6 +346,8 @@ mod wim;
 
 #[cfg(test)]
 mod geli_frist_tests;
+#[cfg(test)]
+mod invoic_stellen_tests;
 #[cfg(test)]
 mod outbound_answer_tests;
 #[cfg(test)]
@@ -937,7 +941,8 @@ mod tests {
     /// could receive the original can receive its cancellation. Its permitted
     /// set is the union of the families' own sets, derived here rather than
     /// trusted: a role missing from the hand-written list cannot answer a
-    /// cancellation of an invoice it received itself.
+    /// cancellation of an invoice it received itself, and a role beyond it
+    /// answers a cancellation of an invoice it never received.
     #[test]
     fn the_storno_answers_every_family_it_cancels() {
         let family_commands = [
@@ -969,6 +974,12 @@ mod tests {
                 "{role:?} can receive a billing invoice but not its Stornorechnung"
             );
         }
+        for role in storno.permitted_roles {
+            assert!(
+                required.contains(role),
+                "{role:?} can answer a Stornorechnung but receives no invoice it cancels"
+            );
+        }
     }
 
     /// The GaBi Gas billing family reaches **two** roles, and the command that
@@ -979,15 +990,15 @@ mod tests {
     /// descriptor naming one PID must still permit both, or the recipient of
     /// the other cannot answer its own invoices.
     #[test]
-    fn the_gabi_billing_family_is_answerable_by_both_of_its_recipients() {
-        for role in ["MGV", "BKV"] {
-            for command in ["gabi.rechnung.annehmen", "gabi.rechnung.ablehnen"] {
-                assert!(
-                    validate_command(command, Some(role), &roles(&[role])).is_ok(),
-                    "{role} receives a GaBi Gas invoice and must be able to answer it \
-                     with {command}"
-                );
-            }
+    fn the_gabi_billing_family_is_answered_by_the_mgv_and_never_the_bkv() {
+        // 31007/31008 reach the MGV; 31010 runs NB → KN (INVOIC AHB 1.0b
+        // Kap. 3.1.4), so a BKV receives none of the family.
+        for command in ["gabi.rechnung.annehmen", "gabi.rechnung.ablehnen"] {
+            assert!(validate_command(command, Some("MGV"), &roles(&["MGV"])).is_ok());
+            assert!(
+                validate_command(command, Some("BKV"), &roles(&["BKV"])).is_err(),
+                "a BKV receives no GaBi Gas invoice and must not answer one with {command}"
+            );
         }
     }
 

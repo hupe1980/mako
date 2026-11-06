@@ -73,6 +73,18 @@ pub async fn record_with_model(
     cfg: &crate::config::BillingdConfig,
     id: Uuid,
 ) -> BillingResult<(crate::pg::BillingRecordRow, en16931::Invoice)> {
+    record_with_model_am(pool, cfg, id, mako_fristen::heute()).await
+}
+
+/// [`record_with_model`] with the date a paper document would be übermittelt
+/// — today in production, a fixed day in a test, so § 27 Abs. 38 UStG is
+/// decided on the same date whatever day the test runs.
+pub async fn record_with_model_am(
+    pool: &PgPool,
+    cfg: &crate::config::BillingdConfig,
+    id: Uuid,
+    uebermittelt: time::Date,
+) -> BillingResult<(crate::pg::BillingRecordRow, en16931::Invoice)> {
     let row = fetch_billing_record(pool, &cfg.tenant, id)
         .await?
         .ok_or_else(|| BillingError::not_found("RECORD_NOT_FOUND", "billing record not found"))?;
@@ -83,7 +95,7 @@ pub async fn record_with_model(
         .ok_or_else(|| match row.en16931_blocked.as_deref() {
             // The invoice *cannot* have one, and the record says why. Telling
             // the operator to re-run would produce the same refusal.
-            Some(reason) => papier_oder_verweigerung(&row, cfg, reason),
+            Some(reason) => papier_oder_verweigerung(&row, cfg, reason, uebermittelt),
             None => BillingError::unprocessable(
                 "MODEL_MISSING",
                 "record has no EN 16931 model — re-run the billing calculation",
@@ -96,19 +108,47 @@ pub async fn record_with_model(
 /// UStG still admits it for this recipient and supply, or a refusal naming
 /// why it does not.
 ///
-/// Evaluated against today's Berlin date, because the paper document would be
-/// übermittelt now; the supply is dated by the record's last day.
+/// `uebermittelt` is the day the paper document would go out; the supply is
+/// dated by the record's last day.
 fn papier_oder_verweigerung(
     row: &crate::pg::BillingRecordRow,
     cfg: &crate::config::BillingdConfig,
     reason: &str,
+    uebermittelt: time::Date,
 ) -> BillingError {
-    use energy_billing::e_rechnung::{SonstigeRechnungFall, sonstige_rechnung_zulaessig};
+    use mako_fristen::e_rechnung::{Form, SonstigeRechnungFall, sonstige_rechnung_zulaessig};
+    let jahr = row.period_to.year() - 1;
+    let gesamtumsatz = match cfg.e_rechnung.gesamtumsatz_im(
+        crate::config::Steueridentitaet {
+            ust_id: row.aussteller_ust_id.as_deref(),
+            steuernummer: row.aussteller_steuernummer.as_deref(),
+        },
+        jahr,
+    ) {
+        Ok(eur) => eur,
+        Err((a, b)) => {
+            return BillingError::unprocessable(
+                "PAPIER_UNZULAESSIG",
+                format!(
+                    "this document has no valid EN 16931 representation ({reason}), and paper \
+                     is not admissible: [e_rechnung] gesamtumsatz {jahr} states {a} EUR under \
+                     one of the issuer's tax identities and {b} EUR under the other"
+                ),
+            );
+        }
+    };
     let fall = SonstigeRechnungFall {
         ausgefuehrt: row.period_to,
-        uebermittelt: mako_fristen::heute(),
+        uebermittelt,
+        form: Form::Papier,
         empfaenger_unternehmer: row.empfaenger_unternehmer,
-        gesamtumsatz_vorjahr_eur: cfg.e_rechnung.gesamtumsatz_im(row.period_to.year() - 1),
+        zustimmung: None,
+        // Rounded up to the cent: a fraction above 800 000 EUR stays above it.
+        // The record's own Rechnungsaussteller selects the figure; a record
+        // with no recorded issuer, or an issuer with no entry, has none.
+        gesamtumsatz_vorjahr_cent: gesamtumsatz
+            .map(|eur| (eur * rust_decimal::Decimal::ONE_HUNDRED).ceil())
+            .and_then(|c| rust_decimal::prelude::ToPrimitive::to_i64(&c)),
     };
     match sonstige_rechnung_zulaessig(fall) {
         Ok(grund) => BillingError::unprocessable(

@@ -1,10 +1,7 @@
-//! PostgreSQL implementation of `BilanzierungRepository` — the first-class,
+//! PostgreSQL storage: [`PgBilanzierungRepository`] — the first-class,
 //! temporal BO4E `Bilanzierung` resource (BO #3).
 
-use mako_markt::{
-    error::MdmError,
-    repository::{BilanzierungRecord, BilanzierungRepository},
-};
+use mako_markt::{error::MdmError, repository::BilanzierungRecord};
 use sqlx::{PgPool, Row, postgres::PgRow};
 use time::OffsetDateTime;
 
@@ -42,8 +39,10 @@ const SELECT_COLS: &str = "tenant, malo_id, bilanzierungsbeginn, bilanzierungsen
      bilanzkreis, aggregationsverantwortung, abwicklungsmodell, aggregationszustaendigkeit, \
      prognosegrundlage, fallgruppenzuordnung, data, bo4e_version, updated_at";
 
-impl BilanzierungRepository for PgBilanzierungRepository {
-    async fn upsert(&self, rec: &BilanzierungRecord) -> Result<(), MdmError> {
+impl PgBilanzierungRepository {
+    /// Insert or update the Bilanzierung effective `bilanzierungsbeginn`; the
+    /// natural key is `(tenant, malo_id, bilanzierungsbeginn)`.
+    pub async fn upsert(&self, rec: &BilanzierungRecord) -> Result<(), MdmError> {
         let mut tx = self
             .pool
             .begin()
@@ -117,7 +116,9 @@ impl BilanzierungRepository for PgBilanzierungRepository {
         Ok(())
     }
 
-    async fn find_at(
+    /// The Bilanzierung effective for `malo_id` at instant `at` (point-in-time):
+    /// the newest one whose validity window contains `at`. `None` when none.
+    pub async fn find_at(
         &self,
         tenant: &str,
         malo_id: &str,
@@ -143,7 +144,8 @@ impl BilanzierungRepository for PgBilanzierungRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn history(
+    /// Full Bilanzierung history for a MaLo, newest validity-start first.
+    pub async fn history(
         &self,
         tenant: &str,
         malo_id: &str,

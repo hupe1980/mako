@@ -1,0 +1,692 @@
+[
+  {
+    "name": "get_annual_forecast",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "from": {
+          "description": "ISO 8601 start of observation window (optional, defaults to epoch).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "ISO 8601 end of observation window (optional, defaults to now).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_billing_period",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "period_from"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "period_from": {
+          "description": "Start of billing period — ISO 8601 date `YYYY-MM-DD` (inclusive).",
+          "type": "string"
+        },
+        "period_to": {
+          "description": "End of billing period — ISO 8601 date `YYYY-MM-DD` (inclusive).\nDefaults to `period_from` (single-day period) when omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_correction_history",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "from": {
+          "description": "ISO 8601 start of range (default: 90 days ago).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "ISO 8601 end of range (default: now).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Maximum records to return (default: 100, max: 1000).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_device_history",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "days_back": {
+          "description": "How many days back to look (default 90).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_gas_quality",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID (Gas MaLo).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_imbalance",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "year",
+        "month",
+        "bilanziert_kwh"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "year": {
+          "description": "Year (e.g. 2026).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "month": {
+          "description": "Month (1–12).",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "bilanziert_kwh": {
+          "description": "The bilanzierte (profile-allocated) quantity for the month, in kWh.\n\nRequired: edmd holds the measured half of the saldo only. The bilanzierte\nMenge comes from the Bilanzkreisabrechnung, not from metering data.",
+          "type": [
+            "string",
+            "number"
+          ],
+          "pattern": "^-?\\d+(\\.\\d+)?([eE]\\d+)?$"
+        },
+        "sparte": {
+          "description": "`STROM` (default) or `GAS` — Gas balances on the 06:00 Gastag.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_policy",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_quality_assessments",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "from": {
+          "description": "ISO 8601 start (optional, defaults to epoch).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "ISO 8601 end (optional, defaults to now).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_quality_warnings",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "from": {
+          "description": "ISO-8601 start datetime (inclusive). Defaults to 30 days ago when omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "ISO-8601 end datetime (exclusive). Defaults to now when omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_summenzeitreihe",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "from": {
+          "description": "ISO 8601 start (optional).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "ISO 8601 end (optional).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_timeseries",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "from",
+        "to"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "from": {
+          "description": "ISO 8601 start of the query range (inclusive).",
+          "type": "string"
+        },
+        "to": {
+          "description": "ISO 8601 end of the query range (inclusive).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_overdue_reading_orders",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "ausfuehrender_msb": {
+          "description": "Filter by NB/MSB MP-ID (optional).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Max results (default 100).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "UeberfaelligerAbleseauftrag": {
+          "description": "One reading order past its `ausfuehrt_bis` deadline.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The reading order.",
+              "type": "string"
+            },
+            "malo_id": {
+              "description": "11-digit Marktlokations-ID.",
+              "type": "string"
+            },
+            "anlass": {
+              "description": "Why the reading is owed (`JAHRESABLESUNG`, …).",
+              "type": "string"
+            },
+            "ausfuehrender_msb": {
+              "description": "MP-ID of the MSB executing the reading, where one is assigned.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ausfuehrt_bis": {
+              "description": "The last Berlin business day the reading was due on.",
+              "type": "string",
+              "format": "date"
+            },
+            "frist": {
+              "description": "The instant the deadline lapsed — the end of the Berlin day\n`ausfuehrt_bis` — RFC 3339 in UTC.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "status": {
+              "description": "`OFFEN`, `BEAUFTRAGT` or `FEHLGESCHLAGEN`.",
+              "type": "string"
+            },
+            "fehlschlag_grund": {
+              "description": "Why a FEHLGESCHLAGEN order failed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "days_overdue": {
+              "description": "Berlin calendar days from `ausfuehrt_bis` to today.",
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "id",
+            "malo_id",
+            "anlass",
+            "ausfuehrt_bis",
+            "frist",
+            "status",
+            "days_overdue"
+          ]
+        }
+      },
+      "required": [
+        "auftraege",
+        "count",
+        "saturated",
+        "failed_count"
+      ],
+      "type": "object",
+      "properties": {
+        "auftraege": {
+          "description": "The oldest `ausfuehrt_bis` first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UeberfaelligerAbleseauftrag"
+          }
+        },
+        "count": {
+          "description": "How many orders `auftraege` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "At least `limit` orders matched: more may be overdue than were listed.",
+          "type": "boolean"
+        },
+        "failed_count": {
+          "description": "How many of them are FEHLGESCHLAGEN.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "list_reading_orders",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Filter by status: OFFEN | BEAUFTRAGT | AUSGEFUEHRT | STORNIERT | FEHLGESCHLAGEN.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "anlass": {
+          "description": "Filter by Anlass: JAHRESABLESUNG | ZWISCHENABLESUNG | LIEFERBEGINN | SONDERABLESUNG | …",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Max results (default 50, max 500).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "trigger_jahresablesung",
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "nb_mp_id"
+      ],
+      "type": "object",
+      "properties": {
+        "nb_mp_id": {
+          "description": "NB MP-ID (BDEW-Codenummer) for the grid area.",
+          "type": "string"
+        },
+        "campaign_year": {
+          "description": "Campaign year (default: current year).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "dry_run": {
+          "description": "Dry-run: report what a run would do without creating reading orders.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_malos": {
+          "description": "Cap on MaLos enumerated in one call (default 2000, max 10000).\n\nBounded so the tool cannot exceed an MCP client's request timeout on a\nlarge grid. Re-running is idempotent, so a capped run is resumed by\ncalling again rather than by starting over.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "trigger_substitution",
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "gap_from",
+        "gap_to",
+        "bundesland",
+        "reason"
+      ],
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID the gap belongs to.",
+          "type": "string"
+        },
+        "gap_from": {
+          "description": "Gap start (UTC, RFC3339).",
+          "type": "string"
+        },
+        "gap_to": {
+          "description": "Gap end (UTC, RFC3339).",
+          "type": "string"
+        },
+        "prior_days": {
+          "description": "Reference read window in days (default 7). The Vergleichswert averages\nthe same slot on the previous three days of the gap's day class, so the\nwindow has to hold three of them.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "bundesland": {
+          "description": "**Required** — the Bundesland whose holidays decide the day class\n(`BE`, `NW`, `DE-BY`, …).",
+          "type": "string"
+        },
+        "hold": {
+          "description": "Fill gaps longer than 2 h with the last measured value (`Z93`). Gas only.",
+          "type": "boolean",
+          "default": false
+        },
+        "confirmed_outage": {
+          "description": "The whole gap window is a confirmed supply interruption, filled with\nzeros. Only for an outage that was established.",
+          "type": "boolean",
+          "default": false
+        },
+        "obis_code": {
+          "description": "OBIS register the gap belongs to (part of the reading identity).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sparte": {
+          "description": "`STROM` (default) · `GAS` · `WAERME` · `WASSER`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "**Required** — the `STS+Z40` Grund der Ersatzwertbildung (MSCONS MIG\n2.5), by name (`NO_ACCESS`, `METERING_EQUIPMENT_FAULT`,\n`COMMUNICATION_FAILURE`, …) or by market code (`Z74`, `Z81`, `Z75`, …).\nThe list is closed and has no catch-all, so an unstated reason is a\nrefusal rather than a default: it would put an invented one into the\n§ 147 Abs. 1 AO audit trail and onto the MSCONS that carries the value.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "validate_timeseries",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "from",
+        "to"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "from": {
+          "description": "ISO 8601 start of validation window.",
+          "type": "string"
+        },
+        "to": {
+          "description": "ISO 8601 end of validation window.",
+          "type": "string"
+        },
+        "max_plant_power_kw": {
+          "description": "Physical capacity ceiling of the metered plant, in kW.\n\nSupply it and **`CAPACITY`** checks each interval's average power\nagainst it. Omit it and the rule stays off — edmd holds no master data\nof its own and will not invent a ceiling.",
+          "type": [
+            "string",
+            "number",
+            "null"
+          ],
+          "pattern": "^-?\\d+(\\.\\d+)?([eE]\\d+)?$"
+        }
+      }
+    },
+    "outputSchema": null
+  }
+]

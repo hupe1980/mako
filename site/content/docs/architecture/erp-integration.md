@@ -297,7 +297,6 @@ After each checked INVOIC, `invoicd` posts payment CloudEvents to the ERP when
 |---|---|---|
 | `de.invoic.receipt.settled` | Invoice accepted | Book received invoice |
 | `de.invoic.receipt.disputed` | Invoice rejected | Flag for manual review |
-| `de.invoic.receipt.dispatched` | Self-issued 31006 sent | Track self-issued invoice |
 
 The `dispatched` field says whether the market answer went out — do not pay
 against a settled invoice whose REMADV never left.
@@ -353,7 +352,7 @@ A BO4E object, or `null` where none applies (e.g. `de.mako.contrl.received`).
 | `de.mako.process.initiated` | New inbound UTILMD received | `Marktlokation` |
 | `de.mako.aperak.accepted` | Counterparty accepted our UTILMD | `Marktlokation` |
 | `de.mako.aperak.rejected` | Counterparty rejected our UTILMD | `Marktlokation` + rejection reason |
-| `de.mako.aperak.timeout` | No APERAK within regulatory SLA | `Marktlokation` |
+| `de.mako.antwortfrist.abgelaufen` | The counterparty let the business Antwortfrist lapse | `Marktlokation` |
 | `de.mako.contrl.received` | CONTRL syntax acknowledgement | — (null data) |
 | `de.mako.process.completed` | Lieferbeginn/Lieferende confirmed | `Marktlokation` + `Vertrag` |
 | `de.mako.process.failed` | Fatal error / regulatory deadline exceeded | `Marktlokation` |
@@ -633,8 +632,8 @@ async def receive(request: Request):
             await on_aperak_accepted(event)
         case "de.mako.aperak.rejected":
             await on_aperak_rejected(event)
-        case "de.mako.aperak.timeout":
-            await on_aperak_timeout(event)
+        case "de.mako.antwortfrist.abgelaufen":
+            await on_antwortfrist_abgelaufen(event)
         case "de.mako.process.completed":
             await on_process_completed(event)
         case "de.mako.process.failed":
@@ -678,7 +677,7 @@ app.post(
       case "de.mako.process.initiated":  await onInitiated(event);  break;
       case "de.mako.aperak.accepted":    await onAccepted(event);   break;
       case "de.mako.aperak.rejected":    await onRejected(event);   break;
-      case "de.mako.aperak.timeout":     await onTimeout(event);    break;
+      case "de.mako.antwortfrist.abgelaufen":     await onTimeout(event);    break;
       case "de.mako.process.completed":  await onCompleted(event);  break;
       case "de.mako.process.failed":     await onFailed(event);     break;
     }

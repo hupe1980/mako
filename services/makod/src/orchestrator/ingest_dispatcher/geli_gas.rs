@@ -257,7 +257,7 @@ impl EdifactIngestDispatcher {
                 31011 => {
                     let cmd =
                         adapters::geli_gas_sperrprozesse_invoic_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_malo_from_invoic(msg);
+                    let malo_id = extract_invoice_ref_from_invoic(msg);
                     // Settlement deadline: 10 Werktage (BK7-24-01-009).
                     let due_at =
                         fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);

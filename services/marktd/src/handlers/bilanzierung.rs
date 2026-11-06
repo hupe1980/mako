@@ -30,7 +30,7 @@ use axum::{
     response::IntoResponse,
 };
 use mako_markt::bo4e::Bo4e;
-use mako_markt::repository::{BilanzierungRecord, BilanzierungRepository};
+use mako_markt::repository::BilanzierungRecord;
 use mako_service::{ApiError, ApiResult, Json};
 use serde::Deserialize;
 use time::OffsetDateTime;

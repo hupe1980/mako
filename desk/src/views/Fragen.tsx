@@ -105,20 +105,24 @@ function Lesen({ schritte }: { schritte: Answer["schritte"] }) {
  * and sends nothing; „Verwerfen" hides it and, once its hold ends, says so
  * beside the run — a routine decision, taken back with „Rückgängig" (FR-029).
  */
-function VorschlagKarte({
+export function VorschlagKarte({
   v,
   run,
   onUebernehmen,
+  disclosure,
 }: {
   v: Vorschlag;
   run: string;
   onUebernehmen: (v: Vorschlag, run: string) => void;
+  /** agentd's disclosure, where the card stands outside the answer that carries it. */
+  disclosure?: string;
 }) {
   const [weg, setWeg] = useState(false);
   const hold = useHold();
   if (weg) return null;
   return (
     <div className="mt-3 rounded-[12px] border border-ai bg-surface p-3">
+      {disclosure && <p className="m-0 mb-1 text-caption font-semibold text-ai">{disclosure}</p>}
       <p className="m-0 flex flex-wrap items-center gap-2 text-caption font-semibold text-ai">
         <Icon name="sparkle" size={12} />
         Vorschlag
@@ -160,9 +164,13 @@ function VorschlagKarte({
         </AriaButton>
         <AriaButton
           onPress={() => onUebernehmen(v, run)}
-          className="focus-ring h-7 rounded-full bg-ai px-3 text-body font-semibold text-on-accent"
+          aria-keyshortcuts="U"
+          className="focus-ring inline-flex h-7 items-center gap-2 rounded-full bg-ai px-3 text-body font-semibold text-on-accent"
         >
           In die Entscheidung übernehmen
+          <kbd aria-hidden className="font-sans text-caption opacity-80">
+            U
+          </kbd>
         </AriaButton>
       </div>
     </div>

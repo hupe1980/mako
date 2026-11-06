@@ -26,9 +26,10 @@ pool_size = 10
 
 [identity]
 # Operator primary MP-ID — must match makod.toml [[party]] primary = true.
-# Used for §20 EnWG parity: when the initiating LF MP-ID equals own_mp_id,
-# the decision is flagged as affiliate-initiated in anmeldung_decisions.
 own_mp_id = "9900357000004"
+# The affiliated Lieferanten's MP-IDs: their Anmeldungen are held for a person
+# (§ 20 Abs. 1 EnWG) and grouped as affiliate in the § 7a Abs. 5 evidence.
+verbundene_lieferanten = []
 # tenant defaults to own_mp_id when empty.
 
 [makod]

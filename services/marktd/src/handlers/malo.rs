@@ -19,7 +19,7 @@ use mako_markt::{
     cloudevents::{EventExtensions, MarktEvent},
     domain::{MaloId, Sparte},
     error::MdmError,
-    repository::{MaloFilter, MaloRepository, PageResult, Rollenzuordnung},
+    repository::{MaloFilter, PageResult, Rollenzuordnung},
 };
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;

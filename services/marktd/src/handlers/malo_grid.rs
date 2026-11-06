@@ -19,7 +19,7 @@ use std::sync::Arc;
 use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
 use mako_markt::{
     domain::{MaloId, Sparte},
-    repository::{MaloGridRecord, MaloGridRepository},
+    repository::MaloGridRecord,
 };
 use mako_service::Json;
 use serde::{Deserialize, Serialize};

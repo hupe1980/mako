@@ -15,7 +15,7 @@ use axum::{
 };
 use mako_markt::bo4e::Bo4e;
 use mako_markt::domain::Lokationstyp;
-use mako_markt::repository::{Buendelbefund, Lokationsbuendel, LokationszuordnungRepository};
+use mako_markt::repository::{Buendelbefund, Lokationsbuendel};
 use mako_service::cedar::CedarEnforcer;
 use mako_service::{ApiError, ApiResult, Json};
 use rubo4e::current::Lokationszuordnung;

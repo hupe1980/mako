@@ -9,6 +9,164 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.26.0] — 2026-11-06
+
+### Added
+
+- The assistant's proposal waits on every Freigabe: agentd reads processd's
+  open Freigaben every `[vorschlaege] intervall_secs` and admits one
+  desk-assistant run per entry, keyed on its id. The Desk shows the proposal
+  under the row in Heute and in the decision; `U` takes it into the form,
+  unsent. `GET /api/v1/vorschlaege` reads it and starts no run;
+  `automatisch = false` leaves it to a question.
+- grid-billing tables the 2027 network levies as the ÜNB published them on
+  26.10.2026: § 19 StromNEV-Aufschlag A′ 2,027 / B′ 0,050 / C′ 0,025 ct/kWh,
+  Offshore-Netzumlage 1,143 ct/kWh, KWKG-Umlage 0,451 ct/kWh. The ÜNB published
+  the § 19 Aufschlag under the § 24d EnWG reservation, which the row carries;
+  a 2027 settlement priced from it warns `UMLAGE_UNTER_VORBEHALT`.
+- The Desk's Heute is every Rolle's home: one list of what waits on a person,
+  in Frist bands, with the assistant's Hinweis under the item it concerns,
+  `⌘J` asking about the item in focus, a Freigabe decided in place, and each
+  source's count or refusal beneath.
+
+### Changed
+
+- **Breaking:** marktd's NbEnergiemix history renders `updated_at` as
+  RFC 3339.
+- **Breaking:** `mako_invoic::InvoicCommand::SendInvoic` carries `nachricht`,
+  the built INVOIC, and enqueues it as the `INVOIC` outbox entry; makod's
+  INVOIC renderer only wraps it. edi-energy adds `Profile::seed_segment` and
+  `Profile::completion` (with `Unstated`); `SkeletonParties` is re-exported at
+  the crate root.
+- **Breaking:** makod's INVOIC commands take `zugehoeriges_dokument`
+  (`RFF+ACE` — Lieferschein, ORDERS or QUOTES), `preise_mp_id`, `rechnungstyp`
+  (`IMD` codes BO4E lacks), `ausfuehrungsdatum` (`DTM+203`) and a Storno's
+  `original_rechnungsdatum`; `invoice_ref` must equal the Rechnungsnummer.
+- **Breaking:** netzbilanzd refuses at drafting an NN-Rechnung without
+  `cadence`, and a Strom one without an Artikel-ID for every charge
+  (`artikel_ids`) or without `lieferschein_ref`. Its dispatch names both
+  parties and the Marktlokation from marktd (`422` naming a record marktd
+  lacks); every invoice it issues — 31001, 31002, 31005, 31009, 31011 — goes
+  out as a valid INVOIC.
+- **Breaking:** grid-billing adds `QuantityUnit::Stueck` (the Abschlag and each
+  AWH position, `QTY+47` `H87`) and `bdew_artikelnummer_code` from the Codeliste
+  der Artikelnummern 5.6 Kap. 2; every position with an Artikelnummer carries its
+  13-digit code, the Abschlag `9990001000376`.
+- **Breaking:** grid-billing states every position net in cents, rounded once
+  kaufmännisch from the stated quantity and price, and forms the totals from
+  those nets (INVOIC `MOA+203` `[930]`); a Mehr-/Mindermenge is whole kWh
+  (`[937]`). A monthly, yearly or daily charge is `1` `H87` with its time at
+  `QTY+136`. `SettlementPosition` gains `artikel_id`, `QuantityUnit` `Tag`,
+  `MsbInput` `tagespreise`.
+- **Breaking:** netzbilanzd's `gas_awh` settlement requires `auftrag_ref` and
+  `ausfuehrungsdatum`; its `msb` settlement takes `bezugsdokument`,
+  `artikel_ids` and `tagespreise` where the 31009 column requires them.
+- **Breaking:** grid-billing credits § 14a Modul 1 for the period's days — one
+  `NneModul1Pauschale` position per calendar year at the pauschale over that
+  year's days (`QTY+136` `DAY`, Artikel-ID `1-02-0-015` €/Tag) — and drops the
+  `Jahresanteil` input; the 31002 Strom column admits no `MON`/`ANN`.
+- **Breaking:** grid-billing settles one Mehr-/Mindermenge leg per document:
+  the Mindermenge as 31005, the Mehrmenge as the NB's selbst ausgestellte 31006,
+  stated positive as the LF's Guthaben (INVOIC AHB 1.0b Kap. 3; BDEW-AWH
+  Mehr-/Mindermengen V2.1 Kap. 6.5.2). `MmmInput::selbstausgestellt` is gone, a
+  period before 01.07.2018 is refused, and `invoic.mmm.stellen` sends the
+  Mehrmenge as 31006.
+- invoic-checker multiplies a position by its `zeitbezogene_menge` and accepts
+  a net within half a cent of the product.
+- **Breaking:** the event a GPKE / GeLi Gas Lieferantenwechsel emits when its
+  business Antwortfrist lapses is `de.mako.antwortfrist.abgelaufen`
+  (`ErpEventType::AntwortfristAbgelaufen`, processd state
+  `antwortfrist_abgelaufen`), replacing `de.mako.aperak.timeout`. It was never an
+  APERAK clock.
+- **Breaking:** `makod_aperak_missed_total` is
+  `makod_delivery_window_missed_total` and counts a missed CONTRL window too.
+- **Breaking:** processd names the operator's affiliated Lieferanten in a
+  required `[identity] verbundene_lieferanten` (`[]` included), replacing
+  `own_mp_ids`. The NB hold on an affiliate's Anmeldung and the § 7a Abs. 5
+  evidence both read it; the NB's own MP-ID never named an affiliate, since
+  each Marktrolle has its own.
+- **Breaking:** the § 27 Abs. 38 UStG rule moved from `energy_billing::e_rechnung`
+  to `mako_fristen::e_rechnung` and takes the Gesamtumsatz in cents. Another
+  electronic format needs the recipient's recorded Zustimmung; EDI goes out as
+  an E-Rechnung when its format extracts into EN 16931 (§ 14 Abs. 1 Satz 6
+  Nr. 2), otherwise under Nr. 1 or Nr. 3 (`edi_zulaessig`).
+- **Breaking:** makod refuses an outbound INVOIC the recipient's EDI agreement
+  does not carry (`422 edi_unzulaessig`); marktd's partner record holds
+  `edi_zustimmung` and `edi_extrahierbar`.
+- **Breaking:** billingd's `[[e_rechnung.gesamtumsatz]]` entries name the
+  issuer's `ust_id` or `steuernummer`; the Nr. 2 grace reads the figure of the
+  identity a record was issued under, stored on the record.
+- **Breaking:** billingd classifies the recipient from vertragd's
+  `rechnungsempfaenger` block, which carries `unternehmer` (from that party's
+  own `kundentyp`) and the per-customer `zustimmung_sonstige_erechnung`,
+  `edi_zustimmung` and `edi_extrahierbar`.
+- **Breaking:** invoicd reads `check.auto_dispute_threshold_eur` as an EUR
+  decimal string (`"250.00"`) and compares it exactly.
+- **Breaking:** netzbilanzd `list_korrekturbedarf`, edmd
+  `list_overdue_reading_orders` and invoicd `list_disputes` answer typed results
+  pinned in `mcp.snapshot.json`; billingd serves `list_review_queue`.
+- productd's quotation reads the Strom- and Energiesteuer of its Stichtag year
+  from the dated series and refuses an unread year (`STEUERSATZ_FEHLT`).
+- `check-rounding` also refuses the `billing` crate's non-kaufmännisch
+  `Rounding` modes.
+
+### Removed
+
+- **Breaking:** invoicd's `POST /api/v1/selbstausstellen`, its
+  `dispatch-selbstausstellen` action and `[edmd]` config, makod's
+  `gpke.abrechnung.selbstausstellen` and mako-events' `RECEIPT_DISPATCHED`. The
+  selbst ausgestellte MMM-Rechnung runs NB → LF (PID-Übersicht 4.0), so the
+  Lieferant never issues it; netzbilanzd does. invoicd's receipts lose the
+  `direction` column and the ERP payload its `direction` key; `invoice_ref` is
+  `NOT NULL`.
+- **Breaking:** edi-energy's `builders::InvoicBuilder`, which wrote the INVOIC
+  header only.
+- **Breaking:** a BKV can no longer answer `gabi.rechnung.*` or
+  `invoic.stornorechnung.*`: the
+  Kapazitätsrechnung 31010 runs NB → KN (INVOIC AHB 1.0b Kap. 3.1.4), and
+  31007/31008 reach the MGV.
+- **Breaking:** `mako-markt`'s 29 repository traits and its `testing` feature;
+  the storage methods are inherent methods of marktd's PostgreSQL types.
+
+### Fixed
+
+- edmd completes a reading order and files its Zählerstand in one commit; a
+  reading write that fails, or a completion refused for its unit or a missing
+  register, leaves the order open instead of completed without its reading.
+- accountingd answers a ledger refusal `422`, an unknown subject `404`, and only
+  a store or integrity failure `500` with an `error_id`, on every ledger-backed
+  route and the CloudEvent ingest. A booking into a sealed period was a `500`,
+  a CloudEvent the ledger refuses was redelivered indefinitely, and a seal's
+  store failure was a `422` carrying the database's text.
+- marktd serves an NbEnergiemix's `eeg_einspeisung_kwh` and
+  `gesamtentnahme_kwh`; every read returned them as `null`.
+- outputd's `500` carries `error.error_id`, the id its log line records.
+- An invoice and its answers correlate on the Rechnungsnummer: an inbound
+  INVOIC is registered under `BGM` DE1004, and a REMADV or COMDIS is matched by
+  `DOC` DE1004. The REMADV's `RFF+Z13` is its own Prüfidentifikator and the
+  INVOIC's UNH reference numbers only the message, so no answer found its
+  invoice.
+- No outbound INVOIC could be issued: the six issuing commands answered
+  `process_not_found` and the message lacked positions and totals. Each now
+  builds, validates against its AHB and spawns from its `rechnung` — 31001,
+  31002, 31005, 31006, 31009, 31011 and the Storno — refusing an invalid one at
+  the command with the MIG places it misses, and a character outside UNOC;
+  makod's inbound INVOIC reader takes MIG 2.8e's qualifiers.
+- invoicd's monthly billing summary counts an invoice in its Berlin month; it
+  bucketed by the UTC month, so a receipt after 23:00 on a month's last day fell
+  into the next. `check-business-dates` now also refuses a calendar component
+  read off a stored `TIMESTAMPTZ` column outside Berlin.
+- marktd's MCP `get_partner` answers from the repository REST reads through; it
+  decoded `makoadresse` as a string and returned every partner without an AS4
+  endpoint, and its `updated_at` was not RFC 3339.
+- billingd names two disagreeing Gesamtumsatz figures of one issuer when it
+  refuses the paper grace, instead of calling the figure unrecorded.
+- A Tarifwechsel invoice (`Invoice::merge`) derives its VAT once per rate from the
+  merged lines; it summed each leg's separately rounded tax, a cent too high where
+  each leg rounded up.
+- A position's amount is rounded once, kaufmännisch, to the cent; it was put on five
+  decimals first, so 0,004995 EUR became 0,01 EUR instead of 0,00 EUR.
+
 ## [0.25.0] — 2026-11-06
 
 ### Added

@@ -44,7 +44,8 @@ sequenceDiagram
     nd->>chk: re-check the document as amended
     alt outcome ≠ Dispute
         nd->>makod: ForwardCommand (marktrolle NB, or MSB for 31009)
-        makod->>LF: INVOIC 31002 / 31005 / 31009 / 31011 (EDIFACT over AS4)
+        makod->>makod: build + validate the INVOIC, spawn the issuing process
+        makod->>LF: INVOIC 31001 / 31002 / 31004 / 31005 / 31006 / 31009 / 31011 (EDIFACT over AS4)
         makod-->>nd: { process_id }
         nd->>nd: status = dispatched
     else outcome = Dispute
@@ -87,7 +88,8 @@ graph LR
 |---|---|---|---|---|
 | 31001 | Abschlagsrechnung Netznutzung (payment on account) | NB → LF | `abschlag` | INVOIC AHB 1.0b · §14 Abs. 5 UStG |
 | 31002 | NN-Rechnung (Netznutzungsentgelt + Konzessionsabgabe) | NB → LF | `nne` | StromNEV §§17/21 · GasNEV §15 · KAV §2 |
-| 31005 | Mehr-/Mindermengensaldo | NB → LF | `mmm` | GPKE (BK6-24-174) Teil 1 Kap. 8.4 · GaBi Gas 2.1 (BK7-24-01-008) |
+| 31005 | Mindermenge — the NB's Forderung | NB → LF | `mmm` | GPKE (BK6-24-174) Teil 1 Kap. 8.4 · GaBi Gas 2.1 (BK7-24-01-008) |
+| 31006 | Mehrmenge — the NB's selbst ausgestellte Rechnung, the LF's Guthaben, stated positive | NB → LF | `mmm` | INVOIC AHB 1.0b Kap. 3 · BDEW-AWH Mehr-/Mindermengen V2.1 Kap. 6.5.2 |
 | 31009 | MSB-Rechnung (Messstellenbetrieb) | **MSB → NB / LF / ESA** | `msb` | §30 MsbG |
 | 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse) | GNB → LFG | `gas_awh` | GeLi Gas 3.0 (BK7-24-01-009) §5.4 |
 
@@ -100,6 +102,43 @@ names which kind. Two properties cost money when missed:
 - **PID 31009 runs MSB → NB / LF / ESA** in all seven Anwendungsfälle (*Anwendungsübersicht der
   Prüfidentifikatoren* 4.0). The draft stores the MSB as `sender_mp_id`; dispatch declares
   `marktrolle: MSB`.
+
+makod builds the INVOIC from the dispatched `Rechnung` and refuses one the AHB cannot carry —
+`422 invoic_nicht_darstellbar`, the MIG places in `places` ([makod: Issuing the
+INVOIC](@/docs/services/makod.md#issuing-the-invoic)). What the AHB requires beyond the
+settlement comes from three places:
+
+| Fact | INVOIC place | Source |
+|---|---|---|
+| Firmenname, Anschrift, USt-ID of both parties | `NAD+MS` / `NAD+MR`, `SG3 RFF` | marktd's partner record (`geschaeftspartner`), read at dispatch |
+| Lieferanschrift, MaLo-ID, Energierichtung | `NAD+DP`, `LOC+172`, `IMD` DE 7009 | marktd's Marktlokation (`data`), read at dispatch |
+| Rechnungstyp | `IMD` DE 7081 | `cadence` — required on an NN-Rechnung |
+| Artikel-ID per charge (Strom) | `LIN` DE 7140 `Z09` | `artikel_ids` on the `nne` settlement, keyed by position kind |
+| Lieferschein-MSCONS (Strom) | `SG1 RFF+ACE` | `lieferschein_ref` on the `nne` settlement |
+| Preise des Netzbetreibers (Strom, period from 01.01.2026) | `SG1 RFF+Z56` | `preise_mp_id`, else `nb_mp_id` |
+| Sperrauftrag (31011) | `SG1 RFF+ACE`, `IMD++Z43` | `auftrag_ref` on the `gas_awh` settlement |
+| Ausführungsdatum (31011) | `DTM+203` | `ausfuehrungsdatum` on the `gas_awh` settlement |
+| Angebot or Bestellung (31009 to a LF / an ESA) | `SG1 RFF+ACE` | `bezugsdokument` on the `msb` settlement |
+| Day prices and Artikel-IDs (31009, period from 01.01.2024) | `PRI` `DAY`, `LIN` `Z09` | `tagespreise` and `artikel_ids` on the `msb` settlement |
+
+Gas NNE, Abschlag and MMM positions carry their BDEW-Artikelnummer (`Z01`) from the
+settlement, an AWH position the Artikel-ID its input states. A fact the table names as
+required and the request omits is refused at drafting, each named; a party or a Marktlokation
+marktd does not record is refused at dispatch, naming the record. A Stornorechnung goes out
+with its original's Rechnungstyp and Rechnungsdatum (`DTM+171`), a Rechnung für Sperren
+without a Zeitraum (the 31011 column lists one only on the Blindarbeitrechnung).
+
+The settlement states what the INVOIC carries:
+
+- **A position's net is in cents**, rounded once, kaufmännisch, from the stated quantity
+  and unit price, and the totals are the sum of those nets: `MOA+203` DE 5004 carries `[930]`
+  „max. 2 Nachkommastellen" (INVOIC AHB 1.0b, S. 20).
+- **A charge priced per month or day** states the count `1` `H87` at `QTY+47` and the time at
+  `QTY+136` (MIG 2.8e 00035/00036, S. 42 f.), with the price per that unit.
+- **A Mehr-/Mindermenge is whole kWh** (`QTY+47` `[937]`, S. 40), rounded kaufmännisch
+  before it is priced, and one leg per document: the MMM is a Lieferung, so the Mindermenge
+  goes out as 31005 and the Mehrmenge as 31006 (INVOIC AHB 1.0b Kap. 3, S. 5), both from
+  the NB to the LF (PID-Übersicht 4.0). A period before 01.07.2018 is refused.
 
 ---
 
@@ -120,11 +159,16 @@ rate bands keyed on the municipality's inhabitant count.
 Three levies ride on the Strom Netzentgelt; `netzbilanzd` adds them to every Strom NNE
 settlement and to no Gas settlement:
 
-| Levy | 2026 rate (A′) | Basis |
-|---|---|---|
-| Aufschlag für besondere Netznutzung (§19 StromNEV-Umlage) | 1.559 ct/kWh | §19 Abs. 2 StromNEV |
-| Offshore-Netzumlage | 0.941 ct/kWh | §17f EnWG |
-| KWKG-Umlage | 0.446 ct/kWh | §26 KWKG |
+| Levy | 2026 (A′) | 2027 (A′) | Basis |
+|---|---|---|---|
+| Aufschlag für besondere Netznutzung (§19 StromNEV-Umlage) | 1.559 ct/kWh | 2.027 ct/kWh | §19 Abs. 2 StromNEV |
+| Offshore-Netzumlage | 0.941 ct/kWh | 1.143 ct/kWh | §17f EnWG |
+| KWKG-Umlage | 0.446 ct/kWh | 0.451 ct/kWh | §26 KWKG |
+
+The 2027 rates are the ÜNB's publication of 26.10.2026 on netztransparenz.de. They published the
+2027 §19 Aufschlag under a reservation: it assumes the federal Zuschuss of § 24d EnWG, and rises
+„sollte bis zum 07.12.2026 keine Rechtssicherheit bestehen". A 2027 settlement priced from that
+row carries `UMLAGE_UNTER_VORBEHALT`.
 
 The §19 StromNEV levy has an A′/B′/C′ schedule (B′ capped at 0.050, C′ at 0.025 ct/kWh); set
 `letztverbrauchergruppe` to bill a privileged band. Offshore- and KWKG-Umlage are published at
@@ -226,6 +270,7 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
       "malo_id": "51238696012",
       "period_from": "2026-01-01",
       "period_to": "2026-01-31",
+      "cadence": "Monatsrechnung",
       "settlement": {
         "billing_type": "nne",
         "nb_mp_id": "9900357000004",
@@ -240,7 +285,16 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
         "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde" },
         "netzebene": "Niederspannung",
         "jahresarbeit_kwh": "18000",
-        "tariff_sheet_id": "Preisblatt-NNE-2026-Q1"
+        "tariff_sheet_id": "Preisblatt-NNE-2026-Q1",
+        "artikel_ids": {
+          "NneArbeit": "1-03-7-005",
+          "NneLeistung": "1-03-7-004",
+          "Konzessionsabgabe": "1-08-3-001",
+          "KwkgUmlage": "1-10-1-001",
+          "OffshoreNetzumlage": "1-10-2-001",
+          "Sect19StromNevUmlage": "1-10-4-001"
+        },
+        "lieferschein_ref": "LS-2026-000417"
       }
     }]
   }'
@@ -258,14 +312,21 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
     "check_outcome": "Ok",
     "check_findings": [],
     "settlement_warnings": [],
-    "netto_eur":     "598.34",
-    "steuer_eur":    "113.68",
-    "brutto_eur":    "712.02",
+    "netto_eur":     "598.35",
+    "steuer_eur":    "113.69",
+    "brutto_eur":    "712.04",
     // gross less the Abschläge this invoice settles — see "Abschläge" below
-    "zu_zahlen_eur": "712.02"
+    "zu_zahlen_eur": "712.04"
   }]
 }
 ```
+
+The Artikel-IDs are the Netznutzungspreisblatt's (Codeliste der Artikelnummern und Artikel-ID
+5.6): `1-03-7-005` / `1-03-7-004` Monatsleistungspreissystem Niederspannung, Arbeitspreis and
+Leistungspreis for a month of 31 days (Kap. 3.1.3); `1-08-3-001` Höchstbetrag der
+Konzessionsabgabe für Sondervertragskunden (Kap. 3.1.8); `1-10-1-001`, `1-10-2-001`,
+`1-10-4-001` the KWKG-, Offshore- and § 19-Aufschläge for nicht privilegierte Letztverbraucher
+(Kap. 3.1.10).
 
 ### `leistungspreis.system` — which Leistungspreissystem the Preisblatt states
 
@@ -346,7 +407,7 @@ BK8-22/010-A numbers three modules; `ArbeitspreisModell` holds one at a time:
 
 | Module | Mechanism | Shape |
 |---|---|---|
-| **Modul 1** | pauschale Reduzierung — a flat annual amount credited pro rata, not a rate change | `Modul1Pauschal { basis, pauschale_eur_pro_jahr, jahresanteil }` |
+| **Modul 1** | pauschale Reduzierung — a flat annual amount credited for the period's days (each calendar year at its own length), not a rate change; one position per year at the day rate, `NneModul1Pauschale` in `artikel_ids` (`1-02-0-015` €/Tag in the Grundpreis-/Arbeitspreissystem, Codeliste 5.6 Kap. 3.1.2) | `Modul1Pauschal { basis, pauschale_eur_pro_jahr }` |
 | **Modul 2** | prozentuale Reduzierung of the controllable device's own Arbeitspreis; scales with consumption, and needs that device separately metered | `Modul2ProzentualeReduzierung { basis, reduktion }` |
 | **Modul 3** | zeitvariable Netzentgelte in three Tarifstufen, opt-in since 01.04.2025 | `Modul3ZeitVariabel { ht, st, nt }` |
 
@@ -466,25 +527,27 @@ curl -X PUT http://localhost:8680/api/v1/billing/fremdkosten/{draft_id} -d @frem
 curl -X PUT http://localhost:8680/api/v1/billing/drafts/{draft_id}/dispatch
 ```
 
-Dispatch runs four steps in one transaction:
+Dispatch runs five steps in one transaction:
 
-1. **Merge the Fremdkosten** into `Rechnung.fremdkosten` (BO4E's first-class field). They are
+1. **Name the parties and the Marktlokation** from marktd — see the table above.
+2. **Merge the Fremdkosten** into `Rechnung.fremdkosten` (BO4E's first-class field). They are
    informational and change no total; costs the counterparty owes belong in the settlement.
    `PUT /fremdkosten/{draft_id}` answers `409` once the invoice has left `draft`.
-2. **Run the outbound BO4E gate** over the merged document
+3. **Run the outbound BO4E gate** over the merged document
    ([`ensure_conformant`](@/docs/architecture/domain-model.md#the-bo4e-gate)) — this is the one
    document netzbilanzd assembles at runtime from two stored parts.
-3. **Re-check the amended document** with `invoic-checker`; `Dispute` blocks the send and returns
+4. **Re-check the amended document** with `invoic-checker`; `Dispute` blocks the send and returns
    the findings.
-4. **Hand it to `makod`** under the idempotency key `netzbilanzd-invoic-{draft_id}`:
+5. **Hand it to `makod`** under the idempotency key `netzbilanzd-invoic-{draft_id}`:
 
    | Field | Value |
    |---|---|
-   | `command` | `invoic.nne-abschlag.stellen` (31001) · `invoic.nne.stellen` (31002) · `invoic.mmm.stellen` (31005) · `wim.msb-rechnung.stellen` (31009) · `invoic.sonstige-leistung.stellen` (31011) |
+   | `command` | `invoic.nne-abschlag.stellen` (31001) · `invoic.nne.stellen` (31002) · `invoic.mmm.stellen` (31005, 31006) · `wim.msb-rechnung.stellen` (31009) · `invoic.sonstige-leistung.stellen` (31011) |
    | `marktrolle` | `MSB` for PID 31009, `GNB` for 31011 and any gas invoice, `NB` otherwise — checked by `makod` against the licensed roles |
    | `invoice_ref` | the invoice number — what the inbound REMADV correlates on |
    | `sender_mp_id` / `recipient_mp_id` | as the settlement resolved them |
-   | `pid`, `sparte`, `rechnung` | the document and what identifies it |
+   | `pid`, `sparte`, `rechnung` | the document — with the parties and the Marktlokation — and what identifies it |
+   | `zugehoeriges_dokument`, `preise_mp_id`, `rechnungstyp`, `original_rechnungsdatum` | `RFF+ACE`, `RFF+Z56`, `IMD` where BO4E has no code, `DTM+171` of a Storno |
 
 The commands are Sparte-neutral. Every PID has an issuer-side process in `makod`, 31011 included.
 
@@ -1024,7 +1087,7 @@ tools:
 | `get_submission_status` | MaBiS: recent runs + failed / retry-exhausted / open-Korrekturbedarf counts |
 | `list_failed_submissions` | MaBiS: failed runs, newest first, with `attempt_count` and `error_msg` |
 | `get_submission_run` | MaBiS: one run by UUID (version as RFC 3339) |
-| `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (§9.8.1 obligations) |
+| `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (§9.8.1 obligations), typed (`Korrekturbedarf`) |
 
 Settling, dispatching, rejecting, correcting and filing a Summenzeitreihe live on REST, where
 the action is attributable to an operator. `agentd`'s `mabis-agent` reads the four MaBiS tools.
@@ -1126,7 +1189,7 @@ Migrations run at startup; every table is tenant-scoped. `invoice_drafts` enforc
 
 | Constraint | Rule |
 |---|---|
-| `pid` CHECK | `31001, 31002, 31005, 31009, 31011` |
+| `pid` CHECK | `31001, 31002, 31005, 31006, 31009, 31011` |
 | `id_totals_add_up` | `netto + steuer = brutto` (units of 10⁻⁵ EUR) |
 | `id_zu_zahlen_within_brutto` | the Abschlag deduction never flips the sign or exceeds the gross |
 | `id_reverse_charge_states_no_tax` | `AE` ⇒ zero tax and rate; `S` ⇒ rate > 0 |

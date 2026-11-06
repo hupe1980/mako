@@ -22,12 +22,13 @@ Port: **`:9580`**
 | **Marktrolle** | the role an operator plays in the German energy market — **LF** (supplier), **NB** (grid operator), **MSB** (metering operator), **BKV** (balancing-group manager). `agentd` builds role-scoped, so an LF binary contains no NB specialist. See [Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen) |
 | **Marktlokation (MaLo)** | the delivery point a run is correlated on, identified by an 11-digit MaLo-ID — the unit a case, a memory subject and a GDPR erasure are all scoped to. See [Identifier Formats](@/docs/architecture/domain-model.md#identifier-formats) |
 | **Frist / Werktag** | a regulated deadline counted in BDEW Werktage. Agent approval windows resolve through the same calendar the protocol daemon [`makod`](@/docs/services/makod.md) uses for an EDIFACT Antwortfrist |
-| **APERAK** | the EDIFACT technical acknowledgement of a received market message. An APERAK timeout is one of the events that wakes `mako-agent` |
+| **APERAK** | the EDIFACT technical acknowledgement of a received market message. A lapsed Antwortfrist is one of the events that wakes `mako-agent` |
 
 | Endpoint | Description |
 |---|---|
 | `POST /webhook` | Inbound CloudEvent trigger (Standard Webhooks-verified). Admits durably, then answers `202` with the run ids |
 | `GET /api/v1/hinweise` | The open worklist rows the caller's roles may answer, each with the skill that opened it, its title, the row's text, priority, due instant and Anker — the run's case's `malo`/`melo`/`process` key. Read under the worklist's verb; the Desk's Hinweise |
+| `GET /api/v1/vorschlaege?freigabe=<id>,…` | Each Freigabe's waiting proposal — its run's answer (`running`, or concluded with the checked `vorschlag`), or `null` where none was admitted; at most 100 ids. Starts no run. `api:run.read` |
 | `GET /api/v1/runs/{run}/antwort` | The answer sentence by sentence, each with its cited call and `belegt` (Belegprüfung); the run's `schritte` (also while running); a `vorschlag` on a Freigabe; the reader's `hilfreich`. Read under `api:run.read` |
 | `POST /api/v1/runs/{run}/bewertung` | `{hilfreich, begruendung?}` or `{vorschlag: sent\|edited\|dismissed}`, recorded as an assessment beside the concluded run under the caller's name; a later one replaces it. `204`, `409` while running. `api:run.assess` |
 | `POST /api/v1/runs` | Start a specialist by hand (OIDC JWT **and** Cedar `api:run.start`; honours `Idempotency-Key`). Admits durably, then answers `202` with the run ids; an unknown body field is `422` |
@@ -213,6 +214,15 @@ reads and never acts: a proposed decision only fills the Desk's form, and the
 person sends it. Each answer and Hinweis takes a „Hilfreich?" verdict, and a
 proposal records whether it was sent, edited or dismissed
 (`POST /api/v1/runs/{run}/bewertung`).
+
+A Freigabe's proposal is computed before anyone asks. Every
+`[vorschlaege] intervall_secs` agentd reads processd's open Freigaben
+(`list_pending_approvals`) and starts one `desk-assistant` run per entry, asked
+„Was schlägst du vor?". The admission is keyed on the entry id, so a second
+tick, a restart or a second instance starts no second run; the Desk reads the
+result at `GET /api/v1/vorschlaege`. `automatisch = false` leaves the
+proposal to a person's question. It needs the `processd` MCP server and the
+`desk-assistant` activated; without either, the startup log says so.
 
 Controls on that surface:
 
@@ -410,7 +420,7 @@ graph TB
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 11 services, 165 tools"]
+    subgraph tools ["MCP Tools — 11 services, 166 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · processd"]
         T3["einsd · netzbilanzd · ..."]
@@ -479,8 +489,8 @@ procedure by `cargo xtask check-prompt-tools`.
 
 | Specialist | Capability | Shape | Reach | Subscribes to |
 |---|---|---|---|---|
-| `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
-| `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
+| `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.mako.aperak.*` |
+| `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.obs.deadline.approaching` |
 | `desk-assistant` | `desk.assistant` | `tool-calling` | 5 on makod, processd, vertragd | none — started from the Desk by a person's question (`POST /api/v1/runs`); every sentence cites its call and is checked (`GET /api/v1/runs/{run}/antwort`); on a held decision it may propose one, which the Desk prefills and never sends |
 | `billing-agent` | `billing` | `tool-calling` | 9 on accountingd, billingd, invoicd, marktd | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
 | `netzbilanz-agent` | `netzbilanz` | `tool-calling` | 7 on marktd, netzbilanzd | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue`, `de.netzbilanz.invoic.disputed` |
@@ -632,6 +642,13 @@ audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
 
 [http]
 addr = "0.0.0.0:9580"
+
+# ── Proposals ─────────────────────────────────────────────────────────────────
+# One desk-assistant run per open Freigabe, admitted once per entry, so the
+# proposal waits in the Desk. Each is a model run; off, it runs on request only.
+[vorschlaege]
+automatisch    = true   # default
+intervall_secs = 60     # default; how often processd's queue is read; 0 is refused
 
 # ── Back-pressure ─────────────────────────────────────────────────────────────
 # Per-tenant, reserved in the store at admission, so it holds across instances.

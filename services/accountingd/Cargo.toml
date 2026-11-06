@@ -53,6 +53,7 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal", "migrate", "macros"] }
 tokio = { version = "1", features = ["full", "test-util"] }
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true

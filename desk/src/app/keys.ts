@@ -46,14 +46,14 @@ const letter = (k: string) => (e: KeyboardEvent) =>
 
 export const NAECHSTE: Shortcut = {
   keys: "J",
-  label: "Nächste Freigabe",
-  group: "Freigaben",
+  label: "Nächster Eintrag",
+  group: "Listen",
   match: letter("j"),
 };
 export const VORIGE: Shortcut = {
   keys: "K",
-  label: "Vorige Freigabe",
-  group: "Freigaben",
+  label: "Voriger Eintrag",
+  group: "Listen",
   match: letter("k"),
 };
 export const FREIGEBEN: Shortcut = {
@@ -67,6 +67,13 @@ export const ABLEHNEN: Shortcut = {
   label: "Ablehnen wählen",
   group: "Freigaben",
   match: letter("r"),
+};
+
+export const UEBERNEHMEN: Shortcut = {
+  keys: "U",
+  label: "Vorschlag des Assistenten übernehmen",
+  group: "Freigaben",
+  match: letter("u"),
 };
 
 /**
@@ -100,5 +107,6 @@ export const SHORTCUTS: Shortcut[] = [
   VORIGE,
   FREIGEBEN,
   ABLEHNEN,
+  UEBERNEHMEN,
   { keys: "↵", label: "Senden bestätigen", group: "Freigaben" },
 ];

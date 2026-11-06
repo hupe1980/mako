@@ -581,6 +581,13 @@ fields. Inside `geschaeftspartner` they are absorbed as unvalidated extension
 fields and read back as nothing — put them at the top level. AS4 endpoints go
 in `makoadresse`.
 
+`edi_zustimmung` and `edi_extrahierbar` record what an outbound INVOIC to this
+partner rests on: the partner's Zustimmung to EDI invoices, and whether the
+agreed format extracts into EN 16931 (§ 14 Abs. 1 Satz 6 Nr. 2 UStG). Whether
+EDI@Energy INVOIC does is not settled, so the operator records it per partner;
+`null` is „not recorded", and
+[makod](@/docs/services/makod.md#outbound-invoic-and-the-e-rechnung) refuses on it.
+
 ```bash
 # `mp_id` may be omitted — the path names the partner — and is refused if it differs.
 curl -s -X PUT "http://marktd:8180/api/v1/partners/9904234560001" \
@@ -592,6 +599,8 @@ curl -s -X PUT "http://marktd:8180/api/v1/partners/9904234560001" \
     "rollencodetyp": "BDEW",
     "sparte":        "STROM",
     "makoadresse":   ["https://as4.muster-ev.de/as4/in"],
+    "edi_zustimmung":   true,
+    "edi_extrahierbar": false,
     "geschaeftspartner": {
       "_typ": "GESCHAEFTSPARTNER",
       "anrede": "FRAU",
@@ -1291,7 +1300,7 @@ Source: `urn:mako:marktd:tenant:{tenant}`.
 
 Relayed from makod unchanged: `de.mako.process.initiated`,
 `de.mako.process.completed`, `de.mako.process.failed`,
-`de.mako.aperak.accepted`, `de.mako.aperak.rejected`, `de.mako.aperak.timeout`.
+`de.mako.aperak.accepted`, `de.mako.aperak.rejected`, `de.mako.antwortfrist.abgelaufen`.
 
 | Extension | Meaning |
 |---|---|

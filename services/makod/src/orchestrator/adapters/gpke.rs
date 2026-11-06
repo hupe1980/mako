@@ -334,8 +334,8 @@ pub fn gpke_abrechnung_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
 /// confirming or partially disputing the payment.  `makod` resumes the billing
 /// process with [`InvoicCommand::ReceiveRemadv`].
 ///
-/// **Correlation**: `extract_invoice_ref_from_remadv` reads `RFF+Z13:<invoice_ref>` to
-/// map back to the spawned billing process.
+/// **Correlation**: `extract_invoice_ref_from_remadv` reads the Rechnungsnummer
+/// from `DOC` DE1004 to map back to the billing process.
 ///
 /// Source: REMADV AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
 #[must_use]
@@ -381,7 +381,7 @@ pub fn gpke_abrechnung_remadv_registry() -> AdapterRegistry<GpkeAbrechnungWorkfl
 /// COMDIS 29001 (Ablehnung der Zahlung).  `makod` resumes the billing process
 /// with [`InvoicCommand::ReceiveComdis`].
 ///
-/// **Correlation**: `extract_invoice_ref_from_comdis` reads `RFF+Z13:<invoice_ref>`.
+/// **Correlation**: `extract_invoice_ref_from_comdis` reads `DOC` DE1004.
 ///
 /// Source: COMDIS AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
 #[must_use]

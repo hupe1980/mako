@@ -95,8 +95,6 @@ fn the_declared_list_matches_the_authorize_calls() {
             Some(&before[start + 1..])
         })
         .collect();
-    // The selbstausstellen handler lives in its own module.
-    called.push("dispatch-selbstausstellen");
     // The MCP surface is gated by `McpAuth`, which checks `use-mcp`.
     called.push("use-mcp");
     called.sort_unstable();

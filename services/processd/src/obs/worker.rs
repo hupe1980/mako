@@ -161,10 +161,9 @@ impl SweepOutcome {
 /// longer than the warn window produces no event at all, in the case where the
 /// alert matters most.
 ///
-/// `aperak_timeout` rows are **not** excluded: a counterparty that missed the
-/// 45-minute acknowledgement still owes the business answer, and is the one most
-/// likely to miss it. Excluding them would also disagree with
-/// `list_overdue_processes`, which does not.
+/// `antwortfrist_abgelaufen` rows are **not** excluded: the process is still
+/// open past its Frist and still owes the answer. Excluding them would also
+/// disagree with `list_overdue_processes`, which does not.
 pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<SweepOutcome, sqlx::Error> {
     let rows = sqlx::query(&format!(
         r"SELECT process_id, pid, family, workflow_name, malo_id, partner_mp_id,

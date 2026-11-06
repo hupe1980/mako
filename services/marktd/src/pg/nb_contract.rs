@@ -1,9 +1,6 @@
-//! PostgreSQL implementation of [`NbContractRepository`].
+//! PostgreSQL storage: [`PgNbContractRepository`].
 
-use mako_markt::{
-    error::MdmError,
-    repository::{NbContractRecord, NbContractRepository},
-};
+use mako_markt::{error::MdmError, repository::NbContractRecord};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
 /// PostgreSQL-backed NB network contract repository.
@@ -23,8 +20,9 @@ const SELECT_COLS: &str = "contract_id, malo_id, nb_mp_id, sparte, netzebene, \
     bilanzierungsmethode, billing_schedule, netznutzer_mp_id, netznutzer_typ, \
     valid_from, valid_to, version, tenant, data, vertragsart, vertragsstatus";
 
-impl NbContractRepository for PgNbContractRepository {
-    async fn upsert(&self, rec: NbContractRecord) -> Result<i64, MdmError> {
+impl PgNbContractRepository {
+    /// Upsert a NB contract record.  Returns the new version number.
+    pub async fn upsert(&self, rec: NbContractRecord) -> Result<i64, MdmError> {
         // Scoped like every other read here: `contract_id` comes from the
         // request path and is unique across the whole table, so the version a
         // tenant-less read returns is another tenant's.
@@ -100,7 +98,8 @@ impl NbContractRepository for PgNbContractRepository {
         Ok(new_version)
     }
 
-    async fn find(
+    /// Find a contract by `contract_id`.
+    pub async fn find(
         &self,
         contract_id: &str,
         tenant: &str,
@@ -117,7 +116,11 @@ impl NbContractRepository for PgNbContractRepository {
         Ok(row.map(row_to_rec))
     }
 
-    async fn find_active(
+    /// Find the contract active on `date` for `malo_id` within `tenant`.
+    ///
+    /// Returns the most recent contract whose `valid_from ≤ date < valid_to`
+    /// (or `valid_to IS NULL`).
+    pub async fn find_active(
         &self,
         malo_id: &str,
         date: time::Date,
@@ -142,7 +145,8 @@ impl NbContractRepository for PgNbContractRepository {
         Ok(row.map(row_to_rec))
     }
 
-    async fn list_by_nb(
+    /// List all NB contracts for a given `nb_mp_id` and `tenant`.
+    pub async fn list_by_nb(
         &self,
         nb_mp_id: &str,
         tenant: &str,

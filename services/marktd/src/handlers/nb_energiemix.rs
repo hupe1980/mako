@@ -34,15 +34,18 @@ use mako_service::ApiError;
 use mako_service::Json;
 use rubo4e::current::Energiemix;
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row as _};
+use sqlx::PgPool;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use utoipa::IntoParams;
 
 use std::sync::Arc;
 
 use mako_service::cedar::CedarEnforcer;
 
-use super::{Claims, Tenant};
+use super::{Claims, Tenant, mdm_error};
+use crate::pg::PgNbEnergiemixRepository;
+use crate::pg::nb_energiemix::NbEnergiemixWrite;
 
 // ── DTOs ─────────────────────────────────────────────────────────────────────
 
@@ -153,27 +156,17 @@ pub async fn put_nb_energiemix(
         .gueltig_fuer
         .unwrap_or_else(|| mako_fristen::heute().year() as i16);
 
-    match sqlx::query(
-        r"INSERT INTO nb_energiemix
-              (nb_mp_id, tenant, gueltig_fuer, energiemix,
-               eeg_einspeisung_kwh, gesamtentnahme_kwh, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, now())
-          ON CONFLICT (tenant, nb_mp_id, gueltig_fuer) DO UPDATE
-          SET energiemix            = EXCLUDED.energiemix,
-              eeg_einspeisung_kwh   = COALESCE(EXCLUDED.eeg_einspeisung_kwh, nb_energiemix.eeg_einspeisung_kwh),
-              gesamtentnahme_kwh    = COALESCE(EXCLUDED.gesamtentnahme_kwh,  nb_energiemix.gesamtentnahme_kwh),
-              updated_at            = now()",
-    )
-    .bind(&nb_mp_id)
-    .bind(&tenant)
-    .bind(year)
-    .bind(&canonical)
-    .bind(req.eeg_einspeisung_kwh)
-    .bind(req.gesamtentnahme_kwh)
-    .execute(&pool)
-    .await
-    {
-        Ok(_) => (
+    let repo = PgNbEnergiemixRepository::new(pool);
+    let write = NbEnergiemixWrite {
+        tenant: &tenant,
+        nb_mp_id: &nb_mp_id,
+        gueltig_fuer: year,
+        energiemix: &canonical,
+        eeg_einspeisung_kwh: req.eeg_einspeisung_kwh,
+        gesamtentnahme_kwh: req.gesamtentnahme_kwh,
+    };
+    match repo.upsert(&write).await {
+        Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "nb_mp_id": nb_mp_id,
@@ -182,7 +175,7 @@ pub async fn put_nb_energiemix(
             })),
         )
             .into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }
 
@@ -208,67 +201,36 @@ pub async fn get_nb_energiemix(
     {
         return ApiError::forbidden("read-energiemix denied").into_response();
     }
-    let row = if let Some(year) = q.year {
-        sqlx::query(
-            r"SELECT nb_mp_id, gueltig_fuer, energiemix,
-                     eeg_einspeisung_kwh, gesamtentnahme_kwh, updated_at
-              FROM nb_energiemix
-              WHERE nb_mp_id = $1 AND tenant = $2 AND gueltig_fuer = $3",
-        )
-        .bind(&nb_mp_id)
-        .bind(&tenant)
-        .bind(year)
-        .fetch_optional(&pool)
+    let record = match PgNbEnergiemixRepository::new(pool)
+        .find(&tenant, &nb_mp_id, q.year)
         .await
-    } else {
-        // Return the most recent available year.
-        sqlx::query(
-            r"SELECT nb_mp_id, gueltig_fuer, energiemix,
-                     eeg_einspeisung_kwh, gesamtentnahme_kwh, updated_at
-              FROM nb_energiemix
-              WHERE nb_mp_id = $1 AND tenant = $2
-              ORDER BY gueltig_fuer DESC
-              LIMIT 1",
-        )
-        .bind(&nb_mp_id)
-        .bind(&tenant)
-        .fetch_optional(&pool)
-        .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) => return ApiError::NotFound.into_response(),
+        Err(e) => return mdm_error(e).into_response(),
     };
-
-    match row {
-        Ok(None) => ApiError::NotFound.into_response(),
-        Ok(Some(r)) => {
-            let energiemix_json: serde_json::Value = r.try_get("energiemix").unwrap_or_default();
-            // A stored row can predate the current schema series, so a read is
-            // drift-tolerant — but it says so. `unwrap_or_default()` here
-            // returned an *empty* Energiemix, which is a §42 EnWG
-            // Stromkennzeichnung disclosure with no energy sources in it, served
-            // with a 200 and no way to tell it from a genuine one.
-            let typed: Energiemix =
-                serde_json::from_value(energiemix_json.clone()).unwrap_or_else(|e| {
-                    tracing::error!(
-                        nb_mp_id = %nb_mp_id,
-                        error = %e,
-                        "schema drift: the stored Reststrommix is not a valid BO4E \
-                         Energiemix — re-PUT it; serving an empty disclosure"
-                    );
-                    Energiemix::default()
-                });
-            let resp = NbEnergiemixResponse {
-                nb_mp_id: r.try_get("nb_mp_id").unwrap_or_default(),
-                gueltig_fuer: r.try_get("gueltig_fuer").unwrap_or_default(),
-                energiemix: typed,
-                eeg_einspeisung_kwh: r.try_get("eeg_einspeisung_kwh").unwrap_or(None),
-                gesamtentnahme_kwh: r.try_get("gesamtentnahme_kwh").unwrap_or(None),
-                updated_at: r
-                    .try_get("updated_at")
-                    .unwrap_or_else(|_| OffsetDateTime::now_utc()),
-            };
-            Json(resp).into_response()
-        }
-        Err(e) => ApiError::internal(e).into_response(),
-    }
+    // A stored row can predate the current schema series, so a read is
+    // drift-tolerant — but it says so. An *empty* Energiemix is a §42 EnWG
+    // Stromkennzeichnung disclosure with no energy sources in it, served
+    // with a 200 and no way to tell it from a genuine one.
+    let typed: Energiemix = serde_json::from_value(record.energiemix).unwrap_or_else(|e| {
+        tracing::error!(
+            nb_mp_id = %nb_mp_id,
+            error = %e,
+            "schema drift: the stored Reststrommix is not a valid BO4E \
+             Energiemix — re-PUT it; serving an empty disclosure"
+        );
+        Energiemix::default()
+    });
+    Json(NbEnergiemixResponse {
+        nb_mp_id: record.nb_mp_id,
+        gueltig_fuer: record.gueltig_fuer,
+        energiemix: typed,
+        eeg_einspeisung_kwh: record.eeg_einspeisung_kwh,
+        gesamtentnahme_kwh: record.gesamtentnahme_kwh,
+        updated_at: record.updated_at,
+    })
+    .into_response()
 }
 
 /// `GET /api/v1/energiemix/{nb_mp_id}/history`
@@ -288,37 +250,26 @@ pub async fn get_nb_energiemix_history(
     {
         return ApiError::forbidden("read-energiemix denied").into_response();
     }
-    let rows = sqlx::query(
-        r"SELECT nb_mp_id, gueltig_fuer, energiemix,
-                 eeg_einspeisung_kwh, gesamtentnahme_kwh, updated_at
-          FROM nb_energiemix
-          WHERE nb_mp_id = $1 AND tenant = $2
-          ORDER BY gueltig_fuer DESC",
-    )
-    .bind(&nb_mp_id)
-    .bind(&tenant)
-    .fetch_all(&pool)
-    .await;
-
-    match rows {
+    match PgNbEnergiemixRepository::new(pool)
+        .history(&tenant, &nb_mp_id)
+        .await
+    {
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows
-                .iter()
+                .into_iter()
                 .map(|r| {
                     serde_json::json!({
-                        "nb_mp_id":              r.try_get::<String, _>("nb_mp_id").unwrap_or_default(),
-                        "gueltig_fuer":          r.try_get::<i16, _>("gueltig_fuer").unwrap_or_default(),
-                        "energiemix":            r.try_get::<serde_json::Value, _>("energiemix").unwrap_or_default(),
-                        "eeg_einspeisung_kwh":   r.try_get::<Option<i64>, _>("eeg_einspeisung_kwh").unwrap_or(None),
-                        "gesamtentnahme_kwh":    r.try_get::<Option<i64>, _>("gesamtentnahme_kwh").unwrap_or(None),
-                        "updated_at":            r.try_get::<OffsetDateTime, _>("updated_at")
-                                                    .map(|t| t.to_string())
-                                                    .unwrap_or_default(),
+                        "nb_mp_id":            r.nb_mp_id,
+                        "gueltig_fuer":        r.gueltig_fuer,
+                        "energiemix":          r.energiemix,
+                        "eeg_einspeisung_kwh": r.eeg_einspeisung_kwh,
+                        "gesamtentnahme_kwh":  r.gesamtentnahme_kwh,
+                        "updated_at":          r.updated_at.format(&Rfc3339).unwrap_or_default(),
                     })
                 })
                 .collect();
             Json(serde_json::json!({ "nb_mp_id": nb_mp_id, "history": items })).into_response()
         }
-        Err(e) => ApiError::internal(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }

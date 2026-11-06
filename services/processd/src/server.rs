@@ -224,7 +224,8 @@ pub struct RunConfig {
     /// Event types to subscribe to — the union every module reads.
     pub subscriber_event_types: Vec<String>,
     /// Every operator MP-ID, for the read model's § 7a Abs. 5 EnWG evidence.
-    pub own_mp_ids: Vec<String>,
+    /// `[identity] verbundene_lieferanten`.
+    pub verbundene_lieferanten: Vec<String>,
     /// `[obs]` — the read model's `de.obs.*` producers.
     pub obs_outbound_url: Option<String>,
     pub obs_outbound_secret: Option<SecretString>,
@@ -381,6 +382,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             marktd_url: cfg.marktd_url.clone(),
             marktd_api_key: cfg.marktd_api_key.clone(),
             own_mp_id: cfg.own_mp_id.clone(),
+            verbundene_lieferanten: cfg.verbundene_lieferanten.iter().cloned().collect(),
             tenant: cfg.tenant.clone(),
             auto_accept: cfg.nb_auto_accept,
             gas_bearbeitungsfrist_wt: cfg.nb_gas_bearbeitungsfrist_wt,
@@ -473,17 +475,12 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
 
     // ── Process read model ─────────────────────────────────────────────────
     //
-    // § 7a Abs. 5 EnWG: the affiliate-detection set is every MP-ID the
-    // operator acts under, falling back to the primary one.
-    let own_mp_ids: std::collections::HashSet<String> = if cfg.own_mp_ids.is_empty() {
-        std::iter::once(cfg.own_mp_id.clone()).collect()
-    } else {
-        cfg.own_mp_ids.iter().cloned().collect()
-    };
+    // § 7a Abs. 5 EnWG: the affiliated Lieferanten, the same list the NB
+    // module decides on.
     let obs_state = crate::obs::project::ObsState {
         repo: crate::obs::pg::PgProcessProjectionRepository::new(pool.clone()),
         tenant: cfg.tenant.clone(),
-        own_mp_ids: Arc::new(own_mp_ids),
+        verbundene_lieferanten: Arc::new(cfg.verbundene_lieferanten.iter().cloned().collect()),
     };
     if let Some(outbound_url) = cfg.obs_outbound_url.clone() {
         use secrecy::ExposeSecret as _;

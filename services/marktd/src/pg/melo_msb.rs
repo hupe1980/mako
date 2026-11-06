@@ -1,10 +1,7 @@
-//! PostgreSQL implementation of `MeloMsbRepository` — the per-Messlokation
+//! PostgreSQL storage: [`PgMeloMsbRepository`] — the per-Messlokation
 //! dated MSB timeline (WiM Teil 2 UC 4.1.1 historical Werteanfrage routing).
 
-use mako_markt::{
-    error::MdmError,
-    repository::{MeloMsbRepository, MeloMsbZuordnung},
-};
+use mako_markt::{error::MdmError, repository::MeloMsbZuordnung};
 use sqlx::{PgPool, Row, postgres::PgRow};
 use time::Date;
 
@@ -31,7 +28,7 @@ fn map_row(row: &PgRow) -> Result<MeloMsbZuordnung, sqlx::Error> {
 }
 
 impl PgMeloMsbRepository {
-    /// [`MeloMsbRepository::assign_msb`] on a caller-supplied connection.
+    /// [`Self::assign_msb`] on a caller-supplied connection.
     ///
     /// The WiM Zuordnung is derived inside `event_ingest`'s transaction,
     /// alongside the idempotency marker and the durable outbox rows: a
@@ -100,8 +97,11 @@ impl PgMeloMsbRepository {
     }
 }
 
-impl MeloMsbRepository for PgMeloMsbRepository {
-    async fn assign_msb(
+impl PgMeloMsbRepository {
+    /// Record a new MSB assignment effective `valid_from`, closing the
+    /// previously-open assignment (`valid_to = valid_from`) atomically. A
+    /// re-assignment on an existing `valid_from` overwrites that row.
+    pub async fn assign_msb(
         &self,
         tenant: &str,
         melo_id: &str,
@@ -120,7 +120,9 @@ impl MeloMsbRepository for PgMeloMsbRepository {
         Ok(())
     }
 
-    async fn find_msb_at(
+    /// The MSB responsible for `melo_id` on `at` (point-in-time). `None` when no
+    /// assignment covers the date.
+    pub async fn find_msb_at(
         &self,
         tenant: &str,
         melo_id: &str,
@@ -142,7 +144,8 @@ impl MeloMsbRepository for PgMeloMsbRepository {
         Ok(row.map(|(m,)| m))
     }
 
-    async fn history(
+    /// Full assignment history for a MeLo, newest first.
+    pub async fn history(
         &self,
         tenant: &str,
         melo_id: &str,

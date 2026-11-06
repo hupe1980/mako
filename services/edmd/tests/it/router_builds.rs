@@ -32,6 +32,11 @@ async fn app() -> Option<(axum::Router, sqlx::PgPool, ContainerAsync<Postgres>)>
         toml::from_str(include_str!("../../../../demos/eeg-billing/edmd.toml"))
             .expect("the demo configuration parses");
     cfg["database"]["url"] = toml::Value::String(url);
+    // The deployment's own MSB, the operator of a Zählerstand an Ablesung files.
+    cfg["identity"]
+        .as_table_mut()
+        .expect("an [identity] table")
+        .insert("own_mp_id".to_owned(), "9900987654329".into());
     let cfg = cfg
         .try_into()
         .expect("the demo configuration is an edmd one");
@@ -253,4 +258,110 @@ async fn a_virtual_meter_with_an_unknown_key_is_refused() {
     .await
     .expect("the configuration is stored");
     assert_eq!(legal_basis.as_deref(), Some("§42b EnWG"));
+}
+
+/// Insert an open Ablesung for `obis_code` on a meter, returning its id.
+async fn open_reading_order(pool: &sqlx::PgPool, obis_code: &str) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO ablese_auftraege
+             (malo_id, melo_id, tenant, anlass, auftraggeber_rolle, geplant_am, obis_code)
+         VALUES ('51238696012', 'DE0001234567890123456789012345678', '9900357000004',
+                 'ZWISCHENABLESUNG', 'LF', DATE '2026-07-01', $1)
+         RETURNING id",
+    )
+    .bind(obis_code)
+    .fetch_one(pool)
+    .await
+    .expect("insert the reading order")
+}
+
+async fn order_status(pool: &sqlx::PgPool, id: uuid::Uuid) -> String {
+    sqlx::query_scalar("SELECT status FROM ablese_auftraege WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("the order is there")
+}
+
+/// Completing an Ablesung sets the order `AUSGEFUEHRT` and files its
+/// Zählerstand as one write: when the Zählerstand cannot be filed, the order
+/// stays open. A completed order whose reading never reached the reading store
+/// is invisible to billing and is never re-dispatched, because nothing marks it
+/// as owing a value. The fault is an order whose register is not an OBIS code,
+/// which the reading store refuses after the order row has been updated.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_reading_that_cannot_be_filed_leaves_the_order_open() {
+    let Some((app, pool, _pg)) = app().await else {
+        return;
+    };
+    let id = open_reading_order(&pool, "not-an-obis-code").await;
+
+    let (status, body) = call(
+        app,
+        json_request(
+            "PUT",
+            &format!("/api/v1/reading-orders/{id}/complete"),
+            &serde_json::json!({
+                "zaehlerstand_kwh": "12345.6",
+                "abgelesen_am": "2026-07-01T08:00:00Z",
+            }),
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{status}: {body}");
+    assert_eq!(order_status(&pool, id).await, "OFFEN", "{body}");
+}
+
+/// The other half: a Zählerstand that is filed completes the order.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_filed_reading_completes_the_order() {
+    let Some((app, pool, _pg)) = app().await else {
+        return;
+    };
+    let id = open_reading_order(&pool, "1-0:1.8.0").await;
+
+    let (status, body) = call(
+        app,
+        json_request(
+            "PUT",
+            &format!("/api/v1/reading-orders/{id}/complete"),
+            &serde_json::json!({
+                "zaehlerstand_kwh": "12345.6",
+                "abgelesen_am": "2026-07-01T08:00:00Z",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(order_status(&pool, id).await, "AUSGEFUEHRT");
+}
+
+/// A refused completion changes nothing: a Strom order reported with a volume
+/// register is a decode fault, answered 422, and the order stays open for the
+/// reading it is still owed.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_refused_completion_leaves_the_order_open() {
+    let Some((app, pool, _pg)) = app().await else {
+        return;
+    };
+    let id = open_reading_order(&pool, "1-0:1.8.0").await;
+
+    let (status, body) = call(
+        app,
+        json_request(
+            "PUT",
+            &format!("/api/v1/reading-orders/{id}/complete"),
+            &serde_json::json!({ "zaehlerstand_qm3": "812.4" }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "{body}"
+    );
+    assert_eq!(order_status(&pool, id).await, "OFFEN", "{body}");
 }

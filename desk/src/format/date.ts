@@ -57,3 +57,19 @@ export function formatBusinessDate(day: BusinessDate): string {
 export function epochMs(at: Instant): number {
   return Date.parse(at);
 }
+
+const berlinYmd = new Intl.DateTimeFormat("en-CA", {
+  timeZone: BERLIN,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+/**
+ * The Berlin calendar day an epoch instant falls on, as a day number — for
+ * asking whether two instants share a day, never for display.
+ */
+export function berlinDayNumber(ms: number): number {
+  const [y = 0, m = 1, d = 1] = berlinYmd.format(ms).split("-").map(Number);
+  return Date.UTC(y, m - 1, d) / 86_400_000;
+}

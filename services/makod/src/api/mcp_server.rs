@@ -2065,6 +2065,19 @@ fn dispatch_error_to_string(e: crate::commands_api::DispatchError) -> String {
         DispatchError::NotImplemented(cmd) => {
             format!("not_implemented: Command '{cmd}' is registered but not yet dispatchable.")
         }
+        DispatchError::EdiUnzulaessig(msg) => format!("edi_unzulaessig: {msg}"),
+        DispatchError::MarktdUnavailable(_) => "marktd_unavailable: marktd, which holds the \
+             recipient's EDI agreement, did not answer — retry."
+            .to_owned(),
+        DispatchError::InvoicNichtDarstellbar { message, .. } => {
+            format!("invoic_nicht_darstellbar: {message}")
+        }
+        DispatchError::DuplicateInvoice {
+            process_id,
+            invoice_ref,
+        } => format!(
+            "duplicate_invoice: Invoice '{invoice_ref}' was already issued by process {process_id}."
+        ),
     }
 }
 

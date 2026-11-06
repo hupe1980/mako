@@ -121,10 +121,12 @@ yours is not sent. Any other refusal is shown in the Prozessüberwachung's own
 words; one its policy makes stands where the controls were until the tab is
 closed.
 
-Ask the assistant „Was schlägst du vor?" and it may propose a decision — an
-action, a code and one sentence why, checked like every sentence it writes.
-„In die Entscheidung übernehmen" fills the form and sends nothing; you check
-it and send it yourself. Whether you sent the proposal as it was, changed it
+The assistant has usually proposed a decision before you open one: once for
+every Freigabe, as it is queued — an action, a code and one sentence why,
+marked „AI-generated." and checked like every sentence it writes. It stands
+at the top of the decision; <kbd>U</kbd> or „In die Entscheidung übernehmen"
+fills the form and sends nothing; you check it and send it yourself. Where it
+has not proposed one, ask it „Was schlägst du vor?". Whether you sent the proposal as it was, changed it
 or dismissed it is kept beside the assistant's run, which is how its proposals
 are measured.
 
@@ -157,23 +159,38 @@ the Prozessüberwachung has it, each with the Festlegung its deadline came from.
 
 ## Heute
 
-Wearing **Lieferant**, the Desk opens on **Heute**. On top is the **Lage**,
-the day in a few lines: how many Fristen end today and the earliest one's
-time, how many are already overdue, how many Anmeldungen wait and how many
-are not yet sent. Every figure is the Prozessüberwachung's or the
-Kundenverwaltung's own count — no model writes the Lage — and each line
-opens the list it counts.
+Every Rolle opens on **Heute**: everything that waits on you, in one list.
+Each item is something a service holds open for this Rolle:
 
-Below it, every Anmeldung waiting
-for the Netzbetreiber, the one whose Frist runs out first on top — the Prozessüberwachung
-sorts them, fifty at a time, so the most urgent is on top however many are
-open. Below, the Anmeldungen no process carries yet, with the Kundenverwaltung's count.
+| Rolle | What Heute lists |
+|---|---|
+| Netz | Freigaben, overdue processes, Korrekturbedarf after a negative Prüfmitteilung |
+| Lieferant | Anmeldungen waiting on the Netzbetreiber, Freigaben, overdue processes, disputed invoices, invoices held for review, Anmeldungen not yet sent |
+| Messstelle | Freigaben, overdue processes, overdue reading orders |
+| Energieservice | Freigaben, overdue processes |
 
-Heute stays fast at any size: a page costs one read for the order and one
-for its names, never a request per row.
+The list is read in bands — **Überfällig**, **Heute**, **Nächste 7 Tage**,
+**Später**, **Ohne Frist** — by the Frist each service returned; the Desk
+computes none. A row names the customer where one is known, says in the
+service's words why it waits, and opens what it is about.
 
-[![Heute: the urgent Anmeldung first](heute-light.png)](heute-light.png)
-[![Heute: the urgent Anmeldung first](heute-dark.png)](heute-dark.png)
+A Freigabe is decided where it stands: <kbd>↵</kbd> opens the decision under
+the row — <kbd>A</kbd> or <kbd>R</kbd>, the code, the confirm — and Heute
+stays on screen. The assistant's proposal waits under the row;
+<kbd>U</kbd> opens the decision with it taken in, unsent.
+
+The assistant works in the same list. Its Hinweis on a MaLo or process sits
+under that item, „Hilfreich?" beside it while the item has focus; one no item
+carries is an item of its own. <kbd>J</kbd> and
+<kbd>K</kbd> or the arrows move, <kbd>↵</kbd> opens, and <kbd>⌘J</kbd> asks the
+assistant about the item you are on.
+
+Under the list each source says how many it returned, or why it did not
+answer — one unreachable service never empties Heute. As Lieferant the
+**Lage** heads the page: the day in the services' own counts, no model in it.
+
+[![Heute as Lieferant: the Lage, then the items in Frist bands, a Hinweis of the assistant under the item it concerns](heute-light.png)](heute-light.png)
+[![Heute as Lieferant: the Lage, then the items in Frist bands, a Hinweis of the assistant under the item it concerns](heute-dark.png)](heute-dark.png)
 
 ## The Lieferant starts from the customer
 

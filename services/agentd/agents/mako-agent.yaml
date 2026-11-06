@@ -36,7 +36,7 @@ spec:
 
       ## TRIGGERED BY
       - `de.mako.process.failed` — process timed out or returned error
-      - `de.mako.aperak.timeout` — APERAK deadline missed (APERAK AHB §2.3/§2.4.1: Strom UTILMD/ORDERS 45 Minuten an jedem Tag außer Samstag — § 2.4.1 nennt sie unqualifiziert und nimmt allein den Samstag aus, der Sonntag ist kein Sonderfall; Gas Folgeprozesse nächster Werktag 12:00, Initialprozesse 3 Werktage)
+      - `de.mako.antwortfrist.abgelaufen` — the counterparty let the business Antwortfrist of a Wechselprozess lapse (`mako_fristen::antwort`; GPKE Teil 2, GeLi Gas Kap. 3.1–3.3). Not an APERAK delivery window — that reaches no workflow and is makod's own alert
       - `de.mako.aperak.*` — APERAK events
 
       ## STEP-BY-STEP PROCEDURE

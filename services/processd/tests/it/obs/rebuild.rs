@@ -50,7 +50,7 @@ fn state(pool: &sqlx::PgPool) -> ObsState {
     ObsState {
         repo: processd::obs::pg::PgProcessProjectionRepository::new(pool.clone()),
         tenant: TENANT.to_owned(),
-        own_mp_ids: Arc::new(HashSet::from([TENANT.to_owned()])),
+        verbundene_lieferanten: Arc::new(HashSet::from([TENANT.to_owned()])),
     }
 }
 
@@ -153,7 +153,7 @@ fn replay_log() -> Vec<Logged> {
         ),
         event(
             8,
-            "de.mako.aperak.timeout",
+            "de.mako.antwortfrist.abgelaufen",
             p4,
             55_010,
             datetime!(2026-09-02 08:00 UTC),

@@ -201,6 +201,13 @@ impl Daemon for Agentd {
                 .await
                 .context("connect MCP tool transports")?;
 
+        // The proposal tick reads processd's queue over the transport the
+        // manifests' processd grants already use.
+        let processd_tools = tool_servers
+            .iter()
+            .find(|(name, _)| name == "processd")
+            .map(|(_, client)| Arc::clone(client));
+
         // Only specialists the operator activated are registered and routed. An
         // `enable` name that matches nothing compiled in refuses to boot rather
         // than presenting as an agent that never fires.
@@ -490,6 +497,28 @@ impl Daemon for Agentd {
             policy: policy_for_routes,
         });
 
+        // ── The proposal waiting on every Freigabe ───────────────────────
+        match (cfg.vorschlaege.automatisch, processd_tools) {
+            (false, _) => info!(
+                "agentd: [vorschlaege] automatisch = false — a Freigabe's proposal is computed \
+                 only when a person asks for one"
+            ),
+            (true, None) => warn!(
+                "agentd: [vorschlaege] automatisch is on but no `processd` MCP server is \
+                 configured — no Freigabe gets a waiting proposal"
+            ),
+            (true, Some(_)) if !activated.includes(crate::plane::vorschlag::SKILL) => warn!(
+                "agentd: [vorschlaege] automatisch is on but the desk-assistant is not \
+                 activated — no Freigabe gets a waiting proposal"
+            ),
+            (true, Some(processd)) => crate::plane::vorschlag::spawn(
+                Arc::clone(&state),
+                processd,
+                std::time::Duration::from_secs(cfg.vorschlaege.intervall_secs),
+                ctx.shutdown.clone(),
+            ),
+        }
+
         let mut app = Router::new()
             // CloudEvent ingest
             .route("/webhook", post(handlers::webhook))
@@ -498,6 +527,7 @@ impl Daemon for Agentd {
             .route("/api/v1/runs/{run}/antwort", get(handlers::answer))
             .route("/api/v1/runs/{run}/bewertung", post(handlers::bewerten))
             .route("/api/v1/hinweise", get(handlers::hinweise))
+            .route("/api/v1/vorschlaege", get(handlers::vorschlaege))
             .route("/api/v1/erasure", post(handlers::erase))
             // What this deployment runs, and what it could run
             .route("/api/v1/agents", get(handlers::list_agents))

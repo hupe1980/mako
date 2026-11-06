@@ -761,6 +761,12 @@ pub async fn sleep_or_cancel(
 /// | 3       | 40         | 20                |
 /// | 4       | 80         | 40                |
 /// | 5+      | 300 (cap)  | 150               |
+/// A deadline the scheduler counts in `makod_delivery_window_missed_total`
+/// when it fires: an APERAK or CONTRL delivery window, still registered.
+fn is_missed_delivery_window(label: &str) -> bool {
+    mako_fristen::is_delivery_window(label)
+}
+
 fn backoff_delay(attempt: u32, entropy: u64) -> std::time::Duration {
     const BASE_SECS: u64 = 5;
     const MAX_SECS: u64 = 300;
@@ -1404,29 +1410,29 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
                 let id = deadline.deadline_id();
                 let label = deadline.label().to_owned();
 
-                // An APERAK delivery window that reaches this point is a
-                // regulatory violation under APERAK AHB 1.1 §2.4.1 (Strom
-                // 45 min) / §2.3.1 (Gas 1 Werktag): the outbox worker discharges
-                // the window the moment the APERAK goes out, so one that is
-                // still registered when it comes due was never answered.
+                // A delivery window that reaches this point is a regulatory
+                // violation under APERAK AHB 1.1 §2.4.1 (Strom) / §2.3.1 (Gas)
+                // or CONTRL AHB 1.0 §2.3.1: the outbox worker discharges the
+                // window the moment its message goes out, so one that is still
+                // registered when it comes due was never answered.
                 //
                 // Do NOT re-test `now > due_at` here. `due_now` selects on
                 // `due_at <= now`, so that comparison is true by construction and
                 // says nothing about compliance — it was the reason this counter
                 // once tracked "Strom processes started" rather than "APERAKs
                 // missed". The discharge is what carries the meaning.
-                if label.starts_with(mako_fristen::APERAK_WINDOW_LABEL_PREFIX) {
+                if is_missed_delivery_window(&label) {
                     let now = time::OffsetDateTime::now_utc();
-                    crate::metrics::EngineMetrics::global().aperak_missed(&label);
+                    crate::metrics::EngineMetrics::global().delivery_window_missed(&label);
                     tracing::error!(
                         deadline_id = %id,
                         label       = %label,
                         due_at      = %deadline.due_at(),
                         fired_at    = %now,
                         overdue_secs = (now - deadline.due_at()).whole_seconds(),
-                        "APERAK delivery window closed with no delivery — regulatory \
-                         violation (APERAK AHB 1.1 §2.4.1 Strom / §2.3.1 Gas). \
-                         Counter: makod_aperak_missed_total",
+                        "delivery window closed with no delivery — regulatory \
+                         violation (APERAK AHB 1.1 §2.4.1 Strom / §2.3.1 Gas, \
+                         CONTRL AHB 1.0 §2.3.1). Counter: makod_delivery_window_missed_total",
                     );
                 }
 
@@ -2852,12 +2858,27 @@ mod tests {
         );
     }
 
+    /// Every delivery window that fires is counted as missed — the CONTRL one
+    /// as much as the three APERAK ones; a business Frist never is.
+    #[test]
+    fn every_delivery_window_counts_as_missed_and_no_business_frist_does() {
+        for label in [
+            mako_fristen::APERAK_STROM_WINDOW_LABEL,
+            mako_fristen::APERAK_GAS_FOLGEPROZESS_LABEL,
+            mako_fristen::APERAK_GAS_INITIALPROZESS_LABEL,
+            mako_fristen::CONTRL_FRIST_LABEL,
+        ] {
+            assert!(super::is_missed_delivery_window(label), "{label}");
+        }
+        assert!(!super::is_missed_delivery_window("antwortfrist"));
+    }
+
     /// Every delivery-window label must be discharged by the message it watches.
     ///
     /// This is the invariant the miss counters rest on. A window label that
     /// `discharges_delivery_window` does not recognise is never retired, so it
     /// fires on every process and is counted as a regulatory violation each
-    /// time — which is precisely how `makod_aperak_missed_total` once came to
+    /// time — which is precisely how `makod_delivery_window_missed_total` once came to
     /// count Strom processes rather than missed APERAKs.
     ///
     /// Adding a delivery window means adding a row here.

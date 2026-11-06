@@ -26,7 +26,7 @@ use axum::{
 };
 use mako_markt::{
     error::MdmError,
-    repository::{PageResult, TrancheRecord, TrancheRepository},
+    repository::{PageResult, TrancheRecord},
 };
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;

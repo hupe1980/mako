@@ -92,6 +92,9 @@ fn settlement_input(sparte: Sparte) -> serde_json::Value {
         jahreshoechstleistung_kw: None,
         jahresarbeit_kwh: None,
         tariff_sheet_id: None,
+        artikel_ids: std::collections::BTreeMap::new(),
+        lieferschein_ref: None,
+        preise_mp_id: None,
     })))
     .expect("serialize settlement input")
 }

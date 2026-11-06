@@ -1,13 +1,11 @@
-//! PostgreSQL implementation of [`PriCatRepository`].
+//! PostgreSQL storage: [`PgPriCatRepository`].
 //!
 //! Backed by the `pricat_versions` and `pricat_dispatch_log` tables
 //! (see `migrations/0001_initial.sql`).
 
 use mako_markt::{
     error::MdmError,
-    repository::{
-        PreisblattSource, PriCatDispatchEntry, PriCatDispatchState, PriCatRepository, PriCatVersion,
-    },
+    repository::{PreisblattSource, PriCatDispatchEntry, PriCatDispatchState, PriCatVersion},
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
 use time::Date;
@@ -132,10 +130,20 @@ fn state_str(state: &PriCatDispatchState) -> &'static str {
     }
 }
 
-// ── PriCatRepository impl ────────────────────────────────────────────────────
+// ── PgPriCatRepository methods ─────────────────────────────────────────────────
 
-impl PriCatRepository for PgPriCatRepository {
-    async fn upsert_version(
+impl PgPriCatRepository {
+    /// Insert or update a versioned PRICAT snapshot.
+    ///
+    /// Conflicts on `(nb_mp_id, tenant, valid_from)` perform an in-place update of
+    /// the payload and reset `dispatch_done_at` so the new version is re-dispatched.
+    ///
+    /// Returns the `UUID` of the upserted row.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
+    pub async fn upsert_version(
         &self,
         nb_mp_id: &str,
         tenant: &str,
@@ -163,7 +171,8 @@ impl PriCatRepository for PgPriCatRepository {
         .await
     }
 
-    async fn list_versions(
+    /// Return all PRICAT versions for the given NB GLN, newest first.
+    pub async fn list_versions(
         &self,
         nb_mp_id: &str,
         tenant: &str,
@@ -192,7 +201,8 @@ impl PriCatRepository for PgPriCatRepository {
         Ok(rows.iter().map(row_to_version).collect())
     }
 
-    async fn find_latest(
+    /// Return the single most-recent PRICAT version for the given NB.
+    pub async fn find_latest(
         &self,
         nb_mp_id: &str,
         tenant: &str,
@@ -222,7 +232,8 @@ impl PriCatRepository for PgPriCatRepository {
         Ok(row.as_ref().map(row_to_version))
     }
 
-    async fn list_pending(&self, tenant: &str) -> Result<Vec<PriCatVersion>, MdmError> {
+    /// Return all versions whose dispatch has not yet completed (state ≠ Done).
+    pub async fn list_pending(&self, tenant: &str) -> Result<Vec<PriCatVersion>, MdmError> {
         let rows = sqlx::query(
             r#"SELECT id, nb_mp_id, tenant, valid_from, valid_to, data, bo4e_version,
                       source,
@@ -246,7 +257,8 @@ impl PriCatRepository for PgPriCatRepository {
         Ok(rows.iter().map(row_to_version).collect())
     }
 
-    async fn mark_queued(&self, id: uuid::Uuid) -> Result<(), MdmError> {
+    /// Mark a version as queued for dispatch.
+    pub async fn mark_queued(&self, id: uuid::Uuid) -> Result<(), MdmError> {
         sqlx::query(
             "UPDATE pricat_versions SET dispatch_queued_at = now(), updated_at = now()
              WHERE id = $1",
@@ -258,7 +270,8 @@ impl PriCatRepository for PgPriCatRepository {
         Ok(())
     }
 
-    async fn mark_done(&self, id: uuid::Uuid) -> Result<(), MdmError> {
+    /// Mark a version as fully dispatched (all LF partners reached).
+    pub async fn mark_done(&self, id: uuid::Uuid) -> Result<(), MdmError> {
         sqlx::query(
             "UPDATE pricat_versions
              SET dispatch_done_at = now(), dispatch_error = NULL, updated_at = now()
@@ -271,7 +284,8 @@ impl PriCatRepository for PgPriCatRepository {
         Ok(())
     }
 
-    async fn mark_error(&self, id: uuid::Uuid, error: &str) -> Result<(), MdmError> {
+    /// Mark a version dispatch as failed with an error message.
+    pub async fn mark_error(&self, id: uuid::Uuid, error: &str) -> Result<(), MdmError> {
         sqlx::query(
             "UPDATE pricat_versions
              SET dispatch_error = $2, dispatch_queued_at = NULL, updated_at = now()
@@ -285,7 +299,8 @@ impl PriCatRepository for PgPriCatRepository {
         Ok(())
     }
 
-    async fn log_dispatch(&self, entry: PriCatDispatchEntry) -> Result<(), MdmError> {
+    /// Append a dispatch audit entry for one NB × LF dispatch attempt.
+    pub async fn log_dispatch(&self, entry: PriCatDispatchEntry) -> Result<(), MdmError> {
         sqlx::query(
             r#"INSERT INTO pricat_dispatch_log
                    (id, pricat_version_id, nb_mp_id, lf_mp_id, tenant, process_id,
@@ -307,7 +322,8 @@ impl PriCatRepository for PgPriCatRepository {
         Ok(())
     }
 
-    async fn dispatch_log(
+    /// Return dispatch log entries for the given PRICAT version.
+    pub async fn dispatch_log(
         &self,
         pricat_version_id: uuid::Uuid,
     ) -> Result<Vec<PriCatDispatchEntry>, MdmError> {
@@ -328,7 +344,7 @@ impl PriCatRepository for PgPriCatRepository {
 }
 
 // ── unused helper suppression ─────────────────────────────────────────────────
-// state_str is only used indirectly via the trait; keep a reference to silence
+// state_str has no caller; this reference keeps it from tripping the
 // dead_code lint without adding cfg(test).
 const _: fn() = || {
     let _ = state_str(&PriCatDispatchState::Pending);

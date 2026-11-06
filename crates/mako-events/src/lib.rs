@@ -65,8 +65,9 @@ pub mod mako {
     pub const APERAK_ACCEPTED: &str = "de.mako.aperak.accepted";
     /// APERAK rejected the outbound message (carries BDEW ERC code).
     pub const APERAK_REJECTED: &str = "de.mako.aperak.rejected";
-    /// APERAK deadline missed.
-    pub const APERAK_TIMEOUT: &str = "de.mako.aperak.timeout";
+    /// The business Antwortfrist of a Wechselprozess lapsed unanswered —
+    /// not an APERAK delivery window, which makod alerts on itself.
+    pub const ANTWORTFRIST_ABGELAUFEN: &str = "de.mako.antwortfrist.abgelaufen";
     /// CONTRL received for an outbound interchange.
     pub const CONTRL_RECEIVED: &str = "de.mako.contrl.received";
     /// MaLo identified during Lieferantenwechsel (GPKE identification step).
@@ -188,8 +189,6 @@ pub mod billing {
 pub mod invoic {
     /// Inbound INVOIC disputed (REMADV Ablehnung path).
     pub const RECEIPT_DISPUTED: &str = "de.invoic.receipt.disputed";
-    /// Inbound INVOIC dispatched to the ERP.
-    pub const RECEIPT_DISPATCHED: &str = "de.invoic.receipt.dispatched";
     /// Inbound INVOIC settled (REMADV Zahlungsavis).
     pub const RECEIPT_SETTLED: &str = "de.invoic.receipt.settled";
     /// Outbound INVOIC payment overdue (no REMADV in time).
@@ -652,7 +651,7 @@ pub fn all() -> &'static [&'static str] {
         mako::PROCESS_FAILED,
         mako::APERAK_ACCEPTED,
         mako::APERAK_REJECTED,
-        mako::APERAK_TIMEOUT,
+        mako::ANTWORTFRIST_ABGELAUFEN,
         mako::CONTRL_RECEIVED,
         mako::MALO_IDENTIFIED,
         mako::ABMELDEANFRAGE_BEANTWORTET,
@@ -686,7 +685,6 @@ pub fn all() -> &'static [&'static str] {
         billing::XRECHNUNG_B2G_READY,
         // de.invoic.*
         invoic::RECEIPT_DISPUTED,
-        invoic::RECEIPT_DISPATCHED,
         invoic::RECEIPT_SETTLED,
         invoic::PAYMENT_OVERDUE,
         // de.eeg.*

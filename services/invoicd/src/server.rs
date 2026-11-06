@@ -12,7 +12,6 @@
 //! | `GET` | `/api/v1/disputes` | `read-disputes` |
 //! | `GET` | `/api/v1/overdue-remadv` | `read-overdue-remadv` |
 //! | `GET` | `/api/v1/zahlungsstatus/{malo_id}` | `read-receipt` |
-//! | `POST` | `/api/v1/selbstausstellen` | `dispatch-selbstausstellen` |
 //! | `GET` | `/invoicd/metrics` | — (internal) |
 //!
 //! `/health/*` and the generic `/metrics` are the runner's and are not mounted
@@ -86,7 +85,6 @@ pub const CEDAR_ACTIONS: &[&str] = &[
     "read-disputes",
     "read-overdue-remadv",
     "write-receipt",
-    "dispatch-selbstausstellen",
     "use-mcp",
 ];
 
@@ -114,10 +112,6 @@ pub fn router(state: HandlerState) -> Router {
         .route("/api/v1/disputes", get(list_disputes))
         .route("/api/v1/overdue-remadv", get(list_overdue_remadv))
         .route("/api/v1/zahlungsstatus/{malo_id}", get(get_zahlungsstatus))
-        .route(
-            "/api/v1/selbstausstellen",
-            post(crate::selbstausstellen::post_selbstausstellen),
-        )
         .route("/invoicd/metrics", get(metrics))
         .with_state(state)
 }
@@ -684,7 +678,6 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
         "webhook.inbound_secret",
     )?;
     let erp_hmac_secret = resolve(cfg.erp.hmac_secret.as_deref(), "erp.hmac_secret")?;
-    let edmd_api_key = resolve(cfg.edmd.api_key.as_deref(), "edmd.api_key")?;
 
     let tenant = cfg.identity.tenant.clone();
     let pool = ctx.pool().clone();
@@ -699,15 +692,12 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
         makod,
         check_config: Arc::new(cfg.check_config()),
         inbound_secret: Arc::new(inbound_secret.clone()),
-        auto_dispute_threshold_raw: cfg.auto_dispute_threshold_raw(),
+        auto_dispute_threshold_raw: cfg.check.auto_dispute_threshold_raw()?,
         pool: pool.clone(),
         tenant: tenant.clone(),
         marktrolle: cfg.identity.marktrolle,
         erp_webhook_url: cfg.erp.webhook_url.clone(),
         erp_hmac_secret: erp_hmac_secret.clone(),
-        edmd: cfg.edmd.url.as_deref().map(|url| {
-            mako_service::http::Upstream::new("edmd", url, edmd_api_key, ctx.http.clone())
-        }),
         http_client: ctx.http.clone(),
     };
 

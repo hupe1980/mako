@@ -804,7 +804,13 @@ impl InvoicCheckEngine {
 
     fn check_arithmetic(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
         for pos in rechnung.rechnungspositionen.iter().flatten() {
-            let qty = pos.positions_menge.wert_decimal();
+            // A charge priced per unit of time is the count at `QTY+47` times
+            // the time at `QTY+136` (INVOIC MIG 2.8e 00035/00036, S. 42 f.).
+            let qty = pos.positions_menge.wert_decimal().map(|q| {
+                pos.zeitbezogene_menge
+                    .wert_decimal()
+                    .map_or(q, |zeit| q * zeit)
+            });
             let price = pos.einzelpreis.wert_decimal().and_then(euro_from_decimal);
             let stated_net = pos.gesamtpreis.wert_decimal().and_then(euro_from_decimal);
 
@@ -832,7 +838,17 @@ impl InvoicCheckEngine {
                     });
                     continue;
                 };
-                if !stated_net.within_tolerance_ppm(computed, config.arithmetic_tolerance_ppm) {
+                // A net is stated in cents (`MOA+203` DE 5004 `[930]`, INVOIC
+                // AHB 1.0b S. 20), so within half a cent of the product it is
+                // the product rounded — the lawful figure, however small the
+                // position.
+                const HALF_A_CENT_RAW: i128 = 500;
+                let within_rounding =
+                    (i128::from(stated_net.to_raw()) - i128::from(computed.to_raw())).abs()
+                        <= HALF_A_CENT_RAW;
+                if !within_rounding
+                    && !stated_net.within_tolerance_ppm(computed, config.arithmetic_tolerance_ppm)
+                {
                     findings.push(Finding {
                         kind: FindingKind::ArithmeticError,
                         is_dispute: true,
@@ -2044,6 +2060,76 @@ mod tests {
                 .findings
                 .iter()
                 .any(|f| f.kind == FindingKind::ArithmeticError)
+        );
+    }
+
+    /// A charge priced per unit of time is quantity × time × price: `1` `H87`
+    /// at `QTY+47`, three months at `QTY+136`, 15 EUR per month is 45 EUR
+    /// (INVOIC MIG 2.8e 00035/00036, S. 42 f.).
+    #[test]
+    fn a_time_based_position_multiplies_by_its_time_quantity() {
+        let mut pos = make_pos(
+            1,
+            "DE001",
+            Some("1"),
+            Some(EuroAmount::from_raw(1_500_000)),
+            Some(EuroAmount::from_raw(4_500_000)),
+        );
+        if let Some(m) = pos.positions_menge.as_mut() {
+            m.einheit = Some(Mengeneinheit::Stueck);
+        }
+        pos.zeitbezogene_menge = Some(Menge {
+            wert: Some(Decimal::from(3)),
+            einheit: Some(Mengeneinheit::Monat),
+            ..Default::default()
+        });
+        let r = make_rechnung(vec![pos.clone()], None);
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ArithmeticError),
+            "{:?}",
+            report.findings
+        );
+        // Three months at 15 EUR stated as 15 EUR is a mismatch.
+        pos.gesamtpreis = Some(betrag(EuroAmount::from_raw(1_500_000)));
+        let r = make_rechnung(vec![pos], None);
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ArithmeticError)
+        );
+    }
+
+    /// A net is stated in cents (`MOA+203` `[930]`, INVOIC AHB 1.0b S. 20), so
+    /// a product rounded to the cent is exact however small:
+    /// 7.5 kWh × 0.0205 EUR = 0.15375 EUR is stated 0.15 EUR — 2.4 % off,
+    /// beyond the relative tolerance, and still the lawful figure.
+    #[test]
+    fn a_net_rounded_to_the_cent_is_no_arithmetic_error() {
+        let pos = make_pos(
+            1,
+            "DE001",
+            Some("7.5"),
+            Some(EuroAmount::from_raw(2_050)),
+            Some(EuroAmount::from_raw(15_000)),
+        );
+        let r = make_rechnung(vec![pos], None);
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ArithmeticError),
+            "{:?}",
+            report.findings
         );
     }
 

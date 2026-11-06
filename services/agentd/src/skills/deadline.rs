@@ -69,7 +69,7 @@ const TRIAGE_OBLIGATION: &str = "deadline-breach-triage";
 /// Werktage the triage row runs for.
 const TRIAGE_WERKTAGE: u64 = 1;
 
-/// Deadline triage for `de.obs.deadline.approaching`, `de.mako.aperak.timeout`
+/// Deadline triage for `de.obs.deadline.approaching`, `de.mako.antwortfrist.abgelaufen`
 /// and `de.mako.process.failed`.
 #[derive(Debug, Default)]
 pub struct DeadlineTriage;

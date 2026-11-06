@@ -31,6 +31,7 @@ assert_eq!(due, Date::from_calendar_date(2025, Month::January, 13).unwrap());
 | How much Vorlauf does this Anmeldung need? | `vorlauf`, `abmeldung` |
 | When must the CONTRL / APERAK go out? | `contrl_due_at`, `aperak_strom_due_at`, `aperak_gas_folgeprozess_due_at`, `aperak_gas_initialprozess_due_at` |
 | Is this deadline label a delivery window (retired on delivery, owned by no workflow)? | `is_delivery_window` |
+| May this invoice to an Unternehmer still go out on paper, in another electronic format or as EDI? | `e_rechnung` — § 27 Abs. 38 UStG, § 14 Abs. 1 Satz 6 Nr. 2 UStG |
 
 ## Three clocks, never one number
 

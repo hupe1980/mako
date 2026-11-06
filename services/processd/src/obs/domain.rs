@@ -8,8 +8,8 @@
 //!
 //! | Clock | What it is | Where it comes from |
 //! |---|---|---|
-//! | **APERAK Frist** | the *technical* acknowledgement — 45 min Strom (Sonntag 12:00 for a Saturday arrival), next Werktag 12:00 Gas Folgeprozess, 3 Werktage Gas Initialprozess | `mako_fristen`, reported to processd as `de.mako.aperak.timeout` |
-//! | **Antwortfrist** | the *business* answer — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | `mako_fristen::antwort`, stored as [`ProcessProjection::deadline_at`] |
+//! | **APERAK Frist** | the *technical* acknowledgement — 45 min Strom (Sonntag 12:00 for a Saturday arrival), next Werktag 12:00 Gas Folgeprozess, 3 Werktage Gas Initialprozess | `mako_fristen`; a missed one reaches no workflow and is makod's delivery-window alert, never this read model |
+//! | **Antwortfrist** | the *business* answer — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | `mako_fristen::antwort`, stored as [`ProcessProjection::deadline_at`]; a lapse the workflow observed arrives as `de.mako.antwortfrist.abgelaufen` |
 //!
 //! They differ by orders of magnitude and they fail for different reasons: a
 //! missed APERAK is a transport or validation fault, a missed Antwortfrist is a
@@ -29,9 +29,9 @@ pub enum ProcessState {
     Initiated,
     /// `de.mako.aperak.accepted` received — APERAK acknowledged.
     Running,
-    /// `de.mako.aperak.timeout` received — the **APERAK** Frist lapsed with no
-    /// acknowledgement. Not the business answer window: see the module note.
-    AperakTimeout,
+    /// `de.mako.antwortfrist.abgelaufen` received — the GPKE / GeLi Gas
+    /// workflow saw its business Antwortfrist lapse unanswered.
+    AntwortfristAbgelaufen,
     /// `de.mako.process.completed` received — happy path finished.
     Completed,
     /// `de.mako.aperak.rejected` received — ERC code rejection.
@@ -51,7 +51,7 @@ impl ProcessState {
             mako_events::mako::PROCESS_INITIATED => Some(Self::Initiated),
             mako_events::mako::APERAK_ACCEPTED => Some(Self::Running),
             mako_events::mako::APERAK_REJECTED => Some(Self::Rejected),
-            mako_events::mako::APERAK_TIMEOUT => Some(Self::AperakTimeout),
+            mako_events::mako::ANTWORTFRIST_ABGELAUFEN => Some(Self::AntwortfristAbgelaufen),
             mako_events::mako::PROCESS_COMPLETED => Some(Self::Completed),
             mako_events::mako::PROCESS_FAILED => Some(Self::Failed),
             _ => None,
@@ -68,7 +68,7 @@ impl ProcessState {
         match self {
             Self::Initiated => "initiated",
             Self::Running => "running",
-            Self::AperakTimeout => "aperak_timeout",
+            Self::AntwortfristAbgelaufen => "antwortfrist_abgelaufen",
             Self::Completed => "completed",
             Self::Rejected => "rejected",
             Self::Failed => "failed",
@@ -86,7 +86,7 @@ impl ProcessState {
     pub const ALL: [Self; 6] = [
         Self::Initiated,
         Self::Running,
-        Self::AperakTimeout,
+        Self::AntwortfristAbgelaufen,
         Self::Completed,
         Self::Rejected,
         Self::Failed,
@@ -94,9 +94,9 @@ impl ProcessState {
 
     /// `true` for terminal states that will receive no further events.
     ///
-    /// `AperakTimeout` is deliberately **not** terminal: a counterparty that
-    /// missed the acknowledgement window can still answer the business message,
-    /// and the process completes normally afterwards.
+    /// `AntwortfristAbgelaufen` is deliberately **not** terminal: a counterparty that
+    /// let the Antwortfrist lapse can still answer late, and the process
+    /// completes normally afterwards.
     #[must_use]
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Rejected | Self::Failed)
@@ -231,7 +231,7 @@ pub struct ProcessProjection {
     /// part of the same vertically integrated undertaking as this operator.
     ///
     /// Set on `de.mako.process.initiated` for Lieferbeginn PIDs by comparing
-    /// `data.new_supplier` against `[identity] own_mp_ids`. It is the grouping
+    /// `data.new_supplier` against `[identity] verbundene_lieferanten`. It is the grouping
     /// key of the Gleichbehandlungsbericht evidence — see
     /// [`ParityGroup`].
     pub initiator_is_affiliate: bool,
@@ -286,9 +286,9 @@ pub struct KpiReport {
     pub total_completed: u64,
     pub total_rejected: u64,
     pub total_failed: u64,
-    /// Processes currently in [`ProcessState::AperakTimeout`] — the
-    /// **technical** acknowledgement clock.
-    pub total_aperak_timeout: u64,
+    /// Processes currently in [`ProcessState::AntwortfristAbgelaufen`] — the
+    /// lapse the workflow itself reported.
+    pub total_antwortfrist_abgelaufen: u64,
     /// Processes that passed their **business Antwortfrist** without closing,
     /// or closed after it. Counted only where a Frist is published.
     pub total_frist_breached: u64,
@@ -447,8 +447,8 @@ mod tests {
 
     /// A missed APERAK is not the end of a process.
     #[test]
-    fn an_aperak_timeout_is_not_terminal() {
-        assert!(!ProcessState::AperakTimeout.is_terminal());
+    fn a_lapsed_antwortfrist_is_not_terminal() {
+        assert!(!ProcessState::AntwortfristAbgelaufen.is_terminal());
         assert!(ProcessState::Failed.is_terminal());
     }
 

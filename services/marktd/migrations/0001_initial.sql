@@ -859,6 +859,15 @@ CREATE TABLE partners (
     -- AS4 endpoints are `makoadresse`; a communication-channel list belongs to
     -- makod's own partner store, not here.
     geschaeftspartner JSONB    NOT NULL DEFAULT '{}'::jsonb,
+    -- The EDI agreement an outbound INVOIC to this partner rests on. NULL is
+    -- „not recorded", and makod refuses the INVOIC on it rather than assume
+    -- either answer. `edi_zustimmung`: the partner's Zustimmung to receiving
+    -- invoices as EDI (§ 27 Abs. 38 Nr. 1 and 3 UStG). `edi_extrahierbar`:
+    -- whether the agreed format allows „die richtige und vollständige
+    -- Extraktion der … erforderlichen Angaben" into an EN 16931 format, which
+    -- makes it an E-Rechnung (§ 14 Abs. 1 Satz 6 Nr. 2 UStG).
+    edi_zustimmung   BOOLEAN,
+    edi_extrahierbar BOOLEAN,
     version        BIGINT      NOT NULL DEFAULT 1,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );

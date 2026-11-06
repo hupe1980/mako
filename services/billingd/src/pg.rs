@@ -37,6 +37,10 @@ pub struct BillingRecordRow {
     /// Unternehmen (§ 14 Abs. 2 Satz 2 Nr. 1 UStG), as the contract said when
     /// the invoice was billed. `None` = not recorded.
     pub empfaenger_unternehmer: Option<bool>,
+    /// The Rechnungsaussteller's USt-IdNr. this record was issued under.
+    pub aussteller_ust_id: Option<String>,
+    /// The Rechnungsaussteller's Steuernummer this record was issued under.
+    pub aussteller_steuernummer: Option<String>,
     pub total_netto_eur: Decimal,
     pub total_brutto_eur: Decimal,
     pub outcome: String,
@@ -397,6 +401,28 @@ pub async fn attach_en16931(
     .execute(executor)
     .await
     .context("attach_en16931")?;
+    Ok(())
+}
+
+/// Record the Rechnungsaussteller's tax identity (§ 14 Abs. 4 Nr. 2 UStG) the
+/// invoice was issued under — the key its § 27 Abs. 38 Nr. 2 UStG
+/// Gesamtumsatz is selected by.
+pub async fn attach_aussteller(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    ust_id: Option<&str>,
+    steuernummer: Option<&str>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE billing_records SET aussteller_ust_id = $2, aussteller_steuernummer = $3, \
+         updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .bind(ust_id)
+    .bind(steuernummer)
+    .execute(executor)
+    .await
+    .context("attach_aussteller")?;
     Ok(())
 }
 

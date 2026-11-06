@@ -1092,7 +1092,7 @@ mod tests {
     fn nelo_change_emits_object_tagged_apply() {
         // NeLo change (55615) with a grounded attribute emits an
         // `objekt`-tagged apply intent alongside the APERAK — marktd routes it
-        // to NeLoRepository::patch_stammdaten.
+        // to PgNeLoRepository::patch_stammdaten.
         let mut cmd = receive_malo_cmd(serde_json::json!({ "netzebene": "NSP" }), true);
         if let StammdatenCommand::ReceiveAenderung { pid: p, .. } = &mut cmd {
             *p = pid(55615); // NeLo

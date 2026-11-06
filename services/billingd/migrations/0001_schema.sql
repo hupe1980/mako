@@ -102,6 +102,11 @@ CREATE TABLE billing_records (
     -- segment said at billing. NULL = not recorded; the paper path refuses the
     -- § 27 Abs. 38 UStG grace on it rather than assume either answer.
     empfaenger_unternehmer BOOLEAN,
+    -- The Rechnungsaussteller's tax identity (§ 14 Abs. 4 Nr. 2 UStG) the
+    -- record was issued under — what selects its § 27 Abs. 38 Nr. 2 UStG
+    -- Gesamtumsatz. NULL in both = not recorded, which refuses that grace.
+    aussteller_ust_id      TEXT,
+    aussteller_steuernummer TEXT,
 
     -- Monetary summary for fast reporting (avoids JSONB parse).
     --

@@ -320,6 +320,40 @@ pub(crate) async fn handle_command(
             )))
             .into_response();
         }
+        Err(DispatchError::EdiUnzulaessig(msg)) => {
+            return ApiError::unprocessable(msg)
+                .with_code("edi_unzulaessig")
+                .into_response();
+        }
+        Err(DispatchError::InvoicNichtDarstellbar { message, places }) => {
+            return ApiError::unprocessable(message)
+                .with_code("invoic_nicht_darstellbar")
+                .with_fields(serde_json::json!({ "places": places }))
+                .into_response();
+        }
+        Err(DispatchError::DuplicateInvoice {
+            process_id,
+            invoice_ref,
+        }) => {
+            return ApiError::conflict_with(
+                "duplicate_invoice",
+                format!(
+                    "Invoice {invoice_ref:?} was already issued by process {process_id}; a \
+                     Rechnungsnummer names one document, so it is not issued twice."
+                ),
+                serde_json::json!({ "invoice_ref": invoice_ref, "process_id": process_id.to_string() }),
+            )
+            .into_response();
+        }
+        Err(DispatchError::MarktdUnavailable(e)) => {
+            tracing::warn!(error = %e, command = %cmd_lower, "ERP dispatch: marktd unavailable");
+            return ApiError::unavailable(
+                "marktd, which holds the recipient's EDI agreement, did not answer — the \
+                 INVOIC is not sent without it. Retry.",
+            )
+            .with_code("marktd_unavailable")
+            .into_response();
+        }
         Err(DispatchError::NotImplemented(cmd)) => {
             tracing::warn!(
                 command = %cmd,

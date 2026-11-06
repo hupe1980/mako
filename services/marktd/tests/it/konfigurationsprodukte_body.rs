@@ -8,8 +8,6 @@
     clippy::disallowed_methods,
     reason = "a test connects straight to its throwaway container; pool sizing is a deployment concern"
 )]
-
-use mako_markt::repository::SteuerbareRessourceRepository as _;
 use marktd::daemon::Marktd;
 use marktd::pg::PgSteuerbareRessourceRepository;
 use tower::ServiceExt as _;

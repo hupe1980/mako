@@ -15,6 +15,7 @@ url = "postgres://dev:dev@localhost:5432/processd"
 
 [identity]
 own_mp_id = "9900357000004"
+verbundene_lieferanten = []
 
 [makod]
 url     = "http://127.0.0.1:8080"

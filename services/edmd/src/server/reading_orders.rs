@@ -256,6 +256,20 @@ pub(crate) async fn complete_reading_order(
     // bounds select on the reading's own timestamp.
     let abgelesen_am = req.abgelesen_am.unwrap_or_else(OffsetDateTime::now_utc);
 
+    // The status change and the filed Zählerstand commit together: the order
+    // row is updated inside a transaction that commits only once the reading
+    // store has accepted the value. Every early return below — a refusal or a
+    // failed reading write — drops the transaction and leaves the order open,
+    // so it is never `AUSGEFUEHRT` without the reading billing reads. The
+    // reading store spans the hot and the cold tier and cannot join this
+    // transaction, so the order of the two writes is what decides the failure
+    // direction: a commit that fails after the reading was filed leaves the
+    // order open, and completing it again re-files the same register value.
+    let mut tx = match state.repo.pool().begin().await {
+        Ok(tx) => tx,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+
     let res = sqlx::query(
         "UPDATE ablese_auftraege
          SET status='AUSGEFUEHRT',
@@ -276,7 +290,7 @@ pub(crate) async fn complete_reading_order(
     .bind(id)
     .bind(&state.tenant)
     .bind(abgelesen_am)
-    .fetch_optional(state.repo.pool())
+    .fetch_optional(&mut *tx)
     .await;
 
     let row = match res {
@@ -369,17 +383,18 @@ pub(crate) async fn complete_reading_order(
             .store_readings(std::slice::from_ref(&reading))
             .await
         {
-            // The order is already AUSGEFUEHRT and the value is on its row, so
-            // nothing is lost — but the billing path cannot see it, which is the
-            // whole reason for filing it, so it must be visible.
+            // Returning drops the transaction: the order stays open.
             tracing::error!(
                 order = %id, malo_id = %malo_id, error = %e,
-                "edmd: reading order completed but its Zählerstand could not be filed"
+                "edmd: the Zählerstand of a reading order could not be filed; the order stays open"
             );
             return ApiError::internal(e).into_response();
         }
     }
 
+    if let Err(e) = tx.commit().await {
+        return ApiError::internal(e).into_response();
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 

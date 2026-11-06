@@ -75,7 +75,7 @@ spec:
                        but Samstag (a Saturday arrival is due Sonntag 12:00),
                        next Werktag 12:00 for a Gas Folgeprozess, 3 Werktage for
                        a Gas Initialprozess. A lapse arrives as
-                       `de.mako.aperak.timeout`.
+                       `de.mako.antwortfrist.abgelaufen`.
         Antwortfrist   the business answer — 11:00 of the 1. Werktag for a GPKE
                        Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for
                        WiM Strom. This is what `deadline_at` holds.

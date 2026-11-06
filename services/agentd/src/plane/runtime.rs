@@ -1243,6 +1243,54 @@ impl Plane {
         Some(self.accept_one(route, event, payload).await)
     }
 
+    /// Admit the desk assistant's proposal for one open Freigabe — once.
+    ///
+    /// The event id is the entry's ([`super::vorschlag::ereignis`]), so the
+    /// admission key makes a second tick, a restart or a second instance meet
+    /// the original run. The payload names no MaLo, so the run's case is
+    /// correlated on that id alone and [`vorschlag_of`](Self::vorschlag_of)
+    /// finds it again. `None` when the desk assistant is not activated.
+    pub async fn vorschlag_zulassen(&self, freigabe: &str) -> Option<Accepted> {
+        let id = super::vorschlag::ereignis(freigabe);
+        let source = mako_service::source("agentd", self.tenant.as_str());
+        let envelope = Envelope {
+            id: &id,
+            source: &source,
+            event_type: "manual",
+        };
+        let input = serde_json::json!({ "frage": super::vorschlag::FRAGE, "freigabe": freigabe });
+        self.accept_named(super::vorschlag::SKILL, envelope, input)
+            .await
+    }
+
+    /// The waiting proposal of one Freigabe, read from its run's journal:
+    /// `None` when no proposal run was admitted for it. Never starts a run.
+    ///
+    /// # Errors
+    ///
+    /// The case store or the journal failing.
+    pub async fn vorschlag_of(
+        &self,
+        freigabe: &str,
+        reader: &str,
+    ) -> Result<Option<Answer>, String> {
+        let Some(cases) = self.runtime.cases() else {
+            return Ok(None);
+        };
+        let key =
+            agentplane::core::CorrelationKey::new("event", super::vorschlag::ereignis(freigabe));
+        let Some(case) = cases.correlate(&[key]).await.map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        let Some(case) = cases.case(case).await.map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        match case.runs.last() {
+            Some(run) => self.answer(&run.to_string(), reader).await,
+            None => Ok(None),
+        }
+    }
+
     /// What to tell the emitter about a whole fan-out.
     ///
     /// Any retryable refusal keeps the whole message retryable. Runs already

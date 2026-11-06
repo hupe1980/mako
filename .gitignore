@@ -83,6 +83,7 @@ dev/.data/
 # The Desk (desk/): dependencies and build output
 desk/node_modules/
 desk/dist/
+desk/*.tsbuildinfo
 
 # Upstream-crate feedback notes — internal, never published
 /*_FEEDBACK.md

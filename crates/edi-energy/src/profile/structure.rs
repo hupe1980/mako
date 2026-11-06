@@ -225,7 +225,7 @@ impl Structure {
         }
     }
 
-    fn matches(&self, id: NodeId, seg: &Segment<'_>) -> bool {
+    pub(crate) fn matches(&self, id: NodeId, seg: &Segment<'_>) -> bool {
         let Kind::Segment {
             tag,
             discriminators,

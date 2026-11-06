@@ -7,7 +7,7 @@
 //! | `GET` | `/api/v1/versorgung/{malo_id}` | `Option<VersorgungsStatusRecord>` |
 //! | `GET` | `/api/v1/malos/{malo_id}` | `Option<MaloTypedFields>` |
 //! | `GET` | `/api/v1/malos/{malo_id}/grid` | `Option<MaloGridRecord>` |
-//! | `GET` | `/api/v1/partners/{mp_id}` | `bool` (partner known) |
+//! | `GET` | `/api/v1/partners/{mp_id}` | `bool` (partner known) / `Option<PartnerEdi>` |
 //! | `GET` | `/api/v1/preisblaetter/{nb_mp_id}?date=…` | `Option<PreisblattNetznutzung>` |
 //! | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}?date=…` | `Option<PreisblattMessung>` |
 //! | `GET` | `/api/v1/energiemix/{nb_mp_id}?year=…` | `Option<NbEnergiemixRecord>` |
@@ -312,6 +312,20 @@ pub struct EsaProduktAngebot {
     pub im_katalog: bool,
 }
 
+/// The EDI agreement marktd records for one Marktpartner — what an outbound
+/// INVOIC to it rests on (`mako_fristen::e_rechnung::EdiFall`).
+///
+/// Each field is `None` when not recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+pub struct PartnerEdi {
+    /// The partner's Zustimmung to receiving invoices as EDI.
+    #[serde(default)]
+    pub edi_zustimmung: Option<bool>,
+    /// Whether the agreed format extracts into an EN 16931 format.
+    #[serde(default)]
+    pub edi_extrahierbar: Option<bool>,
+}
+
 impl MarktdClient {
     /// Construct a new client.
     ///
@@ -475,6 +489,85 @@ impl MarktdClient {
         resp.json::<MaloTypedFields>()
             .await
             .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/malos/{malo_id}` — the stored BO4E `Marktlokation`
+    /// (`data`), with its `lokationsadresse` and `energierichtung`: what an
+    /// outbound INVOIC names in `NAD+DP`, `LOC+172` and `IMD` DE 7009.
+    ///
+    /// `None` on 404 — the `MaLo` is not registered.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on a network error or any status other
+    /// than 200/404; [`MarktdClientError::Deserialization`] when `data` is not
+    /// a `Marktlokation`.
+    pub async fn get_marktlokation(
+        &self,
+        malo_id: &str,
+    ) -> Result<Option<rubo4e::current::Marktlokation>, MarktdClientError> {
+        #[derive(serde::Deserialize)]
+        struct Body {
+            data: rubo4e::current::Marktlokation,
+        }
+        let url = format!("{}/api/v1/malos/{}", self.base_url, malo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json::<Body>()
+            .await
+            .map(|b| Some(b.data))
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/partners/{mp_id}` — the partner's BO4E
+    /// `Geschaeftspartner` (Firmenname, Anschrift, Umsatzsteuer-ID): what an
+    /// outbound INVOIC names in `NAD+MS`/`NAD+MR` and their `SG3 RFF`.
+    ///
+    /// `None` when the partner is not registered or no `geschaeftspartner` is
+    /// recorded for it.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on a network error or any status other
+    /// than 200/404; [`MarktdClientError::Deserialization`] when the recorded
+    /// `geschaeftspartner` is not one.
+    pub async fn get_geschaeftspartner(
+        &self,
+        mp_id: &str,
+    ) -> Result<Option<rubo4e::current::Geschaeftspartner>, MarktdClientError> {
+        #[derive(serde::Deserialize)]
+        struct Body {
+            #[serde(default)]
+            geschaeftspartner: Option<rubo4e::current::Geschaeftspartner>,
+        }
+        let url = format!("{}/api/v1/partners/{}", self.base_url, mp_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            warn!(mp_id, %status, "get_geschaeftspartner: HTTP error");
+            return Err(MarktdClientError::Http(format!("HTTP {}", status.as_u16())));
+        }
+        resp.json::<Body>()
+            .await
+            .map(|b| b.geschaeftspartner)
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
@@ -1092,6 +1185,42 @@ impl MarktdClient {
         // outage into a wrongful market rejection.
         warn!(mp_id, %status, "partner_known: HTTP error");
         Err(MarktdClientError::Http(format!("HTTP {}", status.as_u16())))
+    }
+
+    /// `GET /api/v1/partners/{mp_id}` — the EDI agreement recorded for the
+    /// partner, read for every outbound INVOIC.
+    ///
+    /// `None` on 404: the partner is not registered, so nothing is recorded —
+    /// which the caller refuses exactly as an unrecorded field.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on a network error or any status other than
+    /// 200/404 — an outage, never an unrecorded agreement.
+    /// [`MarktdClientError::Deserialization`] on a body that does not decode.
+    pub async fn get_partner_edi(
+        &self,
+        mp_id: &str,
+    ) -> Result<Option<PartnerEdi>, MarktdClientError> {
+        let url = format!("{}/api/v1/partners/{}", self.base_url, mp_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            warn!(mp_id, %status, "get_partner_edi: HTTP error");
+            return Err(MarktdClientError::Http(format!("HTTP {}", status.as_u16())));
+        }
+        resp.json::<PartnerEdi>()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
     /// `GET /api/v1/preisblaetter/{nb_mp_id}?date={billing_date}` — Preisblatt.

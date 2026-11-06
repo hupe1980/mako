@@ -21,9 +21,7 @@ use mako_markt::domain::Lokationstyp;
 use mako_markt::{
     domain::{MaloId, MeloId, Sparte},
     repository::{
-        LokationszuordnungRepository as _, MaloRepository as _, MeloRepository as _,
-        MeloStammdatenPatch, NeLoRecord, NeLoRepository as _, NeloStammdatenPatch, TrancheRecord,
-        TrancheRepository as _, TrancheStammdatenPatch,
+        MeloStammdatenPatch, NeLoRecord, NeloStammdatenPatch, TrancheRecord, TrancheStammdatenPatch,
     },
 };
 use marktd::pg::{
@@ -478,7 +476,7 @@ async fn patch_stammdaten_updates_typed_columns_only() {
 }
 
 /// A `LOC+Z17` Stammdatenänderung patches the typed MeLo columns
-/// (`netzebene_messung`, `regelzone`) via `MeloRepository::patch_stammdaten`,
+/// (`netzebene_messung`, `regelzone`) via `PgMeloRepository::patch_stammdaten`,
 /// leaving the JSONB payload and version untouched, and no-ops when unknown.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
@@ -532,7 +530,7 @@ async fn melo_patch_stammdaten_updates_typed_columns_only() {
 }
 
 /// A `LOC+Z18` Stammdatenänderung patches the typed NeLo Netzebene via
-/// `NeLoRepository::patch_stammdaten`.
+/// `PgNeLoRepository::patch_stammdaten`.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn nelo_patch_stammdaten_updates_netzebene() {
@@ -599,12 +597,11 @@ async fn nelo_patch_stammdaten_updates_netzebene() {
 }
 
 /// The MeLo Stammdatenänderung's MSB-Zuordnung lands on the dated
-/// `melo_msb_zuordnungen` timeline via `MeloMsbRepository::assign_msb` — the path
+/// `melo_msb_zuordnungen` timeline via `PgMeloMsbRepository::assign_msb` — the path
 /// the `MESSLOKATION` apply writes to. A later assignment closes the earlier one.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn melo_msb_zuordnung_from_stammdatenaenderung() {
-    use mako_markt::repository::MeloMsbRepository as _;
     use marktd::pg::PgMeloMsbRepository;
 
     let Some((pool, _pg)) = test_pool("melo_msb").await else {
@@ -663,13 +660,11 @@ async fn melo_msb_zuordnung_from_stammdatenaenderung() {
 }
 
 /// A `LOC+Z20` Stammdatenänderung patches the TR Fernschaltbarkeit via
-/// `TechnischeRessourceRepository::patch_stammdaten` (UTILMD CAV Z58 + Z06/Z07).
+/// `PgTechnischeRessourceRepository::patch_stammdaten` (UTILMD CAV Z58 + Z06/Z07).
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn tr_patch_stammdaten_updates_fernschaltbarkeit() {
-    use mako_markt::repository::{
-        TechnischeRessourceRepository as _, TechnischeRessourceStammdatenPatch,
-    };
+    use mako_markt::repository::TechnischeRessourceStammdatenPatch;
     use marktd::pg::PgTechnischeRessourceRepository;
 
     let Some((pool, _pg)) = test_pool("tr_patch").await else {
@@ -774,11 +769,10 @@ async fn tr_patch_stammdaten_updates_fernschaltbarkeit() {
 
 /// A `LOC+Z19` SR Stammdatenänderung replaces the contracted
 /// `konfigurationsprodukte` (BO4E `Vec<Konfigurationsprodukt>`) via
-/// `SteuerbareRessourceRepository::replace_sr_konfigurationsprodukte`.
+/// `PgSteuerbareRessourceRepository::replace_sr_konfigurationsprodukte`.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn sr_konfigurationsprodukte_replace() {
-    use mako_markt::repository::SteuerbareRessourceRepository as _;
     use marktd::pg::PgSteuerbareRessourceRepository;
 
     let Some((pool, _pg)) = test_pool("sr_konfig").await else {
@@ -843,7 +837,7 @@ async fn sr_konfigurationsprodukte_replace() {
 }
 
 /// A `LOC+Z21` Stammdatenänderung patches the typed Tranche columns via
-/// `TrancheRepository::patch_stammdaten`; the greenfield table round-trips.
+/// `PgTrancheRepository::patch_stammdaten`; the greenfield table round-trips.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn tranche_patch_stammdaten_updates_typed_columns() {

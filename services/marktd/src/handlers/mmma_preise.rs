@@ -22,7 +22,6 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use mako_markt::repository::{MmmPreisStromRepository, MmmaPreisGasRepository};
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use rust_decimal::Decimal;

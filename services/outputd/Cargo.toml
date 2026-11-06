@@ -45,7 +45,6 @@ tokio-util   = { workspace = true }
 # § 27 Abs. 38 UStG decision (`e_rechnung`), so a paper-only INVOICE is refused
 # on the same terms billingd's paper path is.
 en16931         = { workspace = true }
-energy-billing  = { workspace = true }
 mako-fristen    = { workspace = true }
 en16931-formats = { workspace = true }
 rust_decimal    = { workspace = true }
@@ -72,6 +71,7 @@ toml       = "0.8"
 roxmltree = "0.21"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

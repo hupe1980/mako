@@ -75,6 +75,8 @@ pub struct NbModuleConfig {
     pub marktd_url: String,
     pub marktd_api_key: SecretString,
     pub own_mp_id: String,
+    /// The affiliated Lieferanten's MP-IDs (`[identity] verbundene_lieferanten`).
+    pub verbundene_lieferanten: std::collections::HashSet<String>,
     pub tenant: String,
     pub auto_accept: bool,
     /// Gas Bearbeitungsfrist (WT) added to the 6-week retroactive Anmeldung
@@ -465,7 +467,9 @@ pub async fn evaluate_and_decide(
         return Ok(false);
     }
 
-    let initiator_is_affiliate = payload.new_supplier_gln == config.own_mp_id;
+    let initiator_is_affiliate = config
+        .verbundene_lieferanten
+        .contains(&payload.new_supplier_gln);
     let pid = payload.pid;
     let process_id = payload.process_id;
     let malo_id = payload.malo_id.clone();
@@ -722,7 +726,7 @@ pub async fn evaluate_and_decide(
                     config,
                     &payload_meta,
                     &format!(
-                        "§20 EnWG affiliate Anmeldung (LF {lf_mp_id} is this operator) — \
+                        "§20 EnWG affiliate Anmeldung (LF {lf_mp_id} is affiliated with this operator) — \
                          `mako-pruefung` says Accept, but an affiliate may not take the \
                          automatic path a third party does not get"
                     ),
@@ -1223,7 +1227,7 @@ pub async fn resume_after_lfa_antwort(
         // `insert` is ON CONFLICT DO NOTHING on `(process_id, tenant)` — so
         // this is the *first* recorded decision, because phase one produced
         // none. The affiliate flag is recomputed rather than carried.
-        initiator_is_affiliate: waiting.lfn_mp_id == config.own_mp_id,
+        initiator_is_affiliate: config.verbundene_lieferanten.contains(&waiting.lfn_mp_id),
         decided_at: now,
         tenant: config.tenant.clone(),
     };
@@ -1861,7 +1865,7 @@ async fn decide_abmeldung(
     let process_id = payload.process_id;
     let malo_id = payload.malo_id.clone();
     let lf_mp_id = payload.lf_mp_id.clone();
-    let initiator_is_affiliate = lf_mp_id == config.own_mp_id;
+    let initiator_is_affiliate = config.verbundene_lieferanten.contains(&lf_mp_id);
     let received_at = received_at(event);
 
     info!(%process_id, pid, %malo_id, %lf_mp_id, "processd NB: evaluating Abmeldung");
@@ -1927,7 +1931,7 @@ async fn decide_abmeldung(
                     config,
                     &meta,
                     &format!(
-                        "§ 20 EnWG affiliate Abmeldung (LF {lf_mp_id} is this operator) — \
+                        "§ 20 EnWG affiliate Abmeldung (LF {lf_mp_id} is affiliated with this operator) — \
                          E_0607 says Accept, but an affiliate may not take the automatic path"
                     ),
                     None,
@@ -3024,25 +3028,14 @@ mod tests {
     }
 
     #[test]
-    fn affiliate_detection() {
-        // When new_supplier == own_mp_id, initiator_is_affiliate must be true.
-        let own_mp_id = "9900357000004";
-        let event = serde_json::json!({
-            "makopid": 55001,
-            "subject": "550e8400-e29b-41d4-a716-446655440003",
-            "data": {
-                "malo_id": "51238696012",
-                "new_supplier": own_mp_id, // affiliate!
-                "grid_operator": "9900000000001",
-                "process_date": "20261001"
-            }
-        });
-        let payload = AnmeldungPayload::parse(&event).unwrap();
-        let initiator_is_affiliate = payload.new_supplier_gln == own_mp_id;
-        assert!(
-            initiator_is_affiliate,
-            "affiliate must be detected when new_supplier == own_mp_id"
-        );
+    fn an_affiliated_lieferant_is_named_by_its_own_mp_id_not_the_nb_s() {
+        // Each Marktrolle has its own MP-ID (Identifikatoren AWH V1.2 § 2.1),
+        // so the affiliate's MP-ID is never `own_mp_id`: comparing against
+        // the NB's own code would never recognise one.
+        let cfg = nb_config();
+        assert!(!cfg.verbundene_lieferanten.contains(&cfg.own_mp_id));
+        assert!(cfg.verbundene_lieferanten.contains("9900357000011"));
+        assert!(!cfg.verbundene_lieferanten.contains("9900000000002"));
     }
 
     // ── Geschäftsvorfall 3: unread facts escalate, they do not default ───────
@@ -3248,6 +3241,7 @@ mod tests {
             marktd_url: "http://marktd.invalid".into(),
             marktd_api_key: SecretString::from("k"),
             own_mp_id: "9900357000004".into(),
+            verbundene_lieferanten: std::iter::once("9900357000011".to_owned()).collect(),
             tenant: "t".into(),
             auto_accept: false,
             gas_bearbeitungsfrist_wt: 3,

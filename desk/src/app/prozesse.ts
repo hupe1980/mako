@@ -81,7 +81,7 @@ export function prozessTitel(workflow: string): string {
 const ZUSTAND: Record<string, string> = {
   initiated: "begonnen",
   running: "läuft",
-  aperak_timeout: "ohne Bestätigung",
+  antwortfrist_abgelaufen: "ohne Bestätigung",
   completed: "abgeschlossen",
   rejected: "abgelehnt",
   failed: "fehlgeschlagen",

@@ -1,9 +1,10 @@
 //! MCP server for `billingd` — Multi-Product Billing Engine.
 //!
-//! ## Tools (11) — all read-only
+//! ## Tools (13) — all read-only
 //!
 //! | Tool | Description |
 //! |---|---|
+//! | `get_policy` | The operator policy this deployment runs under |
 //! | `list_billing_records` | List billing records for a MaLo |
 //! | `get_billing_record` | Get a single billing record with full Rechnung BO4E |
 //! | `preview_billing` | Dry-run billing calculation (no persist, no CloudEvent) |
@@ -15,6 +16,7 @@
 //! | `get_billing_summary` | Aggregate billing stats per MaLo or LF, counted once |
 //! | `validate_tariff_config` | Pre-flight validation: §41a iMSys guard, legacy flags, §42 Energiemix |
 //! | `explain_invoice_position` | Explain how a billing position was calculated (PositionTrace audit) |
+//! | `list_review_queue` | Analyst review queue (REVIEW + HELD), typed |
 //!
 //! ## Why nothing here issues an invoice
 //!
@@ -56,7 +58,7 @@ use rmcp::{
     },
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -160,6 +162,101 @@ pub struct ExplainPositionParams {
     pub position_number: Option<u32>,
     /// Keyword to match in the position description (positionstext). Mutually exclusive with position_number.
     pub description_keyword: Option<String>,
+}
+
+/// The band `list_review_queue` narrows to.
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReviewBand {
+    /// Dispatched; queued for analyst review.
+    Review,
+    /// Not dispatched until an analyst releases it.
+    Held,
+}
+
+impl ReviewBand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Review => "REVIEW",
+            Self::Held => "HELD",
+        }
+    }
+}
+
+/// Filters for `list_review_queue`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListReviewQueueParams {
+    /// `REVIEW` or `HELD`; unset lists both.
+    pub band: Option<ReviewBand>,
+    /// Max results (default 50, clamped to 1–200).
+    pub limit: Option<i64>,
+}
+
+/// One billing record on the analyst review queue.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct Pruefposten {
+    /// The billing record — what `POST /api/v1/billing/{id}/release` addresses.
+    pub id: String,
+    /// 11-digit MaLo-ID.
+    pub malo_id: String,
+    /// MP-ID of the Lieferant that issued the invoice.
+    pub lf_mp_id: String,
+    /// § 14 Abs. 4 Nr. 4 UStG Rechnungsnummer.
+    pub rechnungsnummer: String,
+    /// Billing category (`STROM`, `GAS`, …).
+    pub category: String,
+    /// First day of the billed period.
+    #[schemars(extend("format" = "date"))]
+    pub period_from: String,
+    /// End of the billed period.
+    #[schemars(extend("format" = "date"))]
+    pub period_to: String,
+    /// Gross total in EUR, a decimal string.
+    pub total_brutto_eur: String,
+    /// `REVIEW` (dispatched, queued for review) or `HELD` (not dispatched).
+    pub risk_band: String,
+    /// Deterministic risk score 0–100.
+    pub risk_score: Option<i16>,
+    /// The coded findings the score is the sum of.
+    pub risk_findings: Vec<crate::risk::RiskFinding>,
+    /// RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub created_at: String,
+}
+
+impl Pruefposten {
+    fn from_row(row: crate::pg::BillingRecordRow) -> Result<Self, serde_json::Error> {
+        use time::format_description::well_known::Rfc3339;
+        let risk_findings = match row.risk_findings {
+            Some(findings) => serde_json::from_value(findings)?,
+            None => Vec::new(),
+        };
+        Ok(Self {
+            id: row.id.to_string(),
+            malo_id: row.malo_id,
+            lf_mp_id: row.lf_mp_id,
+            rechnungsnummer: row.rechnungsnummer,
+            category: row.category,
+            period_from: row.period_from.to_string(),
+            period_to: row.period_to.to_string(),
+            total_brutto_eur: row.total_brutto_eur.to_string(),
+            risk_band: row.risk_band.unwrap_or_default(),
+            risk_score: row.risk_score,
+            risk_findings,
+            created_at: row.created_at.format(&Rfc3339).unwrap_or_default(),
+        })
+    }
+}
+
+/// `list_review_queue`' answer.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct Pruefliste {
+    /// The highest risk score first.
+    pub records: Vec<Pruefposten>,
+    /// How many records `records` holds.
+    pub count: usize,
+    /// At least `limit` records matched: more may be waiting than were listed.
+    pub saturated: bool,
 }
 
 #[derive(Clone)]
@@ -753,6 +850,39 @@ before billing.",
     }
 
     #[tool(
+        description = "The analyst review queue: billing records the risk gate banded REVIEW (dispatched, queued for review) or HELD (not dispatched until released through POST /api/v1/billing/{id}/release), the highest risk score first, each with the coded findings behind its score. `saturated` means at least `limit` records matched.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<Pruefliste>()
+    )]
+    async fn list_review_queue(
+        &self,
+        Parameters(params): Parameters<ListReviewQueueParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = params.limit.unwrap_or(50).clamp(1, 200);
+        let rows = crate::pg::list_review_queue(
+            &self.state.pool,
+            &self.state.tenant,
+            params.band.map(ReviewBand::as_str),
+            limit,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let records = rows
+            .into_iter()
+            .map(Pruefposten::from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| McpError::internal_error(format!("risk_findings: {e}"), None))?;
+        Ok(CallToolResult::structured(
+            serde_json::to_value(Pruefliste {
+                count: records.len(),
+                saturated: records.len() >= usize::try_from(limit).unwrap_or(usize::MAX),
+                records,
+            })
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
+    }
+
+    #[tool(
         description = "Aggregate billing statistics for a MaLo or an LF: record count, total \
 net and gross, average gross per 30 days of supply, and a breakdown by category. Aggregated in \
 the database over the whole history — not a capped page — and counted once: Storno rows and the \
@@ -1066,4 +1196,35 @@ fn mako_attr(value: &serde_json::Value, name: &str) -> serde_json::Value {
         .and_then(|a| a.get("wert"))
         .cloned()
         .unwrap_or(serde_json::Value::Null)
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    /// The served tool contract is the committed `mcp.snapshot.json`
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it); the Desk generates its types from it.
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let tools: Vec<serde_json::Value> = BillingdMcpHandler::tool_router()
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
+    }
+
+    /// The band filter admits the two bands an analyst works and nothing else:
+    /// an AUTO_RELEASED record is by definition not on the queue.
+    #[test]
+    fn the_band_filter_admits_review_and_held_only() {
+        let band = |s: &str| serde_json::from_value::<ReviewBand>(serde_json::json!(s));
+        assert_eq!(band("REVIEW").map(ReviewBand::as_str).ok(), Some("REVIEW"));
+        assert_eq!(band("HELD").map(ReviewBand::as_str).ok(), Some("HELD"));
+        assert!(band("AUTO_RELEASED").is_err());
+    }
 }

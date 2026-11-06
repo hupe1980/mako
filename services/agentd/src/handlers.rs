@@ -426,6 +426,51 @@ pub async fn answer(
     }
 }
 
+/// `?freigabe=<id>,<id>…` — the Freigaben whose waiting proposal is asked for.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VorschlaegeQuery {
+    pub freigabe: String,
+}
+
+/// Ids per request — the most rows Heute shows at once.
+const VORSCHLAEGE_MAX: usize = 100;
+
+/// `GET /api/v1/vorschlaege?freigabe=<id>,…` — each Freigabe's waiting
+/// proposal: its run's answer (`running`, or concluded with its checked
+/// `vorschlag`), or `null` where none was admitted. Read under the verb a
+/// run's answer is; it never starts a run.
+pub async fn vorschlaege(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    axum::extract::Query(q): axum::extract::Query<VorschlaegeQuery>,
+) -> ApiResult<Json<std::collections::BTreeMap<String, Option<crate::plane::Answer>>>> {
+    if let Some(refused) = refusal(&state, &claims, agentplane::api::action::RUN_READ) {
+        return Err(refused);
+    }
+    let ids: Vec<&str> = q
+        .freigabe
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if ids.len() > VORSCHLAEGE_MAX {
+        return Err(ApiError::unprocessable(format!(
+            "at most {VORSCHLAEGE_MAX} Freigaben per request, {} given",
+            ids.len()
+        )));
+    }
+    let reader = &claims.principal().sub;
+    let mut out = std::collections::BTreeMap::new();
+    for id in ids {
+        let answer = state.plane.vorschlag_of(id, reader).await.map_err(|e| {
+            ApiError::internal(anyhow::anyhow!("read the proposal of Freigabe {id}: {e}"))
+        })?;
+        out.insert(id.to_owned(), answer);
+    }
+    Ok(Json(out))
+}
+
 /// A person's verdict on a run the Desk showed them: whether it helped, or
 /// what became of its proposal — one of the two per request.
 #[derive(Debug, serde::Deserialize)]

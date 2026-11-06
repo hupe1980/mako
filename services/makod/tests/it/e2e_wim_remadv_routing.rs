@@ -5,7 +5,7 @@
 //! by last-write-wins and `resolve_workflow`'s MP-ID→Sparte narrowing cannot tell
 //! the two Strom families apart. `EdifactIngestDispatcher::dispatch` therefore runs
 //! a correlation step (`correlation_route`) that re-routes the reply to the family
-//! actually holding an open process for the referenced invoice (RFF+Z13).
+//! actually holding an open process for the referenced invoice (`DOC` DE1004).
 //!
 //! These tests prove:
 //! 1. a REMADV for a WiM MSB-Rechnung (31009) resumes the `wim-invoic` process
@@ -30,20 +30,21 @@ use mako_wim::invoic::WimInvoicWorkflow;
 use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004"; // UNB recipient (our own party) in the fixture
-const INVOICE_REF: &str = "REF001"; // must match the REMADV's RFF+Z13 back-reference
+const INVOICE_REF: &str = "REF001"; // the Rechnungsnummer the REMADV names in DOC DE1004
 
-/// Minimal REMADV 33001 (Bestätigung) carrying `RFF+Z13:REF001` — the message-ref
-/// of the original 31009 INVOIC the billing process was registered under.
+/// Minimal REMADV 33001 (Bestätigung) naming `DOC+380+REF001` — the
+/// Rechnungsnummer of the 31009 INVOIC the billing process was registered under.
+/// `RFF+Z13` is the REMADV's own Prüfidentifikator and names no invoice.
 const REMADV_33001: &str = "UNB+UNOC:3+4012345000023:14+9900357000004:500+250101:0000+1'\
 UNH+1+REMADV:D:05A:UN:2.9f'\
 BGM+239+00033001'\
 DTM+137:202501010000?+00:303'\
-RFF+Z13:REF001'\
+RFF+Z13:33001'\
 NAD+MS+4012345000023::293'\
 CTA+IC+:Abrechnungsstelle'\
 COM+030 12345678:TE'\
 CUX+2:EUR:9'\
-DOC+Z41+INV-2025-001'\
+DOC+380+REF001'\
 MOA+9:100.00:EUR'\
 UNS+D'\
 MOA+9:100.00:EUR'\
@@ -85,6 +86,7 @@ async fn spawn_wim_invoic(store: &SlateDbStore, tenant: TenantId, invoice_ref: &
                 recipient: MarktpartnerCode::new(OWN_MP),       // NB/LF/ESA payer
                 document_date: "20250101".into(),
                 invoice_ref: MessageRef::new(invoice_ref),
+                nachricht: "UNH+1+INVOIC:D:06A:UN:2.8e'UNT+2+1'".to_owned(),
             },
             RunOptions::new(),
         )

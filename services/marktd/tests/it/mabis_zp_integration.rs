@@ -18,7 +18,7 @@
     reason = "a test connects straight to its throwaway container; pool sizing and lifetimes are a deployment concern"
 )]
 
-use mako_markt::repository::{MabisZpRecord, MabisZpRepository};
+use mako_markt::repository::MabisZpRecord;
 use mako_service::cedar::{CedarEnforcer, CedarPrincipal};
 use marktd::pg::PgMabisZpRepository;
 use sqlx::PgPool;

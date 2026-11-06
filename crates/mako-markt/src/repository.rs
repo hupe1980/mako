@@ -2,23 +2,15 @@
     clippy::doc_markdown,
     reason = "a pedantic style lint this crate does not adopt"
 )]
-//! Repository traits for all `marktd` aggregate types.
+//! Record, request and filter types for every `marktd` aggregate.
 //!
-//! The production implementation of every trait is the `Pg*Repository` in
-//! `services/marktd/src/pg/`. Two have an in-memory double as well, in
-//! `crates/mako-markt/src/testing.rs` (feature = "testing"):
-//! `VersorgungsStatusRepository` and `NbEnergiemixRepository`. The rest are
-//! exercised against real PostgreSQL only.
-//!
-//! All methods are `async` (AFIT, stable since Rust 1.75).
-//! All methods return `Result<_, MdmError>` annotated `#[must_use]`.
+//! The storage is marktd's: each `Pg*Repository` in `services/marktd/src/pg/`
+//! carries its methods inherently.
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::Date;
 use uuid::Uuid;
-
-use std::future::Future;
 
 use crate::{
     domain::{Lokationstyp, MaloId, MarktpartnerId, MeloId, ProcessStatus, Sparte},
@@ -129,7 +121,7 @@ pub struct Rollenzuordnung {
 /// Stored MaLo record as returned by repository reads.
 ///
 /// `rollenzuordnung` contains only the role assignments valid at the
-/// `at` date passed to `MaloRepository::find` / `MaloRepository::list`.
+/// `at` date passed to `PgMaloRepository::find` / `PgMaloRepository::list`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaloRecord {
     pub malo_id: MaloId,
@@ -273,14 +265,9 @@ pub struct Subscription {
     pub version: i64,
 }
 
-/// Stored trading-partner record.
-///
-/// `gln` holds the 13-digit `MarktpartnerId` (Rollencodenummer).  The field
-/// name `gln` is kept for backward-compatibility with the PostgreSQL column
-/// name and existing EDIFACT serialization; semantically this value is a
-/// Marktpartner-ID, which may be a BDEW-Codenummer, DVGW-Codenummer, or a
-/// GS1 GLN — use [`crate::domain::nad_agency_code`] to determine the coding
-/// authority.
+/// Stored trading-partner record, keyed by its 13-digit `MarktpartnerId`
+/// (Rollencodenummer) — a BDEW-Codenummer, DVGW-Codenummer or GS1 GLN; use
+/// [`crate::domain::nad_agency_code`] for the coding authority.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartnerRecord {
@@ -307,6 +294,15 @@ pub struct PartnerRecord {
     /// `marktd`'s `PartnerUpsertRequest`.
     #[serde(default)]
     pub geschaeftspartner: serde_json::Value,
+    /// The partner's Zustimmung to receiving invoices as EDI (§ 27 Abs. 38
+    /// Nr. 1 and 3 UStG); `None` when not recorded.
+    #[serde(default)]
+    pub edi_zustimmung: Option<bool>,
+    /// Whether the EDI format agreed with this partner extracts into an
+    /// EN 16931 format, which makes it an E-Rechnung (§ 14 Abs. 1 Satz 6 Nr. 2
+    /// UStG); `None` when not recorded.
+    #[serde(default)]
+    pub edi_extrahierbar: Option<bool>,
     /// Optimistic-concurrency version.
     #[serde(default)]
     pub version: i64,
@@ -453,7 +449,7 @@ pub struct MaloTypedFields {
 /// "Änderung Daten der MaLo" message; each `None` leaves the column untouched.
 /// Populated by the `makod` adapter from the UTILMD SG8 `SEQ`/SG10 `CCI`/`CAV`
 /// and `TM` segments and carried into the `de.mako.process.completed` payload
-/// that `marktd` applies via [`MaloRepository::patch_stammdaten`].
+/// that `marktd` applies via `PgMaloRepository::patch_stammdaten`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MaloStammdatenPatch {
     /// `netzebene` — BO4E `Netzebene` wire value (`NSP`/`MSP`/`HSP`/`HSS`,
@@ -502,78 +498,6 @@ impl MaloStammdatenPatch {
     }
 }
 
-/// Read/write access to `MARKTLOKATION` records.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait MaloRepository: Send + Sync {
-    /// Insert or update a `MARKTLOKATION`.
-    ///
-    /// Validates optimistic concurrency via `if_match` (the caller's ETag).
-    /// Pass `None` for unconditional upsert (first write).
-    ///
-    /// Returns the new version number.
-    /// `data` is the **typed** BO — not a `serde_json::Value`. The repository
-    /// serialises the JSONB and derives the shadow columns from it
-    /// ([`MaloShadowColumns`](crate::bo4e::MaloShadowColumns)), so a payload
-    /// that has not been through BO4E validation cannot reach storage and a
-    /// column cannot disagree with the document it shadows.
-    async fn upsert(
-        &self,
-        malo_id: &MaloId,
-        sparte: Sparte,
-        data: &rubo4e::current::Marktlokation,
-        rollenzuordnung: Vec<Rollenzuordnung>,
-        if_match: Option<i64>,
-        bo4e_version: &str,
-    ) -> Result<i64, MdmError>;
-
-    /// Patch the `bilanzierungsmethode` and/or `fallgruppe` typed columns on an
-    /// existing MaLo row **without** touching the JSONB payload or version.
-    ///
-    /// Called by `marktd` event_ingest when it receives
-    /// `de.mako.process.initiated` (PID 55001/44001) carrying
-    /// `bilanzierungsmethode` and/or `fallgruppe` extracted from the UTILMD
-    /// `TM+EM` / `TM+Z10` segments by the `makod` adapter.
-    ///
-    /// No-ops silently when the MaLo row does not yet exist — the values will
-    /// be set on the first `PUT /api/v1/malos` call instead.
-    async fn patch_typenmerkmal(
-        &self,
-        malo_id: &MaloId,
-        bilanzierungsmethode: Option<&str>,
-        fallgruppe: Option<&str>,
-    ) -> Result<(), MdmError>;
-
-    /// Apply a UTILMD Stammdatenänderung (GPKE Teil 4 / GeLi Gas) to the typed
-    /// MaLo columns — the granular counterpart of
-    /// [`patch_typenmerkmal`](Self::patch_typenmerkmal) over the full
-    /// changeable attribute set.
-    ///
-    /// Each `Some` field overwrites its column; each `None` leaves it unchanged
-    /// (`COALESCE`). The JSONB payload and the optimistic `version` are **not**
-    /// touched — a Stammdatenänderung is authoritative master data arriving over
-    /// EDIFACT, not an operator edit. Returns `true` when a row was updated and
-    /// `false` when the MaLo is not yet known locally (the change is then a
-    /// no-op; the row is created by the next `PUT /api/v1/malos`).
-    async fn patch_stammdaten(
-        &self,
-        malo_id: &MaloId,
-        patch: &MaloStammdatenPatch,
-    ) -> Result<bool, MdmError>;
-
-    /// Return the `MARKTLOKATION` with `rollenzuordnung` valid at `at`.
-    ///
-    /// `at` defaults to today (German local date).
-    async fn find(&self, malo_id: &MaloId, at: Date) -> Result<Option<MaloRecord>, MdmError>;
-
-    /// Return a paged list filtered by the given predicates.
-    ///
-    /// `at` is the reference date for `rollenzuordnung` validity.
-    async fn list(&self, filter: MaloFilter, at: Date) -> Result<PageResult<MaloRecord>, MdmError>;
-}
-
 /// A GPKE Teil 4 / GeLi Gas Stammdatenänderung applied to the typed
 /// `MESSLOKATION` columns (`LOC+Z17`, „Änderung Daten der MeLo").
 ///
@@ -607,156 +531,6 @@ impl MeloStammdatenPatch {
     pub fn is_empty(&self) -> bool {
         self.netzebene_messung.is_none() && self.regelzone.is_none()
     }
-}
-
-/// Read/write access to `MESSLOKATION` records.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait MeloRepository: Send + Sync {
-    /// Insert or update a `MESSLOKATION`.
-    ///
-    /// Takes the **typed** BO for the same reason
-    /// [`MaloRepository::upsert`] does — see
-    /// [`MeloShadowColumns`](crate::bo4e::MeloShadowColumns).
-    ///
-    /// Returns the new version number.
-    async fn upsert(
-        &self,
-        melo_id: &MeloId,
-        malo_id: Option<&MaloId>,
-        data: &rubo4e::current::Messlokation,
-        if_match: Option<i64>,
-        bo4e_version: &str,
-    ) -> Result<i64, MdmError>;
-
-    /// Return the `MESSLOKATION` record.
-    async fn find(&self, melo_id: &MeloId) -> Result<Option<MeloRecord>, MdmError>;
-
-    /// Apply a UTILMD Stammdatenänderung (`LOC+Z17`) to the typed MeLo columns —
-    /// the MeLo counterpart of [`MaloRepository::patch_stammdaten`].
-    ///
-    /// Each `Some` field overwrites its column via `COALESCE`; each `None` leaves
-    /// it unchanged. The JSONB payload (`data`, `standorteigenschaften`) and the
-    /// optimistic `version` are **not** touched. Returns `true` when a row was
-    /// updated and `false` when the MeLo is not yet known locally (no-op).
-    async fn patch_stammdaten(
-        &self,
-        melo_id: &MeloId,
-        patch: &MeloStammdatenPatch,
-    ) -> Result<bool, MdmError>;
-}
-
-/// Read/write access to ERP webhook subscriptions.
-///
-/// Unlike the other repositories here, every method returns an explicitly
-/// `Send` future rather than using bare `async fn`. The fan-out worker
-/// (`marktd::fanout`) is generic over this trait, and a bare AFIT future is
-/// not `Send` in a generic context — which forced the worker onto a dedicated
-/// OS thread with its own current-thread runtime and a `LocalSet`, an entire
-/// thread spent on an accidental auto-trait bound. With `+ Send` the worker is
-/// an ordinary `tokio::spawn`.
-pub trait SubscriptionRepository: Send + Sync {
-    /// Insert or update a subscription.
-    ///
-    /// `webhook_secret` is the HMAC signing key and is stored **in plaintext** —
-    /// it is an integrity secret a subscriber uses to verify a delivery came
-    /// from this hub, not a confidentiality key over customer data. Protect it
-    /// with database-level controls (least-privilege grants on `subscriptions`,
-    /// storage encryption); see the marktd README, "Webhook secret at rest".
-    ///
-    /// Returns the new version number.
-    fn upsert(&self, sub: Subscription) -> impl Future<Output = Result<i64, MdmError>> + Send;
-
-    /// Return a subscription by subscriber ID.
-    fn find(
-        &self,
-        subscriber_id: &str,
-    ) -> impl Future<Output = Result<Option<Subscription>, MdmError>> + Send;
-
-    /// Deactivate a subscription so it stops matching future fan-outs.
-    ///
-    /// A soft delete by design: `event_delivery` rows reference the subscriber
-    /// and are the § 147 AO / GoBD record that a market event was (or was not)
-    /// delivered, so the row itself must survive. Returns `false` when no such
-    /// subscription exists.
-    fn deactivate(
-        &self,
-        subscriber_id: &str,
-    ) -> impl Future<Output = Result<bool, MdmError>> + Send;
-
-    /// List all active subscriptions.
-    fn list_active(&self) -> impl Future<Output = Result<Vec<Subscription>, MdmError>> + Send;
-
-    /// Return all active subscriptions that match a given event type and role.
-    ///
-    /// Used by the fan-out worker to select delivery targets.
-    ///
-    /// `role` and `sparte` are both `None` when the event does not carry one.
-    /// That means *not scoped by this axis* and matches every subscriber —
-    /// an event with no Marktrolle is not an event for the empty Marktrolle.
-    fn list_matching(
-        &self,
-        event_type: &str,
-        role: Option<&str>,
-        sparte: Option<&str>,
-    ) -> impl Future<Output = Result<Vec<Subscription>, MdmError>> + Send;
-}
-
-/// Read/write access to the process correlation index.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait CorrelationIndex: Send + Sync {
-    /// Insert a new correlation entry (idempotent — duplicate `process_id` is a no-op).
-    async fn insert(&self, entry: CorrelationEntry) -> Result<(), MdmError>;
-
-    /// Update status and `completed_at` for a process.
-    async fn update_status(
-        &self,
-        process_id: Uuid,
-        status: ProcessStatus,
-        completed_at: Option<time::OffsetDateTime>,
-    ) -> Result<(), MdmError>;
-
-    /// Update `edifact_conv_id` when the first `de.mako.*` event is received.
-    async fn update_edifact_conv_id(&self, process_id: Uuid, conv_id: Uuid)
-    -> Result<(), MdmError>;
-
-    /// Look up by ERP order ID (`Idempotency-Key` from command submission).
-    async fn find_by_erp_order_id(
-        &self,
-        erp_order_id: &str,
-    ) -> Result<Option<CorrelationEntry>, MdmError>;
-
-    /// Look up by `process_id`.
-    async fn find_by_process_id(
-        &self,
-        process_id: Uuid,
-    ) -> Result<Option<CorrelationEntry>, MdmError>;
-
-    /// Return correlations matching the filter.
-    async fn list(&self, filter: CorrelationFilter) -> Result<Vec<CorrelationEntry>, MdmError>;
-}
-
-/// Read/write access to the trading-partner directory.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait PartnerRepository: Send + Sync {
-    /// Insert or update a trading partner.
-    ///
-    /// Returns the new version number.
-    async fn upsert(&self, partner: PartnerRecord) -> Result<i64, MdmError>;
-
-    /// Return a partner by their 13-digit `MarktpartnerId`.
-    async fn find(&self, id: &MarktpartnerId) -> Result<Option<PartnerRecord>, MdmError>;
-
-    /// List all partners.
-    async fn list(&self) -> Result<Vec<PartnerRecord>, MdmError>;
 }
 
 // ── Preisblatt ───────────────────────────────────────────────────────────────
@@ -812,40 +586,6 @@ pub struct PreisblattRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
-/// Read/write access to NB price sheets.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait PreisblattRepository: Send + Sync {
-    /// Upsert a `PreisblattNetznutzung` for the given NB GLN.
-    ///
-    /// Multiple records per GLN are stored; they are distinguished by the
-    /// `gueltigkeit.startdatum` inside `data`.
-    ///
-    /// `source` tracks how the record entered the system: `Api` for operator
-    /// REST uploads, `Mako` for engine-ingested PRICAT 27003 messages.
-    /// An `Api`-sourced sheet is never overwritten by a `Mako` ingest unless
-    /// `force = true`.
-    async fn upsert(
-        &self,
-        nb_mp_id: &str,
-        data: serde_json::Value,
-        bo4e_version: &str,
-        source: PreisblattSource,
-    ) -> Result<(), MdmError>;
-
-    /// Return the price sheet for `nb_mp_id` that was valid on `billing_date`
-    /// (ISO 8601 date string, e.g. `"2025-06-15"`).
-    ///
-    /// Returns `None` when no matching entry is found.
-    async fn find_for_date(
-        &self,
-        nb_mp_id: &str,
-        billing_date: &str,
-    ) -> Result<Option<PreisblattRecord>, MdmError>;
-}
-
 // ── PreisblattMessung (MSB metering price sheets — B5) ───────────────────────
 
 /// A stored `PreisblattMessung` record from the MSB.
@@ -877,40 +617,6 @@ pub struct PreisblattMessungRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
-/// Read/write access to MSB (Messstellenbetreiber) metering price sheets.
-///
-/// Used by `invoicd` for PID 31009 (`MSB-Rechnung`) tariff plausibility checks:
-/// positions 4 (Grundpreis Messung) and 5 (Arbeitspreis Messung).
-///
-/// Source: WiM AHB BK6-24-174.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait PreisblattMessungRepository: Send + Sync {
-    /// Upsert a `PreisblattMessung` for the given MSB MP-ID.
-    ///
-    /// Conflicts on `(msb_mp_id, valid_from)` perform an in-place update.
-    /// An `Api`-sourced sheet is never overwritten by a `Mako` ingest.
-    async fn upsert_messung(
-        &self,
-        msb_mp_id: &str,
-        data: serde_json::Value,
-        bo4e_version: &str,
-        source: PreisblattSource,
-    ) -> Result<(), MdmError>;
-
-    /// Return the `PreisblattMessung` for `msb_mp_id` valid on `billing_date`
-    /// (ISO 8601 date string, e.g. `"2025-06-15"`).
-    ///
-    /// Returns `None` when no matching entry is found.
-    async fn find_messung_for_date(
-        &self,
-        msb_mp_id: &str,
-        billing_date: &str,
-    ) -> Result<Option<PreisblattMessungRecord>, MdmError>;
-}
-
 // ── PreisblattKonzessionsabgabe (B3) ─────────────────────────────────────────
 
 /// A stored `PreisblattKonzessionsabgabe` record.
@@ -938,40 +644,6 @@ pub struct PreisblattKaRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
-/// Read/write access to `PreisblattKonzessionsabgabe` records.
-///
-/// Used by `netzbilanzd` for INVOIC 31001/31002 KA tariff positions.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait PreisblattKaRepository: Send + Sync {
-    /// Upsert a `PreisblattKonzessionsabgabe` for the given NB MP-ID.
-    ///
-    /// Conflicts on `(nb_mp_id, sparte, kundengruppe_ka, valid_from)` are updated in-place.
-    /// `Api`-sourced sheets are never overwritten by `Mako` ingests.
-    async fn upsert_ka(
-        &self,
-        nb_mp_id: &str,
-        sparte: &str,
-        kundengruppe_ka: Option<&str>,
-        data: serde_json::Value,
-        bo4e_version: &str,
-        source: PreisblattSource,
-    ) -> Result<(), MdmError>;
-
-    /// Return the `PreisblattKonzessionsabgabe` valid on `billing_date` for the NB.
-    ///
-    /// Returns `None` when no matching entry is found.
-    async fn find_ka_for_date(
-        &self,
-        nb_mp_id: &str,
-        sparte: &str,
-        kundengruppe_ka: Option<&str>,
-        billing_date: &str,
-    ) -> Result<Option<PreisblattKaRecord>, MdmError>;
-}
-
 // ── PreisblattDienstleistung (MSB service price sheets) ──────────────────────
 
 /// A stored `PreisblattDienstleistung` record.
@@ -988,30 +660,6 @@ pub struct PreisblattDienstleistungRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
-/// Read/write access to MSB service price sheets.
-///
-/// Used by `invoic-checker` for INVOIC 31009 service position validation
-/// and by `mako-wim` REQOTE/QUOTES (PIDs 35001/35002/35004/35005).
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait PreisblattDienstleistungRepository: Send + Sync {
-    async fn upsert_dienstleistung(
-        &self,
-        msb_mp_id: &str,
-        data: serde_json::Value,
-        bo4e_version: &str,
-        source: PreisblattSource,
-    ) -> Result<(), MdmError>;
-
-    async fn find_dienstleistung_for_date(
-        &self,
-        msb_mp_id: &str,
-        billing_date: &str,
-    ) -> Result<Option<PreisblattDienstleistungRecord>, MdmError>;
-}
-
 // ── PreisblattHardware (MSB hardware rental price sheets) ────────────────────
 
 /// A stored `PreisblattHardware` record.
@@ -1026,30 +674,6 @@ pub struct PreisblattHardwareRecord {
     pub created_at: time::OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
-}
-
-/// Read/write access to MSB hardware rental price sheets.
-///
-/// Required for NB → MSB settlement INVOIC 31009 hardware positions.
-/// `invoic-checker` check 5 cannot validate hardware positions without it.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait PreisblattHardwareRepository: Send + Sync {
-    async fn upsert_hardware(
-        &self,
-        msb_mp_id: &str,
-        data: serde_json::Value,
-        bo4e_version: &str,
-        source: PreisblattSource,
-    ) -> Result<(), MdmError>;
-
-    async fn find_hardware_for_date(
-        &self,
-        msb_mp_id: &str,
-        billing_date: &str,
-    ) -> Result<Option<PreisblattHardwareRecord>, MdmError>;
 }
 
 // ── PriCat (versioned PreisblattNetznutzung history + dispatch) ──────────────
@@ -1123,69 +747,6 @@ pub struct PriCatDispatchEntry {
     pub dispatched_at: time::OffsetDateTime,
     pub outcome: String,
     pub error_detail: Option<String>,
-}
-
-/// Read/write access to versioned PRICAT snapshots and the dispatch audit log.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait PriCatRepository: Send + Sync {
-    /// Insert or update a versioned PRICAT snapshot.
-    ///
-    /// Conflicts on `(nb_mp_id, tenant, valid_from)` perform an in-place update of
-    /// the payload and reset `dispatch_done_at` so the new version is re-dispatched.
-    ///
-    /// Returns the `UUID` of the upserted row.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-    )]
-    async fn upsert_version(
-        &self,
-        nb_mp_id: &str,
-        tenant: &str,
-        valid_from: time::Date,
-        valid_to: Option<time::Date>,
-        data: serde_json::Value,
-        bo4e_version: &str,
-        source: PreisblattSource,
-    ) -> Result<uuid::Uuid, MdmError>;
-
-    /// Return all PRICAT versions for the given NB GLN, newest first.
-    async fn list_versions(
-        &self,
-        nb_mp_id: &str,
-        tenant: &str,
-    ) -> Result<Vec<PriCatVersion>, MdmError>;
-
-    /// Return the single most-recent PRICAT version for the given NB.
-    async fn find_latest(
-        &self,
-        nb_mp_id: &str,
-        tenant: &str,
-    ) -> Result<Option<PriCatVersion>, MdmError>;
-
-    /// Return all versions whose dispatch has not yet completed (state ≠ Done).
-    async fn list_pending(&self, tenant: &str) -> Result<Vec<PriCatVersion>, MdmError>;
-
-    /// Mark a version as queued for dispatch.
-    async fn mark_queued(&self, id: uuid::Uuid) -> Result<(), MdmError>;
-
-    /// Mark a version as fully dispatched (all LF partners reached).
-    async fn mark_done(&self, id: uuid::Uuid) -> Result<(), MdmError>;
-
-    /// Mark a version dispatch as failed with an error message.
-    async fn mark_error(&self, id: uuid::Uuid, error: &str) -> Result<(), MdmError>;
-
-    /// Append a dispatch audit entry for one NB × LF dispatch attempt.
-    async fn log_dispatch(&self, entry: PriCatDispatchEntry) -> Result<(), MdmError>;
-
-    /// Return dispatch log entries for the given PRICAT version.
-    async fn dispatch_log(
-        &self,
-        pricat_version_id: uuid::Uuid,
-    ) -> Result<Vec<PriCatDispatchEntry>, MdmError>;
 }
 
 // ── NbContract (NB network contracts — typed, not opaque JSONB) ──────────────
@@ -1375,45 +936,6 @@ pub struct NbContractRecord {
     pub tenant: String,
     /// Optimistic-concurrency version counter.
     pub version: i64,
-}
-
-/// CRUD repository for NB network contracts.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait NbContractRepository: Send + Sync {
-    /// Upsert a NB contract record.  Returns the new version number.
-    #[must_use]
-    async fn upsert(&self, rec: NbContractRecord) -> Result<i64, MdmError>;
-
-    /// Find a contract by `contract_id`.
-    #[must_use]
-    async fn find(
-        &self,
-        contract_id: &str,
-        tenant: &str,
-    ) -> Result<Option<NbContractRecord>, MdmError>;
-
-    /// Find the contract active on `date` for `malo_id` within `tenant`.
-    ///
-    /// Returns the most recent contract whose `valid_from ≤ date < valid_to`
-    /// (or `valid_to IS NULL`).
-    #[must_use]
-    async fn find_active(
-        &self,
-        malo_id: &str,
-        date: time::Date,
-        tenant: &str,
-    ) -> Result<Option<NbContractRecord>, MdmError>;
-
-    /// List all NB contracts for a given `nb_mp_id` and `tenant`.
-    #[must_use]
-    async fn list_by_nb(
-        &self,
-        nb_mp_id: &str,
-        tenant: &str,
-    ) -> Result<Vec<NbContractRecord>, MdmError>;
 }
 
 // ── VersorgungsStatus ─────────────────────────────────────────────────────────
@@ -1706,7 +1228,7 @@ impl VersorgungsStatusRecord {
 
 /// Single entry in the supply-state change history of a MaLo.
 ///
-/// Populated by `VersorgungsStatusRepository::upsert` — each successful write
+/// Populated by `PgVersorgungsStatusRepository::upsert` — each successful write
 /// appends one row to `versorgungsstatus_history`.  Used by
 /// `GET /api/v1/versorgung/{malo_id}/history` and the `?at=YYYY-MM-DD`
 /// point-in-time query.
@@ -1735,227 +1257,6 @@ pub struct VersorgungsStatusHistoryRecord {
     /// UTC instant when this state became active (set when the upsert commits).
     #[serde(with = "time::serde::rfc3339")]
     pub valid_from: time::OffsetDateTime,
-}
-
-/// Read/write access to `VersorgungsStatus` records.
-///
-/// Exactly one row per `(malo_id, tenant)`. All writes use optimistic
-/// concurrency — callers must supply the version observed during the
-/// last read. A `MdmError::Conflict` response means a concurrent update
-/// won; retry after re-reading.
-///
-/// Every successful `upsert` atomically appends a row to
-/// `versorgungsstatus_history`, enabling point-in-time queries via `find_at`.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait VersorgungsStatusRepository: Send + Sync {
-    /// Insert (version 1) or update a `VersorgungsStatus` record.
-    ///
-    /// `if_version` is the caller's expected current version.
-    /// Pass `None` on first insert.  Returns the new version.
-    ///
-    /// Returns `MdmError::Conflict` when `if_version` does not match the
-    /// stored version (optimistic locking violation).
-    ///
-    /// Every successful write appends one row to `versorgungsstatus_history`.
-    #[must_use]
-    async fn upsert(
-        &self,
-        rec: VersorgungsStatusRecord,
-        if_version: Option<i64>,
-    ) -> Result<i64, MdmError>;
-
-    /// Return the current `VersorgungsStatus` for a MaLo, or `None` if unknown.
-    #[must_use]
-    async fn find(
-        &self,
-        malo_id: &MaloId,
-        tenant: &str,
-    ) -> Result<Option<VersorgungsStatusRecord>, MdmError>;
-
-    /// Return the supply state as it was on the given calendar date (German local
-    /// time, i.e. CET/CEST).
-    ///
-    /// Uses the `versorgungsstatus_history` table. Returns `None` when no
-    /// history exists on or before `at`.
-    ///
-    /// The SQL equivalent:
-    /// ```sql
-    /// SELECT * FROM versorgungsstatus_history
-    /// WHERE malo_id = $1 AND tenant = $2
-    ///   AND (valid_from AT TIME ZONE 'Europe/Berlin')::date <= $at
-    /// ORDER BY valid_from DESC LIMIT 1
-    /// ```
-    #[must_use]
-    async fn find_at(
-        &self,
-        malo_id: &MaloId,
-        tenant: &str,
-        at: Date,
-    ) -> Result<Option<VersorgungsStatusRecord>, MdmError>;
-
-    /// Return the full supply-state change history for a MaLo, newest first.
-    ///
-    /// Backed by the `versorgungsstatus_history` table.
-    #[must_use]
-    async fn find_history(
-        &self,
-        malo_id: &MaloId,
-        tenant: &str,
-        page: u32,
-        size: u32,
-    ) -> Result<PageResult<VersorgungsStatusHistoryRecord>, MdmError>;
-
-    /// Return all records for a tenant (used for bulk replay / re-projection).
-    #[must_use]
-    async fn list_by_tenant(
-        &self,
-        tenant: &str,
-        page: u32,
-        size: u32,
-    ) -> Result<PageResult<VersorgungsStatusRecord>, MdmError>;
-
-    /// Record an announced incoming Lieferant (partial update).
-    ///
-    /// Called when a UTILMD 55001 / 55077 / 44001 (`de.mako.process.initiated`,
-    /// NB side) is received. Adds one [`ZuordnungsStatus::Angekuendigt`]
-    /// assignment without touching `lieferstatus` or any running one.
-    ///
-    /// `prozent` is the share the Anmeldung registers — `Decimal::ONE_HUNDRED`
-    /// for an untranchierte Marktlokation, the Aufteilungsfaktor of the
-    /// Tranchengröße product for a Tranche. `tranche_id` names the Tranche
-    /// (`SG5 LOC+Z21`) when there is one.
-    ///
-    /// **Several may be pending at once.** A second supplier announcing the
-    /// same Marktlokation is what `E_0622` Prüfschritt 70 refuses with `A06`
-    /// and what 55038 / 44038 addresses; the projection records it either way,
-    /// because a decision the projection has already discarded cannot be made.
-    ///
-    /// Re-announcing the same `(lf_mp_id, tranche_id)` updates that assignment
-    /// in place, so an at-least-once redelivery is idempotent.
-    ///
-    /// Inserts a new row as `Unbeliefert` if none exists yet for this MaLo.
-    /// Appends to `versorgungsstatus_history` on every successful write.
-    #[must_use]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one assignment carries its full identity"
-    )]
-    async fn announce_lf_next(
-        &self,
-        malo_id: &MaloId,
-        tenant: &str,
-        lf_mp_id_next: &str,
-        lf_next_lieferbeginn: Option<Date>,
-        prozent: Decimal,
-        tranche_id: Option<&str>,
-        nb_mp_id: &str,
-        process_id: Option<Uuid>,
-    ) -> Result<(), MdmError>;
-
-    /// Promote an announced assignment to a running one.
-    ///
-    /// Called when UTILMD 55002 / 55003 / 44002 (`de.mako.process.completed`,
-    /// NB side) confirms the Anmeldung. Sets that assignment to
-    /// [`ZuordnungsStatus::Aktiv`] and `lieferstatus = Beliefert`.
-    ///
-    /// `lf_mp_id` names **which** announcement is confirmed. `None` means „the
-    /// one that is pending", which is well defined exactly while there is one —
-    /// the ordinary case, and what a Bestätigung payload that names no supplier
-    /// can mean. A Marktlokation carrying several pending announcements is
-    /// **not** confirmed by an unnamed Bestätigung: picking one of them would
-    /// assign the Marktlokation to a supplier the message never mentioned.
-    ///
-    /// On a tranchierte Marktlokation the other running assignments stay: an
-    /// Anmeldung for a 25 % Tranche does not displace the LFA holding the other
-    /// 75 %. On an untranchierte one the displaced 100 % assignment is removed.
-    ///
-    /// No-ops when no such announcement exists (idempotent re-delivery).
-    /// Appends to `versorgungsstatus_history` on every successful write.
-    #[must_use]
-    async fn confirm_supply(
-        &self,
-        malo_id: &MaloId,
-        tenant: &str,
-        lf_mp_id: Option<&str>,
-        process_id: Option<Uuid>,
-    ) -> Result<(), MdmError>;
-
-    /// End a running assignment, preserving every pending announcement.
-    ///
-    /// Called when UTILMD 55013/44013 (`de.mako.process.completed`) is
-    /// processed. Removes the running assignments named by `lf_mp_id` — or
-    /// **all** of them when it is `None`, which is what an untranchierte
-    /// Marktlokation's Abmeldung means — and leaves the announced ones intact
-    /// so a pending supplier switch is not lost.
-    ///
-    /// `lieferstatus` becomes `Unbeliefert` only once no running assignment is
-    /// left: on a tranchierte Marktlokation one LFA leaving does not make the
-    /// Marktlokation unsupplied, and treating it as if it did would trigger a
-    /// §38 EnWG Ersatzversorgung for a Marktlokation that still has suppliers.
-    ///
-    /// The NB is responsible for activating Ersatz/Grundversorgung (§38 EnWG)
-    /// when `lieferstatus` becomes `Unbeliefert` and nothing is announced.
-    /// Appends to `versorgungsstatus_history` on every successful write.
-    #[must_use]
-    async fn end_supply(
-        &self,
-        malo_id: &MaloId,
-        tenant: &str,
-        lf_mp_id: Option<&str>,
-        nb_mp_id: &str,
-        process_id: Option<Uuid>,
-    ) -> Result<(), MdmError>;
-
-    /// Drop a pending announcement without touching any running assignment.
-    ///
-    /// Invoked when a Lieferbeginn is cancelled or rejected (GPKE 55003 /
-    /// 55004, GeLi Gas 44003 / 44004), and by 55038 / 44038 „Aufhebung einer
-    /// zukünftigen Zuordnung" — which is the same operation addressed at an
-    /// **LFZ** rather than at the sender.
-    ///
-    /// `lf_mp_id` names whose announcement to drop; `None` drops every pending
-    /// one. Idempotent: a no-op when no such announcement exists.
-    async fn clear_lf_next(
-        &self,
-        malo_id: &MaloId,
-        tenant: &str,
-        lf_mp_id: Option<&str>,
-        process_id: Option<Uuid>,
-    ) -> Result<(), MdmError>;
-
-    /// Record the start of the statutory fallback supply (§38/§36 EnWG).
-    ///
-    /// Called when the EoG Zuordnung completes (UTILMD 55013/44013
-    /// `de.mako.process.completed`): the Grundversorger becomes the supplier
-    /// of record. Atomically sets
-    /// - `lieferstatus = Ersatzversorgung` or `Grundversorgung`
-    ///   (`eog_status` must be one of the two; any other value is an error),
-    /// - the running assignment replaced by a single 100 % `gv_mp_id` one
-    ///   beginning at `eog_seit`,
-    /// - `eog_seit = start of the fallback supply` (anchors the §38 Abs. 4
-    ///   3-month maximum for `Ersatzversorgung`),
-    ///
-    /// while preserving every announced assignment — a pending regular supplier
-    /// switch ends the fallback supply on confirmation.
-    /// Appends to `versorgungsstatus_history` on every successful write.
-    #[must_use]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "regulatory transition carries its full context"
-    )]
-    async fn begin_eog_supply(
-        &self,
-        malo_id: &MaloId,
-        tenant: &str,
-        gv_mp_id: &str,
-        nb_mp_id: &str,
-        eog_status: LieferStatus,
-        eog_seit: Option<Date>,
-        process_id: Option<Uuid>,
-    ) -> Result<(), MdmError>;
 }
 
 // ── Grundversorger (§36 EnWG) ─────────────────────────────────────────────────
@@ -1992,24 +1293,6 @@ pub struct GrundversorgerRecord {
     pub tenant: String,
 }
 
-/// Repository for the per-Netzgebiet Grundversorger determination (§36 EnWG).
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait GrundversorgerRepository: Send + Sync {
-    /// Fetch the Grundversorger for a Netzbetreiber and Sparte.
-    async fn find(
-        &self,
-        tenant: &str,
-        nb_mp_id: &str,
-        sparte: Sparte,
-    ) -> Result<Option<GrundversorgerRecord>, MdmError>;
-
-    /// Insert or update the Grundversorger entry.
-    async fn upsert(&self, record: &GrundversorgerRecord) -> Result<(), MdmError>;
-}
-
 // ── MSB-Zuordnung je Messlokation (dated timeline) ────────────────────────────
 
 /// One dated MSB assignment for a Messlokation.
@@ -2033,37 +1316,6 @@ pub struct MeloMsbZuordnung {
     /// Tenant identifier (not serialized in API responses).
     #[serde(skip_serializing, default)]
     pub tenant: String,
-}
-
-/// Repository for the per-Messlokation dated MSB timeline (WiM Teil 2 UC 4.1.1).
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait MeloMsbRepository: Send + Sync {
-    /// Record a new MSB assignment effective `valid_from`, closing the
-    /// previously-open assignment (`valid_to = valid_from`) atomically. A
-    /// re-assignment on an existing `valid_from` overwrites that row.
-    async fn assign_msb(
-        &self,
-        tenant: &str,
-        melo_id: &str,
-        msb_mp_id: &str,
-        valid_from: Date,
-    ) -> Result<(), MdmError>;
-
-    /// The MSB responsible for `melo_id` on `at` (point-in-time). `None` when no
-    /// assignment covers the date.
-    async fn find_msb_at(
-        &self,
-        tenant: &str,
-        melo_id: &str,
-        at: Date,
-    ) -> Result<Option<String>, MdmError>;
-
-    /// Full assignment history for a MeLo, newest first.
-    async fn history(&self, tenant: &str, melo_id: &str)
-    -> Result<Vec<MeloMsbZuordnung>, MdmError>;
 }
 
 // ── Bilanzierung (BO4E BO #3) ──────────────────────────────────────────────────
@@ -2217,33 +1469,6 @@ impl BilanzierungRecord {
     }
 }
 
-/// Repository for the first-class temporal BO4E `Bilanzierung` resource.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait BilanzierungRepository: Send + Sync {
-    /// Insert or update the Bilanzierung effective `bilanzierungsbeginn`; the
-    /// natural key is `(tenant, malo_id, bilanzierungsbeginn)`.
-    async fn upsert(&self, record: &BilanzierungRecord) -> Result<(), MdmError>;
-
-    /// The Bilanzierung effective for `malo_id` at instant `at` (point-in-time):
-    /// the newest one whose validity window contains `at`. `None` when none.
-    async fn find_at(
-        &self,
-        tenant: &str,
-        malo_id: &str,
-        at: time::OffsetDateTime,
-    ) -> Result<Option<BilanzierungRecord>, MdmError>;
-
-    /// Full Bilanzierung history for a MaLo, newest validity-start first.
-    async fn history(
-        &self,
-        tenant: &str,
-        malo_id: &str,
-    ) -> Result<Vec<BilanzierungRecord>, MdmError>;
-}
-
 // ── Netz-Element-Lokation (NeLo) ──────────────────────────────────────────────
 
 /// Stored NeLo record.
@@ -2303,57 +1528,6 @@ impl NeloStammdatenPatch {
     pub fn is_empty(&self) -> bool {
         self.netzebene.is_none() && self.steuerkanal.is_none()
     }
-}
-
-/// Read/write access to `NeLo` records.
-///
-/// One row per `(nelo_id, tenant)`.
-/// Writes use optimistic concurrency via `if_match` (ETag header version).
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait NeLoRepository: Send + Sync {
-    /// Insert or update a NeLo record.
-    ///
-    /// `if_match` = `None` for unconditional upsert (first write).
-    /// Returns the new version number.
-    #[must_use]
-    async fn upsert(&self, rec: NeLoRecord, if_match: Option<i64>) -> Result<i64, MdmError>;
-
-    /// Return a NeLo by `nelo_id`, or `None` if not found.
-    #[must_use]
-    async fn find(&self, nelo_id: &str, tenant: &str) -> Result<Option<NeLoRecord>, MdmError>;
-
-    /// Apply a UTILMD Stammdatenänderung (`LOC+Z18`) to the typed NeLo columns.
-    ///
-    /// `COALESCE` per column; the JSONB payload and `version` are untouched.
-    /// Returns `true` when a row was updated, `false` when the NeLo is unknown.
-    async fn patch_stammdaten(
-        &self,
-        nelo_id: &str,
-        tenant: &str,
-        patch: &NeloStammdatenPatch,
-    ) -> Result<bool, MdmError>;
-
-    /// Return all NeLos owned by a Netzbetreiber GLN.
-    #[must_use]
-    async fn list_by_nb(
-        &self,
-        nb_mp_id: &str,
-        tenant: &str,
-        page: u32,
-        size: u32,
-    ) -> Result<PageResult<NeLoRecord>, MdmError>;
-
-    /// Return all NeLos for a tenant (paged).
-    #[must_use]
-    async fn list_by_tenant(
-        &self,
-        tenant: &str,
-        page: u32,
-        size: u32,
-    ) -> Result<PageResult<NeLoRecord>, MdmError>;
 }
 
 // ── Tranche ──────────────────────────────────────────────────────────────────
@@ -2417,42 +1591,6 @@ impl TrancheStammdatenPatch {
     }
 }
 
-/// Read/write access to `Tranche` records.
-///
-/// One row per `(tranche_id, tenant)`.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait TrancheRepository: Send + Sync {
-    /// Insert or update a Tranche record. `if_match` = `None` for unconditional
-    /// upsert. Returns the new version number.
-    async fn upsert(&self, rec: TrancheRecord, if_match: Option<i64>) -> Result<i64, MdmError>;
-
-    /// Return a Tranche by `tranche_id`, or `None` if not found.
-    async fn find(&self, tranche_id: &str, tenant: &str)
-    -> Result<Option<TrancheRecord>, MdmError>;
-
-    /// Return all Tranchen of a Marktlokation (paged).
-    async fn list_by_malo(
-        &self,
-        malo_id: &str,
-        tenant: &str,
-        page: u32,
-        size: u32,
-    ) -> Result<PageResult<TrancheRecord>, MdmError>;
-
-    /// Apply a UTILMD Stammdatenänderung (`LOC+Z21`) to the typed Tranche
-    /// columns. `COALESCE` per column; JSONB and `version` untouched. Returns
-    /// `true` when a row was updated, `false` when the Tranche is unknown.
-    async fn patch_stammdaten(
-        &self,
-        tranche_id: &str,
-        tenant: &str,
-        patch: &TrancheStammdatenPatch,
-    ) -> Result<bool, MdmError>;
-}
-
 // ── MaloGridRecord ────────────────────────────────────────────────────────────
 
 /// NB grid topology record for a single Marktlokation.
@@ -2497,43 +1635,6 @@ pub struct MaloGridRecord {
     /// defaults to empty string when deserializing from the marktd API.
     #[serde(default)]
     pub tenant: String,
-}
-
-/// Read/write access to NB grid topology records (`malo_grid` table).
-///
-/// One row per `(malo_id, tenant)`.  Written by the NB's NIS adapter
-/// and by manual provisioning; read by `processd` NB module for Anmeldung STP evaluation.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait MaloGridRepository: Send + Sync {
-    /// Insert or replace the grid record for a MaLo.
-    ///
-    /// Idempotent — subsequent writes overwrite the previous record.
-    /// `updated_at` is set to `now()` by the repository implementation.
-    #[must_use]
-    async fn upsert(&self, rec: MaloGridRecord) -> Result<(), MdmError>;
-
-    /// Return the grid record for a MaLo, or `None` if not yet synced.
-    #[must_use]
-    async fn find(
-        &self,
-        malo_id: &MaloId,
-        tenant: &str,
-    ) -> Result<Option<MaloGridRecord>, MdmError>;
-
-    /// List all grid records for a given NB GLN and tenant (e.g. for bulk export).
-    #[must_use]
-    async fn list_by_nb(
-        &self,
-        nb_mp_id: &str,
-        tenant: &str,
-    ) -> Result<Vec<MaloGridRecord>, MdmError>;
-
-    /// Delete a grid record (e.g. when MaStR signals decommissioning).
-    #[must_use]
-    async fn delete(&self, malo_id: &MaloId, tenant: &str) -> Result<(), MdmError>;
 }
 
 // ── SteuerbareRessource (B4b) ─────────────────────────────────────────────────
@@ -2588,57 +1689,6 @@ impl SteuerbareRessourceStammdatenPatch {
     pub fn is_empty(&self) -> bool {
         self.konfigurationsprodukte.is_none()
     }
-}
-
-/// Persistent store for `SteuerbareRessource` registrations.
-///
-/// Populated by the WiM iMS Steuerungsauftrag process (PID 55168)
-/// and by operator REST uploads.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait SteuerbareRessourceRepository: Send + Sync {
-    /// Upsert a `SteuerbareRessource` for the given `sr_id` + tenant.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-    )]
-    async fn upsert_sr(
-        &self,
-        sr_id: &str,
-        tenant: &str,
-        malo_id: Option<&str>,
-        melo_id: Option<&str>,
-        data: serde_json::Value,
-        bo4e_version: &str,
-        konfigurationsprodukte: Option<serde_json::Value>,
-    ) -> Result<(), MdmError>;
-
-    /// Return the `SteuerbareRessource` for `sr_id`, or `None` if not found.
-    async fn find_sr(
-        &self,
-        sr_id: &str,
-        tenant: &str,
-    ) -> Result<Option<SteuerbareRessourceRecord>, MdmError>;
-
-    /// Return all `SteuerbareRessource` records for a MaLo.
-    async fn list_sr_by_malo(
-        &self,
-        malo_id: &str,
-        tenant: &str,
-    ) -> Result<Vec<SteuerbareRessourceRecord>, MdmError>;
-
-    /// Replace the `konfigurationsprodukte` array for an existing SR.
-    ///
-    /// Returns `Ok(true)` when the SR was found and updated,
-    /// `Ok(false)` when the SR does not exist (caller should return 404).
-    async fn replace_sr_konfigurationsprodukte(
-        &self,
-        sr_id: &str,
-        tenant: &str,
-        konfigurationsprodukte: serde_json::Value,
-    ) -> Result<bool, MdmError>;
 }
 
 // ── TechnischeRessource (B9) ─────────────────────────────────────────────────
@@ -2704,65 +1754,6 @@ impl TechnischeRessourceStammdatenPatch {
     }
 }
 
-/// Persistent store for `TechnischeRessource` registrations.
-///
-/// Populated by Redispatch 2.0 registration processes and by operator REST
-/// uploads.  Used by iMS E-mobility `Steuerungsauftrag` routing and flex-market
-/// clearing.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait TechnischeRessourceRepository: Send + Sync {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-    )]
-    async fn upsert_tr(
-        &self,
-        tr_id: &str,
-        tenant: &str,
-        malo_id: Option<&str>,
-        melo_id: Option<&str>,
-        nutzung: Option<&str>,
-        verbrauchsart: Option<&str>,
-        ist_fernschaltbar: Option<bool>,
-        data: serde_json::Value,
-        bo4e_version: &str,
-    ) -> Result<(), MdmError>;
-
-    async fn find_tr(
-        &self,
-        tr_id: &str,
-        tenant: &str,
-    ) -> Result<Option<TechnischeRessourceRecord>, MdmError>;
-
-    /// Return all `TechnischeRessource` records for a `MaLo`.
-    async fn list_tr_by_malo(
-        &self,
-        malo_id: &str,
-        tenant: &str,
-    ) -> Result<Vec<TechnischeRessourceRecord>, MdmError>;
-
-    /// Return all `TechnischeRessource` records for a `MeLo`.
-    async fn list_tr_by_melo(
-        &self,
-        melo_id: &str,
-        tenant: &str,
-    ) -> Result<Vec<TechnischeRessourceRecord>, MdmError>;
-
-    /// Apply a UTILMD Stammdatenänderung (`LOC+Z20`) to the typed TR columns.
-    ///
-    /// `COALESCE` per column; the JSONB payload and `version` are untouched.
-    /// Returns `true` when a row was updated, `false` when the TR is unknown.
-    async fn patch_stammdaten(
-        &self,
-        tr_id: &str,
-        tenant: &str,
-        patch: &TechnischeRessourceStammdatenPatch,
-    ) -> Result<bool, MdmError>;
-}
-
 // ── Lokationszuordnung graph (B5) ────────────────────────────────────────────
 
 /// One directed edge of the MaKo location graph.
@@ -2796,95 +1787,6 @@ pub struct LokationszuordnungEdge {
     /// BFS traversal depth from root (0 = direct edge from root).
     #[serde(default)]
     pub depth: i32,
-}
-
-/// Persistent store for the `Lokationszuordnung` location graph.
-///
-/// Enables single-query recursive traversal of the full MaLo → MeLo → NeLo →
-/// SR/TR graph for topology-dependent operations (Redispatch 2.0, iMS E-mobility
-/// Steuerungsauftrag routing, MSB Stammdaten hierarchy).
-///
-/// # Single-write-path invariant (MaLo ↔ MeLo)
-///
-/// The `melo → malo` edges of this graph are ALSO maintained by the MeLo write
-/// path (`MeloRepository::upsert` in marktd's PG implementation) in the same
-/// transaction that sets the `melo.malo_id` FK: the FK is a derived convenience
-/// for "current parent", the graph is the authoritative temporal history, and
-/// the two never contradict. Writers other than the MeLo PUT and the graph API
-/// must not touch `melo.malo_id` directly.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait LokationszuordnungRepository: Send + Sync {
-    /// Insert or replace a directed edge.
-    ///
-    /// For open-ended edges (`valid_from = None`), only one edge per
-    /// `(tenant, von_id, nach_id)` pair is kept.  Dated edges
-    /// (`valid_from = Some(date)`) allow temporal succession.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-    )]
-    async fn upsert_edge(
-        &self,
-        tenant: &str,
-        von_id: &str,
-        von_typ: Lokationstyp,
-        nach_id: &str,
-        nach_typ: Lokationstyp,
-        valid_from: Option<time::Date>,
-        valid_to: Option<time::Date>,
-        data: serde_json::Value,
-    ) -> Result<uuid::Uuid, MdmError>;
-
-    /// Recursively traverse the full location graph reachable from `root_id`.
-    ///
-    /// Returns all edges BFS-ordered by depth (depth 0 = direct edges from root).
-    /// Pass `at_date = None` to return all edges regardless of validity.
-    /// Pass `at_date = Some(d)` to filter to edges valid on date `d`.
-    ///
-    /// Traversal is capped at depth 8 to prevent runaway queries on malformed data.
-    async fn find_graph(
-        &self,
-        tenant: &str,
-        root_id: &str,
-        at_date: Option<time::Date>,
-    ) -> Result<Vec<LokationszuordnungEdge>, MdmError>;
-
-    /// Return direct (depth-0) edges FROM a given node, optionally filtered by date.
-    async fn list_edges_from(
-        &self,
-        tenant: &str,
-        von_id: &str,
-        at_date: Option<time::Date>,
-    ) -> Result<Vec<LokationszuordnungEdge>, MdmError>;
-
-    /// Hard-delete an edge by `(tenant, von_id, nach_id)`.
-    ///
-    /// Removes all temporal variants of the edge pair.
-    /// Returns `true` if at least one row was deleted.
-    async fn delete_edge(
-        &self,
-        tenant: &str,
-        von_id: &str,
-        nach_id: &str,
-    ) -> Result<bool, MdmError>;
-
-    /// Load the [`Lokationsbuendel`] rooted at `malo_id`, projected from the
-    /// typed edge graph (validity-filtered by `at_date`).
-    ///
-    /// Provided method — implementations get it for free on top of
-    /// [`find_graph`](Self::find_graph).
-    async fn load_buendel(
-        &self,
-        tenant: &str,
-        malo_id: &str,
-        at_date: Option<time::Date>,
-    ) -> Result<Lokationsbuendel, MdmError> {
-        let edges = self.find_graph(tenant, malo_id, at_date).await?;
-        Ok(Lokationsbuendel::from_graph(malo_id, &edges))
-    }
 }
 
 /// Error raised when a [`Lokationsbuendel`] violates a structural integrity rule.
@@ -3016,7 +1918,7 @@ pub struct Lokationsbuendel {
 
 impl Lokationsbuendel {
     /// Project the bundle rooted at `malo_id` from a set of graph edges
-    /// (typically the output of [`LokationszuordnungRepository::find_graph`]).
+    /// (typically the output of `PgLokationszuordnungRepository::find_graph`).
     ///
     /// Nodes are collected by [`Lokationstyp`] across every edge in `edges`; the
     /// root MaLo itself is excluded from the lists, and ids are de-duplicated.
@@ -3352,87 +2254,6 @@ pub struct GeraetRecord {
     pub version: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
-}
-
-/// Persistent store for Zähler (meters) and Geräte (devices).
-///
-/// Populated by WiM MSB/NB device handover processes (ORDERS PIDs 17001, 17002, 17009)
-/// and operator REST uploads.
-///
-/// Source: WiM AHB BK6-24-174; BO4E Zaehler/Geraet schemas.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait DeviceRepository: Send + Sync {
-    /// Upsert a `Zaehler` record.
-    /// `zaehler_typ` and `eichung_bis` are **derived from `data`**
-    /// ([`ZaehlerShadowColumns`](crate::bo4e::ZaehlerShadowColumns)), not passed
-    /// alongside it: `Zaehler` declares both, and asking for them twice let the
-    /// column contradict the document it shadows.
-    async fn upsert_zaehler(
-        &self,
-        zaehler_id: &str,
-        tenant: &str,
-        melo_id: &str,
-        data: &rubo4e::current::Zaehler,
-        bo4e_version: &str,
-    ) -> Result<(), MdmError>;
-
-    /// Return all `Zaehler` for a given MeLo-ID.
-    async fn list_zaehler_by_melo(
-        &self,
-        melo_id: &str,
-        tenant: &str,
-    ) -> Result<Vec<ZaehlerRecord>, MdmError>;
-
-    /// Return the `Zaehler` for a given `zaehler_id`, or `None` if not found.
-    async fn find_zaehler(
-        &self,
-        zaehler_id: &str,
-        tenant: &str,
-    ) -> Result<Option<ZaehlerRecord>, MdmError>;
-
-    /// Upsert a `Geraet` record.
-    /// `geraet_typ` is derived from `data.geraetetyp`, for the same reason
-    /// [`upsert_zaehler`](Self::upsert_zaehler) derives its columns.
-    async fn upsert_geraet(
-        &self,
-        geraet_id: &str,
-        tenant: &str,
-        zaehler_id: &str,
-        data: &rubo4e::current::Geraet,
-        bo4e_version: &str,
-    ) -> Result<(), MdmError>;
-
-    /// Return all `Geraete` for a given `zaehler_id`.
-    async fn list_geraete_by_zaehler(
-        &self,
-        zaehler_id: &str,
-        tenant: &str,
-    ) -> Result<Vec<GeraetRecord>, MdmError>;
-
-    /// Return a single `Geraet` by its `geraet_id`, or `None` if not found.
-    async fn find_geraet(
-        &self,
-        geraet_id: &str,
-        tenant: &str,
-    ) -> Result<Option<GeraetRecord>, MdmError>;
-
-    /// Atomically replace all `GeraetKonfiguration` entries for a `Geraet`.
-    ///
-    /// Returns `true` if the Geraet was found and updated, `false` if not found.
-    ///
-    /// The `updated_at` timestamp on each entry is set server-side; callers
-    /// should not set it in the request (it is overwritten).
-    ///
-    /// Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out.
-    async fn upsert_geraet_konfigurationen(
-        &self,
-        geraet_id: &str,
-        tenant: &str,
-        konfigurationen: Vec<GeraetKonfiguration>,
-    ) -> Result<bool, MdmError>;
 }
 
 // ── iMSys TOU registers: ZaehlzeitRegister + ZaehlzeitSaison ─────────────────
@@ -3825,61 +2646,6 @@ pub mod wall_clock {
     }
 }
 
-/// Persistence store for iMSys TOU registers.
-///
-/// Allows `edmd` to correctly classify MSCONS reads by tariff zone
-/// (HT vs NT) for iMSys smart meters without relying on the OBIS code alone.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait ZaehlzeitRepository: Send + Sync {
-    /// Create or update the register of `zaehler_id` the body identifies, and
-    /// return it as stored.
-    async fn upsert_register(
-        &self,
-        zaehler_id: &str,
-        tenant: &str,
-        body: &ZaehlzeitRegisterUpsert,
-    ) -> Result<ZaehlzeitRegisterRecord, MdmError>;
-
-    /// Return all registers for a given `zaehler_id`.
-    async fn list_registers_by_zaehler(
-        &self,
-        zaehler_id: &str,
-        tenant: &str,
-    ) -> Result<Vec<ZaehlzeitRegisterRecord>, MdmError>;
-
-    /// Create or update a window of `register_id`, which must be one of
-    /// `tenant`'s registers, and return it as stored.
-    ///
-    /// # Errors
-    /// [`MdmError::NotFound`] when `tenant` holds no register `register_id`.
-    async fn upsert_saison(
-        &self,
-        register_id: uuid::Uuid,
-        tenant: &str,
-        body: &ZaehlzeitSaisonUpsert,
-    ) -> Result<ZaehlzeitSaisonRecord, MdmError>;
-
-    /// Return all `ZaehlzeitSaison` entries for a register.
-    async fn list_saisons_by_register(
-        &self,
-        register_id: uuid::Uuid,
-        tenant: &str,
-    ) -> Result<Vec<ZaehlzeitSaisonRecord>, MdmError>;
-
-    /// Resolve the applicable tariff zone (`HT`|`NT`|`EINZEL`) for a Zähler at
-    /// a given local datetime.  Returns `None` if no matching window is found
-    /// (treat as `EINZEL` in that case).
-    async fn resolve_tariff_zone(
-        &self,
-        zaehler_id: &str,
-        tenant: &str,
-        local_datetime: time::PrimitiveDateTime,
-    ) -> Result<Option<String>, MdmError>;
-}
-
 // ── MMMA Gas settlement prices (Trading Hub Europe / MGV) ────────────────────
 
 /// A stored Gas MMM Abrechnungspreis record.
@@ -3900,36 +2666,6 @@ pub struct MmmaPreisGasRecord {
     pub source: String,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
-}
-
-/// Read/write access to Gas MMM Abrechnungspreise.
-///
-/// `netzbilanzd` fetches these instead of requiring manual ERP input per billing run.
-/// `invoicd` uses them for MMM position plausibility check.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait MmmaPreisGasRepository: Send + Sync {
-    /// Upsert the Gas MMM price pair for a billing month + Marktgebiet.
-    async fn upsert_gas(
-        &self,
-        price_month: time::Date,
-        marktgebiet: &str,
-        mehr_ct_kwh: rust_decimal::Decimal,
-        minder_ct_kwh: rust_decimal::Decimal,
-        source: &str,
-    ) -> Result<(), MdmError>;
-
-    /// Return the Gas MMM prices for a billing month. Returns `None` if not yet imported.
-    async fn find_gas(
-        &self,
-        price_month: time::Date,
-        marktgebiet: &str,
-    ) -> Result<Option<MmmaPreisGasRecord>, MdmError>;
-
-    /// List all Gas MMM price records, newest first.
-    async fn list_gas(&self, limit: i64) -> Result<Vec<MmmaPreisGasRecord>, MdmError>;
 }
 
 // ── Strom Mehr-/Mindermengenpreise ───────────────────────────────────────────
@@ -3960,26 +2696,6 @@ pub struct MmmPreisStromRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
-/// Read/write access to the Strom Mehr-/Mindermengenpreise.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait MmmPreisStromRepository: Send + Sync {
-    async fn upsert_strom(
-        &self,
-        price_month: time::Date,
-        mehr_ct_kwh: rust_decimal::Decimal,
-        minder_ct_kwh: rust_decimal::Decimal,
-        source: &str,
-    ) -> Result<(), MdmError>;
-
-    async fn find_strom(
-        &self,
-        price_month: time::Date,
-    ) -> Result<Option<MmmPreisStromRecord>, MdmError>;
-}
-
 // ── NB Energiemix (§42 EnWG annual grid-area renewable mix) ─────────────────
 
 /// A stored `NbEnergiemix` record.
@@ -4002,44 +2718,6 @@ pub struct NbEnergiemixRecord {
     /// Wall-clock time (UTC) when this record was last updated.
     #[serde(with = "time::serde::rfc3339::option", default)]
     pub updated_at: Option<time::OffsetDateTime>,
-}
-
-/// Read/write access to NB annual grid-area Energiemix (§42 EnWG).
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait NbEnergiemixRepository: Send + Sync {
-    /// Upsert the annual Energiemix for an NB.
-    ///
-    /// Idempotent: re-publishing the same year with updated values replaces
-    /// the existing row.
-    async fn upsert_energiemix(
-        &self,
-        tenant: &str,
-        nb_mp_id: &str,
-        gueltig_fuer: i16,
-        energiemix: serde_json::Value,
-        eeg_einspeisung_kwh: Option<i64>,
-        gesamtentnahme_kwh: Option<i64>,
-    ) -> Result<(), MdmError>;
-
-    /// Return the `NbEnergiemix` for the given NB and year.
-    ///
-    /// When `year` is `None`, returns the most recent available year.
-    async fn find_energiemix(
-        &self,
-        tenant: &str,
-        nb_mp_id: &str,
-        year: Option<i16>,
-    ) -> Result<Option<NbEnergiemixRecord>, MdmError>;
-
-    /// Return all available years for a given NB (for history/audit).
-    async fn list_energiemix_years(
-        &self,
-        tenant: &str,
-        nb_mp_id: &str,
-    ) -> Result<Vec<i16>, MdmError>;
 }
 
 // ── ESA consent registry (§49 Abs. 2 Nr. 9 MsbG) ──────────────────────────────
@@ -4288,154 +2966,6 @@ impl ConsentDecision {
     }
 }
 
-/// Registry of ESA consents and framework agreements (`esa_einwilligungen`,
-/// `esa_framework_agreements`).
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait EinwilligungRepository: Send + Sync {
-    /// Grant a consent, superseding any active consent for the same
-    /// `(tenant, esa, Anschlussnutzer)`. Returns the new consent id.
-    async fn grant(&self, rec: EinwilligungRecord) -> Result<Uuid, MdmError>;
-
-    /// Fetch a consent by id (tenant-scoped).
-    async fn get(&self, tenant: &str, id: Uuid) -> Result<Option<EinwilligungRecord>, MdmError>;
-
-    /// List active (non-revoked) consents for an ESA.
-    async fn list_for_esa(
-        &self,
-        tenant: &str,
-        esa_mp_id: &str,
-    ) -> Result<Vec<EinwilligungRecord>, MdmError>;
-
-    /// Revoke a consent (Art. 7(3)). Returns the revoked record when it existed
-    /// and was still active, so the caller can fire the 17008 Abbestellung.
-    async fn revoke(&self, tenant: &str, id: Uuid) -> Result<Option<EinwilligungRecord>, MdmError>;
-
-    /// Close out every consent whose **`valid_to` has passed**, returning the
-    /// records so the caller can stop the deliveries they authorised.
-    ///
-    /// # Why expiry is not a quieter revocation
-    ///
-    /// A consent is the ESA's whole legal basis (§ 49 Abs. 2 Nr. 9 MsbG), and
-    /// `E_0256` Prüfschritt 8 makes its lapse market-visible: the MSB refuses a
-    /// *new* Bestellung with `A08` („widerrufen **oder ihre Gültigkeit ist
-    /// abgelaufen**"). But nothing in the protocol stops a delivery that is
-    /// already running — the only stop signal is the ORDERS 17008, and it is
-    /// the ESA that has to send it.
-    ///
-    /// Nothing else closes that gap: the gate refuses only *new* orders, the
-    /// registry's listing drops the row, and the MSB keeps sending until it is
-    /// told to stop.
-    ///
-    /// Idempotent by construction: it stamps `revoked_at` in the same statement
-    /// that selects, so a second sweep returns nothing and the 17008 is sent
-    /// once per consent.
-    async fn revoke_expired(
-        &self,
-        now: time::Date,
-        tenant: &str,
-    ) -> Result<Vec<EinwilligungRecord>, MdmError>;
-
-    /// Upsert a framework agreement.
-    async fn upsert_framework(&self, rec: EsaFrameworkAgreement) -> Result<(), MdmError>;
-
-    /// Fetch a framework agreement.
-    async fn get_framework(
-        &self,
-        tenant: &str,
-        msb_mp_id: &str,
-        esa_mp_id: &str,
-    ) -> Result<Option<EsaFrameworkAgreement>, MdmError>;
-
-    /// Record the prices of an accepted Angebot, replacing whatever was on
-    /// record for the same subscription and validity start.
-    ///
-    /// Written when the MSB confirms the Bestellung (ORDRSP 19011): that is the
-    /// moment the offer becomes the agreement, and before it there is nothing
-    /// an invoice could be checked against.
-    async fn upsert_esa_preise(&self, preise: &[EsaMessproduktPreis]) -> Result<(), MdmError>;
-
-    /// The prices in force between an ESA and an MSB on `at`.
-    ///
-    /// Across **all** of that pair's subscriptions, deliberately: an INVOIC
-    /// 31009 bills a Rahmenvertrag rather than a single Meldepunkt, and its
-    /// positions name Artikel-IDs without saying which subscription each
-    /// belongs to. Narrowing to one would refuse every position of the others.
-    /// Whether this MSB serves a Kapitel-4.6 Messprodukt on `at`, and in which
-    /// Abo mode.
-    ///
-    /// `E_0252` Prüfschritt 2 and `E_0256` Prüfschritte 4/5 ask a **commercial**
-    /// question the Codeliste cannot answer: which of the *optional* products
-    /// this MSB carries. Without a record both walks escalate every optional
-    /// order to an operator, which is the single change that moves most of them
-    /// to a decision.
-    ///
-    /// `Ok(None)` means the catalogue holds no entry for that product on that
-    /// date — „not carried" for an optional product, and **irrelevant** for a
-    /// Pflichtprodukt, which §34 Abs. 2 S. 2 Nr. 10 MsbG obliges the MSB to
-    /// serve whatever its catalogue says. The caller applies that rule; this
-    /// method reports only what is on file.
-    async fn esa_messprodukt_angebot(
-        &self,
-        tenant: &str,
-        msb_mp_id: &str,
-        messprodukt: &str,
-        at: time::Date,
-    ) -> Result<Option<EsaMessproduktAngebot>, MdmError>;
-
-    /// Record (or replace) what this MSB serves, for one validity window.
-    async fn upsert_esa_messprodukt_katalog(
-        &self,
-        eintraege: &[EsaMessproduktAngebot],
-    ) -> Result<(), MdmError>;
-
-    /// Which **Messprodukt** an ORDERS 17007 Belegnummer subscribed to.
-    ///
-    /// `esa_messprodukt_preise` is the only place that mapping exists outside
-    /// the running `makod` process: `makod` files the accepted Angebot there on
-    /// the ORDRSP 19011 with the Bestellung's Belegnummer beside the product.
-    ///
-    /// `edmd`'s Typ-2 delivery surveillance needs it because the Codeliste
-    /// publishes a delivery cadence **per product** — the Rohdaten products say
-    /// „unverzüglich, jedoch spätestens bis 9:30 Uhr", the aufbereitete-Daten
-    /// ones defer to WiM Teil 2 Kap. 2.5.5 — and an inbound MSCONS 13027 names
-    /// only the Belegnummer (`SG1 RFF+AGI`), never the product.
-    ///
-    /// `Ok(None)` when no accepted offer names that Belegnummer, which is the
-    /// ordinary state for a delivery whose sender omitted the Muss.
-    async fn esa_messprodukt_of_bestellung(
-        &self,
-        tenant: &str,
-        bestellung_ref: &str,
-    ) -> Result<Option<String>, MdmError>;
-
-    async fn esa_preise_at(
-        &self,
-        tenant: &str,
-        esa_mp_id: &str,
-        msb_mp_id: &str,
-        at: time::Date,
-    ) -> Result<Vec<EsaMessproduktPreis>, MdmError>;
-
-    /// Gate an ESA message for `location_id` against the registry.
-    ///
-    /// A revoked consent or an unestablished framework agreement always blocks.
-    /// A *missing* consent record depends on `perspective`: lenient
-    /// ([`ConsentPerspective::MsbInbound`]) treats it as self-assertion and
-    /// allows; strict ([`ConsentPerspective::EsaOutbound`]) treats it as no
-    /// lawful basis and blocks.
-    async fn consent_check(
-        &self,
-        tenant: &str,
-        esa_mp_id: &str,
-        msb_mp_id: &str,
-        location_id: &str,
-        perspective: ConsentPerspective,
-    ) -> Result<ConsentDecision, MdmError>;
-}
-
 // ── §20b EnWG Netzzugangsplattform ────────────────────────────────────────────
 
 /// Use case of a §20b EnWG Netzzugangsplattform request (Abs. 2 Nr. 1–3).
@@ -4588,6 +3118,8 @@ mod partner_record_tests {
             rollencodetyp: Some(rubo4e::current::Rollencodetyp::Bdew),
             makoadresse: vec!["https://as4.musterstadt.example/msh".to_owned()],
             geschaeftspartner: serde_json::json!({}),
+            edi_zustimmung: None,
+            edi_extrahierbar: None,
             version: 1,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
         }
@@ -4692,34 +3224,6 @@ pub struct MabisZpRecord {
     /// Last write time, set by the repository.
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
-}
-
-/// Read/write access to the Bilanzierungsgebiet → MaBiS-Zählpunkt assignments.
-#[expect(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
-pub trait MabisZpRepository: Send + Sync {
-    /// Insert or replace the assignment for a Bilanzierungsgebiet.
-    ///
-    /// Idempotent; `updated_at` is set by the implementation.
-    #[must_use]
-    async fn upsert(&self, rec: MabisZpRecord) -> Result<(), MdmError>;
-
-    /// Return the assignment for a Bilanzierungsgebiet, or `None`.
-    ///
-    /// `None` is the signal to refuse the submission — never to fall back to the
-    /// Bilanzierungsgebiet EIC.
-    #[must_use]
-    async fn find(
-        &self,
-        bilanzierungsgebiet: &str,
-        tenant: &str,
-    ) -> Result<Option<MabisZpRecord>, MdmError>;
-
-    /// Every assignment for a tenant, ascending by Bilanzierungsgebiet.
-    #[must_use]
-    async fn list(&self, tenant: &str) -> Result<Vec<MabisZpRecord>, MdmError>;
 }
 
 #[cfg(test)]

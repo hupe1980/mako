@@ -200,6 +200,27 @@ pub enum DispatchError {
     },
     /// Command is known but has no workflow routing in this build.
     NotImplemented(String),
+    /// The outbound INVOIC may not go out as EDI to this recipient (§ 14
+    /// Abs. 1 Satz 6 Nr. 2, § 27 Abs. 38 UStG) — the rule's sentence, or the
+    /// missing record it turns on.
+    EdiUnzulaessig(String),
+    /// marktd, which holds the recipient's EDI agreement, did not answer.
+    MarktdUnavailable(String),
+    /// The `Rechnung` cannot go out as the INVOIC of its PID: the AHB requires
+    /// a place it does not fill, or the built message fails its Prüfschablone.
+    InvoicNichtDarstellbar {
+        /// The refusal, naming each place.
+        message: String,
+        /// The MIG places (`Nr`) the refusal names.
+        places: Vec<String>,
+    },
+    /// A process already holds this `invoice_ref` — the invoice was issued.
+    DuplicateInvoice {
+        /// The process the first command spawned.
+        process_id: ProcessId,
+        /// The Rechnungsnummer.
+        invoice_ref: String,
+    },
 }
 
 impl From<mako_engine::error::EngineError> for DispatchError {

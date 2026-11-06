@@ -1216,7 +1216,8 @@ async fn the_paper_fallback_follows_section_27_abs_38_ustg() {
         pg::attach_empfaenger_unternehmer(&pool, id, unternehmer)
             .await
             .expect("classify");
-        match billingd::handlers::record_with_model(&pool, &cfg, id).await {
+        match billingd::handlers::record_with_model_am(&pool, &cfg, id, date!(2028 - 02 - 15)).await
+        {
             Err(billingd::error::BillingError::Unprocessable { code, .. }) => code,
             other => panic!("expected a 422, got {other:?}"),
         }
@@ -1228,4 +1229,63 @@ async fn the_paper_fallback_follows_section_27_abs_38_ustg() {
         "MODEL_NOT_REPRESENTABLE"
     );
     assert_eq!(code_for("UNKNOWN-2028", None).await, "PAPIER_UNZULAESSIG");
+}
+
+/// § 27 Abs. 38 Nr. 2 UStG reads the Gesamtumsatz of the record's own
+/// Rechnungsaussteller: a 2027 supply by an issuer whose tax identity carries
+/// a 2026 figure under 800 000 EUR stays on paper, and the same document by an
+/// issuer with no entry — or with no recorded identity — is refused rather
+/// than admitted on another issuer's turnover.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_nr2_turnover_is_the_record_issuers_own() {
+    let Some((pool, _pg)) = test_pool("paper_fallback_issuer").await else {
+        return;
+    };
+    let cfg: billingd::config::BillingdConfig = serde_json::from_value(serde_json::json!({
+        "database": { "url": "postgres://localhost/x" },
+        "tenant": TENANT,
+        "productd_url": "http://localhost:9080",
+        "edmd_url": "http://localhost:8380",
+        "marktd_url": "http://localhost:8080",
+        "e_rechnung": { "gesamtumsatz": [
+            { "ust_id": "DE123456789", "jahr": 2026, "eur": "500000" }
+        ]}
+    }))
+    .expect("config parses");
+
+    let code_for = async |nr: &str, ust_id: Option<&str>| -> &'static str {
+        let json = body();
+        let mut rec = draft(dec!(100), nr, &json);
+        rec.product_code = nr;
+        rec.period_from = date!(2027 - 06 - 01);
+        rec.period_to = date!(2027 - 06 - 30);
+        let id = pg::insert_billing_record(&pool, &rec)
+            .await
+            .expect("insert");
+        pg::attach_en16931_blocked(&pool, id, "BR-O-11: category O beside S")
+            .await
+            .expect("block");
+        pg::attach_empfaenger_unternehmer(&pool, id, Some(true))
+            .await
+            .expect("classify");
+        pg::attach_aussteller(&pool, id, ust_id, None)
+            .await
+            .expect("issuer");
+        match billingd::handlers::record_with_model_am(&pool, &cfg, id, date!(2027 - 07 - 15)).await
+        {
+            Err(billingd::error::BillingError::Unprocessable { code, .. }) => code,
+            other => panic!("expected a 422, got {other:?}"),
+        }
+    };
+
+    assert_eq!(
+        code_for("NR2-OWN", Some("DE123456789")).await,
+        "MODEL_NOT_REPRESENTABLE"
+    );
+    assert_eq!(
+        code_for("NR2-OTHER", Some("DE999999998")).await,
+        "PAPIER_UNZULAESSIG"
+    );
+    assert_eq!(code_for("NR2-NONE", None).await, "PAPIER_UNZULAESSIG");
 }

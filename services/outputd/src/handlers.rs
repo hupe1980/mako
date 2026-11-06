@@ -913,7 +913,7 @@ impl IssueDocumentRequest {
 /// An E-Rechnung is owed „für eine Leistung an einen anderen Unternehmer für
 /// dessen Unternehmen" (§ 14 Abs. 2 Satz 2 Nr. 1 UStG); the paper graces of
 /// § 27 Abs. 38 Nr. 1/2 are decided by
-/// [`energy_billing::e_rechnung::sonstige_rechnung_zulaessig`], the decision
+/// [`mako_fristen::e_rechnung::sonstige_rechnung_zulaessig`], the decision
 /// billingd's paper path takes. A `POST` beside an electronic channel is a copy
 /// of a document that also went out electronically, and passes. A missing fact
 /// never admits paper.
@@ -928,7 +928,7 @@ pub fn pruefe_papierweg(
     uebermittelt: time::Date,
 ) -> OutputResult<()> {
     use crate::delivery::Channel;
-    use energy_billing::e_rechnung::{SonstigeRechnungFall, sonstige_rechnung_zulaessig};
+    use mako_fristen::e_rechnung::{Form, SonstigeRechnungFall, sonstige_rechnung_zulaessig};
     if kind != TemplateKind::Invoice || !channels.iter().all(|c| *c == Channel::Post) {
         return Ok(());
     }
@@ -957,8 +957,14 @@ pub fn pruefe_papierweg(
     sonstige_rechnung_zulaessig(SonstigeRechnungFall {
         ausgefuehrt,
         uebermittelt,
+        form: Form::Papier,
         empfaenger_unternehmer: req.empfaenger_unternehmer,
-        gesamtumsatz_vorjahr_eur: req.gesamtumsatz_vorjahr_eur,
+        zustimmung: None,
+        // Rounded up to the cent: a fraction above 800 000 EUR stays above it.
+        gesamtumsatz_vorjahr_cent: req
+            .gesamtumsatz_vorjahr_eur
+            .map(|eur| (eur * rust_decimal::Decimal::ONE_HUNDRED).ceil())
+            .and_then(|c| rust_decimal::prelude::ToPrimitive::to_i64(&c)),
     })
     .map(|_| ())
     .map_err(|e| refuse(e.to_string()))

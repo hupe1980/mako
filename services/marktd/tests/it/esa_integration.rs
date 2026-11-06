@@ -12,8 +12,7 @@
 )]
 
 use mako_markt::repository::{
-    ConsentCode, ConsentPerspective, EinwilligungRecord, EinwilligungRepository as _,
-    EsaFrameworkAgreement, EsaMessproduktPreis,
+    ConsentCode, ConsentPerspective, EinwilligungRecord, EsaFrameworkAgreement, EsaMessproduktPreis,
 };
 use marktd::pg::PgEinwilligungRepository;
 use sqlx::PgPool;

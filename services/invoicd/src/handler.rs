@@ -68,9 +68,6 @@ pub struct HandlerState {
     pub erp_webhook_url: Option<String>,
     /// Standard Webhooks signing secret for outbound ERP deliveries.
     pub erp_hmac_secret: Option<SecretString>,
-    /// `edmd` — required by `POST /api/v1/selbstausstellen`, which reads the
-    /// measured quantity for the Bilanzierungsmonat from it.
-    pub edmd: Option<mako_service::http::Upstream>,
     pub http_client: reqwest::Client,
 }
 
@@ -254,10 +251,9 @@ async fn process_invoic(
     // in days; the event is dead-lettered and `marktd` redelivers it.
     let row = pg::ReceiptRow {
         process_id,
-        invoice_ref: Some(incoming.invoice_ref.clone()),
+        invoice_ref: incoming.invoice_ref.clone(),
         rechnungsnummer: incoming.rechnung.rechnungsnummer.clone(),
         pid: pid as i16,
-        direction: pg::receipts::DIRECTION_INBOUND.to_owned(),
         sender_mp_id: incoming.sender_mp_id.clone(),
         receiver_gln: incoming.receiver_gln.clone(),
         malo_id: incoming.malo_id.clone(),
@@ -312,7 +308,6 @@ async fn process_invoic(
             &PaymentEventCtx {
                 process_id,
                 pid,
-                direction: pg::receipts::DIRECTION_INBOUND,
                 sender_mp_id: &incoming.sender_mp_id,
                 outcome: verdict.label,
                 pay_by: incoming.rechnung.faelligkeitsdatum_date(),
@@ -397,7 +392,6 @@ async fn process_invoic(
         &PaymentEventCtx {
             process_id,
             pid,
-            direction: pg::receipts::DIRECTION_INBOUND,
             sender_mp_id: &incoming.sender_mp_id,
             outcome: verdict.label,
             // The event carries the Zahlungsziel as a calendar date: BDEW
@@ -1158,7 +1152,6 @@ async fn dead_letter(
 pub struct PaymentEventCtx<'a> {
     pub process_id: Uuid,
     pub pid: u32,
-    pub direction: &'a str,
     pub sender_mp_id: &'a str,
     pub outcome: &'a str,
     pub pay_by: Option<time::Date>,
@@ -1190,7 +1183,6 @@ pub async fn emit_receipt_event(state: &HandlerState, ctx: &PaymentEventCtx<'_>)
         serde_json::json!({
             "process_id":     ctx.process_id.to_string(),
             "pid":            ctx.pid,
-            "direction":      ctx.direction,
             "sender_mp_id":   ctx.sender_mp_id,
             "outcome":        ctx.outcome,
             "pay_by":         ctx.pay_by.map(|d| d.to_string()),
@@ -1282,7 +1274,6 @@ pub async fn emit_receipt_event(state: &HandlerState, ctx: &PaymentEventCtx<'_>)
 pub fn ce_type_for(outcome: &str) -> &'static str {
     match outcome {
         "Dispute" => mako_events::invoic::RECEIPT_DISPUTED,
-        "Dispatched" => mako_events::invoic::RECEIPT_DISPATCHED,
         _ => mako_events::invoic::RECEIPT_SETTLED,
     }
 }
@@ -1608,7 +1599,6 @@ mod tests {
             marktrolle: crate::config::EmpfaengerRolle::Lieferant,
             erp_webhook_url: None,
             erp_hmac_secret: None,
-            edmd: None,
             http_client: reqwest::Client::new(),
         }
     }
@@ -1856,13 +1846,12 @@ mod tests {
         );
     }
 
-    /// Every `outcome` this service writes, from all three places that write one.
+    /// Every `outcome` this service writes, from both places that write one.
     ///
-    /// `Verdict::of` produces four of them; the other two are inline literals —
-    /// `selbstausstellen` marks an outbound document `Dispatched`, and
-    /// `resolve_dispute`'s SQL sets `Resolved`.
+    /// `Verdict::of` produces four of them; `resolve_dispute`'s SQL sets
+    /// `Resolved`.
     fn written_outcomes() -> BTreeSet<&'static str> {
-        let mut out = BTreeSet::from(["Dispatched", "Resolved"]);
+        let mut out = BTreeSet::from(["Resolved"]);
         for outcome in [CheckOutcome::Ok, CheckOutcome::Warn, CheckOutcome::Dispute] {
             for rechnung in [plain(), storno()] {
                 for threshold in [0i64, 1] {
@@ -2195,10 +2184,6 @@ mod tests {
         assert_eq!(
             ce_type_for("Dispute"),
             mako_events::invoic::RECEIPT_DISPUTED
-        );
-        assert_eq!(
-            ce_type_for("Dispatched"),
-            mako_events::invoic::RECEIPT_DISPATCHED
         );
         for settled in ["Ok", "Warn", "AcceptedPartial", "Resolved"] {
             assert_eq!(

@@ -18,7 +18,6 @@ use mako_markt::{
     cloudevents::{EventExtensions, MarktEvent},
     domain::{MaloId, MeloId},
     error::MdmError,
-    repository::MeloRepository,
 };
 use mako_service::Json;
 use rubo4e::current::{Messlokation, Standorteigenschaften};

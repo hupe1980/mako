@@ -1,4 +1,4 @@
-//! PostgreSQL implementation of [`TrancheRepository`].
+//! PostgreSQL storage: [`PgTrancheRepository`].
 //!
 //! A Tranche is a share of a Marktlokation's energy assigned to a distinct
 //! balancing responsibility (GPKE Teil 4 „Daten der Tranche"). One row per
@@ -6,7 +6,7 @@
 
 use mako_markt::{
     error::MdmError,
-    repository::{PageResult, TrancheRecord, TrancheRepository, TrancheStammdatenPatch},
+    repository::{PageResult, TrancheRecord, TrancheStammdatenPatch},
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
 
@@ -37,8 +37,10 @@ fn map_row(row: &PgRow) -> Result<TrancheRecord, sqlx::Error> {
     })
 }
 
-impl TrancheRepository for PgTrancheRepository {
-    async fn upsert(&self, rec: TrancheRecord, if_match: Option<i64>) -> Result<i64, MdmError> {
+impl PgTrancheRepository {
+    /// Insert or update a Tranche record. `if_match` = `None` for unconditional
+    /// upsert. Returns the new version number.
+    pub async fn upsert(&self, rec: TrancheRecord, if_match: Option<i64>) -> Result<i64, MdmError> {
         let rows_affected: u64 = if let Some(expected) = if_match {
             sqlx::query(
                 r"UPDATE tranche
@@ -109,7 +111,8 @@ impl TrancheRepository for PgTrancheRepository {
         }
     }
 
-    async fn find(
+    /// Return a Tranche by `tranche_id`, or `None` if not found.
+    pub async fn find(
         &self,
         tranche_id: &str,
         tenant: &str,
@@ -126,7 +129,8 @@ impl TrancheRepository for PgTrancheRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn list_by_malo(
+    /// Return all Tranchen of a Marktlokation (paged).
+    pub async fn list_by_malo(
         &self,
         malo_id: &str,
         tenant: &str,
@@ -170,7 +174,10 @@ impl TrancheRepository for PgTrancheRepository {
         })
     }
 
-    async fn patch_stammdaten(
+    /// Apply a UTILMD Stammdatenänderung (`LOC+Z21`) to the typed Tranche
+    /// columns. `COALESCE` per column; JSONB and `version` untouched. Returns
+    /// `true` when a row was updated, `false` when the Tranche is unknown.
+    pub async fn patch_stammdaten(
         &self,
         tranche_id: &str,
         tenant: &str,

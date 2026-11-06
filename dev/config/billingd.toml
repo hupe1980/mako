@@ -37,3 +37,10 @@ country      = "DE"
 contact_name = "Kundenservice"
 phone        = "+49 30 123456"
 email        = "rechnung@dev-energie.example"
+
+# § 27 Abs. 38 Nr. 2 UStG — the Rechnungsaussteller's Gesamtumsatz (§ 19 Abs. 2
+# UStG) per tax identity and year; a dev figure under the 800 000 EUR line.
+[[e_rechnung.gesamtumsatz]]
+ust_id = "DE123456789"
+jahr   = 2026
+eur    = "500000"

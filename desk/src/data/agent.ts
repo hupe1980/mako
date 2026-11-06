@@ -131,6 +131,20 @@ async function verdict(run: string, body: object, keepalive: boolean): Promise<v
   if (res.status !== 204) throw await failure(res, { dienst: "agentd", aktion: "bewerten" });
 }
 
+/**
+ * The waiting proposal of each Freigabe, by id: its run's answer so far
+ * (`running`, or concluded with its checked `vorschlag`), or null where agentd
+ * admitted none. Reading starts no run — agentd proposes once per Freigabe.
+ */
+export async function vorschlaege(ids: string[]): Promise<Record<string, Answer | null>> {
+  if (ids.length === 0) return {};
+  const res = await reach(
+    `/svc/agentd/api/v1/vorschlaege?freigabe=${ids.map(encodeURIComponent).join(",")}`,
+  );
+  if (!res.ok) throw await failure(res);
+  return (await res.json()) as Record<string, Answer | null>;
+}
+
 /** One skill, as agentd's catalog states it from its manifest. */
 export interface Faehigkeit {
   name: string;

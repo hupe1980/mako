@@ -8,7 +8,9 @@
 //!   Formatversion by identifier and a removed profile is a compile error.
 //!
 //! Also collapses "is any message type compiled in?" into the `any_message`
-//! cfg, which a dozen items across the crate are gated on.
+//! cfg, which a dozen items across the crate are gated on, and "is any
+//! builder compiled in?" into `any_builder` — every message type but INVOIC,
+//! whose outbound message is built from its profile, not by a builder.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -22,6 +24,7 @@ fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=profiles");
     println!("cargo::rustc-check-cfg=cfg(any_message)");
+    println!("cargo::rustc-check-cfg=cfg(any_builder)");
 
     let any_enabled = MESSAGE_FEATURES.iter().any(|f| {
         std::env::var_os(format!(
@@ -32,6 +35,13 @@ fn main() {
     });
     if any_enabled {
         println!("cargo::rustc-cfg=any_message");
+    }
+    let any_builder = MESSAGE_FEATURES
+        .iter()
+        .filter(|f| **f != "invoic")
+        .any(|f| std::env::var_os(format!("CARGO_FEATURE_{}", f.to_uppercase())).is_some());
+    if any_builder {
+        println!("cargo::rustc-cfg=any_builder");
     }
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");

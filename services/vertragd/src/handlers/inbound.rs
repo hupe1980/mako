@@ -471,6 +471,10 @@ async fn resolve_kunde(
         sepa_erlaubt: Some(false),
         erp_kunde_id: Some(angebot_id.to_string()),
         stromwiederverkaeufer: None,
+        // A prospect has agreed to nothing yet; each stays unrecorded.
+        zustimmung_sonstige_erechnung: None,
+        edi_zustimmung: None,
+        edi_extrahierbar: None,
         notizen: Some(format!("Interessent aus CPQ-Angebot {angebotsnummer}")),
     };
     pg::upsert_kunde(&ctx.pool, ctx.tenant(), &input)

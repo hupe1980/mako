@@ -261,16 +261,15 @@ pub const INVOIC_SONSTIGE_LEISTUNG_ABLEHNEN: &str = "invoic.sonstige-leistung.ab
 pub const INVOIC_NNE_ABSCHLAG_STELLEN: &str = "invoic.nne-abschlag.stellen";
 /// NB / GNB: issue the Netznutzungsrechnung (INVOIC 31002, both Sparten).
 pub const INVOIC_NNE_STELLEN: &str = "invoic.nne.stellen";
-/// NB / GNB: issue the Mehr-/Mindermengenrechnung to the LF (INVOIC 31005,
-/// both Sparten). The aggregated Gas MMM to the MGV is 31007 / 31008.
+/// NB / GNB: issue the Mehr-/Mindermengenrechnung to the LF, both Sparten —
+/// the Mindermenge as 31005, the Mehrmenge as the selbst ausgestellte 31006
+/// (INVOIC AHB 1.0b Kap. 3, S. 5). The aggregated Gas MMM to the MGV is
+/// 31007 / 31008.
 pub const INVOIC_MMM_STELLEN: &str = "invoic.mmm.stellen";
 /// NB / GNB: issue a Rechnung sonstige Leistung (INVOIC 31011).
 pub const INVOIC_SONSTIGE_LEISTUNG_STELLEN: &str = "invoic.sonstige-leistung.stellen";
 /// NB / MSB: issue the MSB-Rechnung (INVOIC 31009).
 pub const WIM_MSB_RECHNUNG_STELLEN: &str = "wim.msb-rechnung.stellen";
-/// LF: issue the self-billed Netznutzungsrechnung (INVOIC 31006,
-/// Mehr-/Mindermengen selbst ausgestellt).
-pub const GPKE_ABRECHNUNG_SELBSTAUSSTELLEN: &str = "gpke.abrechnung.selbstausstellen";
 
 // ── MaBiS Clearingverfahren ───────────────────────────────────────────────────
 
@@ -378,7 +377,6 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     INVOIC_MMM_STELLEN,
     INVOIC_SONSTIGE_LEISTUNG_STELLEN,
     WIM_MSB_RECHNUNG_STELLEN,
-    GPKE_ABRECHNUNG_SELBSTAUSSTELLEN,
 ];
 
 /// Constants `makod` itself needs but no out-of-process caller posts, with why.

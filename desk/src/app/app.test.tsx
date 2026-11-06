@@ -31,14 +31,14 @@ afterEach(() => {
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
   vergessen();
+  localStorage.removeItem("mako-desk.rolle");
 });
 
 describe("the Desk", () => {
-  it("opens on Prozesse with the Rolle badge in the toolbar", async () => {
+  it("opens on Heute with the Rolle badge in the toolbar", async () => {
     await open("/");
-    expect(await screen.findByRole("heading", { name: "Prozesse", level: 1 })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Heute", level: 1 })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Rolle: Netz/ })).toBeTruthy();
-    expect(screen.getByText("Welcher Prozess?")).toBeTruthy();
   });
 
   it("shows makod's refusal for an unknown key", async () => {
@@ -244,19 +244,107 @@ describe("the Desk", () => {
         });
       }),
     );
+    localStorage.setItem("mako-desk.rolle", "lieferant");
     await open("/heute");
-    await screen.findByText("Früh");
-    const rows = screen.getAllByRole("row").map((r) => r.textContent ?? "");
-    expect(rows).toHaveLength(3);
-    expect(rows[0]).toContain("Früh");
-    expect(rows[1]).toContain("Spät");
-    expect(rows[2]).toContain("keine Frist");
+    await screen.findByRole("list", { name: "Später" });
+    const band = (name: string) =>
+      within(screen.getByRole("list", { name }))
+        .getAllByRole("listitem")
+        .map((r) => r.textContent ?? "");
+    // The names arrive in one vertragd read after the order.
+    await waitFor(() => expect(band("Später")[0]).toContain("Früh"));
+    const spaeter = band("Später");
+    expect(spaeter).toHaveLength(2);
+    expect(spaeter[0]).toContain("Früh");
+    expect(spaeter[1]).toContain("Spät");
+    const ohne = band("Ohne Frist");
+    expect(ohne).toHaveLength(1);
+    expect(ohne[0]).toContain("keine Frist");
     // A page of rows costs one read for the order and one for the names —
     // never a call per row, however many rows a tenant holds.
     expect(calls.filter((c) => c === "list_open_processes")).toHaveLength(1);
     expect(calls.filter((c) => c === "kunden_zu_malos")).toHaveLength(1);
     expect(calls.filter((c) => c === "get_process")).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "Nächste 50" })).toBeTruthy();
+    // processd has more than the page: the source line says so.
+    expect(
+      within(screen.getByRole("list", { name: "Quellen" })).getByText("Anmeldungen: 3+"),
+    ).toBeTruthy();
+  });
+
+  it("merges every source by Frist, files a Hinweis under its item and names a failed source", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/svc/agentd/api/v1/hinweise") {
+          const h = (task: string, wert: string, text: string) => ({
+            task,
+            run: `r-${task}`,
+            art: "triage",
+            skill: "deadline-alert-agent",
+            titel: "Fristen-Wächter",
+            text,
+            prioritaet: "normal",
+            faellig: "2031-01-03T09:00:00Z",
+            anker: [{ art: "malo", wert }],
+          });
+          return Response.json([
+            h("t-1", "41203768152", "Die Antwortfrist ist seit gestern abgelaufen."),
+            h("t-2", "30871225644", "Für diese MaLo fehlt die Zuordnung."),
+          ]);
+        }
+        if (url.startsWith("/svc/agentd/")) return Response.json({ faehigkeiten: [] });
+        const m = JSON.parse(String(init?.body));
+        let result: unknown = {};
+        if (m.method === "tools/call" && m.params.name === "list_overdue_processes") {
+          result = {
+            structuredContent: {
+              overdue: [
+                {
+                  process_id: "p-alt",
+                  pid: 55001,
+                  family: "gpke",
+                  state: "running",
+                  malo_id: "41203768152",
+                  deadline_at: "2020-01-01T10:00:00Z",
+                  deadline_source: "Antwort auf die Anmeldung",
+                },
+              ],
+              count: 1,
+              saturated: false,
+              limit: 500,
+            },
+          };
+        } else if (m.method === "tools/call" && m.params.name === "list_pending_approvals") {
+          result = { structuredContent: { freigaben: [], count: 0, saturated: false } };
+        } else if (m.method === "tools/call" && m.params.name === "list_korrekturbedarf") {
+          result = {
+            isError: true,
+            content: [{ type: "text", text: "read-mabis-run denied for this principal" }],
+          };
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
+          headers: { "content-type": "application/json", "mcp-session-id": "s" },
+        });
+      }),
+    );
+    await open("/heute");
+    const ueber = within(await screen.findByRole("list", { name: "Überfällig" }));
+    expect(ueber.getByText("Antwort auf die Anmeldung")).toBeTruthy();
+    // The Hinweis on the overdue MaLo sits under that item …
+    expect(ueber.getByText("Die Antwortfrist ist seit gestern abgelaufen.")).toBeTruthy();
+    // … and the one no item carries is an item of its own, at its own Frist.
+    expect(await screen.findByText("Für diese MaLo fehlt die Zuordnung.")).toBeTruthy();
+    expect(
+      screen.getByRole("list", { name: "Überfällig" }).textContent?.includes("fehlt die Zuordnung"),
+    ).toBe(false);
+    // A refused source names itself in the service's words; the rest still lists.
+    expect(
+      await within(screen.getByRole("list", { name: "Quellen" })).findByText(
+        /Korrekturbedarf: read-mabis-run denied/,
+      ),
+    ).toBeTruthy();
+    // The assistant is asked about the item in focus.
+    expect(screen.getByRole("heading", { name: /Fragen zu/ })).toBeTruthy();
   });
 
   it("states the Lage in the services' own counts, with no model in it", async () => {
@@ -287,6 +375,7 @@ describe("the Desk", () => {
         });
       }),
     );
+    localStorage.setItem("mako-desk.rolle", "lieferant");
     await open("/heute");
     const lage = within(await screen.findByRole("region", { name: "Lage" }));
     // Each figure is the one its service returned — the total is processd's
@@ -690,6 +779,8 @@ describe("the Desk", () => {
   function freigabeFetch(opts: {
     posts: { url: string; body: unknown }[];
     vorschlag?: Record<string, unknown>;
+    /** The proposal agentd computed for q-1 unasked, as `/vorschlaege` answers it. */
+    wartend?: Record<string, unknown>;
     /** processd's answer to the decision, when it is not a plain 200. */
     entscheidung?: Response;
   }) {
@@ -744,6 +835,9 @@ describe("the Desk", () => {
           schritte: [],
           hilfreich: null,
         });
+      }
+      if (url.startsWith("/svc/agentd/api/v1/vorschlaege")) {
+        return Response.json({ "q-1": opts.wartend ?? null });
       }
       if (url.startsWith("/svc/agentd/")) return Response.json([]);
       const m = JSON.parse(String(init?.body));
@@ -854,6 +948,84 @@ describe("the Desk", () => {
         { url: "/svc/agentd/api/v1/runs/r-9/bewertung", body: { vorschlag: "sent" } },
       ]),
     );
+  });
+
+  it("shows the proposal waiting under a Freigabe and U takes it in, sending nothing", async () => {
+    const posts: { url: string; body: unknown }[] = [];
+    const fetch = freigabeFetch({
+      posts,
+      wartend: {
+        run: "r-7",
+        status: "succeeded",
+        disclosure: "AI-generated.",
+        saetze: [],
+        vorschlag: {
+          aktion: "ablehnen",
+          antwortcode: "A02",
+          begruendung: "Die MaLo nimmt nicht an der Marktkommunikation teil.",
+          quelle: "processd/get_queue_entry",
+          belegt: true,
+        },
+        schritte: [],
+        hilfreich: null,
+      },
+    });
+    vi.stubGlobal("fetch", fetch);
+    await open("/heute");
+    const zeile = await screen.findByRole("button", { name: /verbundenen Lieferanten/ });
+    // Waiting under the row, marked as the model's, before anyone asked.
+    expect(
+      await screen.findByText("Die MaLo nimmt nicht an der Marktkommunikation teil."),
+    ).toBeTruthy();
+    expect(screen.getByText(/AI-generated\. Vorschlag: Ablehnen/)).toBeTruthy();
+    expect(fetch.mock.calls.some(([u]) => u === "/svc/agentd/api/v1/runs")).toBe(false);
+    zeile.focus();
+    fireEvent.keyDown(window, { key: "u" });
+    expect(zeile.getAttribute("aria-expanded")).toBe("true");
+    await waitFor(() =>
+      expect((screen.getByRole("radio", { name: /A02/ }) as HTMLInputElement).checked).toBe(true),
+    );
+    expect((screen.getByRole("radio", { name: "Ablehnen" }) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    expect(screen.getByText(/Vom Assistenten vorgeschlagen/)).toBeTruthy();
+    expect(posts).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    await waitFor(() =>
+      expect(posts).toEqual([
+        {
+          url: "/svc/processd/api/v1/queue/q-1/reject",
+          body: { antwort_code: "A02", antwort_tree: "E_0622" },
+        },
+        { url: "/svc/agentd/api/v1/runs/r-7/bewertung", body: { vorschlag: "sent" } },
+      ]),
+    );
+  });
+
+  it("decides a Freigabe in place from Heute, without leaving the list", async () => {
+    const posts: { url: string; body: unknown }[] = [];
+    vi.stubGlobal("fetch", freigabeFetch({ posts }));
+    await open("/heute");
+    const zeile = await screen.findByRole("button", { name: /verbundenen Lieferanten/ });
+    expect(zeile.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(zeile);
+    expect(zeile.getAttribute("aria-expanded")).toBe("true");
+    // The decision form opens under the row; Heute stays on screen.
+    expect(screen.getByRole("heading", { name: "Heute", level: 1 })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Ablehnen" }));
+    fireEvent.click(screen.getByRole("radio", { name: /A02/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    await waitFor(() =>
+      expect(posts).toEqual([
+        {
+          url: "/svc/processd/api/v1/queue/q-1/reject",
+          body: { antwort_code: "A02", antwort_tree: "E_0622" },
+        },
+      ]),
+    );
+    expect(screen.getByRole("heading", { name: "Heute", level: 1 })).toBeTruthy();
   });
 
   /** Choose „Ablehnen" with A02 and send it past the confirm. */

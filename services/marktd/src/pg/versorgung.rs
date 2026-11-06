@@ -1,11 +1,11 @@
-//! PostgreSQL implementation of [`VersorgungsStatusRepository`].
+//! PostgreSQL storage: [`PgVersorgungsStatusRepository`].
 
 use mako_markt::{
     domain::MaloId,
     error::MdmError,
     repository::{
         LfZuordnung, LieferStatus, PageResult, VersorgungsStatusHistoryRecord,
-        VersorgungsStatusRecord, VersorgungsStatusRepository,
+        VersorgungsStatusRecord,
     },
 };
 use rust_decimal::Decimal;
@@ -682,8 +682,17 @@ async fn replace_zuordnungen(
     Ok(())
 }
 
-impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
-    async fn upsert(
+impl PgVersorgungsStatusRepository {
+    /// Insert (version 1) or update a `VersorgungsStatus` record.
+    ///
+    /// `if_version` is the caller's expected current version.
+    /// Pass `None` on first insert.  Returns the new version.
+    ///
+    /// Returns `MdmError::Conflict` when `if_version` does not match the
+    /// stored version (optimistic locking violation).
+    ///
+    /// Every successful write appends one row to `versorgungsstatus_history`.
+    pub async fn upsert(
         &self,
         rec: VersorgungsStatusRecord,
         if_version: Option<i64>,
@@ -694,7 +703,8 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         Ok(new_version)
     }
 
-    async fn find(
+    /// Return the current `VersorgungsStatus` for a MaLo, or `None` if unknown.
+    pub async fn find(
         &self,
         malo_id: &MaloId,
         tenant: &str,
@@ -712,7 +722,20 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         opt.as_ref().map(map_row).transpose().map_err(internal)
     }
 
-    async fn find_at(
+    /// Return the supply state as it was on the given calendar date (German local
+    /// time, i.e. CET/CEST).
+    ///
+    /// Uses the `versorgungsstatus_history` table. Returns `None` when no
+    /// history exists on or before `at`.
+    ///
+    /// The SQL equivalent:
+    /// ```sql
+    /// SELECT * FROM versorgungsstatus_history
+    /// WHERE malo_id = $1 AND tenant = $2
+    ///   AND (valid_from AT TIME ZONE 'Europe/Berlin')::date <= $at
+    /// ORDER BY valid_from DESC LIMIT 1
+    /// ```
+    pub async fn find_at(
         &self,
         malo_id: &MaloId,
         tenant: &str,
@@ -741,7 +764,10 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
             .map_err(internal)
     }
 
-    async fn find_history(
+    /// Return the full supply-state change history for a MaLo, newest first.
+    ///
+    /// Backed by the `versorgungsstatus_history` table.
+    pub async fn find_history(
         &self,
         malo_id: &MaloId,
         tenant: &str,
@@ -790,7 +816,8 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         })
     }
 
-    async fn list_by_tenant(
+    /// Return all records for a tenant (used for bulk replay / re-projection).
+    pub async fn list_by_tenant(
         &self,
         tenant: &str,
         page: u32,
@@ -831,7 +858,32 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         })
     }
 
-    async fn announce_lf_next(
+    /// Record an announced incoming Lieferant (partial update).
+    ///
+    /// Called when a UTILMD 55001 / 55077 / 44001 (`de.mako.process.initiated`,
+    /// NB side) is received. Adds one [`ZuordnungsStatus::Angekuendigt`](mako_markt::repository::ZuordnungsStatus::Angekuendigt)
+    /// assignment without touching `lieferstatus` or any running one.
+    ///
+    /// `prozent` is the share the Anmeldung registers — `Decimal::ONE_HUNDRED`
+    /// for an untranchierte Marktlokation, the Aufteilungsfaktor of the
+    /// Tranchengröße product for a Tranche. `tranche_id` names the Tranche
+    /// (`SG5 LOC+Z21`) when there is one.
+    ///
+    /// **Several may be pending at once.** A second supplier announcing the
+    /// same Marktlokation is what `E_0622` Prüfschritt 70 refuses with `A06`
+    /// and what 55038 / 44038 addresses; the projection records it either way,
+    /// because a decision the projection has already discarded cannot be made.
+    ///
+    /// Re-announcing the same `(lf_mp_id, tranche_id)` updates that assignment
+    /// in place, so an at-least-once redelivery is idempotent.
+    ///
+    /// Inserts a new row as `Unbeliefert` if none exists yet for this MaLo.
+    /// Appends to `versorgungsstatus_history` on every successful write.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one assignment carries its full identity"
+    )]
+    pub async fn announce_lf_next(
         &self,
         malo_id: &MaloId,
         tenant: &str,
@@ -858,7 +910,26 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         tx.commit().await.map_err(internal)
     }
 
-    async fn confirm_supply(
+    /// Promote an announced assignment to a running one.
+    ///
+    /// Called when UTILMD 55002 / 55003 / 44002 (`de.mako.process.completed`,
+    /// NB side) confirms the Anmeldung. Sets that assignment to
+    /// [`ZuordnungsStatus::Aktiv`](mako_markt::repository::ZuordnungsStatus::Aktiv) and `lieferstatus = Beliefert`.
+    ///
+    /// `lf_mp_id` names **which** announcement is confirmed. `None` means „the
+    /// one that is pending", which is well defined exactly while there is one —
+    /// the ordinary case, and what a Bestätigung payload that names no supplier
+    /// can mean. A Marktlokation carrying several pending announcements is
+    /// **not** confirmed by an unnamed Bestätigung: picking one of them would
+    /// assign the Marktlokation to a supplier the message never mentioned.
+    ///
+    /// On a tranchierte Marktlokation the other running assignments stay: an
+    /// Anmeldung for a 25 % Tranche does not displace the LFA holding the other
+    /// 75 %. On an untranchierte one the displaced 100 % assignment is removed.
+    ///
+    /// No-ops when no such announcement exists (idempotent re-delivery).
+    /// Appends to `versorgungsstatus_history` on every successful write.
+    pub async fn confirm_supply(
         &self,
         malo_id: &MaloId,
         tenant: &str,
@@ -870,7 +941,23 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         tx.commit().await.map_err(internal)
     }
 
-    async fn end_supply(
+    /// End a running assignment, preserving every pending announcement.
+    ///
+    /// Called when UTILMD 55013/44013 (`de.mako.process.completed`) is
+    /// processed. Removes the running assignments named by `lf_mp_id` — or
+    /// **all** of them when it is `None`, which is what an untranchierte
+    /// Marktlokation's Abmeldung means — and leaves the announced ones intact
+    /// so a pending supplier switch is not lost.
+    ///
+    /// `lieferstatus` becomes `Unbeliefert` only once no running assignment is
+    /// left: on a tranchierte Marktlokation one LFA leaving does not make the
+    /// Marktlokation unsupplied, and treating it as if it did would trigger a
+    /// §38 EnWG Ersatzversorgung for a Marktlokation that still has suppliers.
+    ///
+    /// The NB is responsible for activating Ersatz/Grundversorgung (§38 EnWG)
+    /// when `lieferstatus` becomes `Unbeliefert` and nothing is announced.
+    /// Appends to `versorgungsstatus_history` on every successful write.
+    pub async fn end_supply(
         &self,
         malo_id: &MaloId,
         tenant: &str,
@@ -886,7 +973,26 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         tx.commit().await.map_err(internal)
     }
 
-    async fn begin_eog_supply(
+    /// Record the start of the statutory fallback supply (§38/§36 EnWG).
+    ///
+    /// Called when the EoG Zuordnung completes (UTILMD 55013/44013
+    /// `de.mako.process.completed`): the Grundversorger becomes the supplier
+    /// of record. Atomically sets
+    /// - `lieferstatus = Ersatzversorgung` or `Grundversorgung`
+    ///   (`eog_status` must be one of the two; any other value is an error),
+    /// - the running assignment replaced by a single 100 % `gv_mp_id` one
+    ///   beginning at `eog_seit`,
+    /// - `eog_seit = start of the fallback supply` (anchors the §38 Abs. 4
+    ///   3-month maximum for `Ersatzversorgung`),
+    ///
+    /// while preserving every announced assignment — a pending regular supplier
+    /// switch ends the fallback supply on confirmation.
+    /// Appends to `versorgungsstatus_history` on every successful write.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "regulatory transition carries its full context"
+    )]
+    pub async fn begin_eog_supply(
         &self,
         malo_id: &MaloId,
         tenant: &str,
@@ -904,7 +1010,16 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         tx.commit().await.map_err(internal)
     }
 
-    async fn clear_lf_next(
+    /// Drop a pending announcement without touching any running assignment.
+    ///
+    /// Invoked when a Lieferbeginn is cancelled or rejected (GPKE 55003 /
+    /// 55004, GeLi Gas 44003 / 44004), and by 55038 / 44038 „Aufhebung einer
+    /// zukünftigen Zuordnung" — which is the same operation addressed at an
+    /// **LFZ** rather than at the sender.
+    ///
+    /// `lf_mp_id` names whose announcement to drop; `None` drops every pending
+    /// one. Idempotent: a no-op when no such announcement exists.
+    pub async fn clear_lf_next(
         &self,
         malo_id: &MaloId,
         tenant: &str,

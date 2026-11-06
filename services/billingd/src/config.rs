@@ -157,46 +157,94 @@ pub struct NehsPreis {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ERechnungConfig {
-    /// The issuer's Gesamtumsatz (§ 19 Abs. 2 UStG) per calendar year.
-    /// § 27 Abs. 38 Nr. 2 UStG admits a sonstige Rechnung for a 2027 supply
-    /// only where the 2026 figure is „nicht mehr als 800 000 Euro"; an
-    /// unrecorded year never admits it.
+    /// The Gesamtumsatz (§ 19 Abs. 2 UStG) per Rechnungsaussteller and
+    /// calendar year. § 27 Abs. 38 Nr. 2 UStG admits a sonstige Rechnung for a
+    /// 2027 supply only where the issuer's 2026 figure is „nicht mehr als
+    /// 800 000 Euro"; an issuer or a year with no entry never admits it.
     #[serde(default)]
     pub gesamtumsatz: Vec<Gesamtumsatz>,
 }
 
-/// One year's Gesamtumsatz of the Rechnungsaussteller.
+/// One year's Gesamtumsatz of one Rechnungsaussteller, named by the tax
+/// identity it invoices under — exactly one of `ust_id` and `steuernummer`.
+///
+/// Keyed on the issuer, not the deployment: the figure is the Unternehmer's,
+/// and a deployment that changes its `seller_vat_id` / `seller_tax_number`
+/// must not carry another issuer's turnover onto its records.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Gesamtumsatz {
+    /// The issuer's USt-IdNr., as `seller_vat_id` carries it.
+    #[serde(default)]
+    pub ust_id: Option<String>,
+    /// The issuer's Steuernummer, as `seller_tax_number` carries it.
+    #[serde(default)]
+    pub steuernummer: Option<String>,
     /// The calendar year.
     pub jahr: i32,
     /// EUR, nach vereinnahmten Entgelten (§ 19 Abs. 2 Satz 1 UStG).
     pub eur: Decimal,
 }
 
+/// The Rechnungsaussteller's tax identity as a billing record carries it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Steueridentitaet<'a> {
+    /// The USt-IdNr. the record was issued under, if any.
+    pub ust_id: Option<&'a str>,
+    /// The Steuernummer the record was issued under, if any.
+    pub steuernummer: Option<&'a str>,
+}
+
+impl Gesamtumsatz {
+    /// The identity this entry names, as `(kind, value)`.
+    fn identitaet(&self) -> Option<(&'static str, &str)> {
+        match (self.ust_id.as_deref(), self.steuernummer.as_deref()) {
+            (Some(id), None) => Some(("ust_id", id)),
+            (None, Some(nr)) => Some(("steuernummer", nr)),
+            _ => None,
+        }
+    }
+
+    fn gilt_fuer(&self, aussteller: Steueridentitaet<'_>) -> bool {
+        match self.identitaet() {
+            Some(("ust_id", id)) => aussteller.ust_id == Some(id),
+            Some((_, nr)) => aussteller.steuernummer == Some(nr),
+            None => false,
+        }
+    }
+}
+
 impl ERechnungConfig {
-    /// Refuse a list that names a year twice or records a negative figure.
+    /// Refuse an entry that does not name exactly one tax identity, names an
+    /// (identity, year) twice, or records a negative figure.
     ///
-    /// [`Self::gesamtumsatz_im`] reads one figure per year; with two, a
-    /// second, corrected figure would be ignored without notice, and the
-    /// § 27 Abs. 38 Nr. 2 UStG test would run on whichever came first.
+    /// [`Self::gesamtumsatz_im`] reads one figure per issuer and year; with
+    /// two, a second, corrected figure would be ignored without notice, and
+    /// the § 27 Abs. 38 Nr. 2 UStG test would run on whichever came first.
     ///
     /// # Errors
     ///
-    /// Names the duplicated year or the negative figure.
+    /// Names the offending entry.
     pub fn validate(&self) -> anyhow::Result<()> {
-        let mut jahre = std::collections::BTreeSet::new();
+        let mut seen = std::collections::BTreeSet::new();
         for g in &self.gesamtumsatz {
+            let Some((art, wert)) = g.identitaet().filter(|(_, w)| !w.trim().is_empty()) else {
+                anyhow::bail!(
+                    "[e_rechnung] gesamtumsatz {}: name exactly one of `ust_id` and \
+                     `steuernummer` — the Gesamtumsatz is the Rechnungsaussteller's",
+                    g.jahr
+                );
+            };
             anyhow::ensure!(
-                jahre.insert(g.jahr),
-                "[e_rechnung] gesamtumsatz names {} twice — one Gesamtumsatz per calendar \
-                 year (§ 19 Abs. 2 UStG); remove the superseded entry",
+                seen.insert((art, wert.to_owned(), g.jahr)),
+                "[e_rechnung] gesamtumsatz names {art} {wert} for {} twice — one Gesamtumsatz \
+                 per Rechnungsaussteller and calendar year (§ 19 Abs. 2 UStG); remove the \
+                 superseded entry",
                 g.jahr
             );
             anyhow::ensure!(
                 g.eur >= Decimal::ZERO,
-                "[e_rechnung] gesamtumsatz {}: {} EUR is not a Gesamtumsatz",
+                "[e_rechnung] gesamtumsatz {art} {wert} {}: {} EUR is not a Gesamtumsatz",
                 g.jahr,
                 g.eur
             );
@@ -204,13 +252,31 @@ impl ERechnungConfig {
         Ok(())
     }
 
-    /// The recorded Gesamtumsatz of `jahr`, if any.
-    #[must_use]
-    pub fn gesamtumsatz_im(&self, jahr: i32) -> Option<Decimal> {
-        self.gesamtumsatz
+    /// The recorded Gesamtumsatz of `aussteller` in `jahr`, if any.
+    ///
+    /// # Errors
+    ///
+    /// The two figures, where the issuer's USt-IdNr. and Steuernummer each
+    /// carry an entry for the year and they disagree: neither can be told to be
+    /// the right one, so the grace is not admitted on either, and the refusal
+    /// says why.
+    pub fn gesamtumsatz_im(
+        &self,
+        aussteller: Steueridentitaet<'_>,
+        jahr: i32,
+    ) -> Result<Option<Decimal>, (Decimal, Decimal)> {
+        let mut figures = self
+            .gesamtumsatz
             .iter()
-            .find(|g| g.jahr == jahr)
-            .map(|g| g.eur)
+            .filter(|g| g.jahr == jahr && g.gilt_fuer(aussteller))
+            .map(|g| g.eur);
+        let Some(first) = figures.next() else {
+            return Ok(None);
+        };
+        match figures.find(|eur| *eur != first) {
+            Some(other) => Err((first, other)),
+            None => Ok(Some(first)),
+        }
     }
 }
 
@@ -1541,10 +1607,7 @@ mod seller_identity_tests {
         );
     }
 
-    /// A year listed twice is refused at startup: the lookup reads one figure,
-    /// so a second, corrected one would be ignored without notice.
-    #[test]
-    fn a_gesamtumsatz_year_listed_twice_is_refused() {
+    fn e_rechnung(gesamtumsatz: serde_json::Value) -> anyhow::Result<BillingdConfig> {
         let mut v = serde_json::json!({
             "database": { "url": "postgres://localhost/x" },
             "tenant": "9900357000004",
@@ -1553,20 +1616,97 @@ mod seller_identity_tests {
             "marktd_url": "http://localhost:8080",
             "seller_vat_id": "DE123456789",
         });
-        v["e_rechnung"] = serde_json::json!({ "gesamtumsatz": [
-            { "jahr": 2026, "eur": "750000" },
-            { "jahr": 2026, "eur": "850000" },
-        ]});
-        let c: BillingdConfig = serde_json::from_value(v.clone()).expect("config parses");
-        let err = c.validate().expect_err("2026 is named twice");
+        v["e_rechnung"] = serde_json::json!({ "gesamtumsatz": gesamtumsatz });
+        let c: BillingdConfig = serde_json::from_value(v)?;
+        c.validate()?;
+        Ok(c)
+    }
+
+    /// An (identity, year) listed twice is refused at startup: the lookup reads
+    /// one figure, so a second, corrected one would be ignored without notice.
+    /// The same year under two issuers is two figures, not a duplicate.
+    #[test]
+    fn a_gesamtumsatz_listed_twice_for_one_issuer_is_refused() {
+        let err = e_rechnung(serde_json::json!([
+            { "ust_id": "DE123456789", "jahr": 2026, "eur": "750000" },
+            { "ust_id": "DE123456789", "jahr": 2026, "eur": "850000" },
+        ]))
+        .expect_err("2026 is named twice for one issuer");
         assert!(err.to_string().contains("2026"), "{err}");
 
-        v["e_rechnung"] = serde_json::json!({ "gesamtumsatz": [
-            { "jahr": 2025, "eur": "750000" },
-            { "jahr": 2026, "eur": "850000" },
-        ]});
-        let c: BillingdConfig = serde_json::from_value(v).expect("config parses");
-        c.validate().expect("one figure per year");
+        e_rechnung(serde_json::json!([
+            { "ust_id": "DE123456789", "jahr": 2025, "eur": "750000" },
+            { "ust_id": "DE123456789", "jahr": 2026, "eur": "850000" },
+            { "steuernummer": "123/456/78901", "jahr": 2026, "eur": "50000" },
+        ]))
+        .expect("one figure per issuer and year");
+    }
+
+    /// An entry names exactly one tax identity — none, or both, is refused.
+    #[test]
+    fn a_gesamtumsatz_names_exactly_one_tax_identity() {
+        for entry in [
+            serde_json::json!({ "jahr": 2026, "eur": "1" }),
+            serde_json::json!({
+                "ust_id": "DE123456789", "steuernummer": "123/456/78901",
+                "jahr": 2026, "eur": "1"
+            }),
+            serde_json::json!({ "ust_id": " ", "jahr": 2026, "eur": "1" }),
+        ] {
+            let err = e_rechnung(serde_json::json!([entry])).expect_err("refused");
+            assert!(err.to_string().contains("exactly one"), "{err}");
+        }
+    }
+
+    /// The figure is selected by the record's Rechnungsaussteller: another
+    /// issuer's turnover, or none, never answers for it.
+    #[test]
+    fn the_gesamtumsatz_is_selected_by_the_issuer() {
+        let c = e_rechnung(serde_json::json!([
+            { "ust_id": "DE123456789", "jahr": 2026, "eur": "750000" },
+        ]))
+        .expect("valid");
+        let by_ust = |id| Steueridentitaet {
+            ust_id: Some(id),
+            steuernummer: None,
+        };
+        assert_eq!(
+            c.e_rechnung.gesamtumsatz_im(by_ust("DE123456789"), 2026),
+            Ok(Some(rust_decimal::dec!(750000)))
+        );
+        assert_eq!(
+            c.e_rechnung.gesamtumsatz_im(by_ust("DE999999999"), 2026),
+            Ok(None)
+        );
+        assert_eq!(
+            c.e_rechnung.gesamtumsatz_im(by_ust("DE123456789"), 2025),
+            Ok(None)
+        );
+        assert_eq!(
+            c.e_rechnung
+                .gesamtumsatz_im(Steueridentitaet::default(), 2026),
+            Ok(None),
+            "a record with no issuer identity has no figure"
+        );
+    }
+
+    /// An issuer whose USt-IdNr. and Steuernummer carry different figures for
+    /// one year has no figure the grace can rest on, and the answer says so.
+    #[test]
+    fn two_figures_for_one_issuer_are_named_not_hidden() {
+        let c = e_rechnung(serde_json::json!([
+            { "ust_id": "DE123456789", "jahr": 2026, "eur": "750000" },
+            { "steuernummer": "123/456/78901", "jahr": 2026, "eur": "900000" },
+        ]))
+        .expect("valid");
+        let beide = Steueridentitaet {
+            ust_id: Some("DE123456789"),
+            steuernummer: Some("123/456/78901"),
+        };
+        assert_eq!(
+            c.e_rechnung.gesamtumsatz_im(beide, 2026),
+            Err((rust_decimal::dec!(750000), rust_decimal::dec!(900000)))
+        );
     }
 
     /// With both, the USt-IdNr. is the one a counterparty can verify (VIES).

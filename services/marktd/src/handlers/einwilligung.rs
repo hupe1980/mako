@@ -29,8 +29,8 @@ use mako_markt::{
     cloudevents::MarktEvent,
     makod_client::MakodClient,
     repository::{
-        ConsentPerspective, EinwilligungRecord, EinwilligungRepository, EsaFrameworkAgreement,
-        EsaMessproduktAngebot, EsaMessproduktPreis,
+        ConsentPerspective, EinwilligungRecord, EsaFrameworkAgreement, EsaMessproduktAngebot,
+        EsaMessproduktPreis,
     },
 };
 use mako_service::Json;

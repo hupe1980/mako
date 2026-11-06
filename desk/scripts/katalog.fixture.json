@@ -39,7 +39,7 @@
       "aktiv": true,
       "ausloeser": [
         "mako_events::mako::PROCESS_FAILED",
-        "mako_events::mako::APERAK_TIMEOUT",
+        "mako_events::mako::ANTWORTFRIST_ABGELAUFEN",
         "mako_events::obs::DEADLINE_APPROACHING"
       ],
       "modell": null,
@@ -61,7 +61,7 @@
       "aktiv": true,
       "ausloeser": [
         "mako_events::mako::PROCESS_FAILED",
-        "mako_events::mako::APERAK_TIMEOUT",
+        "mako_events::mako::ANTWORTFRIST_ABGELAUFEN",
         "\"de.mako.aperak.*\""
       ],
       "modell": "anthropic/claude-sonnet-5",

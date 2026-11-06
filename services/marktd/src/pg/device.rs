@@ -1,12 +1,11 @@
-//! PostgreSQL implementations of [`SteuerbareRessourceRepository`],
-//! [`TechnischeRessourceRepository`], and [`DeviceRepository`].
+//! PostgreSQL storage: [`PgSteuerbareRessourceRepository`],
+//! [`PgTechnischeRessourceRepository`], and [`PgDeviceRepository`].
 
 use mako_markt::{
     bo4e::ZaehlerShadowColumns,
     error::MdmError,
     repository::{
-        DeviceRepository, GeraetKonfiguration, GeraetRecord, SteuerbareRessourceRecord,
-        SteuerbareRessourceRepository, TechnischeRessourceRecord, TechnischeRessourceRepository,
+        GeraetKonfiguration, GeraetRecord, SteuerbareRessourceRecord, TechnischeRessourceRecord,
         ZaehlerRecord,
     },
 };
@@ -14,7 +13,10 @@ use sqlx::{PgPool, Row};
 
 // ── SteuerbareRessource ───────────────────────────────────────────────────────
 
-/// PostgreSQL-backed [`SteuerbareRessourceRepository`].
+/// Persistent store for `SteuerbareRessource` registrations.
+///
+/// Populated by the WiM iMS Steuerungsauftrag process (PID 55168)
+/// and by operator REST uploads.
 #[derive(Clone, Debug)]
 pub struct PgSteuerbareRessourceRepository {
     pool: PgPool,
@@ -27,8 +29,13 @@ impl PgSteuerbareRessourceRepository {
     }
 }
 
-impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
-    async fn upsert_sr(
+impl PgSteuerbareRessourceRepository {
+    /// Upsert a `SteuerbareRessource` for the given `sr_id` + tenant.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
+    pub async fn upsert_sr(
         &self,
         sr_id: &str,
         tenant: &str,
@@ -65,7 +72,8 @@ impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
         Ok(())
     }
 
-    async fn find_sr(
+    /// Return the `SteuerbareRessource` for `sr_id`, or `None` if not found.
+    pub async fn find_sr(
         &self,
         sr_id: &str,
         tenant: &str,
@@ -96,7 +104,8 @@ impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
         }))
     }
 
-    async fn list_sr_by_malo(
+    /// Return all `SteuerbareRessource` records for a MaLo.
+    pub async fn list_sr_by_malo(
         &self,
         malo_id: &str,
         tenant: &str,
@@ -131,7 +140,11 @@ impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
             .collect())
     }
 
-    async fn replace_sr_konfigurationsprodukte(
+    /// Replace the `konfigurationsprodukte` array for an existing SR.
+    ///
+    /// Returns `Ok(true)` when the SR was found and updated,
+    /// `Ok(false)` when the SR does not exist (caller should return 404).
+    pub async fn replace_sr_konfigurationsprodukte(
         &self,
         sr_id: &str,
         tenant: &str,
@@ -167,7 +180,12 @@ impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
 
 // ── Device registry (Zaehler + Geraete) ──────────────────────────────────────
 
-/// PostgreSQL-backed [`DeviceRepository`].
+/// Persistent store for Zähler (meters) and Geräte (devices).
+///
+/// Populated by WiM MSB/NB device handover processes (ORDERS PIDs 17001, 17002, 17009)
+/// and operator REST uploads.
+///
+/// Source: WiM AHB BK6-24-174; BO4E Zaehler/Geraet schemas.
 #[derive(Clone, Debug)]
 pub struct PgDeviceRepository {
     pool: PgPool,
@@ -180,8 +198,13 @@ impl PgDeviceRepository {
     }
 }
 
-impl DeviceRepository for PgDeviceRepository {
-    async fn upsert_zaehler(
+impl PgDeviceRepository {
+    /// Upsert a `Zaehler` record.
+    /// `zaehler_typ` and `eichung_bis` are **derived from `data`**
+    /// ([`ZaehlerShadowColumns`]), not passed
+    /// alongside it: `Zaehler` declares both, and asking for them twice let the
+    /// column contradict the document it shadows.
+    pub async fn upsert_zaehler(
         &self,
         zaehler_id: &str,
         tenant: &str,
@@ -218,7 +241,8 @@ impl DeviceRepository for PgDeviceRepository {
         Ok(())
     }
 
-    async fn list_zaehler_by_melo(
+    /// Return all `Zaehler` for a given MeLo-ID.
+    pub async fn list_zaehler_by_melo(
         &self,
         melo_id: &str,
         tenant: &str,
@@ -238,7 +262,8 @@ impl DeviceRepository for PgDeviceRepository {
         Ok(rows.into_iter().map(row_to_zaehler).collect())
     }
 
-    async fn find_zaehler(
+    /// Return the `Zaehler` for a given `zaehler_id`, or `None` if not found.
+    pub async fn find_zaehler(
         &self,
         zaehler_id: &str,
         tenant: &str,
@@ -257,7 +282,10 @@ impl DeviceRepository for PgDeviceRepository {
         Ok(row.map(row_to_zaehler))
     }
 
-    async fn upsert_geraet(
+    /// Upsert a `Geraet` record.
+    /// `geraet_typ` is derived from `data.geraetetyp`, for the same reason
+    /// [`upsert_zaehler`](Self::upsert_zaehler) derives its columns.
+    pub async fn upsert_geraet(
         &self,
         geraet_id: &str,
         tenant: &str,
@@ -292,7 +320,8 @@ impl DeviceRepository for PgDeviceRepository {
         Ok(())
     }
 
-    async fn list_geraete_by_zaehler(
+    /// Return all `Geraete` for a given `zaehler_id`.
+    pub async fn list_geraete_by_zaehler(
         &self,
         zaehler_id: &str,
         tenant: &str,
@@ -312,7 +341,8 @@ impl DeviceRepository for PgDeviceRepository {
         Ok(rows.into_iter().map(row_to_geraet).collect())
     }
 
-    async fn find_geraet(
+    /// Return a single `Geraet` by its `geraet_id`, or `None` if not found.
+    pub async fn find_geraet(
         &self,
         geraet_id: &str,
         tenant: &str,
@@ -331,7 +361,15 @@ impl DeviceRepository for PgDeviceRepository {
         Ok(row.map(row_to_geraet))
     }
 
-    async fn upsert_geraet_konfigurationen(
+    /// Atomically replace all `GeraetKonfiguration` entries for a `Geraet`.
+    ///
+    /// Returns `true` if the Geraet was found and updated, `false` if not found.
+    ///
+    /// The `updated_at` timestamp on each entry is set server-side; callers
+    /// should not set it in the request (it is overwritten).
+    ///
+    /// Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out.
+    pub async fn upsert_geraet_konfigurationen(
         &self,
         geraet_id: &str,
         tenant: &str,
@@ -412,7 +450,11 @@ fn row_to_geraet(r: sqlx::postgres::PgRow) -> GeraetRecord {
 
 // ── TechnischeRessource (B9) ─────────────────────────────────────────────────
 
-/// PostgreSQL-backed [`TechnischeRessourceRepository`].
+/// Persistent store for `TechnischeRessource` registrations.
+///
+/// Populated by Redispatch 2.0 registration processes and by operator REST
+/// uploads.  Used by iMS E-mobility `Steuerungsauftrag` routing and flex-market
+/// clearing.
 #[derive(Clone, Debug)]
 pub struct PgTechnischeRessourceRepository {
     pool: PgPool,
@@ -425,8 +467,12 @@ impl PgTechnischeRessourceRepository {
     }
 }
 
-impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
-    async fn upsert_tr(
+impl PgTechnischeRessourceRepository {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
+    pub async fn upsert_tr(
         &self,
         tr_id: &str,
         tenant: &str,
@@ -469,7 +515,7 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
         Ok(())
     }
 
-    async fn find_tr(
+    pub async fn find_tr(
         &self,
         tr_id: &str,
         tenant: &str,
@@ -503,7 +549,8 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
         }))
     }
 
-    async fn list_tr_by_malo(
+    /// Return all `TechnischeRessource` records for a `MaLo`.
+    pub async fn list_tr_by_malo(
         &self,
         malo_id: &str,
         tenant: &str,
@@ -540,7 +587,8 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
             .collect())
     }
 
-    async fn list_tr_by_melo(
+    /// Return all `TechnischeRessource` records for a `MeLo`.
+    pub async fn list_tr_by_melo(
         &self,
         melo_id: &str,
         tenant: &str,
@@ -577,7 +625,11 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
             .collect())
     }
 
-    async fn patch_stammdaten(
+    /// Apply a UTILMD Stammdatenänderung (`LOC+Z20`) to the typed TR columns.
+    ///
+    /// `COALESCE` per column; the JSONB payload and `version` are untouched.
+    /// Returns `true` when a row was updated, `false` when the TR is unknown.
+    pub async fn patch_stammdaten(
         &self,
         tr_id: &str,
         tenant: &str,

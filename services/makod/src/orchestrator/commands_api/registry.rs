@@ -344,16 +344,6 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(31002),
         dispatch: cmd_gpke_abrechnung_ablehnen,
     },
-    // Self-issued INVOIC 31006 (LF selbstausgestellt): `invoicd` generates the
-    // BO4E Rechnung via `POST /api/v1/selbstausstellen/{malo_id}` and then calls
-    // this command to record the outbound send and await the NB's REMADV response.
-    // Payload: { "invoice_ref": "<uuid>", "nb_mp_id": "...", "sender_mp_id": "..." }
-    CommandDescriptor {
-        name: "gpke.abrechnung.selbstausstellen",
-        permitted_roles: &[Marktrolle::Lf],
-        primary_pid: pid(31006),
-        dispatch: cmd_gpke_abrechnung_selbstausstellen,
-    },
     // ── netzbilanzd outbound INVOIC generation (NB role) ──────────────────────
     // `netzbilanzd` generates NNE/MMM invoices and dispatches them to `makod`
     // via these commands.  `GpkeAbrechnungWorkflow` spawns in invoicer role so
@@ -909,7 +899,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // Storno (INVOIC AHB §3.1.2 — GPKE/MMM/WiM Strom+Gas/Kapazität/AWH/GeLi). invoicd
     // runs the arithmetic-only check (AcceptedPartial) and dispatches settle/dispute.
     // The receiver can hold any of the storno-facing roles, so permitted_roles spans
-    // both Sparten (NB/GNB, LF variants, MSB, BKV, ESA for WiM Strom Teil 2).
+    // both Sparten (NB/GNB, LF variants, MSB, MGV, ESA for WiM Strom Teil 2).
     CommandDescriptor {
         name: "invoic.stornorechnung.annehmen",
         // The union of every family's recipients, because 31004 cancels an
@@ -926,7 +916,6 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Lfa,
             Marktrolle::Msb,
             Marktrolle::Nmsb,
-            Marktrolle::Bkv,
             Marktrolle::Mgv,
             Marktrolle::Esa,
         ],
@@ -949,7 +938,6 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Lfa,
             Marktrolle::Msb,
             Marktrolle::Nmsb,
-            Marktrolle::Bkv,
             Marktrolle::Mgv,
             Marktrolle::Esa,
         ],
@@ -997,20 +985,18 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(31011),
         dispatch: cmd_sonstige_leistung_rechnung_ablehnen,
     },
-    // GaBi Gas MMM-Rechnung (PIDs 31007/31008): NB bills MGV for
-    // Mehr-/Mindermengen Gas settlement. BKV/MGV receives and settles/disputes.
+    // GaBi Gas MMM-Rechnung (PIDs 31007/31008): the NB bills the MGV, which
+    // settles or disputes. The Kapazitätsrechnung 31010 runs NB → KN (INVOIC
+    // AHB 1.0b Kap. 3.1.4), a role no deployment holds, so nobody answers it here.
     CommandDescriptor {
         name: "gabi.rechnung.annehmen",
-        // One workflow answers the whole GaBi Gas billing family, and its three
-        // PIDs reach two different roles: the **MGV** receives the aggregated
-        // MMM-Rechnung 31007/31008, the **BKV** the Kapazitätsrechnung 31010.
-        permitted_roles: &[Marktrolle::Bkv, Marktrolle::Mgv],
+        permitted_roles: &[Marktrolle::Mgv],
         primary_pid: pid(31007),
         dispatch: cmd_gabi_gas_rechnung_annehmen,
     },
     CommandDescriptor {
         name: "gabi.rechnung.ablehnen",
-        permitted_roles: &[Marktrolle::Bkv, Marktrolle::Mgv],
+        permitted_roles: &[Marktrolle::Mgv],
         primary_pid: pid(31007),
         dispatch: cmd_gabi_gas_rechnung_ablehnen,
     },

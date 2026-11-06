@@ -8,7 +8,7 @@
 //! misstates a cent on the invoice where a price quoted in ct with three
 //! decimals lands on a half-cent.
 //!
-//! Four things are refused:
+//! Five things are refused:
 //!
 //! * `round_dp(` in **any** spelling — the method call, the UFCS
 //!   `Decimal::round_dp(&x, 2)`, or a free function of that name;
@@ -21,12 +21,16 @@
 //!   (`use rust_decimal::RoundingStrategy::MidpointNearestEven;` then
 //!   `.round_dp_with_strategy(2, MidpointNearestEven)`), which names no
 //!   `RoundingStrategy::` path at the call at all. The list is read across
-//!   lines, because `rustfmt` wraps it.
+//!   lines, because `rustfmt` wraps it;
+//! * a `billing::Rounding` variant other than `HalfAwayFromZero` — the
+//!   `billing` crate's own modes (`HalfEven`, `AwayFromZero`, `TowardZero`)
+//!   reach an `Amount` without touching `rust_decimal`, so the rules above
+//!   never see them.
 //!
 //! What is left is the explicit
 //! `round_dp_with_strategy(dp, RoundingStrategy::MidpointAwayFromZero)` and the
 //! one `RoundMoney::round_kfm` / `round_money` helper over it, which lives in
-//! [`HELPER_HOME`]. A fifth refusal keeps it the only one: a `RoundMoney`
+//! [`HELPER_HOME`]. A sixth refusal keeps it the only one: a `RoundMoney`
 //! trait, a `round_kfm` body or a `round_money` function defined anywhere else
 //! is a copy, and a copy is what drifts.
 //!
@@ -164,11 +168,33 @@ pub fn offending_lines(src: &str) -> Vec<(String, usize)> {
         let bare_round_dp = t.contains("round_dp(");
         let weak_strategy = strategy_call_without_kaufmaennisch(&lines, i);
         let decimal_round = decimal_round_sites(t);
-        if named_strategy || bare_round_dp || weak_strategy || decimal_round {
+        let billing_mode = names_a_weak_billing_rounding(t);
+        if named_strategy || bare_round_dp || weak_strategy || decimal_round || billing_mode {
             out.push(((*line).to_owned(), i + 1));
         }
     }
     out
+}
+
+/// Whether the line names a `billing::Rounding` mode other than
+/// `HalfAwayFromZero`, as a path (`Rounding::HalfEven`) or in a `use` group
+/// (`Rounding::{HalfEven, …}`). Identifiers are compared whole: the admissible
+/// `HalfAwayFromZero` contains `AwayFromZero`.
+fn names_a_weak_billing_rounding(t: &str) -> bool {
+    const WEAK: [&str; 3] = ["HalfEven", "AwayFromZero", "TowardZero"];
+    t.match_indices("Rounding::").any(|(at, m)| {
+        let rest = &t[at + m.len()..];
+        let named = match rest.strip_prefix('{') {
+            Some(group) => group.split('}').next().unwrap_or(group),
+            None => rest
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .next()
+                .unwrap_or(""),
+        };
+        named
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .any(|ident| WEAK.contains(&ident))
+    })
 }
 
 /// The lines of `src` that define the rounding helper, unless `rel` is its
@@ -371,6 +397,26 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// The `billing` crate's own non-kaufmännisch modes are refused in every
+    /// spelling; its kaufmännisch one passes.
+    #[test]
+    fn a_billing_rounding_mode_other_than_half_away_from_zero_is_refused() {
+        for line in [
+            "Amount::<5>::from_decimal_rounded(x, Rounding::HalfEven)\n",
+            "let r = billing::Rounding::TowardZero;\n",
+            "use billing::Rounding::{AwayFromZero, HalfAwayFromZero};\n",
+        ] {
+            assert_eq!(offending_lines(line).len(), 1, "{line}");
+        }
+        for line in [
+            "EuroAmount::from_decimal_rounded(x, Rounding::HalfAwayFromZero)\n",
+            "use invoic_checker::amount::Rounding::HalfAwayFromZero;\n",
+            "v.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)\n",
+        ] {
+            assert!(offending_lines(line).is_empty(), "{line}");
+        }
     }
 
     #[test]

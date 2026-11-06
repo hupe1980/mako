@@ -36,10 +36,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use mako_markt::{
-    cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent},
-    repository::{MaloRepository, MeloRepository},
-};
+use mako_markt::cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent};
 use mako_service::ApiError;
 use sqlx::PgPool;
 use tracing::{debug, error, warn};
@@ -958,9 +955,8 @@ async fn apply_object_stammdaten(
     patch_val: &serde_json::Value,
 ) {
     use mako_markt::repository::{
-        MaloStammdatenPatch, MeloMsbRepository, MeloStammdatenPatch, NeLoRepository,
-        NeloStammdatenPatch, SteuerbareRessourceRepository, SteuerbareRessourceStammdatenPatch,
-        TechnischeRessourceRepository, TechnischeRessourceStammdatenPatch, TrancheRepository,
+        MaloStammdatenPatch, MeloStammdatenPatch, NeloStammdatenPatch,
+        SteuerbareRessourceStammdatenPatch, TechnischeRessourceStammdatenPatch,
         TrancheStammdatenPatch,
     };
 

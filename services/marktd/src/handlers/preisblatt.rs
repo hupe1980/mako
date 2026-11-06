@@ -12,13 +12,7 @@ use axum::{
 };
 use mako_markt::bo4e::Bo4e;
 use mako_markt::error::MdmError;
-use mako_markt::{
-    cloudevents::MarktEvent,
-    repository::{
-        PreisblattDienstleistungRepository, PreisblattHardwareRepository, PreisblattKaRepository,
-        PreisblattMessungRepository, PreisblattRepository, PreisblattSource,
-    },
-};
+use mako_markt::{cloudevents::MarktEvent, repository::PreisblattSource};
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use rubo4e::current::{

@@ -54,6 +54,9 @@ tokio-util      = { workspace = true }
 
 [dev-dependencies]
 mako-service = { workspace = true, features = ["testing"] }
+# makod's INVOIC builder: the tests hold netzbilanzd's Rechnung to the message
+# makod sends for it.
+makod = { path = "../makod" }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 

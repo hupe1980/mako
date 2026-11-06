@@ -1,4 +1,4 @@
-//! PostgreSQL implementation of [`MeloRepository`].
+//! PostgreSQL storage: [`PgMeloRepository`].
 //!
 //! # Single-write-path invariant (MaLo ↔ MeLo)
 //!
@@ -18,7 +18,7 @@ use mako_markt::bo4e::MeloShadowColumns;
 use mako_markt::{
     domain::{MaloId, MeloId},
     error::MdmError,
-    repository::{MeloRecord, MeloRepository},
+    repository::MeloRecord,
 };
 use rubo4e::current::Messlokation;
 use sqlx::{PgPool, Row, postgres::PgRow};
@@ -44,7 +44,15 @@ impl PgMeloRepository {
     }
 }
 
-impl MeloRepository for PgMeloRepository {
+impl PgMeloRepository {
+    /// Insert or update a `MESSLOKATION`.
+    ///
+    /// Takes the **typed** BO for the same reason
+    /// [`PgMaloRepository::upsert`](crate::pg::PgMaloRepository::upsert) does — see
+    /// [`MeloShadowColumns`].
+    ///
+    /// Returns the new version number.
+    ///
     /// Upsert a MeLo and reconcile its `melo → malo` graph edge transactionally.
     ///
     /// See the module docs for the single-write-path invariant. Graph effects:
@@ -53,7 +61,7 @@ impl MeloRepository for PgMeloRepository {
     ///   edge to the new parent opened (`valid_from = today`) unless one is
     ///   already open
     /// - parent removed (`malo_id = None`) → all open `melo → malo` edges closed
-    async fn upsert(
+    pub async fn upsert(
         &self,
         melo_id: &MeloId,
         malo_id: Option<&MaloId>,
@@ -197,7 +205,8 @@ impl MeloRepository for PgMeloRepository {
         Ok(new_version)
     }
 
-    async fn find(&self, melo_id: &MeloId) -> Result<Option<MeloRecord>, MdmError> {
+    /// Return the `MESSLOKATION` record.
+    pub async fn find(&self, melo_id: &MeloId) -> Result<Option<MeloRecord>, MdmError> {
         let row: Option<PgRow> = sqlx::query(
             "SELECT melo_id, malo_id, netzebene_messung, regelzone, standorteigenschaften, lokationsbuendel_objektcode, version, data, bo4e_version, updated_at FROM melo WHERE melo_id = $1",
         )
@@ -222,7 +231,14 @@ impl MeloRepository for PgMeloRepository {
         }))
     }
 
-    async fn patch_stammdaten(
+    /// Apply a UTILMD Stammdatenänderung (`LOC+Z17`) to the typed MeLo columns —
+    /// the MeLo counterpart of [`PgMaloRepository::patch_stammdaten`](crate::pg::PgMaloRepository::patch_stammdaten).
+    ///
+    /// Each `Some` field overwrites its column via `COALESCE`; each `None` leaves
+    /// it unchanged. The JSONB payload (`data`, `standorteigenschaften`) and the
+    /// optimistic `version` are **not** touched. Returns `true` when a row was
+    /// updated and `false` when the MeLo is not yet known locally (no-op).
+    pub async fn patch_stammdaten(
         &self,
         melo_id: &MeloId,
         patch: &mako_markt::repository::MeloStammdatenPatch,

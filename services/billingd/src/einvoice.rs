@@ -283,6 +283,15 @@ pub async fn store(
             .and_then(|r| r.unternehmer),
     )
     .await?;
+    // § 14 Abs. 4 Nr. 2 UStG — who issued it, which selects the Gesamtumsatz
+    // § 27 Abs. 38 Nr. 2 UStG reads.
+    crate::pg::attach_aussteller(
+        &mut *exec,
+        record_id,
+        cfg.seller_vat_id.as_deref(),
+        cfg.seller_tax_number.as_deref(),
+    )
+    .await?;
     let model = match build(invoice, cfg) {
         Ok(m) => m,
         Err(e @ energy_billing::EngineError::ValidationBlocked { .. }) => {

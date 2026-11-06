@@ -150,6 +150,11 @@ pub struct AgentdConfig {
     #[serde(default = "default_sweep_interval_secs")]
     pub sweep_interval_secs: u64,
 
+    /// `[vorschlaege]` — the desk assistant's proposal, computed once for every
+    /// open Freigabe so it is waiting when a person opens it.
+    #[serde(default)]
+    pub vorschlaege: VorschlaegeConfig,
+
     /// OIDC configuration.
     ///
     /// Authenticates `POST /api/v1/runs` and — with no dev-mode relaxation — the
@@ -193,6 +198,33 @@ impl mako_service::service::ServiceConfig for AgentdConfig {
 
     fn bind_addr(&self) -> String {
         self.http.addr.clone()
+    }
+}
+
+// ── Vorschläge ─────────────────────────────────────────────────────────────
+
+/// Whether agentd proposes a decision for every open Freigabe unasked.
+///
+/// Each proposal is one model run, admitted once per queue entry; off, a
+/// proposal is computed only when a person asks for one.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VorschlaegeConfig {
+    /// Default `true`.
+    #[serde(default = "default_true")]
+    pub automatisch: bool,
+    /// How often processd's open Freigaben are read, in seconds (default 60).
+    /// It bounds how long a new Freigabe waits for its proposal run to start.
+    #[serde(default = "default_sweep_interval_secs")]
+    pub intervall_secs: u64,
+}
+
+impl Default for VorschlaegeConfig {
+    fn default() -> Self {
+        Self {
+            automatisch: true,
+            intervall_secs: default_sweep_interval_secs(),
+        }
     }
 }
 
@@ -483,6 +515,9 @@ fn default_journal_path() -> String {
 fn default_public_base_url() -> String {
     "http://localhost:9580".to_owned()
 }
+fn default_true() -> bool {
+    true
+}
 fn default_sweep_interval_secs() -> u64 {
     60
 }
@@ -536,6 +571,12 @@ impl AgentdConfig {
         if !self.allow_insecure_no_auth && self.inbound_hmac_secret.is_none() {
             anyhow::bail!(
                 "refusing to start without inbound_hmac_secret: unsigned CloudEvents could spend model budget and open operator tasks. Configure inbound_hmac_secret or set allow_insecure_no_auth = true (dev only)."
+            );
+        }
+        if self.vorschlaege.automatisch && self.vorschlaege.intervall_secs == 0 {
+            anyhow::bail!(
+                "[vorschlaege] intervall_secs = 0 would read processd's queue in a busy loop — \
+                 choose a period in seconds, or set automatisch = false"
             );
         }
         if self.audit_webhook_url.is_some() && self.audit_hmac_secret.is_none() {

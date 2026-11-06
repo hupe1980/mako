@@ -27,6 +27,34 @@ pub struct SkeletonParties {
     pub receiver: String,
 }
 
+/// A data element [`Profile::completion`] filled with a value the profile
+/// does not fix: a synthetic value, or one code chosen among several.
+///
+/// A skeleton may say anything of the right shape. A message a sender means
+/// to transmit may not — a Rechnungsnummer or a Firmenname the generator made
+/// up is a false statement to the counterparty, and so is `ABR` picked for a
+/// Rechnungstyp the business case never stated. The completion reports each
+/// so the sender can refuse instead of sending it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unstated {
+    /// The MIG place.
+    pub nr: String,
+    /// Its tag.
+    pub tag: String,
+    /// The data element.
+    pub de: String,
+}
+
+/// What [`Profile::completion`] made of a seed.
+#[derive(Debug, Clone)]
+pub struct Completion {
+    /// The completed message, `UNH` … `UNT`.
+    pub segments: Vec<OwnedSegment>,
+    /// The data elements filled with something the profile does not fix, in
+    /// message order, each once.
+    pub unstated: Vec<Unstated>,
+}
+
 impl Default for SkeletonParties {
     fn default() -> Self {
         Self {
@@ -49,7 +77,7 @@ impl Profile {
         // forced in; of the places it finds not permitted, one per round is
         // dropped — the last, so of two places that exclude each other
         // (`Marktlokation` / `Messlokation`) the first in MIG order stays.
-        self.generate(None, af, parties)
+        self.generate(None, af, parties).segments
     }
 
     /// `seed`, completed to the column of `af`: every segment of `seed` that
@@ -72,6 +100,24 @@ impl Profile {
         af: &Anwendungsfall,
         parties: &SkeletonParties,
     ) -> Vec<OwnedSegment> {
+        self.generate(Some(seed), af, parties).segments
+    }
+
+    /// [`Profile::complete`], with the data elements it had to fill with
+    /// something the profile does not fix.
+    ///
+    /// A code the column — or, where the column is silent, the MIG — admits
+    /// alone is the profile's statement and is not reported (`CUX+2:EUR:4`,
+    /// `DTM` DE 2379 `303`). A synthetic value, or one code taken among
+    /// several, is a statement nobody made, and is reported as [`Unstated`].
+    /// A sender completes with this and refuses while `unstated` is not empty.
+    #[must_use]
+    pub fn completion(
+        &self,
+        seed: &[OwnedSegment],
+        af: &Anwendungsfall,
+        parties: &SkeletonParties,
+    ) -> Completion {
         self.generate(Some(seed), af, parties)
     }
 
@@ -80,13 +126,14 @@ impl Profile {
         seed: Option<&[OwnedSegment]>,
         af: &Anwendungsfall,
         parties: &SkeletonParties,
-    ) -> Vec<OwnedSegment> {
+    ) -> Completion {
         let resolution = seed.map(|segments| self.structure.resolve(segments));
         let seed = seed
             .zip(resolution.as_ref())
             .map(|(segments, res)| Seed { segments, res });
         let mut fix = Fixpoint::default();
         let mut out = Vec::new();
+        let mut unstated = Vec::new();
         for _ in 0..24 {
             out.clear();
             let mut generator = Generator {
@@ -96,8 +143,10 @@ impl Profile {
                 fix: &fix,
                 seed,
                 out: &mut out,
+                unstated: std::cell::RefCell::new(Vec::new()),
             };
             generator.walk(&self.structure.root, seed.map(|_| 0), 0);
+            unstated = generator.unstated.into_inner();
             let count = out.len();
             if let Some(unt) = out.iter_mut().find(|s| s.tag == "UNT")
                 && let Some(e) = unt.elements.get_mut(0)
@@ -110,7 +159,12 @@ impl Profile {
                 break;
             }
         }
-        out
+        let mut reported = HashSet::new();
+        unstated.retain(|u: &Unstated| reported.insert((u.nr.clone(), u.de.clone())));
+        Completion {
+            segments: out,
+            unstated,
+        }
     }
 
     /// [`Profile::skeleton`] as a complete interchange — `UNB` … `UNZ` with
@@ -249,6 +303,8 @@ struct Generator<'a> {
     /// The message being completed, if any.
     seed: Option<Seed<'a>>,
     out: &'a mut Vec<OwnedSegment>,
+    /// What this round filled without the profile fixing it.
+    unstated: std::cell::RefCell<Vec<Unstated>>,
 }
 
 impl Generator<'_> {
@@ -421,6 +477,31 @@ impl Generator<'_> {
             })
             .collect();
         Segment::new(layout.tag.clone(), elements)
+    }
+
+    /// Note that `el` of `layout` was filled with something the profile does
+    /// not fix.
+    fn unstated(&self, layout: &SegmentNode, el: &Element) {
+        self.unstated.borrow_mut().push(Unstated {
+            nr: layout.nr.clone(),
+            tag: layout.tag.clone(),
+            de: el.id.clone(),
+        });
+    }
+
+    /// `codes[skip]`, noting a choice the profile did not make: more than one
+    /// candidate, or a first one the validator already refused.
+    fn choose(
+        &self,
+        layout: &SegmentNode,
+        el: &Element,
+        codes: &[String],
+        skip: usize,
+    ) -> Option<String> {
+        if codes.len() > 1 || (skip > 0 && !codes.is_empty()) {
+            self.unstated(layout, el);
+        }
+        nth_code(codes, skip)
     }
 
     /// `Muss` without a Voraussetzung — the receiver-independent part of the
@@ -709,8 +790,12 @@ impl Generator<'_> {
         let coded: Vec<String> = rule
             .map(|r| r.operands.iter().filter_map(|o| o.code.clone()).collect())
             .unwrap_or_default();
-        nth_code(&coded, skip)
-            .or_else(|| el.is_code_list().then(|| mig_code(el, skip)).flatten())
+        self.choose(layout, el, &coded, skip)
+            .or_else(|| {
+                el.is_code_list()
+                    .then(|| self.choose(layout, el, &mig_codes(el), skip))
+                    .flatten()
+            })
             .unwrap_or_else(|| self.synthetic(layout, el, chosen, current))
     }
 
@@ -740,7 +825,7 @@ impl Generator<'_> {
                 return None;
             }
             if el.is_code_list() {
-                return mig_code(el, skip);
+                return self.choose(layout, el, &mig_codes(el), skip);
             }
             return Some(self.synthetic(layout, el, chosen, current));
         };
@@ -758,7 +843,7 @@ impl Generator<'_> {
             .filter(|o| o.code.is_some() && used(&o.operand))
             .filter_map(|o| o.code.clone())
             .collect();
-        let unconditional = !coded.is_empty();
+        let unconditional = coded.len();
         for o in &rule.operands {
             if let Some(c) = &o.code
                 && !coded.contains(c)
@@ -767,8 +852,14 @@ impl Generator<'_> {
             }
         }
         if !coded.is_empty() {
-            return if unconditional || mig_required {
-                nth_code(&coded, skip)
+            return if unconditional > 0 || mig_required {
+                // The one code the column admits without a Voraussetzung is
+                // the column's own choice; the rest wait on one.
+                if unconditional == 1 && skip == 0 {
+                    nth_code(&coded, 0)
+                } else {
+                    self.choose(layout, el, &coded, skip)
+                }
             } else {
                 None
             };
@@ -780,7 +871,7 @@ impl Generator<'_> {
         if value_used || mig_required {
             // `X` on a coded element: the MIG's list applies.
             if el.is_code_list() {
-                return mig_code(el, skip);
+                return self.choose(layout, el, &mig_codes(el), skip);
             }
             Some(fit_format(
                 rule,
@@ -805,6 +896,7 @@ impl Generator<'_> {
         chosen: &[Vec<String>],
         current: &[String],
     ) -> String {
+        self.unstated(layout, el);
         let qualifier = chosen
             .first()
             .and_then(|c| c.first())
@@ -963,10 +1055,9 @@ fn nth_code(codes: &[String], skip: usize) -> Option<String> {
     (!codes.is_empty()).then(|| codes[skip % codes.len()].clone())
 }
 
-/// The `skip`-th code of the MIG's list.
-fn mig_code(el: &Element, skip: usize) -> Option<String> {
-    let codes: Vec<String> = el.codes.iter().map(|c| c.code.clone()).collect();
-    nth_code(&codes, skip)
+/// The MIG's code list of `el`.
+fn mig_codes(el: &Element) -> Vec<String> {
+    el.codes.iter().map(|c| c.code.clone()).collect()
 }
 
 /// Which occurrence of `de` inside `layout` sits at `(ei, ci)`.

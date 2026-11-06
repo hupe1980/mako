@@ -31,6 +31,7 @@ pub mod readiness;
 pub mod runtime;
 pub mod sweep;
 pub mod tools;
+pub mod vorschlag;
 pub mod witness;
 pub use runtime::{
     Accepted, Activation, Admitted, AgentDecision, Anker, Answer, AnswerSentence, BewertungError,

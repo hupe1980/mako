@@ -20,7 +20,7 @@ use mako_markt::{
     error::MdmError,
     repository::{
         LfZuordnung, LieferStatus, VersorgungsStatusHistoryRecord, VersorgungsStatusRecord,
-        VersorgungsStatusRepository, ZuordnungsStatus,
+        ZuordnungsStatus,
     },
 };
 use mako_service::cedar::CedarEnforcer;
@@ -183,17 +183,14 @@ fn default_history_size() -> u32 {
 ///
 /// Returns the current supply state.  Add `?at=YYYY-MM-DD` to query the state
 /// as of a specific calendar date (German local time, CET/CEST).
-pub async fn get_versorgungsstatus<Vs>(
+pub async fn get_versorgungsstatus(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(malo_id): Path<String>,
     Query(query): Query<VersorgungQuery>,
-    Extension(vs_repo): Extension<Arc<Vs>>,
-) -> impl IntoResponse
-where
-    Vs: VersorgungsStatusRepository + Send + Sync,
-{
+    Extension(vs_repo): Extension<Arc<PgVersorgungsStatusRepository>>,
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-versorgungsstatus", &state.tenant)
         .is_err()
@@ -271,17 +268,14 @@ where
 ///
 /// Returns the full supply-state change history for a MaLo, newest first.
 /// Backed by the `versorgungsstatus_history` table.
-pub async fn get_versorgungsstatus_history<Vs>(
+pub async fn get_versorgungsstatus_history(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(malo_id): Path<String>,
     Query(query): Query<HistoryQuery>,
-    Extension(vs_repo): Extension<Arc<Vs>>,
-) -> impl IntoResponse
-where
-    Vs: VersorgungsStatusRepository + Send + Sync,
-{
+    Extension(vs_repo): Extension<Arc<PgVersorgungsStatusRepository>>,
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-versorgungsstatus", &state.tenant)
         .is_err()

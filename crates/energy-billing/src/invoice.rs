@@ -884,9 +884,8 @@ impl Invoice {
 
     /// Merge two invoices for adjacent billing periods (§41 EnWG Tarifwechsel).
     ///
-    /// Positions from `self` appear first, then `other`. Totals are re-summed.
-    /// Tax layers are **not** re-applied — each invoice was already taxed independently
-    /// for its sub-period.
+    /// Positions from `self` appear first, then `other`; the tax lines of the
+    /// two legs are replaced by one tax line per rate over the merged lines.
     ///
     /// Uses the context from `self` (billing period, IDs) for the merged invoice.
     /// `other.context.period_to()` is used to update the effective period end.
@@ -902,11 +901,15 @@ impl Invoice {
     /// who owes money. A dropped duplicate is reported as `ABSCHLAG_DOPPELT`
     /// rather than absorbed in silence.
     ///
-    /// ## Derived once, like `billing::Document::concat`
+    /// ## VAT derived once, like `billing::Document::concat`
     ///
-    /// The merged positions go through [`Invoice::from_positions`] again, so the
-    /// VAT of the whole period is derived once from its lines and never summed
-    /// from two separately rounded legs.
+    /// Each leg's tax line was rounded to the cent for that leg alone, so their
+    /// sum can sit a cent above the tax of the merged lines — two legs of
+    /// 0,03 EUR at 19 % carry 0,01 EUR each, while the 0,06 EUR they add up to
+    /// carries 0,01 EUR — and Σ Steuerbeträge would no longer be the tax of the
+    /// lines the document prints. The legs' tax lines are dropped and the tax
+    /// is derived once per rate from the merged lines, each of which carries
+    /// the rate it was charged at.
     ///
     /// ## Use case — Tarifwechsel (price change mid-period)
     ///
@@ -926,8 +929,18 @@ impl Invoice {
             ctx.period = crate::BillingPeriod::new(ctx.period_from(), other.context.period_to())
                 .expect("extending the end of a valid period keeps from <= to");
         }
-        let mut positions = self.positions;
-        positions.extend(other.positions);
+        let mut positions: Vec<crate::position::BillingPosition> = self
+            .positions
+            .into_iter()
+            .chain(other.positions)
+            .filter(|p| p.category != crate::position::PositionCategory::Tax)
+            .collect();
+        let steuer = crate::providers::mwst_positions(&positions, None);
+        let vor_abschlag = positions
+            .iter()
+            .position(|p| p.category == crate::position::PositionCategory::Abschlag)
+            .unwrap_or(positions.len());
+        positions.splice(vor_abschlag..vor_abschlag, steuer);
         let mut all_warnings = self.warnings;
         all_warnings.extend(other.warnings);
         let mut doppelt: Vec<String> = Vec::new();

@@ -161,7 +161,7 @@ pub struct Rechnungsempfaenger {
     /// Whether the Leistungsempfänger is a Unternehmer receiving for his
     /// Unternehmen — the party § 14 Abs. 2 Satz 2 Nr. 1 UStG owes an
     /// E-Rechnung. `None` when the contract does not say; see
-    /// [`crate::e_rechnung`].
+    /// `mako_fristen::e_rechnung`.
     #[serde(default)]
     pub unternehmer: Option<bool>,
 }

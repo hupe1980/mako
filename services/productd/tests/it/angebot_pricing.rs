@@ -70,6 +70,7 @@ fn position(sparte: &str, jahresverbrauch_kwh: Decimal) -> AngebotPositionInput 
 const PLAIN: PricingContext = PricingContext {
     behg_gas_ct_per_kwh: Err(String::new()),
     reverse_charge_13b: false,
+    steuerjahr: Some(2026),
 };
 
 // ── Preisstaffeln ─────────────────────────────────────────────────────────────
@@ -261,6 +262,7 @@ fn a_reverse_charge_quotation_states_no_umsatzsteuer() {
     let ctx = PricingContext {
         behg_gas_ct_per_kwh: Err(String::new()),
         reverse_charge_13b: true,
+        steuerjahr: Some(2026),
     };
     let bd =
         compute_cost_breakdown(&data, &position("STROM", dec!(1000)), None, &ctx).expect("priced");
@@ -280,6 +282,38 @@ fn a_percentage_in_the_rate_field_is_refused() {
 }
 
 // ── Steuern und Umlagen ───────────────────────────────────────────────────────
+
+/// A rate is read from its dated series for the Stichtag's year; a year the
+/// series has not read refuses instead of carrying a rate nobody checked for
+/// it, and a rate the position states still wins.
+#[test]
+fn a_tax_rate_comes_from_the_stichtag_year_or_refuses() {
+    let data = produkt(serde_json::json!([flat("ARBEITSPREIS_EINTARIF", "20")]));
+    let jahr = |j| PricingContext {
+        steuerjahr: Some(j),
+        behg_gas_ct_per_kwh: Ok(dec!(1)),
+        ..PLAIN.clone()
+    };
+    for sparte in ["STROM", "GAS"] {
+        let mut pos = position(sparte, dec!(1000));
+        pos.stromsteuer_ct_per_kwh = None;
+        pos.energiesteuer_gas_ct_per_kwh = None;
+        let err = compute_cost_breakdown(&data, &pos, None, &jahr(2028))
+            .expect_err("2028 has no read rate");
+        assert_eq!(err.grund, grund::STEUERSATZ_FEHLT, "{sparte}");
+        assert!(err.detail.contains("2028"), "{}", err.detail);
+        assert!(
+            compute_cost_breakdown(&data, &pos, None, &jahr(2027)).is_ok(),
+            "{sparte} 2027"
+        );
+        pos.stromsteuer_ct_per_kwh = Some(dec!(2.05));
+        pos.energiesteuer_gas_ct_per_kwh = Some(dec!(0.55));
+        assert!(
+            compute_cost_breakdown(&data, &pos, None, &jahr(2028)).is_ok(),
+            "{sparte} stated"
+        );
+    }
+}
 
 /// § 3 StromStG: 20,50 EUR/MWh.
 #[test]
@@ -306,6 +340,7 @@ fn a_gas_position_needs_a_certificate_price() {
     let ctx = PricingContext {
         behg_gas_ct_per_kwh: Ok(dec!(0.99767)),
         reverse_charge_13b: false,
+        steuerjahr: Some(2026),
     };
     let bd = compute_cost_breakdown(&data, &position("GAS", dec!(1000)), None, &ctx)
         .expect("the series price prices it");
@@ -331,6 +366,7 @@ fn a_2027_lieferbeginn_is_not_priced_at_the_last_2026_auction_point() {
     let ctx = PricingContext {
         behg_gas_ct_per_kwh: behg,
         reverse_charge_13b: false,
+        steuerjahr: Some(2026),
     };
     let err = compute_cost_breakdown(&data, &position("GAS", dec!(1000)), None, &ctx)
         .expect_err("no 2027 CO₂ price");

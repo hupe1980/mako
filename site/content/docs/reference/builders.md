@@ -27,7 +27,6 @@ Prüfidentifikator, AHB and Marktlokation are defined in the
 | `MsconsBuilder` | MSCONS (metered consumption reports) |
 | `AperakBuilder` | APERAK (application error acknowledgements) |
 | `ContrlBuilder` | CONTRL — Empfangsbestätigung (`UCI` DE 0083 `7`) and Syntaxfehlermeldung (`4` + DE 0085) |
-| `InvoicBuilder` | INVOIC (invoices) *(requires `invoic` feature)* |
 | `RemadvBuilder` | REMADV (remittance advice) *(requires `remadv` feature)* |
 | `OrdersBuilder` | ORDERS — orders (Sperrung, Konfiguration, ESA Bestellung/Abbestellung 17007/17008) *(`orders`)* |
 | `OrdrespBuilder` | ORDRSP — order answers, incl. the ESA-Antworten 19011–19014 *(`ordrsp`)* |
@@ -40,6 +39,11 @@ Prüfidentifikator, AHB and Marktlokation are defined in the
 | `ReqoteBuilder` | REQOTE — requests for quotation, incl. ESA Werteanfrage 35003 *(`reqote`)* |
 | `ComdisBuilder` | COMDIS — Handelsunstimmigkeit *(`comdis`)* |
 | `UtiltsBuilder` | UTILTS — Berechnungsformeln *(`utilts`)* |
+
+INVOIC has no builder. makod builds an outbound invoice from its BO4E
+`Rechnung` by MIG place — `Profile::seed_segment`, then `Profile::completion`
+— and validates it against the Prüfschablone of its PID
+([makod: Issuing the INVOIC](@/docs/services/makod.md#issuing-the-invoic)).
 
 The ESA (Energieserviceanbieter) families are built out to full MIG conformance,
 because their messages are the ones mako both sends and has to read back:

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearch } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button as AriaButton,
   GridList,
@@ -12,7 +12,7 @@ import {
   TextField,
 } from "react-aria-components";
 import { DIENST, nichtErreichbar } from "../app/dienste";
-import { ABLEHNEN, FREIGEBEN, NAECHSTE, VORIGE } from "../app/keys";
+import { ABLEHNEN, FREIGEBEN, NAECHSTE, UEBERNEHMEN, VORIGE } from "../app/keys";
 import { ROLLEN, useRolle } from "../app/rollen";
 import { type Schicksal, schicksal, type Vorschlag } from "../data/agent";
 import { Abgelehnt, type Entscheidung, entscheiden, SchonEntschieden } from "../data/freigabe";
@@ -25,7 +25,8 @@ import { EmptyState, Notice, Panel } from "../design/Panel";
 import type { Instant } from "../format/brands";
 import { formatCount } from "../format/count";
 import { formatInstant } from "../format/date";
-import { Fragen } from "./Fragen";
+import { useVorschlaege } from "../inbox/quellen";
+import { Fragen, VorschlagKarte } from "./Fragen";
 import { Verlauf } from "./Verlauf";
 
 const ROW =
@@ -57,7 +58,20 @@ interface Herkunft {
   v: Vorschlag;
 }
 
-function Entscheiden({ f, onDone }: { f: Freigabe; onDone: () => void }) {
+/**
+ * The decision on one Freigabe — action, code, Bemerkung, the confirm — with
+ * the assistant beside it. Freigaben and Heute both decide through it.
+ */
+export function Entscheiden({
+  f,
+  onDone,
+  sofort = false,
+}: {
+  f: Freigabe;
+  onDone: () => void;
+  /** Take the waiting proposal into the form as soon as it is there (`U` on a Heute row). */
+  sofort?: boolean;
+}) {
   const [aktion, setAktion] = useState<"freigeben" | "ablehnen" | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [bemerkung, setBemerkung] = useState("");
@@ -66,6 +80,10 @@ function Entscheiden({ f, onDone }: { f: Freigabe; onDone: () => void }) {
   // processd's policy refused this person a decision once: the reason stands
   // where the controls were, for every Freigabe, for the rest of the session.
   const verweigert = useVerweigert({ dienst: "processd", aktion: "entscheiden" });
+  // The proposal agentd computed when the Freigabe was queued — read, never
+  // asked for: nobody waits on a model here.
+  const wartend = useVorschlaege([f.id]).get(f.id);
+  const wartet = wartend?.vorschlag ? { v: wartend.vorschlag, run: wartend.run } : null;
 
   // processd states, per action, the codes pressing it needs — none where the
   // answer goes as held — by the same rule it checks the code against.
@@ -101,6 +119,11 @@ function Entscheiden({ f, onDone }: { f: Freigabe; onDone: () => void }) {
   useEffect(() => {
     if (verweigert) return;
     const onKey = (e: KeyboardEvent) => {
+      if (UEBERNEHMEN.match?.(e) && wartet) {
+        e.preventDefault();
+        uebernehmen(wartet.v, wartet.run);
+        return;
+      }
       const a =
         FREIGEBEN.match?.(e) && f.kann_freigeben
           ? "freigeben"
@@ -115,14 +138,22 @@ function Entscheiden({ f, onDone }: { f: Freigabe; onDone: () => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [f.kann_freigeben, f.kann_ablehnen, verweigert]);
+  });
 
-  const uebernehmen = (v: Vorschlag, run: string) => {
+  function uebernehmen(v: Vorschlag, run: string) {
     setHerkunft({ run, v });
     setAktion(v.aktion);
     setCode(v.antwortcode);
     setBestaetigen(false);
-  };
+  }
+
+  // `U` on the Heute row opened this form: take the proposal once it is read.
+  const genommen = useRef(false);
+  useEffect(() => {
+    if (!sofort || genommen.current || !wartet) return;
+    genommen.current = true;
+    uebernehmen(wartet.v, wartet.run);
+  });
 
   if (verweigert) {
     return (
@@ -142,6 +173,19 @@ function Entscheiden({ f, onDone }: { f: Freigabe; onDone: () => void }) {
     <>
       <Panel className="flex flex-col gap-4 p-5">
         <h3 className="m-0 text-callout font-semibold">Entscheidung</h3>
+        {wartet && !herkunft && wartend && (
+          <VorschlagKarte
+            v={wartet.v}
+            run={wartet.run}
+            disclosure={wartend.disclosure}
+            onUebernehmen={uebernehmen}
+          />
+        )}
+        {!wartet && wartend?.status === "running" && (
+          <p className="m-0 flex items-center gap-2 text-caption text-ai">
+            <Icon name="sparkle" size={12} /> Der Assistent bereitet einen Vorschlag vor …
+          </p>
+        )}
         {herkunft && (
           <p className="m-0 flex items-center gap-2 text-caption text-ai">
             <Icon name="sparkle" size={12} /> Vom Assistenten vorgeschlagen — prüfen, dann senden.
@@ -343,6 +387,7 @@ export function FreigabenView() {
   const list = useFreigaben();
   const rows = list.data?.freigaben ?? [];
   const selected = rows.find((f) => f.id === id) ?? rows[0];
+  const vorschlaege = useVorschlaege(rows.slice(0, 100).map((f) => f.id));
 
   // J and K walk the queue in processd's order.
   useEffect(() => {
@@ -424,6 +469,12 @@ export function FreigabenView() {
                         )}
                       </span>
                     </span>
+                    {vorschlaege.get(f.id)?.vorschlag && (
+                      <span title="Vorschlag des Assistenten bereit" className="text-ai">
+                        <Icon name="sparkle" size={14} />
+                        <span className="sr-only">Vorschlag bereit</span>
+                      </span>
+                    )}
                     <FristUhr due={f.expires_at} />
                   </GridListItem>
                 ))}

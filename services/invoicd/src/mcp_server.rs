@@ -10,7 +10,7 @@
 //! | Tool | Description |
 //! |------|-------------|
 //! | `get_receipt`              | Read a single INVOIC receipt by UUID |
-//! | `list_disputes`            | List all disputed INVOIC receipts |
+//! | `list_disputes`            | Disputed INVOIC receipts, typed, with the Zahlungsziel as `frist` |
 //! | `get_check_result`         | Get the plausibility findings for a receipt |
 //! | `list_overdue_remadv`      | Receipts approaching Zahlungsziel without dispatched REMADV |
 //! | `get_zahlungsstatus`       | Payment status per MaLo-ID (settled / pending / overdue) |
@@ -45,9 +45,79 @@ use rmcp::{
     },
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
+
+// ── Typed results ─────────────────────────────────────────────────────────────
+
+/// One disputed INVOIC receipt.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct Disput {
+    /// The receipt.
+    pub id: String,
+    /// The market process the INVOIC arrived in.
+    pub process_id: String,
+    /// BDEW Prüfidentifikator of the INVOIC.
+    pub pid: i16,
+    /// MP-ID of the Rechnungssteller.
+    pub sender_mp_id: String,
+    /// RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub received_at: String,
+    /// BO4E schema version of the stored Rechnung.
+    pub bo4e_version: String,
+    /// The end of the Berlin day of the Zahlungsziel (SG8 DTM+265), RFC 3339
+    /// in UTC; `None` when the INVOIC carries no Zahlungsziel.
+    #[schemars(extend("format" = "date-time"))]
+    pub frist: Option<String>,
+}
+
+impl Disput {
+    fn from_row(
+        (id, process_id, pid, sender_mp_id, received_at, bo4e_version, pay_by): (
+            uuid::Uuid,
+            uuid::Uuid,
+            i16,
+            String,
+            time::OffsetDateTime,
+            String,
+            Option<time::OffsetDateTime>,
+        ),
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            process_id: process_id.to_string(),
+            pid,
+            sender_mp_id,
+            received_at: rfc3339(received_at),
+            bo4e_version,
+            frist: pay_by.map(|t| {
+                let tag = mako_fristen::berlin_date(t);
+                tag.next_day()
+                    .map(mako_fristen::berlin_midnight)
+                    .map(rfc3339)
+                    .unwrap_or_default()
+            }),
+        }
+    }
+}
+
+/// `list_disputes`' answer.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct Disputes {
+    /// The most recent first.
+    pub disputes: Vec<Disput>,
+    /// How many receipts `disputes` holds.
+    pub count: usize,
+    /// At least 200 receipts matched: more may be disputed than were listed.
+    pub saturated: bool,
+}
+
+fn rfc3339(t: time::OffsetDateTime) -> String {
+    use time::format_description::well_known::Rfc3339;
+    t.format(&Rfc3339).unwrap_or_default()
+}
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 
@@ -185,18 +255,17 @@ impl InvoicdMcpHandler {
         }
     }
 
-    /// List all disputed INVOIC receipts for this tenant.
+    /// List the disputed INVOIC receipts for this tenant.
     ///
-    /// Returns receipts with `outcome = 'Dispute'` ordered by `received_at`
-    /// descending (most recent first).  Disputes require manual review and
-    /// are not auto-settled by `invoicd`.
-    ///
-    /// Returns up to 200 results.  For full pagination use the REST API.
+    /// Receipts with `outcome = 'Dispute'`, the most recent first. Disputes
+    /// need manual review and are not auto-settled by `invoicd`.
     #[tool(
-        description = "List all open INVOIC disputes (outcome=Dispute) for this tenant",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Open INVOIC disputes (outcome=Dispute) of this tenant, the most recent first, at most 200. `frist` is the end of the Berlin day of the invoice's Zahlungsziel (SG8 DTM+265), when it carries one. `saturated` means at least 200 matched.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<Disputes>()
     )]
     async fn list_disputes(&self) -> Result<CallToolResult, McpError> {
+        const LIMIT: usize = 200;
         let rows = sqlx::query_as::<
             _,
             (
@@ -206,10 +275,11 @@ impl InvoicdMcpHandler {
                 String,
                 time::OffsetDateTime,
                 String,
+                Option<time::OffsetDateTime>,
             ),
         >(
             r#"
-            SELECT id, process_id, pid, sender_mp_id, received_at, bo4e_version
+            SELECT id, process_id, pid, sender_mp_id, received_at, bo4e_version, pay_by
             FROM invoic_receipts
             WHERE tenant = $1 AND outcome = 'Dispute'
             ORDER BY received_at DESC
@@ -221,28 +291,15 @@ impl InvoicdMcpHandler {
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let disputes: Vec<serde_json::Value> = rows
-            .into_iter()
-            .map(
-                |(id, process_id, pid, sender_mp_id, received_at, bo4e_version)| {
-                    serde_json::json!({
-                        "id": id,
-                        "process_id": process_id,
-                        "pid": pid,
-                        "sender_mp_id": sender_mp_id,
-                        "received_at": received_at,
-                        "bo4e_version": bo4e_version,
-                    })
-                },
-            )
-            .collect();
-
-        ContentBlock::json(serde_json::json!({
-            "disputes": disputes,
-            "count": disputes.len(),
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+        let disputes: Vec<Disput> = rows.into_iter().map(Disput::from_row).collect();
+        Ok(CallToolResult::structured(
+            serde_json::to_value(Disputes {
+                count: disputes.len(),
+                saturated: disputes.len() >= LIMIT,
+                disputes,
+            })
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
     }
 
     /// Get plausibility check findings for an INVOIC receipt.
@@ -455,8 +512,8 @@ impl InvoicdMcpHandler {
                      COUNT(*) FILTER (WHERE outcome = 'Dispute')  AS disputes
               FROM invoic_receipts
               WHERE tenant = $1
-                AND date_trunc('month', received_at) =
-                    make_date($2, $3, 1)::timestamp with time zone
+                AND date_trunc('month', received_at AT TIME ZONE 'Europe/Berlin') =
+                    make_date($2, $3, 1)::timestamp
               GROUP BY sender_mp_id, pid, outcome
               ORDER BY sender_mp_id, pid",
         )
@@ -751,7 +808,6 @@ impl ServerHandler for InvoicdMcpHandler {
              - `Dispute`         — plausibility failure; REMADV 33002; requires review\n\
              - `Resolved`        — dispute closed by operator (POST /resolve-dispute)\n\
              - `AcceptedPartial` — Stornorechnung (PID 31004, any Sparte) arithmetic-only check passed\n\
-             - `Dispatched`      — outbound 31006 selbstausgestellt sent; awaiting NB REMADV\n\
              \n\
              Payment is a separate axis: `payment_confirmed_at`, not an outcome. \n\
              An invoice can be disputed and still paid, or `Ok` and unpaid.",
@@ -792,4 +848,47 @@ pub fn router(state: Arc<InvoicdMcpState>, shutdown: CancellationToken) -> Route
             state.clone(),
             mcp_auth_middleware,
         ))
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    /// The served tool contract is the committed `mcp.snapshot.json`
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it); the Desk generates its types from it.
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let tools: Vec<serde_json::Value> = InvoicdMcpHandler::tool_router()
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
+    }
+
+    /// A dispute's Frist is the end of the Berlin day its Zahlungsziel falls
+    /// on: 2026-03-30T22:00Z is 31.03. in Berlin (CEST), which ends at
+    /// 22:00 UTC that day. No Zahlungsziel, no Frist.
+    #[test]
+    fn the_frist_is_the_end_of_the_zahlungsziel_day() {
+        let row = |pay_by| {
+            Disput::from_row((
+                uuid::Uuid::nil(),
+                uuid::Uuid::nil(),
+                31002,
+                "9900357000004".to_owned(),
+                time::macros::datetime!(2026-03-20 10:00 UTC),
+                "v202607".to_owned(),
+                pay_by,
+            ))
+        };
+        let d = row(Some(time::macros::datetime!(2026-03-30 22:00 UTC)));
+        assert_eq!(d.frist.as_deref(), Some("2026-03-31T22:00:00Z"));
+        assert_eq!(d.received_at, "2026-03-20T10:00:00Z");
+        assert_eq!(row(None).frist, None);
+    }
 }

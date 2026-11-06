@@ -224,6 +224,36 @@ pub struct NneRequest {
     /// Price-sheet identifier, carried into every position's trace.
     #[serde(default)]
     pub tariff_sheet_id: Option<String>,
+    /// The Artikel-ID of each charge, keyed by position kind (`"NneArbeit"`,
+    /// `"NneLeistung"`, `"Konzessionsabgabe"`, `"KwkgUmlage"`, …) — `LIN`
+    /// DE 7140 of the INVOIC.
+    ///
+    /// **Required for every charge of an NN-Rechnung Strom.** Since
+    /// BK6-20-160 Strom NNE positions carry the Artikel-ID of the
+    /// Netznutzungspreisblatt instead of an Artikelnummer (Codeliste der
+    /// Artikelnummern und Artikel-ID 5.6, Kap. 1, S. 4), and which one applies
+    /// follows the Preissystem, the Netzebene and the Gemeinde the price sheet
+    /// prices — not the arithmetic. A Strom charge without one is refused at
+    /// drafting. Gas NNE positions keep their BDEW-Artikelnummer and need
+    /// none; an entry here replaces it.
+    #[serde(default)]
+    pub artikel_ids: std::collections::BTreeMap<grid_billing::BillingPositionKind, String>,
+    /// The Dokumentennummer of the Lieferschein-MSCONS this NN-Rechnung
+    /// settles — `SG1 RFF+ACE`, **Muss** on an NN-Rechnung Strom whose period
+    /// ends after 01.12.2019 (INVOIC AHB 1.0b, 31002, `[492] ∧ [36] ∧ [50]`,
+    /// S. 12). netzbilanzd sends no Lieferschein itself, so the operator
+    /// states the one it sent; a Strom NN-Rechnung without it is refused at
+    /// drafting.
+    #[serde(default)]
+    pub lieferschein_ref: Option<String>,
+    /// The MP-ID of the NB whose Preisblatt prices this invoice — `SG1
+    /// RFF+Z56`, **Muss** on an NN-Rechnung Strom whose period begins on or
+    /// after 01.01.2026 (`[88] ∧ [492]`, S. 13). MIG 2.8e 00021 (S. 28) names
+    /// the case where it differs from the sender: a Konzessionsgebiet taken
+    /// over during the year keeps the previous NB's prices to its end. Unset,
+    /// it is `nb_mp_id` — the issuing NB billing at its own prices.
+    #[serde(default)]
+    pub preise_mp_id: Option<String>,
 }
 
 // ── MMM ───────────────────────────────────────────────────────────────────────
@@ -285,9 +315,35 @@ pub struct MsbRequest {
     /// Sparte of the metering point.
     pub sparte: Sparte,
     /// Grundgebühr Messstellenbetrieb in EUR per month (`PreisblattMessung`).
+    /// Zero, or omitted, when the Preisblatt prices per day
+    /// ([`Self::tagespreise`]).
+    #[serde(default)]
     pub grundgebuehr_eur_per_month: Decimal,
-    /// Full calendar months in the billing period.
+    /// Full calendar months in the billing period — the monthly price's
+    /// quantity; not consulted with [`Self::tagespreise`].
+    #[serde(default)]
     pub billing_months: u32,
+    /// The Entgelte per day, where the Preisblatt states them so. **Required
+    /// for a period from 01.01.2024**: the 31009 column then admits only `DAY`
+    /// as the price's unit (INVOIC AHB 1.0b, `PRI` DE 6411 `DAY=X [12] ∧
+    /// [65]`, `QTY+136` `MON` only `[64]`), so a monthly price cannot be
+    /// stated, and the Codeliste der Artikelnummern und Artikel-ID 5.6 prices
+    /// the 31009 Artikel-IDs in €/Tag (Kap. 3.5).
+    #[serde(default)]
+    pub tagespreise: Option<grid_billing::MsbTagespreise>,
+    /// The Artikel-ID of each charge, keyed by position kind
+    /// (`"MsbGrundgebuehr"`, `"MsbSteuereinrichtung"`, `"Messdienstleistung"`)
+    /// — Codeliste 5.6 Kap. 3.5.1 (to the LF) or 3.5.2 (to the NB).
+    /// **Required for a period from 01.01.2024**, when `LIN` DE 7143 admits
+    /// only `Z09` (`[65]`, INVOIC AHB 1.0b S. 18).
+    #[serde(default)]
+    pub artikel_ids: std::collections::BTreeMap<grid_billing::BillingPositionKind, String>,
+    /// The document the Rechnung answers — `SG1 RFF+ACE`: the QUOTES of the
+    /// accepted Angebot to a Lieferant (`[73] ∧ [72] ∧ [508]`), the ORDERS of
+    /// the Konfigurationen to an ESA (`[66] ∧ [501]`; INVOIC AHB 1.0b S. 12).
+    /// **Required** for those two recipients.
+    #[serde(default)]
+    pub bezugsdokument: Option<String>,
     /// Optional Messdienstleistung flat fee in EUR for the whole period.
     #[serde(default)]
     pub messdienstleistung_eur: Option<Decimal>,
@@ -328,6 +384,15 @@ pub struct GasAwhRequest {
     /// Price-sheet identifier, carried into every position's trace.
     #[serde(default)]
     pub tariff_sheet_id: Option<String>,
+    /// The Dokumentennummer of the ORDERS by which the Lieferant gave the
+    /// Sperr- or Entsperrauftrag this Rechnung bills — `SG1 RFF+ACE`, Muss on
+    /// a Rechnung für Sperren (INVOIC AHB 1.0b, 31011, `[47]`, S. 50).
+    pub auftrag_ref: String,
+    /// The day the Auftrag was carried out — `DTM+203` Ausführungsdatum, Muss
+    /// `[47]` (00011, 00040; S. 49, 53). `[518]` (S. 50) names the day: that
+    /// of the Sperrung carried out, of the last Sperrversuch, or of the
+    /// Stornierung's receipt at the NB.
+    pub ausfuehrungsdatum: time::Date,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -496,7 +561,9 @@ mod tests {
                 "anzahl": 1,
                 "preis_eur": "45.00",
                 "artikel_id": "2-01-7-001"
-            }]
+            }],
+            "auftrag_ref": "ORD-2026-0001",
+            "ausfuehrungsdatum": "2026-01-14"
         })))
         .expect("parse");
         let round_tripped = serde_json::to_value(&pos).expect("serialize");

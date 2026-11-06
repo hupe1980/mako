@@ -31,7 +31,7 @@ pub struct ObsState {
     /// Tested against the Lieferant on the processes the network arm answers.
     /// That set is derived from the Antwortfrist table rather than from a
     /// literal PID list — see `counterparty_is_affiliate`.
-    pub own_mp_ids: Arc<HashSet<String>>,
+    pub verbundene_lieferanten: Arc<HashSet<String>>,
 }
 
 /// The outcome of projecting one event.
@@ -163,7 +163,7 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
         pid,
         data["new_supplier"].as_str(),
         partner_mp_id.as_deref(),
-        &state.own_mp_ids,
+        &state.verbundene_lieferanten,
     );
 
     let projection = ProcessProjection {
@@ -222,14 +222,14 @@ fn counterparty_is_affiliate(
     pid: u32,
     new_supplier: Option<&str>,
     partner_mp_id: Option<&str>,
-    own_mp_ids: &HashSet<String>,
+    verbundene_lieferanten: &HashSet<String>,
 ) -> bool {
-    if own_mp_ids.is_empty() || !is_nb_answered_lieferanten_process(pid) {
+    if verbundene_lieferanten.is_empty() || !is_nb_answered_lieferanten_process(pid) {
         return false;
     }
     new_supplier
         .or(partner_mp_id)
-        .is_some_and(|mp| own_mp_ids.contains(mp))
+        .is_some_and(|mp| verbundene_lieferanten.contains(mp))
 }
 
 /// PIDs whose answer the operator's network arm owes a Lieferant.

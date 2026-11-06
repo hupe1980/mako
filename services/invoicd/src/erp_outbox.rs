@@ -123,7 +123,6 @@ async fn flush(
             serde_json::json!({
                 "process_id":     row.process_id.to_string(),
                 "pid":            row.pid,
-                "direction":      row.direction,
                 "sender_mp_id":   row.sender_mp_id,
                 "outcome":        row.outcome,
                 "pay_by":         pay_by,

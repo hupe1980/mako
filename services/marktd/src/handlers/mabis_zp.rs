@@ -29,7 +29,7 @@ use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
-use mako_markt::repository::{MabisZpRecord, MabisZpRepository};
+use mako_markt::repository::MabisZpRecord;
 use mako_service::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;

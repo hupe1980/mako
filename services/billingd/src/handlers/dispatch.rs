@@ -284,17 +284,12 @@ async fn dispatch_invoice(
     // pro-rated to the billing period's length.
     let verbrauchshistorie =
         resolve_verbrauchshistorie(cfg, edmd, malo_id, period_from, period_to).await;
-    // § 14 Abs. 4 Nr. 1 UStG's Leistungsempfänger, and — from the contract's
-    // customer segment — whether § 14 Abs. 2 Satz 2 Nr. 1 owes it an E-Rechnung.
+    // § 14 Abs. 4 Nr. 1 UStG's Leistungsempfänger, and — from that party's own
+    // classification — whether § 14 Abs. 2 Satz 2 Nr. 1 owes it an E-Rechnung.
     let leistungsempfaenger = vertrag.as_ref().and_then(|v| {
         v.rechnungsempfaenger
             .as_ref()
-            .map(|r| energy_billing::Rechnungsempfaenger {
-                unternehmer: crate::clients::unternehmer_aus_kundentyp(
-                    v.vertrag.kundentyp.as_deref(),
-                ),
-                ..r.as_context_party()
-            })
+            .map(crate::clients::Rechnungsempfaenger::as_context_party)
     });
     let vertragsinformationen = vertrag.as_ref().map(|v| {
         energy_billing::Vertragsinformationen {

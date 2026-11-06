@@ -41,6 +41,30 @@ pub fn kind_to_artikelnummer(
         .and_then(|name| rubo4e::current::BdewArtikelnummer::from_wire(name).ok())
 }
 
+/// The code INVOIC `LIN` DE 7140 carries for a position, where the
+/// settlement decides it: the 13-digit BDEW-Artikelnummer of the position's
+/// codelist name ([`crate::bdew_artikelnummer_code`]).
+///
+/// `None` for every NN-Rechnung Strom position. Since BK6-20-160 those carry
+/// the Artikel-ID of the Netznutzungspreisblatt (Codeliste der Artikelnummern
+/// und Artikel-ID 5.6, Kap. 1, S. 4), and from 01.01.2023 the 31002 column
+/// admits no Artikelnummer for Strom (INVOIC AHB 1.0b, `LIN` DE 7143 `Z01`
+/// `[493] ⊻ ([492] ∧ [51])`): which Artikel-ID applies depends on the Preissystem,
+/// the Netzebene and the Gemeinde, which the price sheet states and the
+/// settlement does not, so the issuing service supplies it.
+#[must_use]
+pub fn artikel_code(
+    kind: crate::BillingPositionKind,
+    settlement_type: crate::SettlementType,
+) -> Option<String> {
+    if settlement_type == crate::SettlementType::NneStrom {
+        return None;
+    }
+    kind.artikelnummer(settlement_type)
+        .and_then(crate::bdew_artikelnummer_code)
+        .map(str::to_owned)
+}
+
 /// The BO4E `rechnungstyp` for a settlement, when it is a Netznutzungsrechnung.
 ///
 /// Not every settlement `grid-billing` produces is one. Grid usage (NNE) and
@@ -141,28 +165,40 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
     let positions: Vec<Rechnungsposition> = document
         .numbered_positions()
         .map(|(number, p)| {
-            let einheit = match p.unit {
-                QuantityUnit::Kwh => Mengeneinheit::Kwh,
-                QuantityUnit::Kw => Mengeneinheit::Kw,
-                // Reactive energy/power keep their own units — BO4E v202607
-                // `Mengeneinheit` models them directly (KVARH/KVAR), so we no
-                // longer collapse them into the kWh/kW buckets and lose fidelity.
-                QuantityUnit::Kvarh => Mengeneinheit::Kvarh,
-                QuantityUnit::Kvar => Mengeneinheit::Kvar,
-                QuantityUnit::Monat => Mengeneinheit::Monat,
-                QuantityUnit::Jahr => Mengeneinheit::Jahr,
+            // A charge priced per unit of time states the count `1` `H87` as
+            // its quantity and the time at `QTY+136` (MIG 2.8e 00035, S. 42:
+            // „Bei zeitanteiliger Berechnung von Positionen (im Segment
+            // QTY+136) wie Messung usw. ist hier die Anzahl (in der Regel 1)
+            // in „H87" anzugeben"; 00036, S. 43), with the price per that unit.
+            let zeit = match p.unit {
+                QuantityUnit::Monat => Some(Mengeneinheit::Monat),
+                QuantityUnit::Jahr => Some(Mengeneinheit::Jahr),
+                QuantityUnit::Tag => Some(Mengeneinheit::Tag),
+                _ => None,
             };
-            Rechnungsposition::builder()
+            let (menge, einheit) = match p.unit {
+                QuantityUnit::Kwh => (p.quantity, Mengeneinheit::Kwh),
+                QuantityUnit::Kw => (p.quantity, Mengeneinheit::Kw),
+                QuantityUnit::Kvarh => (p.quantity, Mengeneinheit::Kvarh),
+                QuantityUnit::Kvar => (p.quantity, Mengeneinheit::Kvar),
+                QuantityUnit::Stueck => (p.quantity, Mengeneinheit::Stueck),
+                QuantityUnit::Monat | QuantityUnit::Jahr | QuantityUnit::Tag => {
+                    (rust_decimal::Decimal::ONE, Mengeneinheit::Stueck)
+                }
+            };
+            let mut position = Rechnungsposition::builder()
                 .positionsnummer(i64::from(number))
                 .positionstext(p.text.clone())
                 .artikelnummer(kind_to_artikelnummer(p.kind, invoice.settlement_type))
-                // Artikel-ID (omitted) is resolved from the price sheet at
-                // rendering time; the settlement states what was charged, not
-                // how it is coded.
+                .artikel_id(
+                    p.artikel_id
+                        .clone()
+                        .or_else(|| artikel_code(p.kind, invoice.settlement_type)),
+                )
                 .lieferungszeitraum(lz.clone())
-                .positions_menge(Menge::builder().wert(p.quantity).einheit(einheit).build())
+                .positions_menge(Menge::builder().wert(menge).einheit(einheit).build())
                 .einzelpreis(Preis::builder().wert(p.unit_price_eur.round_kfm(6)).build())
-                .gesamtpreis(Betrag::builder().wert(p.net_eur.round_kfm(5)).build())
+                .gesamtpreis(Betrag::builder().wert(p.net_eur).build())
                 // The calculation trace travels with the position it explains.
                 // grid-billing computes why each amount is what it is — the
                 // inputs, the applied paragraphs, the tariff source — and that
@@ -170,7 +206,13 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
                 // this Rechnung is stored. §20 EnWG audits and LF disputes are
                 // answered from here.
                 .zusatz_attribute(trace_attribute(p))
-                .build()
+                .build();
+            if let Some(z) = zeit {
+                position.zeitbezogene_menge =
+                    Some(Menge::builder().wert(p.quantity).einheit(z).build());
+                position.zeiteinheit = Some(z);
+            }
+            position
         })
         .collect();
 
@@ -248,6 +290,48 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
         );
     }
     rechnung
+}
+
+/// What an INVOIC names beyond the settlement: the two parties and the
+/// Marktlokation — the issuing service reads them from its Marktpartner and
+/// Marktlokation records.
+#[derive(Debug, Clone)]
+pub struct Beteiligte {
+    /// The sender's `Geschaeftspartner` — `NAD+MS` (Firmenname, Anschrift)
+    /// and its `SG3 RFF` (USt-ID).
+    pub ersteller: rubo4e::current::Geschaeftspartner,
+    /// The recipient's `Geschaeftspartner` — `NAD+MR` and its `SG3 RFF`.
+    pub empfaenger: rubo4e::current::Geschaeftspartner,
+    /// The Marktlokation — `NAD+DP` Lieferanschrift, `LOC+172`, and the
+    /// Energierichtung `IMD` DE 7009 states on the MMM-Rechnung.
+    pub marktlokation: rubo4e::current::Marktlokation,
+}
+
+/// `rechnung` with the parties and the Marktlokation it goes out under. The
+/// Marktlokation is named by `malo_id` — the settlement's —, whatever the
+/// record says.
+///
+/// # Errors
+///
+/// [`crate::BillingError::InvalidInput`] when `malo_id` is not a MaLo-ID.
+pub fn mit_beteiligten(
+    mut rechnung: Rechnung,
+    malo_id: &str,
+    b: Beteiligte,
+) -> Result<Rechnung, crate::BillingError> {
+    let mut marktlokation = b.marktlokation;
+    marktlokation.marktlokations_id =
+        Some(
+            malo_id
+                .parse()
+                .map_err(|e| crate::BillingError::InvalidInput {
+                    reason: format!("{malo_id} is not a MaLo-ID: {e}"),
+                })?,
+        );
+    rechnung.rechnungsersteller = Some(Box::new(b.ersteller));
+    rechnung.rechnungsempfaenger = Some(Box::new(b.empfaenger));
+    rechnung.marktlokation = Some(Box::new(marktlokation));
+    Ok(rechnung)
 }
 
 /// What the recipient actually pays: the gross, less the Abschläge deducted.
@@ -430,6 +514,117 @@ mod tests {
         }
     }
 
+    /// Every position's net is stated in cents, and the Summenteil is the sum
+    /// of the positions as stated. INVOIC `SG27 MOA+203` (MIG 2.8e 00041)
+    /// carries DE 5004 under `[930]` „max. 2 Nachkommastellen" (INVOIC AHB
+    /// 1.0b, S. 20), so a net on five places is a message no AHB admits.
+    #[test]
+    fn every_position_is_stated_in_cents_and_the_totals_are_their_sum() {
+        let mut input = sample_nne();
+        input.arbeitspreis = crate::ArbeitspreisModell::Einheitlich(crate::MengePreis {
+            menge_kwh: rust_decimal::Decimal::new(1_234_567, 3),
+            preis_ct_per_kwh: rust_decimal::Decimal::new(3_517, 3),
+        });
+        let settlement = crate::settle_nne(&input).expect("settle");
+        let rechnung = into_rechnung(&as_document(settlement.clone()));
+        let mut summe = rust_decimal::Decimal::ZERO;
+        for (p, s) in rechnung
+            .rechnungspositionen
+            .iter()
+            .flatten()
+            .zip(&settlement.positions)
+        {
+            let netto = p.gesamtpreis.as_ref().and_then(|b| b.wert).expect("net");
+            assert!(netto.normalize().scale() <= 2, "{}: {netto}", s.text);
+            assert_eq!(netto, s.net_eur, "{}", s.text);
+            summe += netto;
+        }
+        assert_eq!(settlement.total_eur, summe);
+        assert_eq!(
+            rechnung.gesamtnetto.as_ref().and_then(|b| b.wert),
+            Some(summe)
+        );
+    }
+
+    /// A charge priced per month states its months as the time quantity
+    /// (`QTY+136`, MIG 2.8e 00036) and the count `1` `H87` as its quantity
+    /// (00035: „Bei zeitanteiliger Berechnung von Positionen (im Segment
+    /// QTY+136) wie Messung usw. ist hier die Anzahl (in der Regel 1) in
+    /// „H87" anzugeben", S. 42); the price is per month.
+    #[test]
+    fn a_monthly_charge_states_its_months_as_the_time_quantity() {
+        let mut input = sample_nne();
+        input.sparte = crate::Sparte::Gas;
+        input.grundpreis = Some(crate::Grundpreis {
+            eur_per_month: rust_decimal::Decimal::from(15),
+            months: rust_decimal::Decimal::from(3),
+        });
+        let rechnung = into_rechnung(&as_document(crate::settle_nne(&input).expect("settle")));
+        let grundpreis = rechnung
+            .rechnungspositionen
+            .iter()
+            .flatten()
+            .find(|p| {
+                p.positionstext
+                    .as_deref()
+                    .is_some_and(|t| t.contains("Grundpreis"))
+            })
+            .expect("the Grundpreis position");
+        let menge = grundpreis.positions_menge.as_ref().expect("QTY+47");
+        assert_eq!(
+            (menge.wert, menge.einheit),
+            (
+                Some(rust_decimal::Decimal::ONE),
+                Some(Mengeneinheit::Stueck)
+            )
+        );
+        let zeit = grundpreis.zeitbezogene_menge.as_ref().expect("QTY+136");
+        assert_eq!(
+            (zeit.wert, zeit.einheit),
+            (
+                Some(rust_decimal::Decimal::from(3)),
+                Some(Mengeneinheit::Monat)
+            )
+        );
+        assert_eq!(grundpreis.zeiteinheit, Some(Mengeneinheit::Monat));
+        assert_eq!(
+            grundpreis.gesamtpreis.as_ref().and_then(|b| b.wert),
+            Some(rust_decimal::Decimal::from(45))
+        );
+    }
+
+    /// An AWH position carries the Artikel-ID its input states — `LIN` DE 7140
+    /// of the 31011, the only code the column admits (`Z09`) — counted in
+    /// Aufträge (`H87`).
+    #[test]
+    fn an_awh_position_keeps_its_artikel_id() {
+        let settlement = crate::settle_gas_awh(&crate::GasAwhInput {
+            malo_id: "51238696012".to_owned(),
+            nb_mp_id: "9800357000004".to_owned(),
+            lf_mp_id: "9800012345678".to_owned(),
+            period: crate::SettlementPeriod::new(
+                time::macros::date!(2026 - 01 - 01),
+                time::macros::date!(2026 - 01 - 31),
+            )
+            .expect("valid period"),
+            awh_positionen: vec![crate::AwhPositionInput {
+                beschreibung: "Unterbrechung der Anschlussnutzung".to_owned(),
+                anzahl: 1,
+                preis_eur: rust_decimal::Decimal::from(60),
+                artikel_id: Some("2-01-7-001".to_owned()),
+            }],
+            tariff_sheet_id: None,
+        })
+        .expect("settle");
+        let rechnung = into_rechnung(&as_document(settlement));
+        let p = &rechnung.rechnungspositionen.expect("positions")[0];
+        assert_eq!(p.artikel_id.as_deref(), Some("2-01-7-001"));
+        assert_eq!(
+            p.positions_menge.as_ref().and_then(|m| m.einheit),
+            Some(Mengeneinheit::Stueck)
+        );
+    }
+
     /// §14 Abs. 4 Nr. 8 UStG: the rate, the tax and the gross reach the document.
     ///
     /// An invoice carrying only `gesamtnetto` is not a Rechnung — its recipient
@@ -490,7 +685,6 @@ mod tests {
             mehr_preis_ct_per_kwh: rust_decimal::Decimal::from(5),
             minder_preis_ct_per_kwh: rust_decimal::Decimal::from(4),
             wiederverkaeufer: crate::Wiederverkaeuferstatus::KEINER,
-            selbstausgestellt: true,
         })
         .expect("settle");
 
@@ -530,7 +724,6 @@ mod tests {
             minder_preis_ct_per_kwh: rust_decimal::Decimal::from(4),
             // Both parties hold §3g status — what electricity requires.
             wiederverkaeufer: crate::Wiederverkaeuferstatus::BEIDE,
-            selbstausgestellt: false,
         })
         .expect("settle");
         let netto = settlement.total_eur;
@@ -610,6 +803,9 @@ mod tests {
         let positions = rechnung.rechnungspositionen.expect("positions");
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0].positionsnummer, Some(1));
+        // The Abschlag's BDEW-Artikelnummer, the one code the 31001 column
+        // admits (`Z01`).
+        assert_eq!(positions[0].artikel_id.as_deref(), Some("9990001000376"));
         assert_eq!(
             rechnung.netznutzungrechnungstyp,
             Some(NetznutzungRechnungstyp::Abschlagsrechnung)
@@ -929,6 +1125,43 @@ mod artikelnummer_bridge_tests {
                 );
             }
         }
+    }
+
+    /// Every codelist name grid-billing emits has its 13-digit code in the
+    /// table, so no position that names an Artikelnummer leaves without one.
+    #[test]
+    fn every_emitted_codelist_name_has_its_code() {
+        for kind in K::ALL {
+            for st in [
+                ST::NneGas,
+                ST::MmmStrom,
+                ST::MmmGas,
+                ST::MsbRechnung,
+                ST::NneAbschlag,
+            ] {
+                if let Some(name) = kind.artikelnummer(st) {
+                    let code = crate::bdew_artikelnummer_code(name)
+                        .unwrap_or_else(|| panic!("{name} has no code"));
+                    assert!(
+                        code.len() == 13 && code.starts_with("9990001"),
+                        "{name}: {code}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// NN-Rechnung Strom positions carry no code from the settlement — the
+    /// Artikel-ID is the price sheet's; Gas keeps the Artikelnummer.
+    #[test]
+    fn strom_nne_takes_no_artikelnummer_code() {
+        for kind in K::ALL {
+            assert_eq!(super::artikel_code(kind, ST::NneStrom), None, "{kind:?}");
+        }
+        assert_eq!(
+            super::artikel_code(K::NneArbeit, ST::NneGas).as_deref(),
+            Some("9990001000269")
+        );
     }
 
     /// Gas NNE keeps the classic code; Strom NNE carries an Artikel-ID instead.

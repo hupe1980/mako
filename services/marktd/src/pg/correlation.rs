@@ -1,9 +1,9 @@
-//! PostgreSQL implementation of [`CorrelationIndex`].
+//! PostgreSQL storage: [`PgCorrelationIndex`].
 
 use mako_markt::{
     domain::ProcessStatus,
     error::MdmError,
-    repository::{CorrelationEntry, CorrelationFilter, CorrelationIndex},
+    repository::{CorrelationEntry, CorrelationFilter},
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
 use time::OffsetDateTime;
@@ -26,8 +26,9 @@ const SELECT_COLS: &str = r#"process_id, workflow_name, pid, malo_id, melo_id, c
        erp_contract_id, erp_order_id, edifact_conv_id, marktrolle,
        format_version, status, initiated_at, completed_at"#;
 
-impl CorrelationIndex for PgCorrelationIndex {
-    async fn insert(&self, entry: CorrelationEntry) -> Result<(), MdmError> {
+impl PgCorrelationIndex {
+    /// Insert a new correlation entry (idempotent — duplicate `process_id` is a no-op).
+    pub async fn insert(&self, entry: CorrelationEntry) -> Result<(), MdmError> {
         let status = entry.status.to_string();
         sqlx::query(
             r#"INSERT INTO process_correlation
@@ -58,7 +59,8 @@ impl CorrelationIndex for PgCorrelationIndex {
         Ok(())
     }
 
-    async fn update_status(
+    /// Update status and `completed_at` for a process.
+    pub async fn update_status(
         &self,
         process_id: Uuid,
         status: ProcessStatus,
@@ -77,7 +79,8 @@ impl CorrelationIndex for PgCorrelationIndex {
         Ok(())
     }
 
-    async fn update_edifact_conv_id(
+    /// Update `edifact_conv_id` when the first `de.mako.*` event is received.
+    pub async fn update_edifact_conv_id(
         &self,
         process_id: Uuid,
         conv_id: Uuid,
@@ -92,7 +95,8 @@ impl CorrelationIndex for PgCorrelationIndex {
         Ok(())
     }
 
-    async fn find_by_erp_order_id(
+    /// Look up by ERP order ID (`Idempotency-Key` from command submission).
+    pub async fn find_by_erp_order_id(
         &self,
         erp_order_id: &str,
     ) -> Result<Option<CorrelationEntry>, MdmError> {
@@ -107,7 +111,8 @@ impl CorrelationIndex for PgCorrelationIndex {
         Ok(row.map(row_to_entry))
     }
 
-    async fn find_by_process_id(
+    /// Look up by `process_id`.
+    pub async fn find_by_process_id(
         &self,
         process_id: Uuid,
     ) -> Result<Option<CorrelationEntry>, MdmError> {
@@ -122,7 +127,8 @@ impl CorrelationIndex for PgCorrelationIndex {
         Ok(row.map(row_to_entry))
     }
 
-    async fn list(&self, filter: CorrelationFilter) -> Result<Vec<CorrelationEntry>, MdmError> {
+    /// Return correlations matching the filter.
+    pub async fn list(&self, filter: CorrelationFilter) -> Result<Vec<CorrelationEntry>, MdmError> {
         let status_str = filter.status.map(|s| s.to_string());
         let rows: Vec<PgRow> = sqlx::query(&format!(
             "SELECT {SELECT_COLS} FROM process_correlation

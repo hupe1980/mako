@@ -143,7 +143,7 @@ impl Daemon for Processd {
                 self_register_webhook_url: cfg.subscription.webhook_url.clone(),
                 subscriber_id: cfg.subscription.subscriber_id.clone(),
                 subscriber_event_types: cfg.subscription.event_types.clone(),
-                own_mp_ids: cfg.identity.own_mp_ids.clone(),
+                verbundene_lieferanten: cfg.identity.verbundene_lieferanten.clone(),
                 obs_outbound_url,
                 obs_outbound_secret,
                 obs_worker: config::ObsConfig {

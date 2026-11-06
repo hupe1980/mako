@@ -1227,7 +1227,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 let mut outbox: Vec<PendingOutbox> = vec![];
                 if let Some(data) = state.data() {
                     outbox.push(PendingOutbox::new(
-                        "AperakTimeout",
+                        "AntwortfristAbgelaufen",
                         data.sender.as_str(),
                         serde_json::json!({
                             "pid":            data.pruefidentifikator.as_u32(),

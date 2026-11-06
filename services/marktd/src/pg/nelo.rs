@@ -1,9 +1,9 @@
-//! PostgreSQL implementation of [`NeLoRepository`].
+//! PostgreSQL storage: [`PgNeLoRepository`].
 
 use mako_markt::{
     domain::Sparte,
     error::MdmError,
-    repository::{NeLoRecord, NeLoRepository, PageResult},
+    repository::{NeLoRecord, PageResult},
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
 use std::str::FromStr as _;
@@ -46,8 +46,12 @@ fn map_row(row: &PgRow) -> Result<NeLoRecord, sqlx::Error> {
     })
 }
 
-impl NeLoRepository for PgNeLoRepository {
-    async fn upsert(&self, rec: NeLoRecord, if_match: Option<i64>) -> Result<i64, MdmError> {
+impl PgNeLoRepository {
+    /// Insert or update a NeLo record.
+    ///
+    /// `if_match` = `None` for unconditional upsert (first write).
+    /// Returns the new version number.
+    pub async fn upsert(&self, rec: NeLoRecord, if_match: Option<i64>) -> Result<i64, MdmError> {
         // The typed columns come from the record, which the handler derived
         // from the validated `Netzlokation` — one derivation, so a column
         // cannot disagree with the document it shadows.
@@ -141,7 +145,8 @@ impl NeLoRepository for PgNeLoRepository {
         }
     }
 
-    async fn find(&self, nelo_id: &str, tenant: &str) -> Result<Option<NeLoRecord>, MdmError> {
+    /// Return a NeLo by `nelo_id`, or `None` if not found.
+    pub async fn find(&self, nelo_id: &str, tenant: &str) -> Result<Option<NeLoRecord>, MdmError> {
         let opt = sqlx::query("SELECT * FROM nelo WHERE nelo_id = $1 AND tenant = $2")
             .bind(nelo_id)
             .bind(tenant)
@@ -155,7 +160,11 @@ impl NeLoRepository for PgNeLoRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn patch_stammdaten(
+    /// Apply a UTILMD Stammdatenänderung (`LOC+Z18`) to the typed NeLo columns.
+    ///
+    /// `COALESCE` per column; the JSONB payload and `version` are untouched.
+    /// Returns `true` when a row was updated, `false` when the NeLo is unknown.
+    pub async fn patch_stammdaten(
         &self,
         nelo_id: &str,
         tenant: &str,
@@ -183,7 +192,8 @@ impl NeLoRepository for PgNeLoRepository {
         Ok(affected > 0)
     }
 
-    async fn list_by_nb(
+    /// Return all NeLos owned by a Netzbetreiber GLN.
+    pub async fn list_by_nb(
         &self,
         nb_mp_id: &str,
         tenant: &str,
@@ -226,7 +236,8 @@ impl NeLoRepository for PgNeLoRepository {
         })
     }
 
-    async fn list_by_tenant(
+    /// Return all NeLos for a tenant (paged).
+    pub async fn list_by_tenant(
         &self,
         tenant: &str,
         page: u32,

@@ -1,9 +1,9 @@
-//! PostgreSQL implementation of [`PartnerRepository`].
+//! PostgreSQL storage: [`PgPartnerRepository`].
 
 use mako_markt::{
     domain::{MarktpartnerId, Sparte},
     error::MdmError,
-    repository::{PartnerRecord, PartnerRepository},
+    repository::PartnerRecord,
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
 
@@ -20,10 +20,13 @@ impl PgPartnerRepository {
     }
 }
 
-const SELECT_COLS: &str = "mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, geschaeftspartner, version, updated_at";
+const SELECT_COLS: &str = "mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, geschaeftspartner, edi_zustimmung, edi_extrahierbar, version, updated_at";
 
-impl PartnerRepository for PgPartnerRepository {
-    async fn upsert(&self, partner: PartnerRecord) -> Result<i64, MdmError> {
+impl PgPartnerRepository {
+    /// Insert or update a trading partner.
+    ///
+    /// Returns the new version number.
+    pub async fn upsert(&self, partner: PartnerRecord) -> Result<i64, MdmError> {
         let current: Option<i64> =
             sqlx::query_scalar("SELECT version FROM partners WHERE mp_id = $1")
                 .bind(&partner.mp_id)
@@ -39,8 +42,8 @@ impl PartnerRepository for PgPartnerRepository {
         let rollencodetyp_str = partner.rollencodetyp.map(|r| r.to_string());
 
         sqlx::query(
-            r#"INSERT INTO partners (mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, geschaeftspartner, version, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+            r#"INSERT INTO partners (mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, geschaeftspartner, edi_zustimmung, edi_extrahierbar, version, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
                ON CONFLICT (mp_id) DO UPDATE
                SET display_name  = EXCLUDED.display_name,
                    marktrolle    = EXCLUDED.marktrolle,
@@ -48,6 +51,8 @@ impl PartnerRepository for PgPartnerRepository {
                    rollencodetyp = EXCLUDED.rollencodetyp,
                    makoadresse   = EXCLUDED.makoadresse,
                    geschaeftspartner = EXCLUDED.geschaeftspartner,
+                   edi_zustimmung   = EXCLUDED.edi_zustimmung,
+                   edi_extrahierbar = EXCLUDED.edi_extrahierbar,
                    version       = EXCLUDED.version,
                    updated_at    = now()"#,
         )
@@ -58,6 +63,8 @@ impl PartnerRepository for PgPartnerRepository {
         .bind(&rollencodetyp_str)
         .bind(&partner.makoadresse)
         .bind(&partner.geschaeftspartner)
+        .bind(partner.edi_zustimmung)
+        .bind(partner.edi_extrahierbar)
         .bind(new_version)
         .execute(&self.pool)
         .await
@@ -66,7 +73,8 @@ impl PartnerRepository for PgPartnerRepository {
         Ok(new_version)
     }
 
-    async fn find(&self, id: &MarktpartnerId) -> Result<Option<PartnerRecord>, MdmError> {
+    /// Return a partner by their 13-digit `MarktpartnerId`.
+    pub async fn find(&self, id: &MarktpartnerId) -> Result<Option<PartnerRecord>, MdmError> {
         let row: Option<PgRow> = sqlx::query(&format!(
             "SELECT {SELECT_COLS} FROM partners WHERE mp_id = $1"
         ))
@@ -78,7 +86,8 @@ impl PartnerRepository for PgPartnerRepository {
         Ok(row.map(row_to_partner))
     }
 
-    async fn list(&self) -> Result<Vec<PartnerRecord>, MdmError> {
+    /// List all partners.
+    pub async fn list(&self) -> Result<Vec<PartnerRecord>, MdmError> {
         let rows: Vec<PgRow> = sqlx::query(&format!(
             "SELECT {SELECT_COLS} FROM partners ORDER BY mp_id"
         ))
@@ -132,6 +141,8 @@ fn row_to_partner(r: PgRow) -> PartnerRecord {
         rollencodetyp: rollencodetyp_str.and_then(|s| decode_enum("rollencodetyp", &s)),
         makoadresse: makoadresse.unwrap_or_default(),
         geschaeftspartner: r.get("geschaeftspartner"),
+        edi_zustimmung: r.get("edi_zustimmung"),
+        edi_extrahierbar: r.get("edi_extrahierbar"),
         version: r.get("version"),
         updated_at: r.get("updated_at"),
     }

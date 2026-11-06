@@ -103,7 +103,8 @@ command.
   `[subscription]` (self-registers with `marktd` at startup), `[oidc]`.
 - **Automation per role:** `[nb]` (`auto_accept`, `einsd_url`), `[lf]`
   (`auto_respond`, `[[lf.bilanzkreise]]`), `[msb]`, `[esa]`, `[eog]`.
-- **Read model:** `[identity] own_mp_ids` (§ 7a Abs. 5 affiliate detection),
+- **Read model:** `[identity] verbundene_lieferanten` (required; the affiliated
+  Lieferanten the NB hold and the § 7a Abs. 5 evidence both read),
   `[obs]` (`outbound_url` / `outbound_secret` for the `de.obs.*` producers, the
   sweep intervals, the operator's `parity_threshold_pp`).
 - **Sperrauftrag queue:** `[sperr]` (`erp_webhook_url` / `erp_hmac_secret` for

@@ -33,7 +33,7 @@ impl EdifactIngestDispatcher {
             "gabi-gas-invoic" => match pid {
                 31010 | 31007 | 31008 => {
                     let cmd = adapters::gabi_gas_invoic_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_malo_from_invoic(msg);
+                    let invoice_ref = extract_invoice_ref_from_invoic(msg);
                     let due_at =
                         fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
                     self.spawn_or_resume_guarded::<GaBiGasInvoicWorkflow>(

@@ -38,7 +38,7 @@
 //! | `de.mako.process.initiated`  | `Initiated`              |
 //! | `de.mako.aperak.accepted`    | `Running`                |
 //! | `de.mako.aperak.rejected`    | `Rejected` + ERC code    |
-//! | `de.mako.aperak.timeout`     | `AperakTimeout`          |
+//! | `de.mako.antwortfrist.abgelaufen`     | `AntwortfristAbgelaufen`          |
 //! | `de.mako.process.completed`  | `Completed`              |
 //! | `de.mako.process.failed`     | `Failed`                 |
 //!

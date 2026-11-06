@@ -90,7 +90,7 @@ pub struct Unset;
 
 // ── Shared helpers (pub(super) for child modules) ─────────────────────────────
 
-#[cfg(any_message)]
+#[cfg(any_builder)]
 pub(super) fn bytes_to_segments(
     bytes: &[u8],
 ) -> Result<Vec<edifact_rs::OwnedSegment>, crate::Error> {
@@ -112,7 +112,6 @@ pub(super) fn bytes_to_segments(
     feature = "aperak",
     feature = "iftsta",
     feature = "insrpt",
-    feature = "invoic",
     feature = "orders",
     feature = "partin",
     feature = "pricat",
@@ -144,7 +143,6 @@ pub(super) fn ccyymmddhhmm_utc(value: &str) -> String {
     feature = "aperak",
     feature = "iftsta",
     feature = "insrpt",
-    feature = "invoic",
     feature = "orders",
     feature = "partin",
     feature = "reqote",
@@ -187,7 +185,6 @@ pub(super) fn now_ccyymmddhhmm() -> String {
     feature = "comdis",
     feature = "iftsta",
     feature = "insrpt",
-    feature = "invoic",
     feature = "mscons",
     feature = "ordchg",
     feature = "orders",
@@ -209,7 +206,7 @@ macro_rules! emit_seg {
     }};
 }
 
-#[cfg(any_message)]
+#[cfg(any_builder)]
 macro_rules! emit_comp {
     ($writer:expr, $tag:expr, $([$($comp:expr),* $(,)?]),+ $(,)?) => {{
         let elements: &[&[&str]] = &[$(&[$($comp),*]),+];
@@ -238,7 +235,6 @@ macro_rules! emit_comp {
     feature = "comdis",
     feature = "iftsta",
     feature = "insrpt",
-    feature = "invoic",
     feature = "mscons",
     feature = "ordchg",
     feature = "orders",
@@ -296,11 +292,6 @@ pub use iftsta::IftstaBuilder;
 mod insrpt;
 #[cfg(feature = "insrpt")]
 pub use insrpt::InsrptBuilder;
-
-#[cfg(feature = "invoic")]
-mod invoic;
-#[cfg(feature = "invoic")]
-pub use invoic::InvoicBuilder;
 
 #[cfg(feature = "orders")]
 mod orders;

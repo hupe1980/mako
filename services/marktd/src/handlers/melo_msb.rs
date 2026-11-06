@@ -20,7 +20,6 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use mako_markt::repository::MeloMsbRepository;
 use mako_service::Json;
 use serde::Deserialize;
 use tracing::info;

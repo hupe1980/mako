@@ -9,6 +9,23 @@ fn parse(body: serde_json::Value) -> BillingRunRequest {
     serde_json::from_value(body).expect("the documented body must parse")
 }
 
+/// Draft `position` and require that nothing the INVOIC needs is missing.
+fn issuable(position: &netzbilanzd::request::BillingPositionRequest) {
+    use netzbilanzd::billing::{self, DocumentFacts};
+    let drafted = billing::render_and_check(
+        billing::settle(position).expect("settles"),
+        "NNE-2026-000001".to_owned(),
+        time::macros::date!(2026 - 02 - 01),
+        time::macros::date!(2026 - 03 - 03),
+        DocumentFacts {
+            cadence: position.cadence,
+            artikel_ids: DocumentFacts::artikel_ids_of(&position.settlement),
+            ..DocumentFacts::default()
+        },
+    );
+    billing::refuse_unissuable(position, &drafted).expect("the documented NN-Rechnung is issuable");
+}
+
 /// The README quick-start and the operator guide's fuller NNE example.
 #[test]
 fn the_documented_nne_examples_parse() {
@@ -20,6 +37,7 @@ fn the_documented_nne_examples_parse() {
             "malo_id": "51238696012",
             "period_from": "2026-01-01",
             "period_to": "2026-01-31",
+            "cadence": "Monatsrechnung",
             "settlement": {
                 "billing_type": "nne",
                 "nb_mp_id": "9900357000004",
@@ -27,7 +45,15 @@ fn the_documented_nne_examples_parse() {
                 "sparte": "Strom",
                 "arbeitspreis": { "Einheitlich": { "menge_kwh": "1500", "preis_ct_per_kwh": "3.5" } },
                 "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde" },
-                "netzebene": "Niederspannung"
+                "netzebene": "Niederspannung",
+                "artikel_ids": {
+                    "NneArbeit": "1-02-0-002",
+                    "Konzessionsabgabe": "1-08-3-001",
+                    "KwkgUmlage": "1-10-1-001",
+                    "OffshoreNetzumlage": "1-10-2-001",
+                    "Sect19StromNevUmlage": "1-10-4-001"
+                },
+                "lieferschein_ref": "LS-2026-000417"
             }
         }]
     }));
@@ -41,6 +67,7 @@ fn the_documented_nne_examples_parse() {
             "malo_id": "51238696012",
             "period_from": "2026-01-01",
             "period_to": "2026-01-31",
+            "cadence": "Monatsrechnung",
             "settlement": {
                 "billing_type": "nne",
                 "nb_mp_id": "9900357000004",
@@ -67,7 +94,16 @@ fn the_documented_nne_examples_parse() {
                 "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde" },
                 "netzebene": "Niederspannung",
                 "jahresarbeit_kwh": "18000",
-                "tariff_sheet_id": "Preisblatt-NNE-2026-Q1"
+                "tariff_sheet_id": "Preisblatt-NNE-2026-Q1",
+                "artikel_ids": {
+                    "NneArbeit": "1-03-7-005",
+                    "NneLeistung": "1-03-7-004",
+                    "Konzessionsabgabe": "1-08-3-001",
+                    "KwkgUmlage": "1-10-1-001",
+                    "OffshoreNetzumlage": "1-10-2-001",
+                    "Sect19StromNevUmlage": "1-10-4-001"
+                },
+                "lieferschein_ref": "LS-2026-000417"
             }
         }]
     }));
@@ -92,15 +128,15 @@ fn the_documented_nne_examples_parse() {
     // 500.00 € when `LeistungspreisSystem` arrived, and the printed totals
     // stayed where they were.
     let settled = netzbilanzd::billing::settle(&guide.positions[0]).expect("the guide settles");
-    assert_eq!(settled.total_eur.to_string(), "598.34", "netto_eur");
+    assert_eq!(settled.total_eur.to_string(), "598.35", "netto_eur");
     assert_eq!(
         settled.steuer.steuer_eur.to_string(),
-        "113.68",
+        "113.69",
         "steuer_eur"
     );
     assert_eq!(
         settled.steuer.brutto_eur().to_string(),
-        "712.02",
+        "712.04",
         "brutto_eur"
     );
     assert!(
@@ -108,6 +144,11 @@ fn the_documented_nne_examples_parse() {
         "a monthly Leistungspreis over a monthly period warns about nothing: {:?}",
         settled.warnings
     );
+
+    // …and both are drafts that can go out as an INVOIC: every charge has its
+    // Artikel-ID, the Lieferschein and the cadence are stated.
+    issuable(&readme.positions[0]);
+    issuable(&guide.positions[0]);
 }
 
 /// Both Leistungspreissysteme reach the engine off the wire.
@@ -165,7 +206,7 @@ fn the_documented_sect14a_modules_parse() {
     for arbeitspreis in [
         serde_json::json!({ "Modul1Pauschal": {
             "basis": { "menge_kwh": "1500", "preis_ct_per_kwh": "3.5" },
-            "pauschale_eur_pro_jahr": "120.00", "jahresanteil": "0.0849"
+            "pauschale_eur_pro_jahr": "120.00"
         }}),
         serde_json::json!({ "Modul2ProzentualeReduzierung": {
             "basis": { "menge_kwh": "800", "preis_ct_per_kwh": "3.5" }, "reduktion": "0.40"

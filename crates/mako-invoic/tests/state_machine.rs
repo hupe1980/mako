@@ -109,7 +109,49 @@ fn send(p: u32) -> InvoicCommand {
         recipient: payer(),
         document_date: "20260601".to_owned(),
         invoice_ref: MessageRef::new("INV-2026-002"),
+        nachricht: NACHRICHT.to_owned(),
     }
+}
+
+/// A message as the transport boundary hands it over; the workflow does not
+/// read it, only carries it.
+const NACHRICHT: &str = "UNH+INV1+INVOIC:D:06A:UN:2.8e'BGM+380+INV-2026-002+9'UNT+3+INV1'";
+
+/// The issuer's `SendInvoic` enqueues the message it carries as the
+/// one `INVOIC` outbox entry of the write that records `InvoicSent`, addressed
+/// to the payer.
+#[tokio::test]
+async fn send_invoic_enqueues_the_message_it_carries() {
+    let p = process::<BothRoles>();
+    let ran = p.run(send(31002), RunOptions::new()).await.unwrap();
+    assert!(
+        ran.events.iter().any(|e| &*e.event_type == "InvoicSent"),
+        "{:?}",
+        ran.events
+    );
+    let invoic: Vec<_> = ran
+        .outbox
+        .iter()
+        .filter(|o| &*o.message_type == "INVOIC")
+        .collect();
+    assert_eq!(invoic.len(), 1, "{:?}", ran.outbox);
+    assert_eq!(invoic[0].payload["nachricht"], NACHRICHT);
+    assert_eq!(invoic[0].payload["receiver"], payer().as_str());
+    assert_eq!(invoic[0].payload["sender"], issuer().as_str());
+    assert_eq!(&*invoic[0].recipient, payer().as_str());
+}
+
+/// A `SendInvoic` that carries no message is refused: recording it as sent
+/// would leave the process waiting on a REMADV to an invoice nobody received.
+#[tokio::test]
+async fn send_invoic_without_a_message_is_refused() {
+    let p = process::<BothRoles>();
+    let mut cmd = send(31002);
+    if let InvoicCommand::SendInvoic { nachricht, .. } = &mut cmd {
+        nachricht.clear();
+    }
+    assert!(p.run(cmd, RunOptions::new()).await.is_err());
+    assert!(matches!(p.state().await.unwrap(), InvoicState::New));
 }
 
 fn remadv(p: u32) -> InvoicCommand {

@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 use invoicd::pg::ReceiptRow;
 use invoicd::pg::receipts::{
-    DEAD_LETTER_ATTEMPTS, DIRECTION_INBOUND, DIRECTION_OUTBOUND, claim_erp_pending,
-    dead_letter_erp, dispatch_target, record_erp_failure, upsert_receipt,
+    DEAD_LETTER_ATTEMPTS, claim_erp_pending, dead_letter_erp, dispatch_target, record_erp_failure,
+    upsert_receipt,
 };
 
 /// Container guard the test holds until it ends — dropping it removes the
@@ -54,13 +54,12 @@ async fn pg_pool() -> Option<(sqlx::PgPool, PgContainer)> {
     Some((pool, container))
 }
 
-fn receipt(process_id: Uuid, direction: &str) -> ReceiptRow {
+fn receipt(process_id: Uuid) -> ReceiptRow {
     ReceiptRow {
         process_id,
-        invoice_ref: Some("INV-2026-000123".to_owned()),
+        invoice_ref: "INV-2026-000123".to_owned(),
         rechnungsnummer: Some("R-2026-000123".to_owned()),
         pid: 31002,
-        direction: direction.to_owned(),
         sender_mp_id: "9900357000004".to_owned(),
         receiver_gln: TENANT.to_owned(),
         malo_id: Some("51238696012".to_owned()),
@@ -88,32 +87,6 @@ macro_rules! pool_or_skip {
     };
 }
 
-/// Both direction constants satisfy the `direction` CHECK — the writers and the
-/// schema agree. A capitalised literal rejects every INSERT.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn both_direction_constants_pass_the_check() {
-    let (pool, _guard) = pool_or_skip!();
-
-    for direction in [DIRECTION_INBOUND, DIRECTION_OUTBOUND] {
-        let id = Uuid::new_v4();
-        upsert_receipt(&pool, &receipt(id, direction))
-            .await
-            .unwrap_or_else(|e| panic!("{direction} must satisfy the direction CHECK: {e}"));
-
-        let stored: String =
-            sqlx::query_scalar("SELECT direction FROM invoic_receipts WHERE process_id = $1")
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .expect("read the receipt back");
-        assert_eq!(stored, direction);
-    }
-
-    let err = upsert_receipt(&pool, &receipt(Uuid::new_v4(), "Inbound")).await;
-    assert!(err.is_err(), "'Inbound' violates the direction CHECK");
-}
-
 /// Two tenants may hold the same `process_id`, and neither write reaches the
 /// other's row.
 ///
@@ -128,11 +101,11 @@ async fn a_process_id_is_unique_per_tenant_and_not_across_them() {
     const OTHER: &str = "9900357000004";
 
     let id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(id, DIRECTION_INBOUND))
+    upsert_receipt(&pool, &receipt(id))
         .await
         .expect("the first tenant stores its receipt");
 
-    let mut foreign = receipt(id, DIRECTION_INBOUND);
+    let mut foreign = receipt(id);
     foreign.tenant = OTHER.to_owned();
     foreign.outcome = "Dispute".to_owned();
     upsert_receipt(&pool, &foreign)
@@ -156,7 +129,7 @@ async fn a_process_id_is_unique_per_tenant_and_not_across_them() {
     );
 
     // Within one tenant the pair is still unique: a redelivery updates.
-    let mut again = receipt(id, DIRECTION_INBOUND);
+    let mut again = receipt(id);
     again.outcome = "Warn".to_owned();
     upsert_receipt(&pool, &again)
         .await
@@ -168,32 +141,6 @@ async fn a_process_id_is_unique_per_tenant_and_not_across_them() {
             .await
             .expect("count");
     assert_eq!(rows, 2, "a redelivery must not add a row");
-}
-
-/// An inbound receipt without its INVOIC message reference is refused.
-///
-/// It could be checked but never answered: `makod` routes the REMADV by that
-/// reference and nothing else. Discovering it at the Zahlungsziel instead of at
-/// the INSERT is a day too late.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn an_inbound_receipt_without_a_message_reference_is_refused() {
-    let (pool, _guard) = pool_or_skip!();
-
-    let mut row = receipt(Uuid::new_v4(), DIRECTION_INBOUND);
-    row.invoice_ref = None;
-    assert!(
-        upsert_receipt(&pool, &row).await.is_err(),
-        "an unanswerable inbound receipt must not be stored"
-    );
-
-    // A self-issued outbound document has no inbound message reference and is
-    // identified by its own invoice number instead.
-    let mut out = receipt(Uuid::new_v4(), DIRECTION_OUTBOUND);
-    out.invoice_ref = None;
-    upsert_receipt(&pool, &out)
-        .await
-        .expect("outbound needs no inbound reference");
 }
 
 /// A redelivery refreshes the check result and never loses the MaLo.
@@ -209,11 +156,11 @@ async fn a_redelivery_refreshes_the_check_and_keeps_the_malo() {
     let (pool, _guard) = pool_or_skip!();
 
     let id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(id, DIRECTION_INBOUND))
+    upsert_receipt(&pool, &receipt(id))
         .await
         .expect("first delivery");
 
-    let mut second = receipt(id, DIRECTION_INBOUND);
+    let mut second = receipt(id);
     second.malo_id = None;
     second.outcome = "Warn".to_owned();
     second.findings = serde_json::json!([{ "kind": "TariffDeviation" }]);
@@ -242,44 +189,6 @@ async fn a_redelivery_refreshes_the_check_and_keeps_the_malo() {
     );
 }
 
-/// The message-reference constraint is enforced on **every** write, including a
-/// redelivery — PostgreSQL evaluates a table CHECK on the proposed tuple before
-/// the `ON CONFLICT` arbiter, so a thin redelivery is refused rather than
-/// silently nulling the routing key.
-///
-/// The ingest path relies on it: `handler::extract` refuses an event with no
-/// `invoice_ref` and dead-letters it, so a receipt without one can only arrive
-/// through a bug, and this makes that bug loud.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn the_message_reference_constraint_holds_on_redelivery_too() {
-    let (pool, _guard) = pool_or_skip!();
-
-    let id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(id, DIRECTION_INBOUND))
-        .await
-        .expect("first delivery");
-
-    let mut thin = receipt(id, DIRECTION_INBOUND);
-    thin.invoice_ref = None;
-    assert!(
-        upsert_receipt(&pool, &thin).await.is_err(),
-        "a redelivery without the routing key must be refused, not silently applied"
-    );
-
-    let invoice_ref: Option<String> =
-        sqlx::query_scalar("SELECT invoice_ref FROM invoic_receipts WHERE process_id = $1")
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .expect("read back");
-    assert_eq!(
-        invoice_ref.as_deref(),
-        Some("INV-2026-000123"),
-        "the stored reference is untouched by the refused write"
-    );
-}
-
 /// A re-dispatch reads the routing key and the answering PID from the receipt.
 /// Sending `process_id` in the message reference's place reached no workflow.
 #[tokio::test]
@@ -288,7 +197,7 @@ async fn a_redispatch_finds_the_message_reference_and_pid() {
     let (pool, _guard) = pool_or_skip!();
 
     let process_id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(process_id, DIRECTION_INBOUND))
+    upsert_receipt(&pool, &receipt(process_id))
         .await
         .expect("persist");
     let id: Uuid = sqlx::query_scalar("SELECT id FROM invoic_receipts WHERE process_id = $1")
@@ -324,7 +233,7 @@ async fn a_dead_lettered_receipt_is_never_claimed_again() {
     let (pool, _guard) = pool_or_skip!();
 
     let id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(id, DIRECTION_INBOUND))
+    upsert_receipt(&pool, &receipt(id))
         .await
         .expect("persist the receipt");
 
@@ -368,7 +277,7 @@ async fn the_retry_budget_terminates_even_when_no_outcome_is_ever_recorded() {
     let (pool, _guard) = pool_or_skip!();
 
     let id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(id, DIRECTION_INBOUND))
+    upsert_receipt(&pool, &receipt(id))
         .await
         .expect("persist the receipt");
 
@@ -412,7 +321,7 @@ async fn the_terminal_backoff_is_an_interval_postgresql_accepts() {
     let (pool, _guard) = pool_or_skip!();
 
     let id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(id, DIRECTION_INBOUND))
+    upsert_receipt(&pool, &receipt(id))
         .await
         .expect("persist the receipt");
 
@@ -446,7 +355,7 @@ async fn a_claimed_batch_is_leased_against_a_second_worker() {
     let (pool, _guard) = pool_or_skip!();
 
     for _ in 0..3 {
-        upsert_receipt(&pool, &receipt(Uuid::new_v4(), DIRECTION_INBOUND))
+        upsert_receipt(&pool, &receipt(Uuid::new_v4()))
             .await
             .expect("persist");
     }
@@ -473,12 +382,12 @@ async fn the_claim_is_tenant_scoped_and_carries_the_dispatch_state() {
     let (pool, _guard) = pool_or_skip!();
 
     let mine = Uuid::new_v4();
-    let mut row = receipt(mine, DIRECTION_INBOUND);
+    let mut row = receipt(mine);
     row.dispatched_at = Some(OffsetDateTime::now_utc());
     row.findings = serde_json::json!([{ "kind": "TariffDeviation" }, { "kind": "PeriodInvalid" }]);
     upsert_receipt(&pool, &row).await.expect("persist mine");
 
-    let mut theirs = receipt(Uuid::new_v4(), DIRECTION_INBOUND);
+    let mut theirs = receipt(Uuid::new_v4());
     theirs.tenant = "9900999000009".to_owned();
     upsert_receipt(&pool, &theirs)
         .await
@@ -504,7 +413,7 @@ async fn a_resolution_cannot_be_recorded_without_its_timestamp() {
     let (pool, _guard) = pool_or_skip!();
 
     let id = Uuid::new_v4();
-    let mut row = receipt(id, DIRECTION_INBOUND);
+    let mut row = receipt(id);
     row.outcome = "Resolved".to_owned();
     assert!(
         upsert_receipt(&pool, &row).await.is_err(),

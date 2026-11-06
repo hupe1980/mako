@@ -285,6 +285,7 @@ fn a_buyer_from_vertragd_closes_the_address_findings() {
         // Where the document is *sent*. No EN 16931 BT carries it, so it must
         // not reach the model — pinned below.
         email: Some("erika@example.test".to_owned()),
+        unternehmer: Some(false),
     };
     let mut invoice = mixed_rate_invoice();
     invoice.set_rechnungsempfaenger(Some(buyer.as_context_party()));

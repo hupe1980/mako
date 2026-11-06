@@ -200,6 +200,7 @@ pub fn settle_dezentrale_einspeisung(
             unit_price_eur: reduced_eur,
             net_eur,
             spot_price_formula: None,
+            artikel_id: None,
             trace: CalculationTrace {
                 explanation: format!(
                     "{:.3} kWh × {:.6} EUR/kWh (= −{:.6} × {faktor} Abschmelzung) = {:.5} EUR \
@@ -223,7 +224,7 @@ pub fn settle_dezentrale_einspeisung(
                     .clone()
                     .map(|sheet_id| TariffSource::PublishedTariffSheet { sheet_id }),
                 regulatory_reduction_factor: Some(faktor),
-                rounding_note: Some("unit price to 6 dp; net to 5 dp"),
+                rounding_note: Some("unit price to 6 dp; net to the cent"),
             },
         });
     }

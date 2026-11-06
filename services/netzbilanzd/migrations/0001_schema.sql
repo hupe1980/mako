@@ -61,7 +61,7 @@ CREATE TABLE invoice_drafts (
     recipient_mp_id     TEXT        NOT NULL,   -- LF, or NB/LF/ESA for 31009
 
     pid                 INTEGER     NOT NULL
-                        CHECK (pid IN (31001, 31002, 31005, 31009, 31011)),
+                        CHECK (pid IN (31001, 31002, 31005, 31006, 31009, 31011)),
     -- NN-Rechnung Strom and Gas share PID 31002, so the Prüfidentifikator does
     -- not identify the Sparte and the Sparte has to be stored beside it.
     sparte              TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),

@@ -827,206 +827,282 @@ coverage_table! {
 /// construction.  All downstream domain logic and the `invoic-checker` engine
 /// work exclusively with the resulting [`bo4e::Rechnung`].
 ///
-/// # Date types
+/// Read by the places of INVOIC MIG 2.8e: the message splits at `LIN` and
+/// `UNS` into Kopf, `SG26` Rechnungspositionen and Summenteil, and each value
+/// is taken from the qualifier the MIG gives its place.
 ///
-/// In rubo4e, `Zeitraum.startdatum / enddatum` are `time::Date` (date-only).
-/// EDIFACT DTM `YYYYMMDD` values are parsed to `time::Date` for all period
-/// fields. Delivery periods are wrapped in a `Zeitraum` and stored in
-/// `Rechnungsposition.lieferungszeitraum` (v202607 schema).
+/// | Place | Qualifier | `Rechnung` field |
+/// |---|---|---|
+/// | 00004 `BGM` | DE 1004; DE 1001 `457`/`Z25` | `rechnungsnummer`; `ist_storno` |
+/// | 00005 `DTM` | `137` (Rechnungsdatum) | `rechnungsdatum` |
+/// | 00007/00008 `DTM` | `155`/`156`, or `Z42`/`Z43` on an Abschlag | `rechnungsperiode` |
+/// | 00014 `IMD` | DE 7081 | `netznutzungrechnungstyp` |
+/// | 00018 `RFF` | `OI` | `original_rechnungsnummer` |
+/// | 00029 `LOC` | `172` | `marktlokation.marktlokations_id` |
+/// | 00033 `DTM` | `265`, the day's Beginn (`[UB1]`) | `faelligkeitsdatum`, that day at midnight UTC |
+/// | 00034–00044 | `LIN`, `QTY+47`/`+136`/`+Z17`, `DTM+155`/`156`, `MOA+203`, `PRI+CAL`, `TAX` | `rechnungspositionen` — the price times the Korrekturfaktor |
+/// | 00052 / 00053 / 00057 `MOA` | `77` / `113` / `9` | `gesamtbrutto` / `vorauszahlungen` / `zu_zahlen` |
+/// | 00058/00061/00062 | `TAX`, `MOA+125`, `MOA+161` per rate | `steuerbetraege`; their sums `gesamtnetto` / `gesamtsteuer` |
+///
+/// A period's `DTM` bounds are instants at 00:00 gesetzlicher Zeit, the Ende
+/// exclusive (MIG 2.8e 00007/00008); BO4E's `Zeitraum` is inclusive on both
+/// ends, so the Ende is read as the Berlin day before it.
 #[must_use]
-fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
-    // Split at the first LIN segment: header vs. detail sections.
-    let lin_start = segs
+pub(crate) fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
+    let uns = segs
+        .iter()
+        .position(|s| s.tag == "UNS")
+        .unwrap_or(segs.len());
+    let lin = segs[..uns]
         .iter()
         .position(|s| s.tag == "LIN")
-        .unwrap_or(segs.len());
-    let header = &segs[..lin_start];
+        .unwrap_or(uns);
+    let header = &segs[..lin];
+    let summary = segs.get(uns + 1..).unwrap_or_default();
 
-    // Zeitraum.startdatum/enddatum are time::Date in rubo4e.
-    let period_start = dtm(header, "163").and_then(edifact_date_to_date);
-    let period_end = dtm(header, "164").and_then(edifact_date_to_date);
-    // Rechnung.rechnungsdatum is still OffsetDateTime.
-    // rechnungsdatum is time::Date in rubo4e (follows *datum convention).
-    let invoice_date = dtm(header, "137").and_then(edifact_date_to_date);
-
-    let gesamtnetto = moa_betrag(header, "79");
-    let gesamtbrutto = moa_betrag(header, "9");
-    // MOA+124 is the Steuerbetrag, and dropping it makes every inbound invoice
-    // reach `invoic-checker` looking like one that states no tax — which is an
-    // invoice the LF cannot deduct (§14 Abs. 4 Nr. 8 UStG). The checker cannot
-    // tell that apart from an invoice whose tax simply was not read.
-    let gesamtsteuer = moa_betrag(header, "124");
-    let steuerbetraege = build_steuerbetraege(header, gesamtnetto.as_ref(), gesamtsteuer.as_ref());
-
-    let rechnungsnummer = segs
-        .iter()
-        .find(|s| s.tag == "BGM")
+    let bgm = segs.iter().find(|s| s.tag == "BGM");
+    let rechnungsnummer = bgm
         .and_then(|s| s.component_str(1, 0))
+        .filter(|v| !v.is_empty())
         .map(str::to_owned);
+    let storno = bgm
+        .and_then(|s| s.component_str(0, 0))
+        .is_some_and(|c| matches!(c, "457" | "Z25"));
 
-    // DTM+163 / DTM+164 are the Abrechnungszeitraum's **inclusive** bounds —
-    // DTM+164 is the last day billed — and BO4E's `Zeitraum` date pair is
-    // inclusive too („Enddatum des betrachteten Zeitraums ist inklusiv"), so
-    // the dates carry across unchanged.
-    let rechnungsperiode = match (period_start, period_end) {
-        (Some(s), Some(e)) => Some(bo4e::Zeitraum {
-            startdatum: Some(s),
-            enddatum: Some(e),
-            ..Default::default()
-        }),
-        _ => None,
+    let periode = zeitraum(header, "155", "156").or_else(|| zeitraum(header, "Z42", "Z43"));
+    let mut rechnungspositionen = Vec::new();
+    let mut start = None;
+    for (i, seg) in segs[lin..uns].iter().enumerate() {
+        if seg.tag == "LIN" {
+            if let Some(s) = start {
+                rechnungspositionen.push(build_position(&segs[lin + s..lin + i]));
+            }
+            start = Some(i);
+        }
+    }
+    if let Some(s) = start {
+        rechnungspositionen.push(build_position(&segs[lin + s..uns]));
+    }
+
+    let steuerbetraege = build_steuerbetraege(summary);
+    let summe = |f: fn(&bo4e::Steuerbetrag) -> Option<Decimal>| {
+        steuerbetraege
+            .iter()
+            .map(f)
+            .collect::<Option<Vec<Decimal>>>()
+            .filter(|v| !v.is_empty())
+            .map(|v| betrag(v.into_iter().sum()))
     };
-    let rechnungspositionen = {
-        let p = build_positions(segs);
-        if p.is_empty() { None } else { Some(p) }
-    };
+    let gesamtnetto = summe(|s| s.basiswert);
+    let gesamtsteuer = summe(|s| s.steuerwert);
+
+    // `SG50`: the amounts before the first `SG52 TAX`.
+    let sg52 = summary
+        .iter()
+        .position(|s| s.tag == "TAX")
+        .unwrap_or(summary.len());
+    let sg50 = &summary[..sg52];
+    let vorauszahlungen: Vec<bo4e::Vorauszahlung> = sg50
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.tag == "MOA" && s.component_str(0, 0) == Some("113"))
+        .map(|(i, s)| {
+            // `SG51`: the `RFF+AFL` / `DTM+3` right after its amount.
+            let rest = &sg50[i + 1..];
+            let next_moa = rest
+                .iter()
+                .position(|s| s.tag == "MOA")
+                .unwrap_or(rest.len());
+            let sg51 = &rest[..next_moa];
+            bo4e::Vorauszahlung {
+                betrag: moa_wert(s).map(betrag),
+                referenz: sg51
+                    .iter()
+                    .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("AFL"))
+                    .and_then(|s| s.component_str(0, 1))
+                    .map(str::to_owned),
+                datum: dtm_instant(sg51, "3"),
+                ..Default::default()
+            }
+        })
+        .collect();
+
     bo4e::Rechnung {
         rechnungsnummer,
-        // BO4E types `rechnungsdatum` as `format: date-time`; DTM+137 carries
-        // qualifier 102, a bare CCYYMMDD. Midnight UTC, so
-        // `rechnungsdatum_date()` gives back the day that was on the wire.
-        rechnungsdatum: invoice_date.map(|d| d.midnight().assume_utc()),
-        rechnungsperiode,
+        rechnungsdatum: dtm_instant(header, "137"),
+        // `[UB1]` states the Fälligkeitsdatum as a day's Beginn; BO4E carries
+        // a date-only value as that date at midnight UTC.
+        faelligkeitsdatum: dtm_instant(header, "265")
+            .map(|t| mako_fristen::berlin_date(t).midnight().assume_utc()),
+        rechnungsperiode: periode,
+        netznutzungrechnungstyp: imd_rechnungstyp(header).and_then(|c| rechnungstyp_von(&c)),
+        ist_storno: storno.then_some(true),
+        original_rechnungsnummer: header
+            .iter()
+            .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("OI"))
+            .and_then(|s| s.component_str(0, 1))
+            .map(str::to_owned),
+        marktlokation: header
+            .iter()
+            .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))
+            .and_then(|s| s.component_str(1, 0))
+            .and_then(|id| id.parse().ok())
+            .map(|id| {
+                Box::new(bo4e::Marktlokation {
+                    marktlokations_id: Some(id),
+                    ..Default::default()
+                })
+            }),
         gesamtnetto,
         gesamtsteuer,
-        gesamtbrutto,
-        steuerbetraege,
-        rechnungspositionen,
+        gesamtbrutto: moa(sg50, "77"),
+        zu_zahlen: moa(sg50, "9"),
+        vorauszahlungen: (!vorauszahlungen.is_empty()).then_some(vorauszahlungen),
+        steuerbetraege: (!steuerbetraege.is_empty()).then_some(steuerbetraege),
+        rechnungspositionen: (!rechnungspositionen.is_empty()).then_some(rechnungspositionen),
         ..Default::default()
     }
 }
 
-/// Build the VAT breakdown from the `TAX` segments, or from `MOA+124` alone.
+/// `IMD` DE 7081 as the BO4E Rechnungstyp it names (MIG 2.8e 00014).
+fn rechnungstyp_von(code: &str) -> Option<bo4e::NetznutzungRechnungstyp> {
+    use bo4e::NetznutzungRechnungstyp as T;
+    Some(match code {
+        "ABR" => T::Abschlussrechnung,
+        "ABS" => T::Abschlagsrechnung,
+        "JVR" => T::Turnusrechnung,
+        "MVR" => T::Monatsrechnung,
+        "WIM" => T::Wimrechnung,
+        "ZVR" => T::Zwischenrechnung,
+        "13I" => T::Integrierte13TeRechnung,
+        "13R" => T::Zusaetzliche13TeRechnung,
+        "MMM" => T::Mehrmindermengenrechnung,
+        _ => return None,
+    })
+}
+
+/// One `SG52`'s `TAX` with the `MOA+125` / `MOA+161` that follow it.
 ///
-/// EDIFACT states the rate on `TAX` (`TAX+7+VAT+++:::<rate>+<category>`) and the
-/// amount on `MOA+124`. Where a `TAX` segment carries category `AE`, the supply
-/// is reverse-charged: the recipient owes the tax, and the invoice states none.
-fn build_steuerbetraege(
-    header: &[OwnedSegment],
-    netto: Option<&bo4e::Betrag>,
-    steuer: Option<&bo4e::Betrag>,
-) -> Option<Vec<bo4e::Steuerbetrag>> {
-    let tax = header.iter().find(|s| s.tag == "TAX");
-    let (steuerart, satz) = match tax {
-        Some(seg) => {
-            // C243 component 4 carries the rate; the category code follows in
-            // element 5. `AE` is the reverse charge (UNCL 5305).
-            let satz = seg
-                .component_str(4, 3)
-                .and_then(|r| r.replace(',', ".").parse::<Decimal>().ok());
-            let kategorie = seg.component_str(5, 0).unwrap_or_default();
-            let art = if kategorie.eq_ignore_ascii_case("AE") {
-                bo4e::Steuerart::Rcv
-            } else {
-                bo4e::Steuerart::Ust
-            };
-            (art, satz)
-        }
-        // No TAX segment: only an amount was stated, so only an amount is
-        // reported. Inventing a rate here would assert something the wire did
-        // not say.
-        None => (bo4e::Steuerart::Ust, None),
-    };
-
-    if tax.is_none() && steuer.is_none() {
-        return None;
-    }
-    Some(vec![bo4e::Steuerbetrag {
-        steuerart: Some(steuerart),
-        steuersatz: satz,
-        basiswert: netto.and_then(|b| b.wert),
-        steuerwert: steuer.and_then(|b| b.wert),
-        ..Default::default()
-    }])
-}
-
-/// Build a `Vec<Rechnungsposition>` by splitting on `LIN` segment boundaries.
-fn build_positions(segs: &[OwnedSegment]) -> Vec<bo4e::Rechnungsposition> {
-    let mut result = Vec::new();
-    let mut group: Vec<&OwnedSegment> = Vec::new();
-    let mut in_detail = false;
-
-    for seg in segs {
-        if seg.tag == "LIN" {
-            if in_detail && !group.is_empty() {
-                result.push(build_position(&group));
-            }
-            group.clear();
-            in_detail = true;
-        }
-        if in_detail {
-            group.push(seg);
-        }
-    }
-    if in_detail && !group.is_empty() {
-        result.push(build_position(&group));
-    }
-    result
-}
-
-/// Build a single `Rechnungsposition` from one LIN group.
-fn build_position(group: &[&OwnedSegment]) -> bo4e::Rechnungsposition {
-    let positionsnummer = group
-        .first()
-        .and_then(|s| s.component_str(0, 0))
-        .and_then(|s| s.parse::<i64>().ok());
-
-    // BO4E v202607 has no `lokations_id`; store it as positionstext.
-    let positionstext = group
-        .iter()
-        .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))
-        .and_then(|s| s.component_str(1, 0))
-        .map(str::to_owned);
-
-    // The delivery period lives in `lieferungszeitraum`.
-    let lieferung_von = dtm_in_group(group, "163").and_then(edifact_date_to_date);
-    let lieferung_bis = dtm_in_group(group, "164").and_then(edifact_date_to_date);
-    let lieferungszeitraum = if lieferung_von.is_some() || lieferung_bis.is_some() {
-        Some(bo4e::Zeitraum {
-            startdatum: lieferung_von,
-            enddatum: lieferung_bis,
+/// EDIFACT states the rate on `TAX` (`TAX+7+VAT+++:::<rate>+<category>`).
+/// Where it carries category `AE`, the supply is reverse-charged: the
+/// recipient owes the tax.
+fn build_steuerbetraege(summary: &[OwnedSegment]) -> Vec<bo4e::Steuerbetrag> {
+    let mut out = Vec::new();
+    for (i, seg) in summary.iter().enumerate().filter(|(_, s)| s.tag == "TAX") {
+        let rest = &summary[i + 1..];
+        let group = &rest[..rest
+            .iter()
+            .position(|s| s.tag == "TAX")
+            .unwrap_or(rest.len())];
+        let (steuerart, steuersatz) = tax(seg);
+        out.push(bo4e::Steuerbetrag {
+            steuerart: Some(steuerart),
+            steuersatz,
+            basiswert: moa(group, "125").and_then(|b| b.wert),
+            steuerwert: moa(group, "161").and_then(|b| b.wert),
             ..Default::default()
-        })
+        });
+    }
+    out
+}
+
+/// `TAX` C243 DE 5278 (the rate) and DE 5305 (`AE` reverse charge).
+fn tax(seg: &OwnedSegment) -> (bo4e::Steuerart, Option<Decimal>) {
+    let satz = seg.component_str(4, 3).and_then(decimal);
+    let art = if seg
+        .component_str(5, 0)
+        .is_some_and(|k| k.eq_ignore_ascii_case("AE"))
+    {
+        bo4e::Steuerart::Rcv
     } else {
-        None
+        bo4e::Steuerart::Ust
     };
+    (art, satz)
+}
 
-    let positions_menge = group
-        .iter()
-        .find(|s| s.tag == "QTY" && s.component_str(0, 0) == Some("46"))
-        .and_then(|s| s.component_str(0, 1))
-        .and_then(|wert| {
-            let normalized = wert.replace(',', ".");
-            normalized.parse::<Decimal>().ok().map(|d| bo4e::Menge {
-                wert: Some(d),
-                einheit: Some(bo4e::Mengeneinheit::Kwh),
-                ..Default::default()
+/// One `SG26`, `LIN` up to the next `LIN` or `UNS`.
+fn build_position(group: &[OwnedSegment]) -> bo4e::Rechnungsposition {
+    let lin = group.first();
+    let menge = |qualifier: &str, einheit: fn(&str) -> Option<bo4e::Mengeneinheit>| {
+        group
+            .iter()
+            .find(|s| s.tag == "QTY" && s.component_str(0, 0) == Some(qualifier))
+            .and_then(|s| {
+                Some(bo4e::Menge {
+                    wert: Some(decimal(s.component_str(0, 1)?)?),
+                    einheit: s.component_str(0, 2).and_then(einheit),
+                    ..Default::default()
+                })
             })
-        });
-
-    let einzelpreis = group
+    };
+    let pri = group
         .iter()
-        .find(|s| s.tag == "PRI" && s.component_str(0, 0) == Some("AAB"))
+        .find(|s| s.tag == "PRI" && s.component_str(0, 0) == Some("CAL"));
+    // `QTY+Z17` Korrekturfaktor (MIG 2.8e 00037): „(MOA+203) = (QTY+Z17) *
+    // (QTY+47) * (PRI+CAL)", so the price BO4E states — quantity × price =
+    // net — is the factor times `PRI`.
+    let korrektur = group
+        .iter()
+        .find(|s| s.tag == "QTY" && s.component_str(0, 0) == Some("Z17"))
         .and_then(|s| s.component_str(0, 1))
-        .and_then(|p| {
-            let normalized = p.replace(',', ".");
-            normalized.parse::<Decimal>().ok().map(|d| bo4e::Preis {
-                wert: Some(d),
-                ..Default::default()
-            })
-        });
-
-    let gesamtpreis = moa_betrag_in_group(group, "77");
-
+        .and_then(decimal)
+        .unwrap_or(Decimal::ONE);
     bo4e::Rechnungsposition {
-        positionsnummer,
-        positionstext,
-        lieferungszeitraum,
-        positions_menge,
-        einzelpreis,
-        gesamtpreis,
+        positionsnummer: lin
+            .and_then(|s| s.component_str(0, 0))
+            .and_then(|s| s.parse::<i64>().ok()),
+        artikel_id: lin
+            .and_then(|s| s.component_str(2, 0))
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned),
+        lieferungszeitraum: zeitraum(group, "155", "156"),
+        positions_menge: menge("47", energie_einheit),
+        zeitbezogene_menge: menge("136", zeit_einheit),
+        zeiteinheit: pri
+            .and_then(|s| s.component_str(0, 5))
+            .and_then(zeit_einheit),
+        einzelpreis: pri
+            .and_then(|s| s.component_str(0, 1))
+            .and_then(decimal)
+            .map(|d| bo4e::Preis {
+                wert: Some(d * korrektur),
+                ..Default::default()
+            }),
+        gesamtpreis: moa(group, "203"),
+        steuerbetrag: group.iter().find(|s| s.tag == "TAX").map(|s| {
+            let (steuerart, steuersatz) = tax(s);
+            bo4e::Steuerbetrag {
+                steuerart: Some(steuerart),
+                steuersatz,
+                ..Default::default()
+            }
+        }),
         ..Default::default()
     }
+}
+
+/// `QTY+47` DE 6411 (MIG 2.8e 00035).
+fn energie_einheit(code: &str) -> Option<bo4e::Mengeneinheit> {
+    use bo4e::Mengeneinheit as M;
+    Some(match code {
+        "KWH" => M::Kwh,
+        "KWT" => M::Kw,
+        "KVR" => M::Kvar,
+        "K3" => M::Kvarh,
+        "H87" => M::Stueck,
+        _ => return None,
+    })
+}
+
+/// `QTY+136` / `PRI` DE 6411 (MIG 2.8e 00036, 00043).
+fn zeit_einheit(code: &str) -> Option<bo4e::Mengeneinheit> {
+    use bo4e::Mengeneinheit as M;
+    Some(match code {
+        "DAY" => M::Tag,
+        "MON" => M::Monat,
+        "ANN" => M::Jahr,
+        _ => return None,
+    })
 }
 
 // ── EDIFACT segment accessor helpers ─────────────────────────────────────────
@@ -1036,6 +1112,56 @@ fn dtm<'a>(segs: &'a [OwnedSegment], qualifier: &str) -> Option<&'a str> {
     segs.iter()
         .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
         .and_then(|s| s.component_str(0, 1))
+}
+
+/// A `DTM` of format `303` (`CCYYMMDDHHMMZZZ`) as the instant it names.
+fn dtm_instant(segs: &[OwnedSegment], qualifier: &str) -> Option<time::OffsetDateTime> {
+    let v = dtm(segs, qualifier)?;
+    let (stamp, zone) = v.split_at_checked(12)?;
+    let date = edifact_date_to_date(stamp.get(..8)?)?;
+    let hour: u8 = stamp.get(8..10)?.parse().ok()?;
+    let minute: u8 = stamp.get(10..12)?.parse().ok()?;
+    let offset: i8 = zone.parse().ok()?;
+    let at = date
+        .with_hms(hour, minute, 0)
+        .ok()?
+        .assume_offset(time::UtcOffset::from_hms(offset, 0, 0).ok()?);
+    Some(at.to_offset(time::UtcOffset::UTC))
+}
+
+/// A Beginn/Ende pair of `DTM`s as the inclusive `Zeitraum` BO4E states.
+fn zeitraum(segs: &[OwnedSegment], von: &str, bis: &str) -> Option<bo4e::Zeitraum> {
+    let start = dtm_instant(segs, von).map(mako_fristen::berlin_date);
+    let end =
+        dtm_instant(segs, bis).map(|e| mako_fristen::berlin_date(e - time::Duration::NANOSECOND));
+    (start.is_some() || end.is_some()).then(|| bo4e::Zeitraum {
+        startdatum: start,
+        enddatum: end,
+        ..Default::default()
+    })
+}
+
+fn decimal(v: &str) -> Option<Decimal> {
+    v.replace(',', ".").parse::<Decimal>().ok()
+}
+
+fn betrag(d: Decimal) -> bo4e::Betrag {
+    bo4e::Betrag {
+        wert: Some(d),
+        ..Default::default()
+    }
+}
+
+fn moa_wert(s: &OwnedSegment) -> Option<Decimal> {
+    s.component_str(0, 1).and_then(decimal)
+}
+
+/// The amount of the `MOA` with `qualifier` in `segs`.
+fn moa(segs: &[OwnedSegment], qualifier: &str) -> Option<bo4e::Betrag> {
+    segs.iter()
+        .find(|s| s.tag == "MOA" && s.component_str(0, 0) == Some(qualifier))
+        .and_then(moa_wert)
+        .map(betrag)
 }
 
 /// The `SG1 RFF+ACE` „Nummer des zugehörigen Dokuments" of an INVOIC.
@@ -1088,56 +1214,7 @@ fn imd_rechnungstyp(segs: &[OwnedSegment]) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Find the value of a `DTM` segment within a LIN group (slices of references).
-fn dtm_in_group<'a>(group: &[&'a OwnedSegment], qualifier: &str) -> Option<&'a str> {
-    group
-        .iter()
-        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
-        .and_then(|s| s.component_str(0, 1))
-}
-
-/// Build a [`bo4e::Betrag`] from a `MOA` segment with a given qualifier.
-fn moa_betrag(segs: &[OwnedSegment], qualifier: &str) -> Option<bo4e::Betrag> {
-    segs.iter()
-        .find(|s| s.tag == "MOA" && s.component_str(0, 0) == Some(qualifier))
-        .and_then(|s| s.component_str(0, 1))
-        .and_then(|wert| {
-            wert.replace(',', ".")
-                .parse::<Decimal>()
-                .ok()
-                .map(|d| bo4e::Betrag {
-                    wert: Some(d),
-                    ..Default::default()
-                })
-        })
-}
-
-/// Build a [`bo4e::Betrag`] from a `MOA` segment within a LIN group.
-fn moa_betrag_in_group(group: &[&OwnedSegment], qualifier: &str) -> Option<bo4e::Betrag> {
-    group
-        .iter()
-        .find(|s| s.tag == "MOA" && s.component_str(0, 0) == Some(qualifier))
-        .and_then(|s| s.component_str(0, 1))
-        .and_then(|wert| {
-            wert.replace(',', ".")
-                .parse::<Decimal>()
-                .ok()
-                .map(|d| bo4e::Betrag {
-                    wert: Some(d),
-                    ..Default::default()
-                })
-        })
-}
-
-/// Convert an EDIFACT date (`YYYYMMDD`) to ISO 8601 (`YYYY-MM-DD`).
-///
-/// Lexicographic comparison of ISO dates is correct — required by
-/// `invoic_checker`'s period-validity check (string comparison on
-/// `Zeitraum.startdatum` / `enddatum`).
 /// Parse an EDIFACT date string (`YYYYMMDD`) to a `time::Date`.
-///
-/// Used for BO4E fields typed as `Option<time::Date>` in rubo4e
-/// (e.g. `Zeitraum.startdatum`, `Zeitraum.enddatum`).
 ///
 /// Returns `None` if the string is not exactly 8 digits or cannot be parsed as a
 /// valid calendar date.

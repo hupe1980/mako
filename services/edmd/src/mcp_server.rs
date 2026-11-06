@@ -13,7 +13,7 @@
 //! | `get_device_history`         | RAG: comprehensive device history for LanceDB indexing |
 //! | `get_quality_warnings`       | Quality verdict over a window (grade A/B/C/F) |
 //! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
-//! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§ 40b Abs. 1 EnWG compliance) |
+//! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§ 40b Abs. 1 EnWG compliance), typed, with `frist` |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
 //! | `trigger_substitution`       | Generate + store § 60 Abs. 1 MsbG Ersatzwerte for a gap window |
 //! | `get_correction_history`     | § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit: list corrections for a MaLo |
@@ -53,7 +53,7 @@ use rmcp::{
     },
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use tokio_util::sync::CancellationToken;
 
@@ -169,6 +169,84 @@ pub struct ListOverdueReadingOrdersParams {
     pub ausfuehrender_msb: Option<String>,
     /// Max results (default 100).
     pub limit: Option<i64>,
+}
+
+/// One reading order past its `ausfuehrt_bis` deadline.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct UeberfaelligerAbleseauftrag {
+    /// The reading order.
+    pub id: String,
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// Why the reading is owed (`JAHRESABLESUNG`, …).
+    pub anlass: String,
+    /// MP-ID of the MSB executing the reading, where one is assigned.
+    pub ausfuehrender_msb: Option<String>,
+    /// The last Berlin business day the reading was due on.
+    #[schemars(extend("format" = "date"))]
+    pub ausfuehrt_bis: String,
+    /// The instant the deadline lapsed — the end of the Berlin day
+    /// `ausfuehrt_bis` — RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub frist: String,
+    /// `OFFEN`, `BEAUFTRAGT` or `FEHLGESCHLAGEN`.
+    pub status: String,
+    /// Why a FEHLGESCHLAGEN order failed.
+    pub fehlschlag_grund: Option<String>,
+    /// Berlin calendar days from `ausfuehrt_bis` to today.
+    pub days_overdue: i64,
+}
+
+impl UeberfaelligerAbleseauftrag {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per column of the row it is read from"
+    )]
+    fn new(
+        id: String,
+        malo_id: String,
+        anlass: String,
+        ausfuehrender_msb: Option<String>,
+        ausfuehrt_bis: time::Date,
+        status: String,
+        fehlschlag_grund: Option<String>,
+        heute: time::Date,
+    ) -> Self {
+        Self {
+            id,
+            malo_id,
+            anlass,
+            ausfuehrender_msb,
+            ausfuehrt_bis: ausfuehrt_bis.to_string(),
+            frist: tagesende(ausfuehrt_bis),
+            status,
+            fehlschlag_grund,
+            days_overdue: (heute - ausfuehrt_bis).whole_days(),
+        }
+    }
+}
+
+/// The end of the Berlin day `date` — Berlin midnight of the day after —
+/// RFC 3339 in UTC.
+fn tagesende(date: time::Date) -> String {
+    use time::format_description::well_known::Rfc3339;
+    date.next_day()
+        .map(mako_fristen::berlin_midnight)
+        .and_then(|t| t.format(&Rfc3339).ok())
+        .unwrap_or_default()
+}
+
+/// `list_overdue_reading_orders`' answer.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct UeberfaelligeAbleseauftraege {
+    /// The oldest `ausfuehrt_bis` first.
+    pub auftraege: Vec<UeberfaelligerAbleseauftrag>,
+    /// How many orders `auftraege` holds.
+    pub count: usize,
+    /// At least `limit` orders matched: more may be overdue than were listed.
+    pub saturated: bool,
+    /// How many of them are FEHLGESCHLAGEN.
+    pub failed_count: usize,
 }
 
 /// Parameters for `trigger_substitution`.
@@ -964,26 +1042,25 @@ Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverag
 
     /// List overdue reading orders — past their `ausfuehrt_bis` deadline.
     ///
-    /// Identifies § 40b Abs. 1 EnWG Jahresablesung compliance failures.
-    /// An overdue JAHRESABLESUNG means SLP meter data is missing, which will
-    /// cause Mehr-/Mindermengen disputes with the LF.
+    /// An overdue JAHRESABLESUNG is a § 40b Abs. 1 EnWG gap: the SLP reading is
+    /// missing and the Mehr-/Mindermengen are estimated, not metered.
     #[tool(
-        description = "List all reading orders past their ausfuehrt_bis deadline (§ 40b Abs. 1 EnWG compliance). Returns overdue OFFEN/BEAUFTRAGT orders sorted by deadline oldest-first.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Reading orders past their ausfuehrt_bis deadline (§ 40b Abs. 1 EnWG), the oldest deadline first: OFFEN and BEAUFTRAGT, and FEHLGESCHLAGEN — closed, but the reading is still owed. `frist` is the instant the deadline lapsed, the end of the Berlin day ausfuehrt_bis. `saturated` means at least `limit` orders matched.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<UeberfaelligeAbleseauftraege>()
     )]
     async fn list_overdue_reading_orders(
         &self,
         Parameters(p): Parameters<ListOverdueReadingOrdersParams>,
     ) -> Result<CallToolResult, McpError> {
-        let limit = p.limit.unwrap_or(100).min(2000);
+        let limit = p.limit.unwrap_or(100).clamp(1, 2000);
         let rows = sqlx::query(
             // FEHLGESCHLAGEN is included: the order is terminal but the reading
             // is still owed, so a failed Jahresablesung past its deadline is
             // exactly the § 40b Abs. 1 EnWG gap this tool exists to surface.
             // Excluding it would let /fail retire an obligation silently.
-            r"SELECT id, malo_id, melo_id, anlass, auftraggeber_rolle,
-                     ausfuehrender_msb, geplant_am, ausfuehrt_bis, status,
-                     fehlschlag_grund, created_at
+            r"SELECT id, malo_id, anlass, ausfuehrender_msb, ausfuehrt_bis, status,
+                     fehlschlag_grund
               FROM ablese_auftraege
               WHERE tenant = $1
                 AND status IN ('OFFEN', 'BEAUFTRAGT', 'FEHLGESCHLAGEN')
@@ -999,46 +1076,38 @@ Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverag
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let orders: Vec<serde_json::Value> = rows.iter().map(|r| {
-            use sqlx::Row as _;
-            serde_json::json!({
-                "id": r.try_get::<uuid::Uuid, _>("id").ok().map(|u| u.to_string()),
-                "malo_id": r.try_get::<String, _>("malo_id").ok(),
-                "anlass": r.try_get::<String, _>("anlass").ok(),
-                "ausfuehrender_msb": r.try_get::<Option<String>, _>("ausfuehrender_msb").ok().flatten(),
-                "ausfuehrt_bis": r.try_get::<Option<time::Date>, _>("ausfuehrt_bis").ok().flatten().map(|d| d.to_string()),
-                "status": r.try_get::<String, _>("status").ok(),
-                "fehlschlag_grund": r.try_get::<Option<String>, _>("fehlschlag_grund").ok().flatten(),
-                "days_overdue": r.try_get::<Option<time::Date>, _>("ausfuehrt_bis").ok().flatten().map(|d| {
-                    (mako_fristen::heute() - d).whole_days()
-                }),
-            })
-        }).collect();
-
-        let by_anlass: std::collections::HashMap<String, usize> =
-            orders
-                .iter()
-                .fold(std::collections::HashMap::new(), |mut acc, o| {
-                    if let Some(anlass) = o["anlass"].as_str() {
-                        *acc.entry(anlass.to_owned()).or_insert(0) += 1;
-                    }
-                    acc
-                });
-
-        let failed = orders
+        let heute = mako_fristen::heute();
+        let auftraege = rows
             .iter()
-            .filter(|o| o["status"].as_str() == Some("FEHLGESCHLAGEN"))
-            .count();
+            .map(|r| {
+                let ausfuehrt_bis: time::Date = r.try_get("ausfuehrt_bis")?;
+                Ok(UeberfaelligerAbleseauftrag::new(
+                    r.try_get::<uuid::Uuid, _>("id")?.to_string(),
+                    r.try_get("malo_id")?,
+                    r.try_get("anlass")?,
+                    r.try_get("ausfuehrender_msb")?,
+                    ausfuehrt_bis,
+                    r.try_get("status")?,
+                    r.try_get("fehlschlag_grund")?,
+                    heute,
+                ))
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        ContentBlock::json(serde_json::json!({
-            "total_overdue": orders.len(),
-            "failed_count": failed,
-            "by_anlass": by_anlass,
-            "orders": orders,
-            "regulatory_note": "JAHRESABLESUNG overdue = § 40b Abs. 1 EnWG violation. SLP Mehr-/Mindermengen will be estimated, not metered. FEHLGESCHLAGEN orders are listed too — the order is closed but the reading is still owed, so it needs re-dispatch or a documented §40a EnWG estimate.",
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+        let failed_count = auftraege
+            .iter()
+            .filter(|o| o.status == "FEHLGESCHLAGEN")
+            .count();
+        Ok(CallToolResult::structured(
+            serde_json::to_value(UeberfaelligeAbleseauftraege {
+                count: auftraege.len(),
+                saturated: auftraege.len() >= usize::try_from(limit).unwrap_or(usize::MAX),
+                failed_count,
+                auftraege,
+            })
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
     }
 
     /// Launch a § 40b Abs. 1 EnWG Jahresablesung campaign via MCP.
@@ -2012,5 +2081,52 @@ mod auth_gate_tests {
             None
         );
         assert_eq!(destructive_tool_action(b"not json"), None);
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    /// The served tool contract is the committed `mcp.snapshot.json`
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it); the Desk generates its types from it.
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let tools: Vec<serde_json::Value> = EdmdMcpHandler::tool_router()
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
+    }
+
+    /// The Frist of a reading order is the end of the Berlin day
+    /// `ausfuehrt_bis`: Berlin midnight of the next day, which is 23:00 UTC
+    /// under CET and 22:00 UTC under CEST. 2026-03-28 ends in CET although
+    /// the clocks change the night after.
+    #[test]
+    fn the_frist_is_the_end_of_the_berlin_day() {
+        let order = |bis| {
+            UeberfaelligerAbleseauftrag::new(
+                "id".to_owned(),
+                "51238696012".to_owned(),
+                "JAHRESABLESUNG".to_owned(),
+                None,
+                bis,
+                "OFFEN".to_owned(),
+                None,
+                time::macros::date!(2026 - 11 - 06),
+            )
+        };
+        let winter = order(time::macros::date!(2026 - 03 - 28));
+        assert_eq!(winter.frist, "2026-03-28T23:00:00Z");
+        assert_eq!(winter.ausfuehrt_bis, "2026-03-28");
+        let summer = order(time::macros::date!(2026 - 07 - 15));
+        assert_eq!(summer.frist, "2026-07-15T22:00:00Z");
+        assert_eq!(summer.days_overdue, 114);
     }
 }

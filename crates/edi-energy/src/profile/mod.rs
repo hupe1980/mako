@@ -11,6 +11,7 @@
 pub mod conditions;
 pub mod formatbedingung;
 pub mod model;
+pub mod seed;
 pub mod skeleton;
 pub mod structure;
 pub mod validate;
@@ -25,7 +26,8 @@ use crate::{MessageType, ProfileError, Pruefidentifikator, Release};
 pub use model::{
     AhbProfile, Anwendungsfall, Element, ElementRule, MigProfile, Operand, Row, SegmentNode,
 };
-pub use skeleton::SkeletonParties;
+pub use seed::SeedError;
+pub use skeleton::{Completion, SkeletonParties, Unstated};
 pub use structure::{Resolution, Structure};
 
 /// One loaded profile.

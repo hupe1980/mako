@@ -289,12 +289,11 @@ fn malo_routes() -> Router<S> {
         // VersorgungsStatus per MaLo, with point-in-time and full history.
         .route(
             "/api/v1/versorgung/{malo_id}",
-            get(get_versorgungsstatus::<pg::PgVersorgungsStatusRepository>)
-                .put(put_versorgungsstatus),
+            get(get_versorgungsstatus).put(put_versorgungsstatus),
         )
         .route(
             "/api/v1/versorgung/{malo_id}/history",
-            get(get_versorgungsstatus_history::<pg::PgVersorgungsStatusRepository>),
+            get(get_versorgungsstatus_history),
         )
 }
 

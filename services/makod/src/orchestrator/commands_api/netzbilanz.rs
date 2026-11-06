@@ -17,43 +17,34 @@ fn party(payload: &serde_json::Value, preferred: &str, legacy: &str) -> String {
         .to_owned()
 }
 
-/// Helper: dispatch `InvoicCommand::SendInvoic` for a given PID.
+/// Issue an NB invoice: `invoic.nne-abschlag.stellen` (PID 31001),
+/// `invoic.nne.stellen` (31002, NN-Rechnung Strom and Gas — the Sparte is
+/// carried in the `rechnung`, not the PID) and `invoic.mmm.stellen` (31005).
 ///
-/// Called by `invoic.nne.stellen` and `invoic.nne.stellen`
-/// (both PID 31002, NN-Rechnung — the Sparte is carried in the payload, not the
-/// PID) and `invoic.mmm.stellen` (PID 31005, MMM-Rechnung).
-///
-/// Spawns a new `GpkeAbrechnungWorkflow` in the invoicer role so that inbound
-/// REMADV responses from the LF are routed back to the correct process.
-///
-/// The `invoice_ref` in the payload (set by `netzbilanzd`) becomes the business
-/// key — it must match the `rechnungsnummer` in the Rechnung BO4E so the REMADV
-/// correlation works.
+/// Builds the INVOIC from the payload's `rechnung` and spawns the
+/// `gpke-abrechnung` process in the invoicer role, keyed by `invoice_ref` —
+/// which `netzbilanzd` sets to the `rechnungsnummer` — so the Lieferant's
+/// REMADV correlates back to it ([`super::invoic_stellen`]).
 pub(super) async fn dispatch_nne_send_invoic(
     state: &CommandsApiState,
     payload: &serde_json::Value,
     pid: u32,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let invoice_ref_str = extract_invoice_ref(payload)?;
     // `sender_mp_id` / `recipient_mp_id` are what the settlement resolved and
     // what `netzbilanzd` stores; `nb_mp_id` / `lf_mp_id` are the older names and
     // stay accepted. Reading only the old pair left both parties empty, and an
     // INVOIC with no sender and no recipient is not a message anyone can route.
     let nb_mp_id = party(payload, "sender_mp_id", "nb_mp_id");
     let lf_mp_id = party(payload, "recipient_mp_id", "lf_mp_id");
-    let invoice_ref_clone = invoice_ref_str.clone();
-    dispatch_to_process::<GpkeAbrechnungWorkflow, _>(
+    super::e_rechnung::edi_pruefen(state.marktd_client.as_deref(), payload, &lf_mp_id).await?;
+    super::invoic_stellen::invoic_stellen::<GpkeAbrechnungWorkflow>(
         state,
-        &invoice_ref_str,
-        "gpke-abrechnung",
-        move || InvoicCommand::SendInvoic {
-            pid: mako_engine::types::Pruefidentifikator::new(pid).expect("valid NNE PID"),
-            sender: mako_engine::types::MarktpartnerCode::new(nb_mp_id.as_str()),
-            recipient: mako_engine::types::MarktpartnerCode::new(lf_mp_id.as_str()),
-            invoice_ref: mako_engine::types::MessageRef::new(invoice_ref_clone.clone()),
-            document_date: time::OffsetDateTime::now_utc()
-                .format(&time::format_description::well_known::Iso8601::DEFAULT)
-                .unwrap_or_default(),
+        payload,
+        super::invoic_stellen::Ausstellung {
+            workflow_name: "gpke-abrechnung",
+            pid,
+            sender: &nb_mp_id,
+            recipient: &lf_mp_id,
         },
     )
     .await
@@ -83,20 +74,29 @@ pub(super) fn cmd_invoic_mmm_stellen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_nne_send_invoic(s, p, 31005))
+    // The Mindermenge is the 31005, the Mehrmenge the NB's selbst ausgestellte
+    // 31006 (INVOIC AHB 1.0b Kap. 3, S. 5) — which one the Rechnung says.
+    let selbst = p
+        .get("rechnung")
+        .and_then(|r| r.get("netznutzungrechnungsart"))
+        .and_then(|v| v.as_str())
+        == Some("SELBSTAUSGESTELLT");
+    Box::pin(dispatch_nne_send_invoic(
+        s,
+        p,
+        if selbst { 31006 } else { 31005 },
+    ))
 }
 
-/// Dispatch the WiM MSB-Rechnung (PID 31009) through the **dedicated** WiM billing
-/// workflow ([`WimInvoicWorkflow::SendInvoic`]) — not `GpkeAbrechnungWorkflow`,
-/// which rejects 31009 (its `GPKE_INVOIC_PIDS` are GPKE-only). Spawns the WiM process
-/// in the MSB invoicer role so the payer's inbound REMADV (33001–33004) correlates
-/// back to it. The billed EDIFACT with amounts is rendered by `netzbilanzd`; this
-/// command records the process state.
+/// Issue the WiM MSB-Rechnung (PID 31009) through the **dedicated** WiM billing
+/// workflow ([`WimInvoicWorkflow`]) — not `GpkeAbrechnungWorkflow`, which
+/// rejects 31009 (its `GPKE_INVOIC_PIDS` are GPKE-only). Spawns the WiM process
+/// in the MSB invoicer role so the payer's inbound REMADV (33001–33004)
+/// correlates back to it ([`super::invoic_stellen`]).
 async fn dispatch_wim_msb_send_invoic(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let invoice_ref_str = extract_invoice_ref(payload)?;
     // Sender = MSB invoicer, recipient = NB/LF/ESA payer. netzbilanzd supplies the
     // party MP-IDs; fall back to the legacy nb/lf fields for compatibility.
     let sender = payload
@@ -112,20 +112,15 @@ async fn dispatch_wim_msb_send_invoic(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_owned();
-    let invoice_ref_clone = invoice_ref_str.clone();
-    dispatch_to_process::<WimInvoicWorkflow, _>(
+    super::e_rechnung::edi_pruefen(state.marktd_client.as_deref(), payload, &recipient).await?;
+    super::invoic_stellen::invoic_stellen::<WimInvoicWorkflow>(
         state,
-        &invoice_ref_str,
-        mako_wim::invoic::WORKFLOW_NAME,
-        move || InvoicCommand::SendInvoic {
-            pid: mako_engine::types::Pruefidentifikator::new(31009)
-                .expect("valid MSB-Rechnung PID"),
-            sender: mako_engine::types::MarktpartnerCode::new(sender.as_str()),
-            recipient: mako_engine::types::MarktpartnerCode::new(recipient.as_str()),
-            invoice_ref: mako_engine::types::MessageRef::new(invoice_ref_clone.clone()),
-            document_date: time::OffsetDateTime::now_utc()
-                .format(&time::format_description::well_known::Iso8601::DEFAULT)
-                .unwrap_or_default(),
+        payload,
+        super::invoic_stellen::Ausstellung {
+            workflow_name: mako_wim::invoic::WORKFLOW_NAME,
+            pid: 31009,
+            sender: &sender,
+            recipient: &recipient,
         },
     )
     .await

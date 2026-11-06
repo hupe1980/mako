@@ -7602,3 +7602,77 @@ fn a_nutzungsplan_whose_shares_are_percentages_is_refused() {
         .expect_err("shares summing to 100 do not partition anything");
     assert_eq!(err.code(), "NUTZUNGSPLAN_SHARES_INVALID");
 }
+
+/// A Tarifwechsel invoice derives its VAT once from its lines: each leg's tax
+/// rounds to the cent on its own, so two legs of 0,03 EUR at 19 % carry
+/// 0,01 EUR each, while the 0,06 EUR they add up to carries 0,01 EUR — and the
+/// sum of the stated Steuerbeträge must be the tax of the printed lines.
+#[test]
+fn a_merged_invoice_derives_its_vat_once_from_the_merged_lines() {
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"3","stromsteuer_ct_per_kwh_override":"0"}"#,
+    )
+    .unwrap();
+    let leg = |from, to| {
+        let ctx = BillingContext {
+            malo_id: "51238696781".to_owned(),
+            rechnungsnummer: "R-1".to_owned(),
+            period: BillingPeriod::new(from, to).unwrap(),
+            regulatory_rates: rates_2026(),
+            ..Default::default()
+        };
+        tariff
+            .build_engine(&no_grid(), &rates_2026())
+            .bill(ctx, &elec(dec!(1)))
+            .expect("a priced leg")
+    };
+    let a = leg(date!(2026 - 01 - 01), date!(2026 - 01 - 01));
+    let b = leg(date!(2026 - 01 - 02), date!(2026 - 01 - 02));
+    assert_eq!(a.netto_eur, dec!(0.03), "each leg is 0,03 EUR net");
+    assert_eq!(a.mwst_eur, dec!(0.01));
+
+    let merged = a.merge(b);
+    assert_eq!(merged.netto_eur, dec!(0.06));
+    assert_eq!(
+        merged.mwst_eur,
+        dec!(0.01),
+        "0,06 EUR × 19 % = 0,0114 → 0,01 EUR"
+    );
+    let tax: Vec<_> = merged
+        .positions
+        .iter()
+        .filter(|p| p.category == PositionCategory::Tax)
+        .collect();
+    assert_eq!(tax.len(), 1, "one tax line per rate, not one per leg");
+    merged.assert_valid();
+}
+
+/// A position's amount is rounded once, to the cent: 0,999 kWh at 0,5 ct/kWh is
+/// 0,004995 EUR, which is 0,00 EUR kaufmännisch. Putting it on five decimals
+/// first (0,00500) and then on the cent states 0,01 EUR — a cent the series
+/// does not add up to.
+#[test]
+fn a_dynamic_position_is_rounded_once_to_the_cent() {
+    use std::collections::HashMap;
+    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0"}"#);
+    let t = time::macros::datetime!(2026-01-01 13:00 UTC);
+    let mut prices = HashMap::new();
+    prices.insert(t, dec!(0.5));
+    let r = bill(
+        &tariff,
+        Quantities {
+            dynamic_intervals: vec![DynamicInterval {
+                timestamp_utc: t,
+                kwh: dec!(0.999),
+            }],
+            dynamic_epex_prices: prices,
+            ..Default::default()
+        },
+    );
+    let ap = r
+        .positions
+        .iter()
+        .find(|p| p.has_tag("§41a"))
+        .expect("the § 41a Arbeitspreis line");
+    assert_eq!(ap.net_eur, dec!(0.00), "0,004995 EUR rounds once, to 0,00");
+}

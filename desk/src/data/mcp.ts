@@ -9,13 +9,21 @@
 // `fetch`. A response is either JSON or a short event stream whose `data:`
 // lines carry the JSON-RPC answer.
 
+import type { BillingdTools } from "./gen/billingd";
+import type { EdmdTools } from "./gen/edmd";
+import type { InvoicdTools } from "./gen/invoicd";
 import type { MakodTools } from "./gen/makod";
+import type { NetzbilanzdTools } from "./gen/netzbilanzd";
 import type { ProcessdTools } from "./gen/processd";
 import type { VertragdTools } from "./gen/vertragd";
 
 /** Every service the Desk reads, with its typed tools. */
 export interface ServiceTools {
+  billingd: BillingdTools;
+  edmd: EdmdTools;
+  invoicd: InvoicdTools;
   makod: MakodTools;
+  netzbilanzd: NetzbilanzdTools;
   processd: ProcessdTools;
   vertragd: VertragdTools;
 }

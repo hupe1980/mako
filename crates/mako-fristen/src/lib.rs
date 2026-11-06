@@ -13,6 +13,7 @@
 //! | *Which window does PID 55001 carry?* | [`antwort`] |
 //! | *Which messages does receiving it oblige me to send?* | [`meldung`] |
 //! | *When must the CONTRL / APERAK go out?* | [`contrl_due_at`], [`aperak_strom_due_at`], [`aperak_gas_folgeprozess_due_at`], [`aperak_gas_initialprozess_due_at`] |
+//! | *May this invoice still go out other than as an E-Rechnung?* | [`e_rechnung`] — § 27 Abs. 38 UStG for paper, another electronic format and EDI |
 //!
 //! `mako-engine` re-exports this crate as `mako_fristen`, so existing
 //! call sites are unchanged.
@@ -82,6 +83,7 @@
 
 pub mod abmeldung;
 pub mod antwort;
+pub mod e_rechnung;
 pub mod meldung;
 pub mod vorlauf;
 

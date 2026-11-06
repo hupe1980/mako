@@ -92,16 +92,16 @@ const UPSERT_SQL: &str = r"INSERT INTO process_projections
 
 /// KPIs for one PID over a calendar period, bucketed by `started_at`.
 ///
-/// **The two clocks are two columns.** `total_aperak_timeout` counts rows in the
-/// technical-acknowledgement state; `total_frist_breached` counts rows that
-/// passed their *business* Antwortfrist. One number for both names the wrong
-/// obligation.
+/// **Two measures of the Antwortfrist.** `total_antwortfrist_abgelaufen` counts
+/// rows whose workflow reported the lapse; `total_frist_breached` counts rows
+/// that passed `deadline_at` as the projection measures it. Neither counts an
+/// APERAK delivery window, which never reaches this read model.
 const KPI_SQL: &str = r"SELECT
       COUNT(*)                                            AS total_initiated,
       COUNT(*) FILTER (WHERE state = 'completed')         AS total_completed,
       COUNT(*) FILTER (WHERE state = 'rejected')          AS total_rejected,
       COUNT(*) FILTER (WHERE state = 'failed')            AS total_failed,
-      COUNT(*) FILTER (WHERE state = 'aperak_timeout')    AS total_aperak_timeout,
+      COUNT(*) FILTER (WHERE state = 'antwortfrist_abgelaufen')    AS total_antwortfrist_abgelaufen,
       COUNT(*) FILTER (WHERE deadline_at IS NOT NULL)     AS total_with_frist,
       COUNT(*) FILTER (
           WHERE deadline_at IS NOT NULL
@@ -276,10 +276,10 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
 
     /// KPIs for one PID over a calendar period, bucketed by `started_at`.
     ///
-    /// **The two clocks are two columns.** `total_aperak_timeout` counts rows in
-    /// the technical-acknowledgement state; `total_frist_breached` counts rows
-    /// that passed their *business* Antwortfrist — closed after it, or still
-    /// open past it.
+    /// **Two measures of the Antwortfrist.** `total_antwortfrist_abgelaufen`
+    /// counts rows whose workflow reported the lapse; `total_frist_breached`
+    /// counts rows that passed `deadline_at` — closed after it, or still open
+    /// past it.
     ///
     /// `total_with_frist` is reported beside the rate because it is the
     /// interesting figure: a bucket where few PIDs carry a published window is
@@ -321,7 +321,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             total_completed: count("total_completed").unsigned_abs(),
             total_rejected: count("total_rejected").unsigned_abs(),
             total_failed: count("total_failed").unsigned_abs(),
-            total_aperak_timeout: count("total_aperak_timeout").unsigned_abs(),
+            total_antwortfrist_abgelaufen: count("total_antwortfrist_abgelaufen").unsigned_abs(),
             total_frist_breached: breached.unsigned_abs(),
             total_with_frist: with_frist.unsigned_abs(),
             // No published window in the bucket means no rate — not 100 %.
@@ -556,7 +556,7 @@ mod tests {
             ProcessState::Completed,
             ProcessState::Rejected,
             ProcessState::Failed,
-            ProcessState::AperakTimeout,
+            ProcessState::AntwortfristAbgelaufen,
         ] {
             let filter = format!("state = '{}'", s.as_str());
             assert!(
@@ -584,12 +584,12 @@ mod tests {
         );
     }
 
-    /// The two clocks stay two columns.
+    /// The workflow's report and the projection's measure stay two columns.
     #[test]
-    fn the_kpi_report_separates_the_aperak_clock_from_the_antwortfrist() {
+    fn the_kpi_report_keeps_the_reported_lapse_beside_the_measured_breach() {
         assert!(
-            KPI_SQL.contains("AS total_aperak_timeout"),
-            "the technical acknowledgement clock"
+            KPI_SQL.contains("AS total_antwortfrist_abgelaufen"),
+            "the lapse the workflow reported"
         );
         assert!(
             KPI_SQL.contains("AS total_frist_breached") && KPI_SQL.contains("deadline_at <"),

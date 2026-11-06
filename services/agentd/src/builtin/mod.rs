@@ -196,7 +196,7 @@ const MAKO_AGENT: Specialist = Specialist {
     name: "mako-agent",
     trigger_patterns: &[
         mako_events::mako::PROCESS_FAILED,
-        mako_events::mako::APERAK_TIMEOUT,
+        mako_events::mako::ANTWORTFRIST_ABGELAUFEN,
         "de.mako.aperak.*",
     ],
 };
@@ -205,7 +205,7 @@ const DEADLINE_ALERT_AGENT: Specialist = Specialist {
     name: "deadline-alert-agent",
     trigger_patterns: &[
         mako_events::mako::PROCESS_FAILED,
-        mako_events::mako::APERAK_TIMEOUT,
+        mako_events::mako::ANTWORTFRIST_ABGELAUFEN,
         mako_events::obs::DEADLINE_APPROACHING,
     ],
 };
