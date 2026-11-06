@@ -391,6 +391,7 @@
             "period_to",
             "total_brutto_eur",
             "risk_band",
+            "risk_score",
             "risk_findings",
             "created_at"
           ]
@@ -423,7 +424,8 @@
           "required": [
             "code",
             "weight",
-            "message"
+            "message",
+            "blocking"
           ]
         }
       },

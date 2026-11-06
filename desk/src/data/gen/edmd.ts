@@ -52,7 +52,7 @@ export interface UeberfaelligerAbleseauftrag {
   /**
    * MP-ID of the MSB executing the reading, where one is assigned.
    */
-  ausfuehrender_msb?: string | null;
+  ausfuehrender_msb: string | null;
   /**
    * The last Berlin business day the reading was due on.
    */
@@ -69,7 +69,7 @@ export interface UeberfaelligerAbleseauftrag {
   /**
    * Why a FEHLGESCHLAGEN order failed.
    */
-  fehlschlag_grund?: string | null;
+  fehlschlag_grund: string | null;
   /**
    * Berlin calendar days from `ausfuehrt_bis` to today.
    */

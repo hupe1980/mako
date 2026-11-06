@@ -151,15 +151,19 @@
             "malo_id",
             "sparte",
             "vertrags_nr",
+            "standort",
             "lieferbeginn",
+            "lieferende",
             "status"
           ]
         }
       },
       "required": [
         "id",
+        "kunden_nr",
         "kundentyp",
         "haushaltskunde",
+        "name",
         "lieferstellen",
         "lieferstellen_gesamt"
       ],
@@ -395,6 +399,8 @@
           "required": [
             "malo_id",
             "kunden_id",
+            "name",
+            "kunden_nr",
             "sparte",
             "status"
           ]
@@ -516,9 +522,12 @@
           },
           "required": [
             "kunden_id",
+            "name",
+            "kunden_nr",
             "malo_id",
             "sparte",
-            "vertrags_nr"
+            "vertrags_nr",
+            "mako_process_id"
           ]
         }
       },
@@ -698,7 +707,9 @@
           },
           "required": [
             "id",
+            "kunden_nr",
             "kundentyp",
+            "name",
             "lieferstellen"
           ]
         }

@@ -85,7 +85,7 @@ export interface DeadlineView {
   /**
    * When the deadline fires, RFC 3339 in UTC.
    */
-  due_at?: Instant | null;
+  due_at: Instant | null;
 }
 /**
  * One recorded event. `richtung`, `pid` and `message_ref` are present when the
@@ -100,7 +100,7 @@ export interface HistoryEntry {
   /**
    * When the event was recorded, RFC 3339 in UTC.
    */
-  recorded_at?: Instant | null;
+  recorded_at: Instant | null;
   /**
    * The workflow's name for the event.
    */
@@ -108,15 +108,15 @@ export interface HistoryEntry {
   /**
    * `eingang` or `ausgang` for a market message.
    */
-  richtung?: string | null;
+  richtung: string | null;
   /**
    * The message's Prüfidentifikator.
    */
-  pid?: number | null;
+  pid: number | null;
   /**
    * The message's document number (`BGM` C106).
    */
-  message_ref?: string | null;
+  message_ref: string | null;
 }
 
 /** Tools makod serves without an output schema: no view may read them. */

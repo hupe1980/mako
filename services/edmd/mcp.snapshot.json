@@ -445,9 +445,11 @@
             "id",
             "malo_id",
             "anlass",
+            "ausfuehrender_msb",
             "ausfuehrt_bis",
             "frist",
             "status",
+            "fehlschlag_grund",
             "days_overdue"
           ]
         }

@@ -29,7 +29,7 @@ export interface ProcessdTools {
       /**
        * The earliest of those Fristen, RFC 3339 in UTC.
        */
-      heute_frueheste?: Instant | null;
+      heute_frueheste: Instant | null;
     };
   };
   get_queue_entry: {
@@ -52,11 +52,11 @@ export interface ProcessdTools {
       /**
        * The Marktlokation (the location for an ESA order), where there is one.
        */
-      malo_id?: string | null;
+      malo_id: string | null;
       /**
        * The Marktrolle the answer is dispatched under (`NB`, `LF`, `MSB`).
        */
-      marktrolle?: string | null;
+      marktrolle: string | null;
       /**
        * Why the entry needs a person, with the Antwortfrist it runs against.
        */
@@ -68,18 +68,18 @@ export interface ProcessdTools {
       /**
        * The frozen answer of a held entry.
        */
-      antwort?: Antwort | null;
+      antwort: Antwort | null;
       /**
        * The codes approving is stated with — an escalation's Zustimmungen.
        * `None` when approving needs no code: a held entry goes as frozen.
        */
-      codes_freigeben?: CodeAuswahl | null;
+      codes_freigeben: CodeAuswahl | null;
       /**
        * The codes rejecting is stated with: the Ablehnungen, or — overriding a
        * held Ablehnung — the Zustimmungen, because rejecting a held answer
        * sends the other cluster. `None` when the refusal carries no code.
        */
-      codes_ablehnen?: CodeAuswahl | null;
+      codes_ablehnen: CodeAuswahl | null;
       /**
        * Approving sends a market message.
        */
@@ -100,11 +100,11 @@ export interface ProcessdTools {
       /**
        * `sub` of the principal who decided.
        */
-      decided_by?: string | null;
+      decided_by: string | null;
       /**
        * RFC 3339 in UTC.
        */
-      decided_at?: Instant | null;
+      decided_at: Instant | null;
     };
   };
   list_open_processes: {
@@ -135,7 +135,7 @@ export interface ProcessdTools {
       /**
        * Pass as `nach` for the next page; absent on the last.
        */
-      weiter?: string | null;
+      weiter: string | null;
     };
   };
   list_overdue_processes: {
@@ -202,12 +202,12 @@ export interface Antwort {
   /**
    * The tree the code was resolved in, when one is known.
    */
-  ebd?: string | null;
+  ebd: string | null;
   /**
    * The BDEW's wording for `code` in `ebd`; `None` when the tree does not
    * publish it — never a guess from another tree.
    */
-  bedeutung?: string | null;
+  bedeutung: string | null;
 }
 /**
  * The codes an answer of one cluster may carry, and the tree they come from.
@@ -246,23 +246,23 @@ export interface ProcessRow {
   pid: number;
   family: string;
   state: string;
-  malo_id?: string | null;
+  malo_id: string | null;
   /**
    * The counterparty's MP-ID.
    */
-  partner_mp_id?: string | null;
+  partner_mp_id: string | null;
   /**
    * RFC 3339 in UTC.
    */
-  started_at?: Instant | null;
+  started_at: Instant | null;
   /**
    * When the Antwortfrist ended, RFC 3339 in UTC.
    */
-  deadline_at?: Instant | null;
+  deadline_at: Instant | null;
   /**
    * The Festlegung the deadline came from.
    */
-  deadline_source?: string | null;
+  deadline_source: string | null;
 }
 /**
  * One approval-queue entry, as a person deciding it sees it.
@@ -283,11 +283,11 @@ export interface Freigabe {
   /**
    * The Marktlokation (the location for an ESA order), where there is one.
    */
-  malo_id?: string | null;
+  malo_id: string | null;
   /**
    * The Marktrolle the answer is dispatched under (`NB`, `LF`, `MSB`).
    */
-  marktrolle?: string | null;
+  marktrolle: string | null;
   /**
    * Why the entry needs a person, with the Antwortfrist it runs against.
    */
@@ -299,18 +299,18 @@ export interface Freigabe {
   /**
    * The frozen answer of a held entry.
    */
-  antwort?: Antwort | null;
+  antwort: Antwort | null;
   /**
    * The codes approving is stated with — an escalation's Zustimmungen.
    * `None` when approving needs no code: a held entry goes as frozen.
    */
-  codes_freigeben?: CodeAuswahl | null;
+  codes_freigeben: CodeAuswahl | null;
   /**
    * The codes rejecting is stated with: the Ablehnungen, or — overriding a
    * held Ablehnung — the Zustimmungen, because rejecting a held answer
    * sends the other cluster. `None` when the refusal carries no code.
    */
-  codes_ablehnen?: CodeAuswahl | null;
+  codes_ablehnen: CodeAuswahl | null;
   /**
    * Approving sends a market message.
    */
@@ -331,11 +331,11 @@ export interface Freigabe {
   /**
    * `sub` of the principal who decided.
    */
-  decided_by?: string | null;
+  decided_by: string | null;
   /**
    * RFC 3339 in UTC.
    */
-  decided_at?: Instant | null;
+  decided_at: Instant | null;
 }
 
 /** Tools processd serves without an output schema: no view may read them. */

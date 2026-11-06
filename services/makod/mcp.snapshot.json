@@ -158,7 +158,8 @@
           "required": [
             "deadline_id",
             "label",
-            "art"
+            "art",
+            "due_at"
           ]
         }
       },
@@ -252,7 +253,11 @@
           },
           "required": [
             "sequence",
-            "event_type"
+            "recorded_at",
+            "event_type",
+            "richtung",
+            "pid",
+            "message_ref"
           ]
         }
       },

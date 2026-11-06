@@ -77,7 +77,7 @@ export interface Pruefposten {
   /**
    * Deterministic risk score 0–100.
    */
-  risk_score?: number | null;
+  risk_score: number | null;
   /**
    * The coded findings the score is the sum of.
    */
@@ -114,7 +114,7 @@ export interface RiskFinding {
    * Expressing a verdict as a large weight leaves it at the mercy of
    * `hold_at`, which an operator may raise.
    */
-  blocking?: boolean;
+  blocking: boolean;
 }
 
 /** Tools billingd serves without an output schema: no view may read them. */

@@ -122,7 +122,8 @@
             "pid",
             "sender_mp_id",
             "received_at",
-            "bo4e_version"
+            "bo4e_version",
+            "frist"
           ]
         }
       },

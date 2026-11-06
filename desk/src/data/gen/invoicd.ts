@@ -52,7 +52,7 @@ export interface Disput {
    * The end of the Berlin day of the Zahlungsziel (SG8 DTM+265), RFC 3339
    * in UTC; `None` when the INVOIC carries no Zahlungsziel.
    */
-  frist?: Instant | null;
+  frist: Instant | null;
 }
 
 /** Tools invoicd serves without an output schema: no view may read them. */

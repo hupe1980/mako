@@ -95,7 +95,8 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "required": [
         "offen",
-        "heute_faellig"
+        "heute_faellig",
+        "heute_frueheste"
       ],
       "properties": {
         "offen": {
@@ -298,7 +299,9 @@
             }
           },
           "required": [
-            "code"
+            "code",
+            "ebd",
+            "bedeutung"
           ]
         },
         "CodeAuswahl": {
@@ -354,13 +357,20 @@
         "id",
         "process_id",
         "pid",
+        "malo_id",
+        "marktrolle",
         "grund",
         "art",
+        "antwort",
+        "codes_freigeben",
+        "codes_ablehnen",
         "kann_freigeben",
         "kann_ablehnen",
         "status",
         "expires_at",
-        "created_at"
+        "created_at",
+        "decided_by",
+        "decided_at"
       ],
       "type": "object",
       "properties": {
@@ -678,12 +688,18 @@
             "process_id",
             "pid",
             "family",
-            "state"
+            "state",
+            "malo_id",
+            "partner_mp_id",
+            "started_at",
+            "deadline_at",
+            "deadline_source"
           ]
         }
       },
       "required": [
-        "prozesse"
+        "prozesse",
+        "weiter"
       ],
       "type": "object",
       "properties": {
@@ -777,7 +793,12 @@
             "process_id",
             "pid",
             "family",
-            "state"
+            "state",
+            "malo_id",
+            "partner_mp_id",
+            "started_at",
+            "deadline_at",
+            "deadline_source"
           ]
         }
       },
@@ -966,13 +987,20 @@
             "id",
             "process_id",
             "pid",
+            "malo_id",
+            "marktrolle",
             "grund",
             "art",
+            "antwort",
+            "codes_freigeben",
+            "codes_ablehnen",
             "kann_freigeben",
             "kann_ablehnen",
             "status",
             "expires_at",
-            "created_at"
+            "created_at",
+            "decided_by",
+            "decided_at"
           ]
         },
         "FreigabeArt": {
@@ -1014,7 +1042,9 @@
             }
           },
           "required": [
-            "code"
+            "code",
+            "ebd",
+            "bedeutung"
           ]
         },
         "CodeAuswahl": {

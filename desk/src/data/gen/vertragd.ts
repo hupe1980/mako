@@ -14,7 +14,7 @@ export interface VertragdTools {
       /**
        * The Kundennummer, if one was assigned.
        */
-      kunden_nr?: string | null;
+      kunden_nr: string | null;
       /**
        * `B2C`, `B2B_SLP`, `B2B_RLM` or `B2B_HV`.
        */
@@ -26,7 +26,7 @@ export interface VertragdTools {
       /**
        * „Vorname Nachname" of the BO4E `Person` or `Geschaeftspartner`, else its `name1`.
        */
-      name?: string | null;
+      name: string | null;
       /**
        * Lieferstellen — Vertragskomponenten with a MaLo — newest first, at most
        * [`LIEFERSTELLEN_SEITE`].
@@ -117,7 +117,7 @@ export interface Lieferstelle {
   /**
    * The contract's Standort, as the customer named it.
    */
-  standort?: string | null;
+  standort: string | null;
   /**
    * First day of supply.
    */
@@ -125,7 +125,7 @@ export interface Lieferstelle {
   /**
    * Last day of supply, when one is set.
    */
-  lieferende?: BusinessDate | null;
+  lieferende: BusinessDate | null;
   /**
    * The Vertragskomponente's state: `ANGELEGT`, `ANGEMELDET`, `BESTAETIGT`,
    * `AKTIV`, `BEENDET`, `ABGELEHNT` or `STORNIERT`.
@@ -147,11 +147,11 @@ export interface MaloKunde {
   /**
    * The customer's name, as `search_kunden` shows it.
    */
-  name?: string | null;
+  name: string | null;
   /**
    * The Kundennummer, if one was assigned.
    */
-  kunden_nr?: string | null;
+  kunden_nr: string | null;
   /**
    * `STROM`, `GAS`, …
    */
@@ -174,11 +174,11 @@ export interface Anmeldung {
   /**
    * The customer's name, as `search_kunden` shows it.
    */
-  name?: string | null;
+  name: string | null;
   /**
    * The Kundennummer, if one was assigned.
    */
-  kunden_nr?: string | null;
+  kunden_nr: string | null;
   /**
    * The Marktlokation registered.
    */
@@ -194,7 +194,7 @@ export interface Anmeldung {
   /**
    * The makod process carrying the Anmeldung, once makod accepted it.
    */
-  mako_process_id?: string | null;
+  mako_process_id: string | null;
 }
 /**
  * One customer the operator's search found.
@@ -207,7 +207,7 @@ export interface KundeTreffer {
   /**
    * The Kundennummer, if one was assigned.
    */
-  kunden_nr?: string | null;
+  kunden_nr: string | null;
   /**
    * `B2C`, `B2B_SLP`, `B2B_RLM` or `B2B_HV`.
    */
@@ -216,7 +216,7 @@ export interface KundeTreffer {
    * The name a person recognises: „Vorname Nachname" of the BO4E `Person`
    * or `Geschaeftspartner`, else the Geschäftspartner's `name1`.
    */
-  name?: string | null;
+  name: string | null;
   /**
    * How many Lieferstellen (Vertragskomponenten with a MaLo) the Kunde has.
    */
