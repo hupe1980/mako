@@ -1064,10 +1064,18 @@ impl BdewAs4IngestHandler {
                             ctx
                         };
                         let dead_pid = pid.unwrap_or(mako_engine::ids::Pid::new(1));
-                        let (reason, result) =
-                            crate::edifact_api::unroutable_rejection(status, &msg, dead_pid, ctx);
+                        let (reason, result, answers) = crate::edifact_api::unroutable_rejection(
+                            status,
+                            &msg,
+                            dead_pid,
+                            ctx,
+                            self.ingest.tenant_id,
+                        );
                         EngineMetrics::global().inbound_received(dead_pid.as_u32(), result);
-                        self.ingest.dl_sink.reject(&reason).await?;
+                        self.ingest
+                            .dl_sink
+                            .reject_answered(&reason, &answers)
+                            .await?;
                     }
 
                     tracing::info!(

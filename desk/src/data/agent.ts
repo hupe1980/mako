@@ -9,7 +9,11 @@ import { type Handlung, verweigern } from "./verweigert";
 const BASE = "/svc/agentd/api/v1/runs";
 
 /** What a question is about — the Anker on screen. */
-export type Anker = { kunde: string } | { malo: string } | { freigabe: string };
+export type Anker =
+  | { kunde: string }
+  | { malo: string }
+  | { freigabe: string }
+  | { disput: string };
 
 export interface AnswerSentence {
   text: string;
@@ -26,7 +30,7 @@ export interface Answer {
   /** agentd's disclosure, shown first. */
   disclosure: string;
   saetze: AnswerSentence[];
-  /** A decision the assistant proposes for a Freigabe — prefilled, never sent. */
+  /** A decision the assistant proposes for a Freigabe or a Disput — prefilled, never sent. */
   vorschlag: Vorschlag | null;
   /** Every service read the run made, in order; `fertig` once it settled. */
   schritte: { quelle: string; fertig: boolean }[];
@@ -35,9 +39,12 @@ export interface Answer {
 }
 
 export interface Vorschlag {
-  aktion: "freigeben" | "ablehnen";
-  /** The Antwortcode a refusal carries; null for an approval. */
+  /** For a Freigabe `freigeben` or `ablehnen`; for a Disput `beilegen` or `aufrechterhalten`. */
+  aktion: "freigeben" | "ablehnen" | "beilegen" | "aufrechterhalten";
+  /** The Antwortcode a refusal carries; null for an approval and a Disput. */
   antwortcode: string | null;
+  /** For a Disput: the checker finding it rests on, as the Rechnungseingang names it. */
+  befund?: string | null;
   begruendung: string;
   /** The read the Begründung rests on, `server/tool`. */
   quelle: string | null;
@@ -131,18 +138,32 @@ async function verdict(run: string, body: object, keepalive: boolean): Promise<v
   if (res.status !== 204) throw await failure(res, { dienst: "agentd", aktion: "bewerten" });
 }
 
+/** What the assistant proposes on unasked: a Freigabe or a Rechnungsdisput. */
+export type VorschlagArt = "freigabe" | "disput";
+
+/** How each proposed action reads, on a row and on its card. */
+export const AKTION: Record<Vorschlag["aktion"], string> = {
+  freigeben: "Freigeben",
+  ablehnen: "Ablehnen",
+  beilegen: "Beilegen",
+  aufrechterhalten: "Aufrechterhalten",
+};
+
 /**
- * The waiting proposal of each Freigabe, by id: its run's answer so far
+ * The waiting proposal of each entry, by kind and id: its run's answer so far
  * (`running`, or concluded with its checked `vorschlag`), or null where agentd
- * admitted none. Reading starts no run — agentd proposes once per Freigabe.
+ * admitted none. Reading starts no run — agentd proposes once per entry.
  */
-export async function vorschlaege(ids: string[]): Promise<Record<string, Answer | null>> {
-  if (ids.length === 0) return {};
-  const res = await reach(
-    `/svc/agentd/api/v1/vorschlaege?freigabe=${ids.map(encodeURIComponent).join(",")}`,
-  );
+export async function vorschlaege(
+  ids: Partial<Record<VorschlagArt, string[]>>,
+): Promise<Partial<Record<VorschlagArt, Record<string, Answer | null>>>> {
+  const query = (Object.entries(ids) as [VorschlagArt, string[]][])
+    .filter(([, v]) => v.length > 0)
+    .map(([art, v]) => `${art}=${v.map(encodeURIComponent).join(",")}`);
+  if (query.length === 0) return {};
+  const res = await reach(`/svc/agentd/api/v1/vorschlaege?${query.join("&")}`);
   if (!res.ok) throw await failure(res);
-  return (await res.json()) as Record<string, Answer | null>;
+  return (await res.json()) as Partial<Record<VorschlagArt, Record<string, Answer | null>>>;
 }
 
 /** One skill, as agentd's catalog states it from its manifest. */

@@ -48,6 +48,8 @@ struct AperakBuilderInner {
     error_text: Option<String>,
     /// `SG5 FTX+Z02` — where in the acknowledged message the AHB is violated.
     ortsangabe: Option<String>,
+    /// Further `SG4` groups after the first: code, text, Ortsangabe.
+    further_errors: Vec<(String, Option<String>, Option<String>)>,
     document_date: Option<String>,
 }
 
@@ -85,6 +87,7 @@ impl AperakBuilder<Unset, Unset> {
                 error_code: None,
                 error_text: None,
                 ortsangabe: None,
+                further_errors: Vec::new(),
                 document_date: None,
             },
         }
@@ -229,6 +232,21 @@ impl<S, R> AperakBuilder<S, R> {
         self
     }
 
+    /// A further Fehlerbeschreibung — its own `SG4 ERC` group with its text
+    /// and Ortsangabe, after the first. APERAK AHB 1.1 § 2.1.1: every AHB-Fehler
+    /// is named; the MIG lets `SG4` repeat 99999 times.
+    pub fn further_error(
+        mut self,
+        code: impl Into<String>,
+        text: Option<String>,
+        ortsangabe: Option<String>,
+    ) -> Self {
+        self.inner
+            .further_errors
+            .push((code.into(), text, ortsangabe));
+        self
+    }
+
     /// Override the message reference number.  Defaults to `"1"`.
     pub fn message_ref(mut self, reference: impl Into<String>) -> Self {
         self.inner.message_ref = reference.into();
@@ -335,31 +353,49 @@ impl<S, R> AperakBuilder<S, R> {
         }
         // `SG5` — the Fehlermeldung: code, text, then the references of the
         // message it is about (MIG Nr 00012–00015).
-        if let Some(code) = &self.inner.error_code {
-            emit_seg!(w, "ERC", code);
-        }
-        if let Some(text) = &self.inner.error_text {
+        // A text without a code stands alone, as it always has.
+        if self.inner.error_code.is_none()
+            && let Some(text) = &self.inner.error_text
+        {
             emit_comp!(w, "FTX", ["ABO"], [""], [""], [text]);
         }
-        if let Some(code) = &self.inner.error_code
-            && let Some(r) = &self.inner.acw_ref
-        {
-            emit_comp!(w, "RFF", ["ACW", r]);
-            let ago = self.inner.ago_ref.as_deref().unwrap_or(r);
-            emit_comp!(w, "RFF", ["AGO", ago]);
-            // `SG5 FTX+Z02` (Nr 00017) is Muss for the six codes that report an
-            // AHB violation rather than a business one — the receiver is told
-            // *where* the message breaks the Anwendungshandbuch, not only that
-            // it does. Emitted only for those, because for every other code the
-            // AHB does not ask for it.
-            if requires_ortsangabe(code) {
-                let ortsangabe = self
-                    .inner
-                    .ortsangabe
-                    .as_deref()
-                    .or(self.inner.error_text.as_deref())
-                    .unwrap_or(code);
-                emit_comp!(w, "FTX", ["Z02"], [""], [""], [ortsangabe]);
+        // One `SG4` per Fehlerbeschreibung: the first from `error_code`, then
+        // every further one, each with its own text and Ortsangabe.
+        let groups = self
+            .inner
+            .error_code
+            .iter()
+            .map(|c| {
+                (
+                    c.as_str(),
+                    self.inner.error_text.as_deref(),
+                    self.inner.ortsangabe.as_deref(),
+                )
+            })
+            .chain(
+                self.inner
+                    .further_errors
+                    .iter()
+                    .map(|(c, t, o)| (c.as_str(), t.as_deref(), o.as_deref())),
+            );
+        for (code, text, ortsangabe) in groups {
+            emit_seg!(w, "ERC", code);
+            if let Some(text) = text {
+                emit_comp!(w, "FTX", ["ABO"], [""], [""], [text]);
+            }
+            if let Some(r) = &self.inner.acw_ref {
+                emit_comp!(w, "RFF", ["ACW", r]);
+                let ago = self.inner.ago_ref.as_deref().unwrap_or(r);
+                emit_comp!(w, "RFF", ["AGO", ago]);
+                // `SG5 FTX+Z02` (Nr 00017) is Muss for the codes that report an
+                // AHB violation rather than a business one — the receiver is
+                // told *where* the message breaks the Anwendungshandbuch, not
+                // only that it does. Emitted only for those, because for every
+                // other code the AHB does not ask for it.
+                if requires_ortsangabe(code) {
+                    let ortsangabe = ortsangabe.or(text).unwrap_or(code);
+                    emit_comp!(w, "FTX", ["Z02"], [""], [""], [ortsangabe]);
+                }
             }
         }
         w.finish_unt(&self.inner.message_ref)

@@ -175,6 +175,7 @@ pub async fn dispatch_redispatch_xml(
             };
             dispatcher
                 .spawn_or_resume_redispatch::<AktivierungWorkflow>(
+                    now,
                     &mrid,
                     mako_redispatch::aktivierung::WORKFLOW_NAME,
                     cmd,
@@ -209,6 +210,7 @@ pub async fn dispatch_redispatch_xml(
             // of the document being acknowledged.
             dispatcher
                 .resume_redispatch::<AktivierungWorkflow>(
+                    now,
                     &recv_id,
                     mako_redispatch::aktivierung::WORKFLOW_NAME,
                     cmd,
@@ -230,6 +232,7 @@ pub async fn dispatch_redispatch_xml(
             };
             dispatcher
                 .spawn_or_resume_redispatch::<StammdatenWorkflow>(
+                    now,
                     &mrid,
                     mako_redispatch::stammdaten::WORKFLOW_NAME,
                     cmd,
@@ -304,12 +307,14 @@ async fn dispatch_ack_forward(
     cmd: ack_forward::AckForwardCommand,
     ack_label: &'static str,
 ) -> Result<IngestOutcome, EngineError> {
-    let due = ack_deadline(OffsetDateTime::now_utc());
+    let now = OffsetDateTime::now_utc();
+    let due = ack_deadline(now);
     let deadlines = [(ack_label, due)];
     match kind {
         RedispatchDocumentKind::Unavailability => {
             dispatcher
                 .spawn_or_resume_redispatch::<ack_forward::VerfuegbarkeitWorkflow>(
+                    now,
                     key,
                     workflow_name,
                     cmd,
@@ -320,6 +325,7 @@ async fn dispatch_ack_forward(
         RedispatchDocumentKind::NetworkConstraint => {
             dispatcher
                 .spawn_or_resume_redispatch::<ack_forward::NetzengpassWorkflow>(
+                    now,
                     key,
                     workflow_name,
                     cmd,
@@ -330,6 +336,7 @@ async fn dispatch_ack_forward(
         RedispatchDocumentKind::Kaskade => {
             dispatcher
                 .spawn_or_resume_redispatch::<ack_forward::KaskadeWorkflow>(
+                    now,
                     key,
                     workflow_name,
                     cmd,
@@ -340,6 +347,7 @@ async fn dispatch_ack_forward(
         RedispatchDocumentKind::PlannedResourceSchedule => {
             dispatcher
                 .spawn_or_resume_redispatch::<ack_forward::PlanungsdatenWorkflow>(
+                    now,
                     key,
                     workflow_name,
                     cmd,
@@ -350,6 +358,7 @@ async fn dispatch_ack_forward(
         RedispatchDocumentKind::StatusRequest => {
             dispatcher
                 .spawn_or_resume_redispatch::<ack_forward::StatusanfrageWorkflow>(
+                    now,
                     key,
                     workflow_name,
                     cmd,
@@ -360,6 +369,7 @@ async fn dispatch_ack_forward(
         RedispatchDocumentKind::Kostenblatt => {
             dispatcher
                 .spawn_or_resume_redispatch::<ack_forward::KostenblattWorkflow>(
+                    now,
                     key,
                     workflow_name,
                     cmd,

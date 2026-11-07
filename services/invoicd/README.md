@@ -52,7 +52,7 @@ arithmetic-only check whatever its PID. Command names come from
 | `Ok` | accepted |
 | `AcceptedPartial` | Storno accepted on the reduced check |
 | `Warn` | warnings, auto-approved below `auto_dispute_threshold_eur` |
-| `Dispute` | rejected; the answer carries the findings as `ablehnungsgrund` |
+| `Dispute` | rejected; the answer carries the disputing findings as `ablehnungsgrund`, German, within one REMADV `FTX+ABO` DE 4440 (`an..512`), with how many more findings did not fit |
 | `Resolved` | dispute closed by an operator |
 
 A `Warn` escalates to `Dispute` only above `auto_dispute_threshold_eur`

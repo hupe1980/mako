@@ -19,8 +19,9 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
-        received_at: OffsetDateTime,
+        inbound: Inbound<'_>,
     ) -> Result<IngestOutcome, EngineError> {
+        let received_at = inbound.received_at;
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
 
@@ -39,19 +40,15 @@ impl EdifactIngestDispatcher {
                 // 55051/55168 (WiM Strom Teil 1) and 44039/44042/44051/44168
                 // (AWH WiM Gas 2.0). Same Use-Cases, same Fristen, one workflow.
                 55_042 | 55_039 | 55_051 | 55_168 | 44_042 | 44_039 | 44_051 | 44_168 => {
-                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::wim_registry(received_at).dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_utilmd(msg);
-                    // **No deadlines passed here.** Both windows depend on the
-                    // PID and the Sparte, and the workflow returns them with the
-                    // `ValidationPassed` event so they land on the same
-                    // transaction: the business answer is 3 / 5 / 7 / 1 Werktage
-                    // per Anwendungsfall, and the APERAK is 45 min in Strom
-                    // against the Initial-/Folgeprozess split in Gas
-                    // (APERAK AHB 1.1 §2.3.1/§2.4.1). Registering a Strom
-                    // APERAK window on a Gas message would report a breach
-                    // 45 minutes into a window that runs to noon the next
-                    // Werktag.
+                    // **No deadlines passed here.** The business answer
+                    // depends on the PID and the Sparte — 3 / 5 / 7 / 1
+                    // Werktage per Anwendungsfall — and the workflow returns it
+                    // with the `ValidationPassed` event so it lands on the same
+                    // transaction.
                     self.spawn_or_resume_guarded::<WimDeviceChangeWorkflow>(
+                        inbound,
                         &melo_id,
                         "wim-device-change",
                         cmd,
@@ -65,9 +62,10 @@ impl EdifactIngestDispatcher {
                 // of a Stilllegung. It asks nothing and is recorded against the
                 // Messlokation's open process, or skipped when there is none.
                 mako_wim::geraetewechsel::ENDE_MSB_VOM_NB_PID => {
-                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::wim_registry(received_at).dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_utilmd(msg);
                     self.resume_by_key::<WimDeviceChangeWorkflow>(
+                        inbound,
                         &melo_id,
                         "wim-device-change",
                         cmd,
@@ -80,9 +78,10 @@ impl EdifactIngestDispatcher {
                 // FV2026-10-01 (PID-Übersicht 4.0 publishes 44168 → 44169 only).
                 55_040 | 55_041 | 55_043 | 55_044 | 55_052 | 55_053 | 55_169 | 55_170 | 44_040
                 | 44_041 | 44_043 | 44_044 | 44_052 | 44_053 | 44_169 => {
-                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::wim_registry(received_at).dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_utilmd(msg);
                     self.resume_by_key::<WimDeviceChangeWorkflow>(
+                        inbound,
                         &melo_id,
                         "wim-device-change",
                         cmd,
@@ -93,9 +92,10 @@ impl EdifactIngestDispatcher {
                 // informational device-change status; resume by the MeLo carried in
                 // the IFTSTA's single LOC (per the AHB profile). Never spawns.
                 p if mako_wim::geraetewechsel::IFTSTA_PIDS.contains(&p) => {
-                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::wim_registry(received_at).dispatch(raw, &fv)?;
                     let melo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<WimDeviceChangeWorkflow>(
+                        inbound,
                         melo_id.as_str(),
                         "wim-device-change",
                         cmd,
@@ -125,18 +125,18 @@ impl EdifactIngestDispatcher {
             // role (both cannot be active simultaneously — build() panics if both are).
             "wim-geraeteubernahme" => match pid {
                 17001 | 17009 => {
-                    let cmd = adapters::wim_geraeteubernahme_registry(self.sparte_of(msg))
-                        .dispatch(raw, &fv)?;
+                    let cmd =
+                        adapters::wim_geraeteubernahme_registry(received_at, self.sparte_of(msg))
+                            .dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
-                    // **No deadlines passed here.** Both windows depend on the
-                    // Use-Case and the Sparte, and only the workflow knows both:
-                    // 17001 answers 2 WT after the arrival ÜT, 17009 by the
-                    // 2. WT *before* the Gerätewechseltermin the message
-                    // carries, and the APERAK window is 45 min in Strom against
-                    // the Initial-/Folgeprozess split in Gas. The workflow
-                    // returns them with the `ValidationPassed` event, so they
-                    // are registered on the same transaction.
+                    // **No deadlines passed here.** The answer window depends
+                    // on the Use-Case, and only the workflow knows it: 17001
+                    // answers 2 WT after the arrival ÜT, 17009 by the 2. WT
+                    // *before* the Gerätewechseltermin the message carries. The
+                    // workflow returns it with the `ValidationPassed` event, so
+                    // it is registered on the same transaction.
                     self.spawn_or_resume_guarded::<WimGeraeteubernahmeWorkflow>(
+                        inbound,
                         &melo_id,
                         "wim-geraeteubernahme",
                         cmd,
@@ -150,10 +150,12 @@ impl EdifactIngestDispatcher {
                     .await
                 }
                 19001 | 19002 | 19015 | 19016 => {
-                    let cmd = adapters::wim_geraeteubernahme_registry(self.sparte_of(msg))
-                        .dispatch(raw, &fv)?;
+                    let cmd =
+                        adapters::wim_geraeteubernahme_registry(received_at, self.sparte_of(msg))
+                            .dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
                     self.resume_by_key::<WimGeraeteubernahmeWorkflow>(
+                        inbound,
                         &melo_id,
                         "wim-geraeteubernahme",
                         cmd,
@@ -196,6 +198,7 @@ impl EdifactIngestDispatcher {
                     .with_time(zahlungsziel.time())
                     .assume_offset(zahlungsziel.offset());
                     self.spawn_or_resume_guarded::<WimInvoicWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "wim-invoic",
                         cmd,
@@ -212,16 +215,26 @@ impl EdifactIngestDispatcher {
                 33001..=33004 => {
                     let cmd = adapters::wim_invoic_remadv_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_remadv(msg);
-                    self.resume_by_key::<WimInvoicWorkflow>(&invoice_ref, "wim-invoic", cmd)
-                        .await
+                    self.resume_by_key::<WimInvoicWorkflow>(
+                        inbound,
+                        &invoice_ref,
+                        "wim-invoic",
+                        cmd,
+                    )
+                    .await
                 }
                 // COMDIS 29001 (MSB invoicer rejects the payer's REMADV) resumes
                 // the same process by the invoice reference.
                 29001 => {
                     let cmd = adapters::wim_invoic_comdis_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_comdis(msg);
-                    self.resume_by_key::<WimInvoicWorkflow>(&invoice_ref, "wim-invoic", cmd)
-                        .await
+                    self.resume_by_key::<WimInvoicWorkflow>(
+                        inbound,
+                        &invoice_ref,
+                        "wim-invoic",
+                        cmd,
+                    )
+                    .await
                 }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "wim-invoic",
@@ -248,12 +261,14 @@ impl EdifactIngestDispatcher {
                     // The workflow returns the deadline with the event, so it
                     // is registered on the same transaction as the receipt.
                     let cmd = adapters::wim_insrpt_registry(
+                        received_at,
                         self.sparte_of(msg),
                         mako_fristen::antwort::Messtechnik::RlmOderImsMsHs,
                     )
                     .dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_insrpt(msg);
                     self.spawn_or_resume_guarded::<WimInsrptWorkflow>(
+                        inbound,
                         &melo_id,
                         "wim-insrpt",
                         cmd,
@@ -269,12 +284,13 @@ impl EdifactIngestDispatcher {
                 // being one, so they resume without closing the process.
                 23003 | 23004 | 23005 | 23008 | 23009 | 23011 | 23012 => {
                     let cmd = adapters::wim_insrpt_registry(
+                        received_at,
                         self.sparte_of(msg),
                         mako_fristen::antwort::Messtechnik::RlmOderImsMsHs,
                     )
                     .dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_insrpt(msg);
-                    self.resume_by_key::<WimInsrptWorkflow>(&melo_id, "wim-insrpt", cmd)
+                    self.resume_by_key::<WimInsrptWorkflow>(inbound, &melo_id, "wim-insrpt", cmd)
                         .await
                 }
                 _ => Ok(IngestOutcome::Skipped {
@@ -315,14 +331,14 @@ impl EdifactIngestDispatcher {
                     // answer echoes it in `RFF+AAV`, and the ESA's ORDERS then
                     // references our Angebot.
                     let anfrage_belegnr = msg.message_ref();
-                    self.spawn_or_resume_keyed::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                    self.spawn_or_resume_keyed::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(inbound,
                         subscription_key.as_str(),
                         mako_wim::wertebestellung::WORKFLOW_NAME,
                         cmd,
                         &fv,
                         &[(mako_wim::wertebestellung::ANGEBOT_WINDOW_LABEL, due_at)],
                         &[anfrage_belegnr, malo_id.as_str()],
-                        None,
+                        Some(mako_engine::workflow::OccupiesBusinessKey::occupies_business_key),
                     )
                     .await
                 } else if pid == mako_wim::wertebestellung::STORNIERUNG_PID.as_u32() {
@@ -341,7 +357,7 @@ impl EdifactIngestDispatcher {
                         HolidayCalendar::BdewMaKo,
                     );
                     let ordchg_belegnr = msg.message_ref();
-                    self.resume_by_key_indexing::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                    self.resume_by_key_indexing::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(inbound,
                         &key,
                         mako_wim::wertebestellung::WORKFLOW_NAME,
                         cmd,
@@ -376,7 +392,7 @@ impl EdifactIngestDispatcher {
                     // our ORDRSP answer echoes it in `RFF+ON`, and a later
                     // ORDCHG Stornierung references it in `RFF+ON` as well.
                     let order_belegnr = msg.message_ref();
-                    self.resume_by_key_indexing::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                    self.resume_by_key_indexing::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(inbound,
                         &key,
                         mako_wim::wertebestellung::WORKFLOW_NAME,
                         cmd,
@@ -417,6 +433,7 @@ impl EdifactIngestDispatcher {
                     let key = esa_korrelation_key(msg, pid);
                     let outcome = self
                         .resume_by_key::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
+                            inbound,
                             &key,
                             mako_wim::esa_wertebestellung::WORKFLOW_NAME,
                             cmd,
@@ -459,12 +476,14 @@ impl EdifactIngestDispatcher {
                             ),
                         )
                     });
-                    self.spawn_or_resume::<WimPreisanfrageWorkflow>(
+                    self.spawn_or_resume_guarded::<WimPreisanfrageWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "wim-preisanfrage",
                         cmd,
                         &fv,
                         deadlines.as_slice(),
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else if mako_wim::preisanfrage::QUOTES_PIDS.contains(&pid) {
@@ -473,6 +492,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<WimPreisanfrageWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "wim-preisanfrage",
                         cmd,
@@ -512,6 +532,7 @@ impl EdifactIngestDispatcher {
                         Vec::new()
                     };
                     self.spawn_or_resume_guarded::<mako_wim::WimRechnungsabwicklungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "wim-rechnungsabwicklung",
                         cmd,
@@ -529,6 +550,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::wim_rechnungsabwicklung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<mako_wim::WimRechnungsabwicklungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "wim-rechnungsabwicklung",
                         cmd,
@@ -545,14 +567,17 @@ impl EdifactIngestDispatcher {
             "wim-preisliste" => {
                 if mako_wim::preisliste::PRICAT_PIDS.contains(&pid) {
                     let cmd = adapters::wim_preisliste_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_malo_from_msg(msg);
+                    // A Preisliste is the sending MSB's.
+                    let malo_id = extract_sender_key(msg);
                     // Price list is a publish-only workflow; no statutory deadline.
-                    self.spawn_or_resume::<WimPreislisteWorkflow>(
+                    self.spawn_or_resume_guarded::<WimPreislisteWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "wim-preisliste",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else {
@@ -577,6 +602,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::wim_technik_aenderung_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
                     self.resume_by_key::<WimTechnikAenderungWorkflow>(
+                        inbound,
                         &melo_id,
                         "wim-technik-aenderung",
                         cmd,
@@ -605,19 +631,16 @@ impl EdifactIngestDispatcher {
                         .unwrap_or_else(|| {
                             fristen::deadline_at_werktage(received_at, 1, HolidayCalendar::BdewMaKo)
                         });
-                    let aperak_due_at = fristen::aperak_strom_due_at(received_at);
                     self.spawn_or_resume_guarded::<WimWeiterverpflichtungWorkflow>(
+                        inbound,
                         &melo_id,
                         mako_wim::weiterverpflichtung::WORKFLOW_NAME,
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_wim::WEITERVERPFLICHTUNG_ANTWORT_WINDOW_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(
+                            mako_wim::WEITERVERPFLICHTUNG_ANTWORT_WINDOW_LABEL,
+                            process_due_at,
+                        )],
                         mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
@@ -652,6 +675,7 @@ impl EdifactIngestDispatcher {
                             )
                         });
                     self.spawn_or_resume_guarded::<mako_wim::ersteinbau::WimErsteinbauWorkflow>(
+                        inbound,
                         melo_id.as_str(),
                         mako_wim::ersteinbau::WORKFLOW_NAME,
                         cmd,
@@ -668,6 +692,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::wim_ersteinbau_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<mako_wim::ersteinbau::WimErsteinbauWorkflow>(
+                        inbound,
                         melo_id.as_str(),
                         mako_wim::ersteinbau::WORKFLOW_NAME,
                         cmd,

@@ -182,6 +182,19 @@ pub enum GeliGasDatenabrufState {
     },
 }
 
+/// Whether a Datenabruf still holds its location: live while the request
+/// waits, settled once the data are delivered or the request refused.
+impl mako_engine::workflow::OccupiesBusinessKey for GeliGasDatenabrufState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the request open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::AnfrageGesendet { .. } => true,
+            Self::New | Self::DatenErhalten | Self::Abgelehnt => false,
+        }
+    }
+}
+
 impl GeliGasDatenabrufState {
     /// Stable string label for the current variant.
     #[must_use]

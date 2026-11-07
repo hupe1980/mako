@@ -404,6 +404,21 @@ pub fn aperak_strom_due_at(received: OffsetDateTime) -> OffsetDateTime {
     }
 }
 
+/// Deadline label for the general Strom APERAK sending obligation — every Strom
+/// message that is not a UTILMD or an ORDERS, owed by the next Werktag 12 Uhr
+/// ([`aperak_strom_allgemein_due_at`], APERAK AHB 1.1 § 2.4.1).
+///
+/// Carries [`APERAK_WINDOW_LABEL_PREFIX`], so the delivery of the APERAK
+/// discharges it ([`discharges_delivery_window`]).
+///
+/// ```rust
+/// use mako_fristen::{discharges_delivery_window, is_delivery_window, APERAK_STROM_ALLGEMEIN_LABEL};
+///
+/// assert!(is_delivery_window(APERAK_STROM_ALLGEMEIN_LABEL));
+/// assert!(discharges_delivery_window("APERAK", APERAK_STROM_ALLGEMEIN_LABEL));
+/// ```
+pub const APERAK_STROM_ALLGEMEIN_LABEL: &str = "aperak-strom-naechster-wt-1200";
+
 /// Compute the Strom APERAK sending deadline for a message that is **not** a
 /// UTILMD or an ORDERS.
 ///

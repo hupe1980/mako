@@ -23,13 +23,14 @@ In production the Desk is the `mako-desk` image — the static bundle on port
 8080 — behind [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) as
 the gateway. The browser talks to one origin and holds no service token: the
 gateway signs the person in by OIDC, serves the Desk, and forwards
-`/svc/<service>/` to makod, processd, vertragd and agentd with the person's
-access token as `Authorization: Bearer`. `desk/deploy/gateway.yaml` is the
+`/svc/<service>/` to each service the Desk reads — makod, processd, vertragd,
+invoicd, billingd, edmd, netzbilanzd and agentd — with the person's access
+token as `Authorization: Bearer`. `desk/deploy/gateway.yaml` is the
 gateway's routing, ready to adapt.
 
 Each service verifies that token as it does any other, so its
 `[oidc] audience` must be in the token's `aud` — an audience mapper at the
-identity provider, or one audience shared by all four. Cedar decides what the
+identity provider, or one audience shared by all of them. Cedar decides what the
 person may do; the Desk keeps no role map. Its CSP allows the bundle's own
 script and stylesheet only, plus a per-request nonce for the styles React
 Aria injects.
@@ -152,6 +153,11 @@ number the service capped shows as a floor („500+").
 **Fristen überschritten** lists every open process past its Antwortfrist, as
 the Prozessüberwachung has it, each with the Festlegung its deadline came from.
 
+**Dead Letters** (Netz) counts every message the Marktkommunikation could not
+take or deliver and lists the most recent. The Lieferant also sees
+**Rechnungsprüfung** and **Rechnungsdispute**, the Messstelle **Ableseaufträge
+überfällig** — each the same read as its row in Heute, which a click opens.
+
 [![The Überblick](ueberblick-light.png)](ueberblick-light.png)
 [![The Überblick](ueberblick-dark.png)](ueberblick-dark.png)
 [![Overdue processes](fristen-light.png)](fristen-light.png)
@@ -178,6 +184,24 @@ A Freigabe is decided where it stands: <kbd>↵</kbd> opens the decision under
 the row — <kbd>A</kbd> or <kbd>R</kbd>, the code, the confirm — and Heute
 stays on screen. The assistant's proposal waits under the row;
 <kbd>U</kbd> opens the decision with it taken in, unsent.
+
+A disputed invoice is decided there too. Its row names the Rechnungssteller
+as the Marktstammdaten register it, with the Rechnungsnummer beneath, and the
+decision lists the checker's findings by their German names. **Beilegen** closes the dispute with your Bemerkung and sends nothing, so
+it is held for five seconds behind „Rückgängig"; while the refusal (REMADV) has
+not gone out, **Ablehnung senden** sends it after the confirm. The assistant
+proposes one of the two with the finding it rests on, „nicht belegt" when the
+findings it read do not name it.
+
+An invoice the Abrechnung's risk check put aside is decided in place as well:
+a **held** one is released after the confirm, since releasing issues it; one
+**under review** went out already, and **Geprüft** takes it off the list,
+held for undo. The assistant proposes neither — the risk check's findings are
+the evidence, listed in the decision. A Korrekturbedarf opens nothing yet: the
+Desk has no Netzentgelte view.
+
+[![A disputed invoice decided in Heute: its finding, the assistant's proposal resting on it, Beilegen and Ablehnung senden](heute-disput-light.png)](heute-disput-light.png)
+[![A disputed invoice decided in Heute: its finding, the assistant's proposal resting on it, Beilegen and Ablehnung senden](heute-disput-dark.png)](heute-disput-dark.png)
 
 The assistant works in the same list. Its Hinweis on a MaLo or process sits
 under that item, „Hilfreich?" beside it while the item has focus; one no item

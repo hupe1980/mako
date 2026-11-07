@@ -306,7 +306,10 @@ pub async fn try_ingest(state: &EdifactApiState, body: &[u8]) -> Option<DvgwInge
             continue;
         };
 
-        match dispatcher.dispatch_dvgw(&msg, &workflow, pid).await {
+        match dispatcher
+            .dispatch_dvgw(&msg, &workflow, pid, time::OffsetDateTime::now_utc())
+            .await
+        {
             Ok(outcome) => {
                 if let Some((workflow_name, reason)) = outcome.coverage_gap() {
                     // The PID resolved, the AS4 receipt went out, and nothing

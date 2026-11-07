@@ -20,7 +20,19 @@ export async function problem(res: Response): Promise<Problem> {
   try {
     const json: unknown = JSON.parse(text);
     if (json && typeof json === "object" && !Array.isArray(json)) {
-      return { ...(json as Record<string, unknown>), status: res.status };
+      const body = json as Record<string, unknown>;
+      // The Abrechnung nests its refusal — `{ "error": { "code", "message" } }`;
+      // read as the one body, its sentence is the `detail`.
+      const inner = body.error;
+      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+        const { message, ...rest } = inner as Record<string, unknown>;
+        return {
+          ...rest,
+          ...(typeof message === "string" ? { detail: message } : {}),
+          status: res.status,
+        };
+      }
+      return { ...body, status: res.status };
     }
   } catch {
     // Not JSON — a proxy's page, a plain-text answer: shown as it came.

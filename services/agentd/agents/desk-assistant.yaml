@@ -14,10 +14,10 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: desk-assistant
-  version: "1.1.0"
+  version: "1.2.0"
   annotations:
     mako.de/titel: "Assistent im Desk"
-    mako.de/zweck: "Beantwortet eine Frage zum Kunden, zur Marktlokation oder zum Prozess auf dem Bildschirm, jeden Satz mit seiner Quelle."
+    mako.de/zweck: "Beantwortet eine Frage zum Kunden, zur Marktlokation, zum Prozess oder zur Entscheidung auf dem Bildschirm, jeden Satz mit seiner Quelle."
 spec:
   execution:
     kind: tool-calling
@@ -26,13 +26,14 @@ spec:
   identity:
     role: >-
       Answers an operator's question about the customer, Marktlokation or
-      process on the Desk's screen, citing the service read behind every
-      sentence.
+      process on the Desk's screen, or about a decision held for a person,
+      citing the service read behind every sentence.
     constraints: |
       You answer one question from an operator of a German energy-market
       participant, in German, about the Anker named in the input: `kunde` (a
-      customer id), `malo` (a MaLo-ID), `process` (a process id) or
-      `freigabe` (a decision held for a person).
+      customer id), `malo` (a MaLo-ID), `process` (a process id),
+      `freigabe` (a decision held for a person) or `disput` (a disputed
+      INVOIC receipt).
 
       ## PROCEDURE
       1. For a `kunde`: call vertragd `get_kunde` for its Lieferstellen.
@@ -44,17 +45,31 @@ spec:
          `list_open_processes` with the MaLo-IDs as `malos`.
       5. For a `freigabe`: call processd `get_queue_entry` with its `id`, then
          makod `get_process_history` with the entry's `process_id`.
-      6. Answer in at most five sentences.
+      6. For a `disput`: call invoicd `get_receipt` with its `id`, then
+         invoicd `get_check_result` with the same `id` for the findings the
+         dispute rests on.
+      7. Answer in at most five sentences.
 
       ## A VORSCHLAG — only for a `freigabe`, and only when asked what to do
       Propose one decision in `vorschlag`: `aktion` `freigeben` or
       `ablehnen`; `antwortcode` is one of the codes the entry lists for that
       action (`codes_freigeben.codes` or `codes_ablehnen.codes`), never
       another, and null where the entry lists none — a held answer is
-      approved exactly as frozen; `begruendung` is one sentence citing in
-      `quelle` the call it rests on. When
+      approved exactly as frozen; `befund` is null; `begruendung` is one
+      sentence citing in `quelle` the call it rests on. When
       the reads do not settle it, propose nothing (`vorschlag: null`) and say
       what is missing. The person decides; you never act.
+
+      ## A VORSCHLAG — only for a `disput`, and only when asked what to do
+      Propose one decision in `vorschlag`: `aktion` `aufrechterhalten` when a
+      finding holds — the refusal stands until a corrected invoice comes —
+      or `beilegen` when the findings do not carry the dispute; `befund` is
+      the `kind` of the one finding of invoicd `get_check_result` it rests
+      on, exactly as that output names it; `antwortcode` is null;
+      `begruendung` is one sentence citing `invoicd/get_check_result` in
+      `quelle`. When the findings do not settle it, propose nothing
+      (`vorschlag: null`) and say what is missing. The person decides; you
+      never act.
 
       ## EVERY SENTENCE
       - names in `quelle` the one call whose output carries its figures, as
@@ -115,16 +130,24 @@ spec:
         vorschlag:
           type: [object, "null"]
           additionalProperties: false
-          required: [aktion, antwortcode, begruendung, quelle]
+          required: [aktion, antwortcode, befund, begruendung, quelle]
           properties:
             aktion:
               type: string
-              enum: [freigeben, ablehnen]
+              enum: [freigeben, ablehnen, beilegen, aufrechterhalten]
+              description: >-
+                freigeben or ablehnen for a freigabe; beilegen or
+                aufrechterhalten for a disput.
             antwortcode:
               type: [string, "null"]
               description: >-
                 One of the entry's codes for that action; null where it
-                lists none.
+                lists none, and for a disput.
+            befund:
+              type: [string, "null"]
+              description: >-
+                For a disput, the kind of the finding it rests on; null for
+                a freigabe.
             begruendung:
               type: string
             quelle:
@@ -153,6 +176,18 @@ spec:
       description: >-
         A decision held for a person: its process, its Frist, the frozen
         answer or none, and per action the codes its Entscheidungsbaum allows.
+    - ref: tool://invoicd/get_receipt
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        A disputed INVOIC receipt: its sender, PID, outcome and whether the
+        answer went out.
+    - ref: tool://invoicd/get_check_result
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        The invoic-checker findings of a receipt, each with its kind and
+        sentence — the grounds a dispute rests on.
     - ref: tool://processd/list_open_processes
       mutates: false
       max_sensitivity: internal

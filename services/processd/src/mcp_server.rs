@@ -108,6 +108,35 @@ pub struct GetStpRateParams {
     pub days: Option<u32>,
 }
 
+/// processd's operating target for the Anmeldung STP rate — its own goal,
+/// not a regulatory one (no Festlegung sets an STP rate).
+pub const STP_TARGET: f64 = 0.95;
+
+/// What `get_stp_rate` returns.
+#[derive(Debug, serde::Serialize, JsonSchema)]
+pub struct StpRate {
+    /// Accepted over accepted and refused decisions, 0.0–1.0; `None` when
+    /// none was decided in the window — no rate, not a zero one.
+    pub stp_rate: Option<f64>,
+    /// The window, in days back from now.
+    pub window_days: u32,
+    /// processd's operating target, 0.95.
+    pub target: f64,
+    /// `false` only when a rate exists and falls below `target`.
+    pub compliant: bool,
+}
+
+impl StpRate {
+    fn of(rate: Option<f64>, window_days: u32) -> Self {
+        Self {
+            stp_rate: rate,
+            window_days,
+            target: STP_TARGET,
+            compliant: rate.is_none_or(|r| r >= STP_TARGET),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StpBreakdownParams {
     /// Number of days to look back (default 30).
@@ -339,8 +368,12 @@ whether the affiliate was treated differently from other LFs (§ 20 Abs. 1 Satz 
     }
 
     #[tool(
-        description = "Get the Anmeldung STP rate for the last N days. NB role. Returns a float 0.0–1.0 or null when no decisions exist.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Get the Anmeldung STP rate for the last N days. NB role. `stp_rate` is \
+accepted / (accepted + refused) decisions, 0.0–1.0, or null when none was decided; escalations \
+are not counted. `target` is processd's operating target, not a regulatory one, and \
+`compliant` is false only when a rate exists and falls below it.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<StpRate>()
     )]
     async fn get_stp_rate(
         &self,
@@ -350,12 +383,9 @@ whether the affiliate was treated differently from other LFs (§ 20 Abs. 1 Satz 
         let repo = PgAnmeldungRepository::new(self.state.pool.clone());
         let days = params.days.unwrap_or(30);
         match repo.stp_rate(&self.state.tenant, days).await {
-            Ok(rate) => ContentBlock::json(serde_json::json!({
-                "stp_rate": rate, "window_days": days, "target": 0.95,
-                "compliant": rate.is_none_or(|r| r >= 0.95),
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(rate) => serde_json::to_value(StpRate::of(rate, days))
+                .map(CallToolResult::structured)
+                .map_err(|e| McpError::internal_error(e.to_string(), None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -994,6 +1024,17 @@ mod tests {
         if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
             panic!("{e}");
         }
+    }
+
+    /// The STP rate is judged against processd's target, and a window with
+    /// no decision is no breach: the Überblick colours its tile from
+    /// `compliant`, never from a threshold of its own.
+    #[test]
+    fn the_stp_rate_is_judged_by_the_service() {
+        assert!(!StpRate::of(Some(0.94), 30).compliant);
+        assert!(StpRate::of(Some(0.95), 30).compliant);
+        assert!(StpRate::of(None, 30).compliant);
+        assert_eq!(StpRate::of(None, 7).stp_rate, None);
     }
 
     #[test]

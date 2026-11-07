@@ -60,7 +60,7 @@ pub(super) fn render_invoic(
 /// | `rechnungsbezug`| no       | `SG5` — the answered invoice and its amounts  |
 /// | `antwort_code`  | no       | `SG7 AJT` DE 4465 — the Antwortcode on an Abweisung |
 /// | `antwort_codeliste`   | no       | `SG7 AJT` DE 1082 — the EBD the code comes from |
-/// | `ablehnungsgrund` | no     | Free-text reason, rendered as `FTX+ACB`        |
+/// | `ablehnungsgrund` | no     | `SG7 FTX+ABO` beside the Kopf-`AJT` (`[548]`)  |
 ///
 /// # An Abweisung must state why
 ///
@@ -158,7 +158,14 @@ pub(super) fn render_remadv(
             None => builders::Abweichungsgrund {
                 code: code.to_owned(),
                 ebd: None,
+                erlaeuterung: None,
             },
+        };
+        // `SG7 FTX+ABO` — the explanation the EBD asks for (`[548]`); invoicd
+        // states it in German and within `an..512`.
+        let grund = match p.get("ablehnungsgrund").and_then(|v| v.as_str()) {
+            Some(text) if !text.trim().is_empty() => grund.mit_erlaeuterung(text),
+            _ => grund,
         };
         builder = builder.abweichungsgrund(grund);
     }
@@ -195,6 +202,7 @@ fn position_level_befunde(
             None => builders::Abweichungsgrund {
                 code: code.to_owned(),
                 ebd: None,
+                erlaeuterung: None,
             },
         };
         let detail = b.get("detail").and_then(|v| v.as_str()).map(str::to_owned);

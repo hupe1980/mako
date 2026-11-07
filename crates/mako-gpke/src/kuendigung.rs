@@ -231,6 +231,23 @@ pub enum KuendigungState {
     },
 }
 
+/// Whether a received Kündigung still holds its Marktlokation against a new one.
+///
+/// Live while the answer is owed or the accepted Vorgang awaits its
+/// Beendigung; settled once refused or ended. A settled process must not
+/// take the next Kündigung for the same Marktlokation — its receive command
+/// refuses anything but `New`.
+impl mako_engine::workflow::OccupiesBusinessKey for KuendigungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::Eingegangen(_) | Self::ValidationPassed(_) | Self::AntwortGesendet { .. } => true,
+            Self::New | Self::Beendet(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl KuendigungState {
     /// Stable string label for the current variant.
     #[must_use]

@@ -140,7 +140,7 @@ impl MockNb {
             "UNH message_ref must not be empty; got: {unh_ref:?}",
         );
 
-        let cmd = wim_registry()
+        let cmd = wim_registry(time::OffsetDateTime::now_utc())
             .dispatch(&raw as &dyn Any, &self.fv)
             .expect("NB: adapt UTILMD 55042 to DeviceChangeCommand");
 

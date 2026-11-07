@@ -1358,6 +1358,7 @@ the principal is then checked against the single Cedar action `use-mcp`.
 | `get_malo` / `list_malo` | One MaLo / list |
 | `get_melo` / `get_melo_standorteigenschaften` | MeLo record / site properties |
 | `get_partner` / `list_partners` | Marktpartner registry |
+| `partner_namen` | Names of up to 200 Marktpartner by MP-ID in one read, typed (`PartnerNamen`; snapshot `mcp.snapshot.json`) |
 | `get_preisblatt` | Netznutzung sheet for an NB and date |
 | `list_pricat_versions` | PRICAT history; dispatch stays REST-only, because `use-mcp` cannot tell a read from a write |
 | `get_versorgungsstatus` / `get_versorgungsstatus_history` / `get_versorgung_at` | Supply state — current, history, point-in-time |

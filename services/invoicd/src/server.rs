@@ -493,7 +493,9 @@ struct ResolveDisputeBody {
 /// `POST /api/v1/receipts/{id}/resolve-dispute`
 ///
 /// Record that a dispute was settled out of band (a corrected invoice, a phone
-/// call, a COMDIS). Moves `Dispute` → `Resolved` with the operator's note.
+/// call, a COMDIS). Moves `Dispute` → `Resolved` with the caller as the
+/// decider and the operator's note. No market message goes out: the answer
+/// REMADV was sent when the dispute was raised.
 async fn resolve_dispute(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -503,7 +505,7 @@ async fn resolve_dispute(
 ) -> ApiResult<Response> {
     authorize(&cedar, &claims, "write-receipt", &state.tenant)?;
     let note = body.as_ref().and_then(|Json(b)| b.note.as_deref());
-    match pg::receipts::resolve_dispute(&state.pool, id, &state.tenant, note).await {
+    match pg::receipts::resolve_dispute(&state.pool, id, &state.tenant, claims.sub(), note).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT.into_response()),
         Ok(false) => Err(ApiError::NotFound),
         Err(e) => Err(e.into()),
@@ -514,11 +516,14 @@ async fn resolve_dispute(
 ///
 /// Re-send the market answer for a receipt whose automatic dispatch failed.
 ///
-/// Both the routing key and the command come from the receipt:
+/// The routing key, the command and the payload all come from the receipt:
 ///
 /// - **The routing key** is the EDIFACT message reference, which is what
 ///   `makod` correlates the answer by.
 /// - **The command** is the answering PID's, from [`crate::routing`].
+/// - **The payload** is the one recorded at the check — Antwortcode, EBD,
+///   Befunde and Ablehnungsgrund — so the REMADV states what the automatic
+///   answer would have.
 ///
 /// Getting either wrong fails silently — `makod` accepts the command and only
 /// the correlation misses — so neither is defaulted.
@@ -550,20 +555,15 @@ async fn dispatch_answer(
         )));
     };
 
-    let dispute = target.outcome == "Dispute";
-    let (command, payload) = if dispute {
-        (
-            route.reject,
-            serde_json::json!({
-                "invoice_ref": invoice_ref,
-                "ablehnungsgrund": "Erneute Übermittlung der Ablehnung (Operator)",
-            }),
-        )
+    let Some(payload) = target.antwort else {
+        return Err(ApiError::unprocessable(
+            "receipt has no recorded answer — it was never checked to an answer",
+        ));
+    };
+    let command = if target.outcome == "Dispute" {
+        route.reject
     } else {
-        (
-            route.accept,
-            serde_json::json!({ "invoice_ref": invoice_ref }),
-        )
+        route.accept
     };
 
     // A distinct salt from the automatic dispatch: this is a second command for

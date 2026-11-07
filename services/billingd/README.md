@@ -32,6 +32,7 @@ just dev billingd      # dev/config/billingd.toml against the dev PostgreSQL
 | `GET /api/v1/billing` · `/{id}` · `/review-queue` | records, filtered in the query (`malo_id`, `lf_mp_id`, `outcome`, `category`, `is_correction`) |
 | `POST /api/v1/billing/{id}/correction` | Storno + release of the period for a fresh original |
 | `POST /api/v1/billing/{id}/release` · `/versenden` | release a record the risk gate held; dispatch it |
+| `POST /api/v1/billing/{id}/reviewed` | record the review of a REVIEW record and take it off the queue; sends nothing |
 | `GET /api/v1/billing/{id}/xrechnung` · `/ubl` · `/pdf` | XRechnung 3.0 CII, PEPPOL BIS 3.0 UBL, ZUGFeRD PDF/A-3 (rendered by `outputd`) |
 | `POST /api/v1/billing/{id}/submit-b2g` | XRechnung CIUS check, then `de.billing.xrechnung.b2g.ready` |
 | `POST /api/v1/billing/sammelrechnung/{rahmenvertrag_id}` | B2B consolidated invoice |

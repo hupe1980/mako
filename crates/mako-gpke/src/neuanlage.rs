@@ -44,9 +44,8 @@ use mako_engine::{
     ids::DeadlineId,
     outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef},
-    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
-use mako_fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
@@ -276,6 +275,23 @@ pub enum NeuanlageState {
     },
 }
 
+/// Whether a received Neuanlage still holds its Marktlokation against a new one.
+///
+/// Live while the answer is owed or the accepted Vorgang awaits its
+/// activation; settled once refused or activated. A settled process must not
+/// take the next Neuanlage for the same Marktlokation — its receive command
+/// refuses anything but `New`.
+impl mako_engine::workflow::OccupiesBusinessKey for NeuanlageState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::Eingegangen(_) | Self::ValidationPassed(_) | Self::AntwortGesendet { .. } => true,
+            Self::New | Self::Aktiviert(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl NeuanlageState {
     /// Stable string label for the current variant.
     #[must_use]
@@ -333,10 +349,6 @@ pub enum NeuanlageCommand {
         process_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
-        /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
-        ///
-        /// Used to compute the APERAK 45-minute sending deadline per APERAK AHB 1.1 §2.4.1.
-        received_at: time::OffsetDateTime,
         /// `true` if validation returned no errors.
         validation_passed: bool,
         /// Validation error strings (for the `Rejected` event).
@@ -497,7 +509,6 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 document_date,
                 process_date,
                 message_ref,
-                received_at,
                 validation_passed,
                 validation_errors,
             } => {
@@ -536,13 +547,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
                         )
                         .caused_by(1),
                     ];
-                    let aperak_dl = PendingDeadline::new(
-                        APERAK_STROM_WINDOW_LABEL,
-                        aperak_strom_due_at(received_at),
-                    );
-                    Ok(WorkflowOutput::with_outbox_and_deadline(
-                        events, outbox, aperak_dl,
-                    ))
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 } else {
                     let reason = validation_errors.join("; ");
                     events.push(NeuanlageEvent::Rejected {
@@ -560,13 +565,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
                         )
                         .caused_by(0),
                     ];
-                    let aperak_dl = PendingDeadline::new(
-                        APERAK_STROM_WINDOW_LABEL,
-                        aperak_strom_due_at(received_at),
-                    );
-                    Ok(WorkflowOutput::with_outbox_and_deadline(
-                        events, outbox, aperak_dl,
-                    ))
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
             }
 
@@ -666,7 +665,6 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             message_ref: mref("NEUA-001"),
-            received_at: time::OffsetDateTime::now_utc(),
             validation_passed: ok,
             validation_errors: if ok {
                 vec![]
@@ -833,7 +831,6 @@ mod tests {
                 document_date: "20251001".to_owned(),
                 process_date: "20260101".to_owned(),
                 message_ref: mref("NEUA-X"),
-                received_at: time::OffsetDateTime::now_utc(),
                 validation_passed: true,
                 validation_errors: vec![],
             },

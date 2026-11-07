@@ -1,0 +1,1111 @@
+{
+  "faehigkeiten": [
+    {
+      "name": "mako-agent",
+      "titel": "Marktprozesse erklären",
+      "zweck": "Erklärt abgelehnte Anmeldungen, APERAK-Fehler und hängende Prozesse.",
+      "version": "2.0.0",
+      "digest": "27f11306e835ee841a7b8092f73e11ee96e34d69e43e13b665b80189751382fa",
+      "ausloeser": [
+        "de.mako.process.failed",
+        "de.mako.antwortfrist.abgelaufen",
+        "de.mako.aperak.*"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "makod/get_process",
+          "wozu": "The workflow state of the process that failed."
+        },
+        {
+          "werkzeug": "makod/get_format_version_coverage",
+          "wozu": "Whether the PID is served in the format version the counterparty used."
+        },
+        {
+          "werkzeug": "makod/get_outbox_status",
+          "wozu": "Whether our own message ever left, before blaming the counterparty."
+        },
+        {
+          "werkzeug": "makod/list_dead_letters",
+          "wozu": "Deliveries that were abandoned, for a process with no APERAK at all."
+        },
+        {
+          "werkzeug": "processd/get_process",
+          "wozu": "The full timeline and deadline status behind the same process."
+        },
+        {
+          "werkzeug": "marktd/get_malo",
+          "wozu": "Master data completeness for an NB rejection: Netzebene, Bilanzierungsgebiet, NB assignment."
+        },
+        {
+          "werkzeug": "marktd/get_nb_contract",
+          "wozu": "Whether the NB contract the Anmeldung needs exists for the period."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "deadline-alert-agent",
+      "titel": "Fristen-Wächter",
+      "zweck": "Ordnet jeden Prozess nahe oder nach seiner Antwortfrist nach Dringlichkeit und nennt, wer antworten muss.",
+      "version": "4.0.0",
+      "digest": "7cfa36714aa74b1f44355d8db78e07c4dd9cb671da830fbe15c8397e4d8d879c",
+      "ausloeser": [
+        "de.mako.process.failed",
+        "de.mako.antwortfrist.abgelaufen",
+        "de.obs.deadline.approaching"
+      ],
+      "modell": null,
+      "liest": [
+        {
+          "werkzeug": "processd/list_overdue_processes",
+          "wozu": "The overdue set, already ordered most-urgent-first with `deadline_at` and `deadline_source` on every row."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "desk-assistant",
+      "titel": "Assistent im Desk",
+      "zweck": "Beantwortet eine Frage zum Kunden, zur Marktlokation, zum Prozess oder zur Entscheidung auf dem Bildschirm, jeden Satz mit seiner Quelle.",
+      "version": "1.2.0",
+      "digest": "aace2a26c6d893c9efcd82df6db6b93a87f9da9119e482b1e19ee4d13f2c7ced",
+      "ausloeser": [],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "vertragd/get_kunde",
+          "wozu": "The customer on screen and every Lieferstelle with its status."
+        },
+        {
+          "werkzeug": "makod/get_process",
+          "wozu": "The processes under a MaLo-ID, each with its pending deadlines."
+        },
+        {
+          "werkzeug": "makod/get_process_history",
+          "wozu": "A process's messages in and out, with PID and time."
+        },
+        {
+          "werkzeug": "processd/get_queue_entry",
+          "wozu": "A decision held for a person: its process, its Frist, the frozen answer or none, and per action the codes its Entscheidungsbaum allows."
+        },
+        {
+          "werkzeug": "invoicd/get_receipt",
+          "wozu": "A disputed INVOIC receipt: its sender, PID, outcome and whether the answer went out."
+        },
+        {
+          "werkzeug": "invoicd/get_check_result",
+          "wozu": "The invoic-checker findings of a receipt, each with its kind and sentence — the grounds a dispute rests on."
+        },
+        {
+          "werkzeug": "processd/list_open_processes",
+          "wozu": "Open processes on given MaLos, the earliest Frist first, each with the Festlegung its deadline came from."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "billing-agent",
+      "titel": "Rechnungseinwände",
+      "zweck": "Prüft eine bestrittene Rechnung gegen die Zahlungsavise und schlägt die Korrektur der Abrechnung vor.",
+      "version": "2.0.0",
+      "digest": "225c60d9d7f82a31fafee25fc05fa12b43792ab71dcf1d06e9f2e026b6c2b618",
+      "ausloeser": [
+        "de.invoic.receipt.disputed",
+        "de.accounting.mahnung.issued"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "invoicd/get_receipt",
+          "wozu": "The disputed INVOIC receipt and the six check results behind the dispute."
+        },
+        {
+          "werkzeug": "invoicd/get_check_result",
+          "wozu": "One check's detail, once `get_receipt` says which of the six failed."
+        },
+        {
+          "werkzeug": "invoicd/get_zahlungsstatus",
+          "wozu": "Whether the disputed invoice has been paid, partially paid or is still open."
+        },
+        {
+          "werkzeug": "billingd/get_billing_record",
+          "wozu": "The Rechnung behind the receipt, to compare positions against the dispute."
+        },
+        {
+          "werkzeug": "billingd/explain_invoice_position",
+          "wozu": "Why one position holds the amount it does — the arithmetic-error path."
+        },
+        {
+          "werkzeug": "marktd/get_preisblatt",
+          "wozu": "PreisblattNetznutzung validity dates, for a check-4 tariff mismatch."
+        },
+        {
+          "werkzeug": "marktd/get_malo",
+          "wozu": "The Marktlokation the receipt names, for the Sparte and the NB assignment."
+        },
+        {
+          "werkzeug": "accountingd/get_balance",
+          "wozu": "The open balance behind a Mahnung, on `de.accounting.mahnung.issued`."
+        },
+        {
+          "werkzeug": "accountingd/list_dunning",
+          "wozu": "Which Mahnstufe the customer is on, so an escalation is not repeated."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "netzbilanz-agent",
+      "titel": "Netzentgeltabrechnung",
+      "zweck": "Überwacht Abrechnungsentwürfe des Netzbetreibers, überfällige Versände und Zahlungsbestätigungen.",
+      "version": "2.0.0",
+      "digest": "9188bbff3ff5e2eeb9a427666c8c34a4ea5d4c5d978aa5bd4f3886c81f5b71fa",
+      "ausloeser": [
+        "de.netzbilanz.invoic.drafted",
+        "de.netzbilanz.invoic.dispatched",
+        "de.netzbilanz.invoic.dispatch-overdue",
+        "de.netzbilanz.invoic.disputed"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "netzbilanzd/get_draft",
+          "wozu": "The invoice draft in full, including `check_findings` and the calculation trace."
+        },
+        {
+          "werkzeug": "netzbilanzd/list_drafts",
+          "wozu": "Drafts across a portfolio, filtered by Sparte for the PID-sharing sweep."
+        },
+        {
+          "werkzeug": "netzbilanzd/list_disputed",
+          "wozu": "Invoices a counterparty rejected, so one dispute can be read against the rest of the period rather than on its own."
+        },
+        {
+          "werkzeug": "netzbilanzd/list_undispatched",
+          "wozu": "Drafts past their dispatch window, with what is still to collect."
+        },
+        {
+          "werkzeug": "netzbilanzd/list_kostenblatt_gaps",
+          "wozu": "Activations registered but never quantified, which would go to the ÜNB as zero cost."
+        },
+        {
+          "werkzeug": "netzbilanzd/list_corrections",
+          "wozu": "Storni and corrections already raised against a draft's period."
+        },
+        {
+          "werkzeug": "marktd/get_preisblatt",
+          "wozu": "The Preisblatt a position's `tariff_source` claims to have come from."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "invoice-reconciliation-agent",
+      "titel": "Zahlungsavise abgleichen",
+      "zweck": "Ordnet eingehende Zahlungsavise offenen Rechnungen zu und nennt den nächsten Schritt bei Abweisungen.",
+      "version": "2.0.0",
+      "digest": "332a0c760a0957f1b52c15a76bc3de8e433940ec508cfaaeb89801a79ff1d566",
+      "ausloeser": [
+        "de.invoic.payment.overdue",
+        "de.invoic.receipt.*"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "invoicd/get_receipt",
+          "wozu": "The disputed or overdue receipt in full."
+        },
+        {
+          "werkzeug": "invoicd/get_zahlungsstatus",
+          "wozu": "What has been paid against it. Only REMADV 33001 confirms a payment — 33002, 33003 and 33004 are Abweisungen, and the process has no Teilzahlung."
+        },
+        {
+          "werkzeug": "invoicd/list_overdue_remadv",
+          "wozu": "Receipts whose payment window has passed, for the escalation ladder."
+        },
+        {
+          "werkzeug": "accountingd/get_balance",
+          "wozu": "The outstanding balance the receipt should reconcile to."
+        },
+        {
+          "werkzeug": "accountingd/list_ledger",
+          "wozu": "The ledger entries behind that balance."
+        },
+        {
+          "werkzeug": "billingd/get_billing_record",
+          "wozu": "The original Rechnung, to compare against the disputed amount."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "billing-anomaly-agent",
+      "titel": "Auffällige Rechnungen",
+      "zweck": "Sucht Rechnungen, die stark vom Verlauf der letzten Monate abweichen, und nennt die wahrscheinliche Ursache.",
+      "version": "2.0.0",
+      "digest": "d3194b221337c6b87bb64f21655a0e9509b9c8e867fe0dc9cf7e83f94e5ad053",
+      "ausloeser": [
+        "de.billing.rechnung.erstellt"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "billingd/get_billing_record",
+          "wozu": "The invoice and the deterministic risk gate's own verdict on it."
+        },
+        {
+          "werkzeug": "billingd/check_billing_anomaly",
+          "wozu": "The rolling three-month baseline this specialist triages against."
+        },
+        {
+          "werkzeug": "billingd/explain_invoice_position",
+          "wozu": "Which position moved, once the total is known to have moved."
+        },
+        {
+          "werkzeug": "edmd/get_timeseries",
+          "wozu": "Metered consumption for the period, to tell a data error from a real change."
+        },
+        {
+          "werkzeug": "edmd/get_quality_assessments",
+          "wozu": "Whether the period was billed on substituted values (QUALITY_SUBSTITUTION)."
+        },
+        {
+          "werkzeug": "edmd/get_device_history",
+          "wozu": "Whether a meter exchange falls in the period (METER_EXCHANGE)."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "billing-regulatory-guard-agent",
+      "titel": "Pflichtangaben der Rechnung",
+      "zweck": "Prüft jede versandte Endkundenrechnung auf die gesetzlichen Pflichtangaben.",
+      "version": "2.0.0",
+      "digest": "3bf28975235ab95aeeb3e2b48ef3952486d62f2d9b39f9ce3eabecdd22bdb5ca",
+      "ausloeser": [
+        "de.billing.rechnung.erstellt"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "billingd/get_billing_record",
+          "wozu": "The full Rechnung JSON every § 40 EnWG field check reads."
+        },
+        {
+          "werkzeug": "billingd/validate_tariff_config",
+          "wozu": "Whether the tariff the invoice was built from is itself well-formed."
+        },
+        {
+          "werkzeug": "vertragd/check_preisgarantie",
+          "wozu": "The Preisgarantie window the repricing check needs — without it the check is unanswerable."
+        },
+        {
+          "werkzeug": "productd/get_product_energiemix",
+          "wozu": "The § 42 EnWG Energiemix and CO₂ figures the invoice must carry."
+        },
+        {
+          "werkzeug": "marktd/get_malo",
+          "wozu": "The Netzbetreiber code § 40 Abs. 2 Nr. 5 EnWG requires on the invoice."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "jahresabrechnung-agent",
+      "titel": "Jahresabrechnung prüfen",
+      "zweck": "Bereitet die Prüfung einer Schlussabrechnung aus Zählerständen, Tarif und Konto vor.",
+      "version": "2.0.0",
+      "digest": "62eb31103a586389c719f30388fc8b7bb645f16299b4b998e4ad736b7976e3ca",
+      "ausloeser": [],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "edmd/get_billing_period",
+          "wozu": "Twelve months of consumption for the MaLo, month by month."
+        },
+        {
+          "werkzeug": "edmd/get_quality_assessments",
+          "wozu": "Which of those months rest on substituted values."
+        },
+        {
+          "werkzeug": "marktd/get_malo",
+          "wozu": "The NB assignment for the billing year."
+        },
+        {
+          "werkzeug": "marktd/get_preisblatt",
+          "wozu": "PreisblattNetznutzung validity across the year."
+        },
+        {
+          "werkzeug": "accountingd/list_ledger",
+          "wozu": "Account movements proving billed advances, payments, reversals and clearings."
+        },
+        {
+          "werkzeug": "accountingd/get_balance",
+          "wozu": "The authoritative current account balance used to reconcile the ledger window."
+        },
+        {
+          "werkzeug": "productd/get_product_energiemix",
+          "wozu": "The § 42 EnWG Energiemix the Schlussabrechnung must carry."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "eeg-agent",
+      "titel": "EEG-Anlagen",
+      "zweck": "Begleitet Förderende, Anschlussvermarktung und Abrechnungsfragen der Erzeugungsanlagen.",
+      "version": "2.0.0",
+      "digest": "84dcf4b670f6b00f1267c5c5d682236b7c22b9678cf6a80b8f05191e3bb4225a",
+      "ausloeser": [
+        "de.eeg.anlage.foerderung-auslaufend",
+        "de.messwert.reading.direct.stored"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "einsd/get_plant",
+          "wozu": "Plant master data: Förderende, settlement model, Inbetriebnahmedatum."
+        },
+        {
+          "werkzeug": "einsd/list_expiring",
+          "wozu": "Plants inside the Förderung expiry window, for the operator checklist."
+        },
+        {
+          "werkzeug": "edmd/get_device_history",
+          "wozu": "Whether the plant meters in 15-minute intervals — the iMSys indicator."
+        },
+        {
+          "werkzeug": "productd/check_41a_epex_status",
+          "wozu": "Whether EPEX day-ahead prices exist for a contractually dynamic post-EEG product."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "eeg-compliance-agent",
+      "titel": "EEG-Pflichten",
+      "zweck": "Prüft die Pflichtzahlungen und Vermarktungspflichten der Anlagen auf Verstöße.",
+      "version": "2.0.0",
+      "digest": "0a5029ee996ceec757cf625b088846ac24d8f30a1e49f9956b60d67d8b4f6f88",
+      "ausloeser": [
+        "de.eeg.anlage.*",
+        "de.eeg.verguetung.*",
+        "de.eeg.marktpraemie.*",
+        "de.eeg.compliance.*",
+        "de.eeg.veraeusserungsform.gewechselt"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "einsd/get_plant",
+          "wozu": "Plant master data: Leistung, Veräußerungsform, Energieträger."
+        },
+        {
+          "werkzeug": "einsd/get_compliance_status",
+          "wozu": "einsd's own § 52 EEG violation verdict for the plant."
+        },
+        {
+          "werkzeug": "einsd/check_sect44b_quota",
+          "wozu": "Biogas annual-cap utilisation under § 44b EEG 2023."
+        },
+        {
+          "werkzeug": "einsd/check_einspeiseverguetung_anspruch",
+          "wozu": "Plants above the § 21 Abs. 1 Satz 1 Nr. 1 ceiling still on the Einspeisevergütung, which therefore carries no claim."
+        },
+        {
+          "werkzeug": "einsd/get_aw_reduktionen",
+          "wozu": "Lawful cuts to the anzulegender Wert, so a smaller Gutschrift is not reported as a violation."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "payment-reconciliation-agent",
+      "titel": "Zahlungen und Mahnwesen",
+      "zweck": "Gleicht Bankrückläufer mit dem Kundenkonto ab und nennt die nächste Mahnstufe.",
+      "version": "2.0.0",
+      "digest": "5b36efadc37015370a303c8fc45dfec8b3f88b7f826b20bc550fb4df452c3b62",
+      "ausloeser": [
+        "de.accounting.payment.due",
+        "de.accounting.bankruecklast",
+        "de.accounting.sepa.collection-rejected",
+        "de.accounting.sperrandrohung",
+        "de.accounting.sperrankuendigung",
+        "de.accounting.abwendung.angeboten",
+        "de.accounting.abwendung.gebrochen"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "accountingd/get_balance",
+          "wozu": "The customer's current balance."
+        },
+        {
+          "werkzeug": "accountingd/list_ledger",
+          "wozu": "The entries behind that balance."
+        },
+        {
+          "werkzeug": "accountingd/list_sepa_collections",
+          "wozu": "Collections still in flight, so a return is not double-counted."
+        },
+        {
+          "werkzeug": "accountingd/list_dunning",
+          "wozu": "The Mahnstufe already reached, so an escalation is a step and not a repeat."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "compliance-agent",
+      "titel": "Gleichbehandlung im Netz",
+      "zweck": "Vergleicht, wie schnell und automatisch Anmeldungen verbundener und fremder Lieferanten bearbeitet werden.",
+      "version": "2.1.0",
+      "digest": "59c4e6472e39dfa36aec39c95334504a322937be5a0724b88ccbfe5c1d9d8111",
+      "ausloeser": [
+        "de.obs.stp.parity.alert"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "processd/get_parity_report",
+          "wozu": "STP rates by market role — the § 20 Abs. 1 EnWG parity comparison itself."
+        },
+        {
+          "werkzeug": "processd/get_kpi_report",
+          "wozu": "The KPI summary the Gleichbehandlungsbericht (§ 7a Abs. 5 Satz 3 EnWG) draws on."
+        },
+        {
+          "werkzeug": "processd/get_process_stp_rate",
+          "wozu": "One family's straight-through rate, to explain a deviation the parity report shows."
+        },
+        {
+          "werkzeug": "processd/list_affiliate_decisions",
+          "wozu": "Decisions split by affiliated and non-affiliated counterparty — the discrimination question, per decision."
+        },
+        {
+          "werkzeug": "processd/get_stp_breakdown_by_erc",
+          "wozu": "Which refusal codes drive a role's lower rate, so a deviation has a cause."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "msb-history-agent",
+      "titel": "Messstellenwechsel",
+      "zweck": "Verfolgt Wechsel des Messstellenbetreibers und hängende Ableseaufträge.",
+      "version": "2.0.0",
+      "digest": "59755dfca3aa0e23cd28a8eca2a82fce8e13770f032d156bd598d709b0a97d54",
+      "ausloeser": [
+        "de.messwert.reading.quality.warning",
+        "de.messwert.reading.direct.stored",
+        "de.mako.process.completed",
+        "de.messwert.reading.order.failed",
+        "de.messwert.reading.delivery.overdue"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "edmd/get_device_history",
+          "wozu": "The MaLo's device and MSB timeline."
+        },
+        {
+          "werkzeug": "edmd/get_quality_warnings",
+          "wozu": "Reading anomalies, to test whether they coincide with an MSB change."
+        },
+        {
+          "werkzeug": "edmd/list_reading_orders",
+          "wozu": "INSRPT reading orders and their state."
+        },
+        {
+          "werkzeug": "edmd/list_overdue_reading_orders",
+          "wozu": "Reading orders past their window — the stuck ones."
+        },
+        {
+          "werkzeug": "marktd/get_malo",
+          "wozu": "The MSB assignment of record, to compare against edmd's history."
+        },
+        {
+          "werkzeug": "marktd/get_melo",
+          "wozu": "The Messlokation the device sits on."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "meter-data-agent",
+      "titel": "Messwertqualität",
+      "zweck": "Findet Lücken in Messwerten, liest ihre Qualität und nennt, welches Ersatzwertverfahren zulässig ist.",
+      "version": "2.0.0",
+      "digest": "54274fc8b93b5a273fc4f289978e2ed9e061892ff3fa95acf648eace3dfa5694",
+      "ausloeser": [
+        "de.messwert.reading.quality.warning",
+        "de.mako.process.completed"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "edmd/get_quality_assessments",
+          "wozu": "The A/B/C/F quality grades for the period."
+        },
+        {
+          "werkzeug": "edmd/get_timeseries",
+          "wozu": "The intervals themselves, to measure how wide an F-grade gap is."
+        },
+        {
+          "werkzeug": "edmd/get_billing_period",
+          "wozu": "Whether the gap falls inside a period that is about to be billed."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "grid-anomaly-agent",
+      "titel": "Lücken in den Netzdaten",
+      "zweck": "Findet Marktlokationen, denen Netzzuordnung oder Netzvertrag fehlt, bevor eine Anmeldung daran scheitert.",
+      "version": "2.0.0",
+      "digest": "a4e8c30ea8db6ad673d0389b701e736d8654d31511354a7f0121231dcc58f382",
+      "ausloeser": [
+        "de.markt.nb-contract.updated",
+        "de.markt.malo.updated"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "marktd/get_malo",
+          "wozu": "Netzebene, Bilanzierungsgebiet and the NB assignment are fields on the Marktlokation."
+        },
+        {
+          "werkzeug": "marktd/get_nb_contract",
+          "wozu": "Whether a valid NB contract covers the MaLo, which is processd's check 5."
+        },
+        {
+          "werkzeug": "marktd/get_rollenzuordnung",
+          "wozu": "Which Marktpartner holds the NB role for the MaLo at the relevant date."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "tariff-optimization-agent",
+      "titel": "Dynamische Tarife",
+      "zweck": "Findet Kunden mit intelligentem Messsystem, für die ein dynamischer Tarif in Frage kommt.",
+      "version": "2.0.0",
+      "digest": "8c9b9e95e2d9394b92bff94b760e8b08c32a7f867b100f3580cb20754c7b0251",
+      "ausloeser": [
+        "de.billing.rechnung.erstellt",
+        "de.mako.process.completed"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "billingd/get_billing_summary",
+          "wozu": "The MaLo's rolling three-month average, the baseline for a saving estimate."
+        },
+        {
+          "werkzeug": "billingd/preview_billing",
+          "wozu": "What the same consumption would cost on the candidate product."
+        },
+        {
+          "werkzeug": "edmd/get_timeseries",
+          "wozu": "Whether 15-minute readings exist — the § 41a Abs. 2 EnWG iMSys precondition."
+        },
+        {
+          "werkzeug": "productd/check_41a_epex_status",
+          "wozu": "Whether day-ahead prices are available for the billing period."
+        },
+        {
+          "werkzeug": "productd/list_products",
+          "wozu": "Dynamic products the customer could move to."
+        },
+        {
+          "werkzeug": "productd/resolve_product",
+          "wozu": "The product the MaLo is on today."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "vertragd-agent",
+      "titel": "Verträge und Kunden",
+      "zweck": "Wacht über Preisgarantien, Preisänderungsmitteilungen, auslaufende Verträge und hängende Anmeldungen.",
+      "version": "2.1.0",
+      "digest": "8f629f9c49d4afc6e85dd7b32f251fbb6b27e8a301749f2c00794d2687e89cb2",
+      "ausloeser": [
+        "de.vertrag.*",
+        "de.mako.aperak.rejected",
+        "de.mako.process.failed",
+        "de.vertrag.ablauf.ankuendigung",
+        "de.vertrag.preisaenderung.ankuendigung"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "vertragd/get_vertrag_status",
+          "wozu": "Every Vertragskomponente and its state, including `preisgarantie_bis`."
+        },
+        {
+          "werkzeug": "vertragd/list_anmeldungen",
+          "wozu": "Every Lieferstelle still ANGEMELDET, with its customer and makod process."
+        },
+        {
+          "werkzeug": "makod/get_process",
+          "wozu": "The processes under a MaLo with their pending deadlines — whether an Anmeldung is late."
+        },
+        {
+          "werkzeug": "vertragd/list_expiring_contracts",
+          "wozu": "Contracts and price guarantees inside the notice window."
+        },
+        {
+          "werkzeug": "vertragd/compute_kuendigungsfrist",
+          "wozu": "The earliest lawful end date, with the rule it rests on named."
+        },
+        {
+          "werkzeug": "vertragd/check_preisgarantie",
+          "wozu": "Whether a Tarifwechsel would cross an active price guarantee."
+        },
+        {
+          "werkzeug": "vertragd/get_kunde",
+          "wozu": "The customer behind the contract, for the notice obligations."
+        },
+        {
+          "werkzeug": "processd/get_process",
+          "wozu": "A process's state and the Antwortcode its answer carried."
+        },
+        {
+          "werkzeug": "productd/list_products",
+          "wozu": "Products a renewal offer could be built from."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "productd-agent",
+      "titel": "Produktkatalog",
+      "zweck": "Prüft den Produktkatalog auf fehlende Börsenpreise und eine veraltete Stromkennzeichnung.",
+      "version": "2.0.0",
+      "digest": "538b3484c0e3a2af43e0509358e97159c2795962fa5d09482b7258c5487aa020",
+      "ausloeser": [
+        "de.tarif.product.updated",
+        "de.tarif.angebot.abgelaufen",
+        "de.tarif.epex.missing"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "productd/get_product",
+          "wozu": "The product definition the event names."
+        },
+        {
+          "werkzeug": "productd/validate_tariff_config",
+          "wozu": "Whether the definition is well-formed BO4E."
+        },
+        {
+          "werkzeug": "productd/get_product_energiemix",
+          "wozu": "The § 42 EnWG Energiemix and CO₂ figures, and their age."
+        },
+        {
+          "werkzeug": "productd/check_41a_epex_status",
+          "wozu": "Day-ahead price coverage for a dynamic § 41a product."
+        },
+        {
+          "werkzeug": "productd/get_angebot",
+          "wozu": "The expired quotation and its customer, for the ERP follow-up."
+        },
+        {
+          "werkzeug": "productd/get_comparison_feed",
+          "wozu": "Every published product, for the annual Energiemix sweep."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "processd-agent",
+      "titel": "Entscheidungen erklären",
+      "zweck": "Erklärt, welcher Prüfschritt eine Anmeldung abgelehnt hat, und verfolgt die Freigabewarteschlange.",
+      "version": "2.0.0",
+      "digest": "74f4c227a91aa17ab9ed4315cfce82c24905783486fc682412fc5c1e6bb20754",
+      "ausloeser": [
+        "de.mako.process.initiated",
+        "de.mako.aperak.rejected",
+        "de.mako.process.failed"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "processd/get_decision",
+          "wozu": "Which of the six checks failed, and why."
+        },
+        {
+          "werkzeug": "processd/list_decisions",
+          "wozu": "Decisions across the period, to tell a one-off from a pattern."
+        },
+        {
+          "werkzeug": "processd/get_queue_entry",
+          "wozu": "One approval-queue item in full."
+        },
+        {
+          "werkzeug": "processd/list_pending_approvals",
+          "wozu": "Anmeldungen waiting on a human rather than on data."
+        },
+        {
+          "werkzeug": "marktd/get_malo",
+          "wozu": "The Marktlokation behind checks 1, 2 and 5."
+        },
+        {
+          "werkzeug": "marktd/get_nb_contract",
+          "wozu": "The NB contract behind checks 3 and 5."
+        },
+        {
+          "werkzeug": "marktd/get_melo",
+          "wozu": "The Messlokation, where the failure is on the metering side."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "sperrd-agent",
+      "titel": "Sperraufträge",
+      "zweck": "Verfolgt Sperr- und Entsperraufträge und meldet, was über dem gewünschten Termin liegt.",
+      "version": "2.0.0",
+      "digest": "37433b7773e52b8bbfc2f38ba8f5e8dcfd0524f66daeb39ddd66660ecce47db6",
+      "ausloeser": [
+        "de.accounting.sperrauftrag",
+        "de.sperr.*",
+        "de.mako.process.completed"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "processd/get_sperr_stats",
+          "wozu": "The queue's own counters — `iftsta_stuck` is the finding that matters."
+        },
+        {
+          "werkzeug": "processd/list_due_orders",
+          "wozu": "Orders past the date the Lieferant asked for, with `ist_fixtermin` and `soll_am`."
+        },
+        {
+          "werkzeug": "processd/get_sperr_order",
+          "wozu": "One order in full, once the queue says which."
+        },
+        {
+          "werkzeug": "processd/list_sperr_orders",
+          "wozu": "Orders across the period, to tell a backlog from a single failure."
+        },
+        {
+          "werkzeug": "makod/get_process",
+          "wozu": "Whether a `gpke-sperrung` process reached ValidationPassed for the MaLo."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "portald-agent",
+      "titel": "Kundenbenachrichtigungen",
+      "zweck": "Stößt Benachrichtigungen im Kundenportal an, etwa zur neuen Rechnung oder zum Tarifwechsel.",
+      "version": "2.0.0",
+      "digest": "e513f363a5740d1267ba7bb23325122b756766260bb2d15ccd5eb772fa24a9ec",
+      "ausloeser": [
+        "de.billing.rechnung.erstellt",
+        "de.eeg.anlage.foerderung-auslaufend",
+        "de.accounting.mahnung.issued",
+        "de.vertrag.*"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "marktd/get_versorgungsstatus",
+          "wozu": "Whether this LF supplies the MaLo, and so whether there is a customer to notify."
+        },
+        {
+          "werkzeug": "billingd/list_billing_records",
+          "wozu": "The invoice list the notification would point at."
+        },
+        {
+          "werkzeug": "billingd/get_billing_record",
+          "wozu": "The invoice total the notification quotes."
+        },
+        {
+          "werkzeug": "accountingd/get_balance",
+          "wozu": "The balance a Mahnung notification must agree with."
+        },
+        {
+          "werkzeug": "accountingd/list_dunning",
+          "wozu": "The Mahnstufe the reminder is about."
+        },
+        {
+          "werkzeug": "accountingd/get_vorauszahlung",
+          "wozu": "The Abschlag a contract-change confirmation quotes."
+        },
+        {
+          "werkzeug": "einsd/list_plants",
+          "wozu": "The customer's plants behind an EEG Förderung expiry notification."
+        },
+        {
+          "werkzeug": "einsd/get_plant",
+          "wozu": "The Förderende the EEG notification quotes."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "regulatory-reporting-agent",
+      "titel": "Bericht an die Bundesnetzagentur",
+      "zweck": "Stellt die Kennzahlen für den jährlichen Bericht zur Gleichbehandlung zusammen.",
+      "version": "2.1.0",
+      "digest": "660daeab0fb96de66f28755d45600238d05a8fd22426f8196fe0230fdafc9aaa",
+      "ausloeser": [],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "processd/get_kpi_report",
+          "wozu": "The KPI figures the report is assembled from."
+        },
+        {
+          "werkzeug": "processd/get_parity_report",
+          "wozu": "Parity between market roles, per process family."
+        },
+        {
+          "werkzeug": "processd/get_process_stp_rate",
+          "wozu": "One family's straight-through rate, where the report needs the detail."
+        },
+        {
+          "werkzeug": "processd/get_stp_breakdown_by_erc",
+          "wozu": "Which refusal codes account for a rate below target."
+        },
+        {
+          "werkzeug": "processd/list_affiliate_decisions",
+          "wozu": "Affiliated versus non-affiliated outcomes — the reportable comparison."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "replacement-value-agent",
+      "titel": "Ersatzwerte",
+      "zweck": "Empfiehlt für fehlende Messwerte das Ersatzwertverfahren, mit Begründung.",
+      "version": "2.0.0",
+      "digest": "4037994713ebafa6d91096f1dbeb31a0e424bf8b995ee5e7f27c6f69fa845758",
+      "ausloeser": [
+        "de.messwert.reading.quality.warning",
+        "de.mako.process.completed"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "edmd/get_quality_assessments",
+          "wozu": "The F-grade intervals that need a substitute value."
+        },
+        {
+          "werkzeug": "edmd/get_timeseries",
+          "wozu": "The intervals around the gap, which decide the method and prove the result."
+        },
+        {
+          "werkzeug": "edmd/get_correction_history",
+          "wozu": "Substitutions already applied to the period, so one is not proposed twice."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "mabis-agent",
+      "titel": "Bilanzierung (MaBiS)",
+      "zweck": "Überwacht die Summenzeitreihen und ihre Clearingfenster und erklärt fehlgeschlagene Lieferungen.",
+      "version": "3.0.0",
+      "digest": "9e44d39dda77c15305959a84fb6a43c43cf25ae729e6203a365235e666aefb68",
+      "ausloeser": [
+        "de.mabis.submission.failed",
+        "de.mabis.korrekturbedarf.opened",
+        "de.messwert.reading.quality.warning"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "netzbilanzd/get_submission_run",
+          "wozu": "The failed run named by the event: phase, attempt count and error."
+        },
+        {
+          "werkzeug": "netzbilanzd/get_submission_status",
+          "wozu": "Whether a submission for the affected period is pending or already corrected."
+        },
+        {
+          "werkzeug": "netzbilanzd/list_korrekturbedarf",
+          "wozu": "Every open § 9.8.1 correction obligation."
+        },
+        {
+          "werkzeug": "netzbilanzd/list_failed_submissions",
+          "wozu": "Failures across the period, to tell one bad run from a systematic gap."
+        },
+        {
+          "werkzeug": "edmd/get_billing_period",
+          "wozu": "Which MaLos are missing data behind an aggregation error."
+        },
+        {
+          "werkzeug": "edmd/get_quality_warnings",
+          "wozu": "Quality flags on the period the Summenzeitreihe aggregates."
+        },
+        {
+          "werkzeug": "edmd/get_summenzeitreihe",
+          "wozu": "Whether the affected MaLo's intervals are substituted in the aggregate."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "smgw-diagnostics-agent",
+      "titel": "Smart-Meter-Gateways",
+      "zweck": "Findet ablaufende Zertifikate, Kommunikationsfehler und stockende Rollouts der Gateways.",
+      "version": "2.0.0",
+      "digest": "c4ab6282acb6577aa9947bc5a938450ac13a8ec4c6f3189cec6d8b784a54cca8",
+      "ausloeser": [
+        "de.messwert.cls.compliance-issue",
+        "de.messwert.smgw.cert.expiry-warning",
+        "de.messwert.reading.quality.warning",
+        "de.messwert.reading.direct.stored",
+        "de.mako.process.initiated",
+        "de.markt.geraet.konfiguration.updated"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "edmd/get_device_history",
+          "wozu": "The MaLo's gateway and MSB timeline."
+        },
+        {
+          "werkzeug": "edmd/get_quality_warnings",
+          "wozu": "Whether the gateway fault has already disrupted metering."
+        },
+        {
+          "werkzeug": "edmd/list_overdue_reading_orders",
+          "wozu": "Reading orders left outstanding by a gateway that stopped answering."
+        },
+        {
+          "werkzeug": "marktd/get_technische_ressource",
+          "wozu": "The technical resource behind the gateway's CLS channel."
+        },
+        {
+          "werkzeug": "marktd/get_steuerbare_ressource",
+          "wozu": "The steuerbare Ressource a § 14a control channel must reach."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "vpp-billing-agent",
+      "titel": "Virtuelles Kraftwerk",
+      "zweck": "Prüft die Abrechnung von Abrufen des virtuellen Kraftwerks auf Unstimmigkeiten.",
+      "version": "2.0.0",
+      "digest": "e64f08e8985cf098c8926cccd81858a7523c209378645531b5c895b86e8db676",
+      "ausloeser": [
+        "de.vpp.dispatch.confirmed",
+        "de.vpp.settlement.berechnet"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "billingd/list_vpp_settlements",
+          "wozu": "Settlements by `tx_id`, for the completeness and duplicate checks."
+        },
+        {
+          "werkzeug": "billingd/get_billing_record",
+          "wozu": "One settlement in full, for the arithmetic and Art. 17 attribute checks."
+        },
+        {
+          "werkzeug": "marktd/get_steuerbare_ressource",
+          "wozu": "Whether the SR-ID the dispatch names exists as a steuerbare Ressource."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "gabi-gas-agent",
+      "titel": "Fehlende Gas-Allokation",
+      "zweck": "Legt einen Klärfall an, wenn die verbindliche Allokation für einen Gastag ausbleibt.",
+      "version": "2.0.0",
+      "digest": "975588b42dfcf402034e081484414e80078801e9478d9e961d258ea5f84c4f57",
+      "ausloeser": [
+        "de.gabi.alocat.missing"
+      ],
+      "modell": null,
+      "liest": [],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "einsd-batch-agent",
+      "titel": "Monatliche EEG-Abrechnung",
+      "zweck": "Startet die monatliche Abrechnung aller Anlagen und meldet, was dabei auffällt.",
+      "version": "2.0.0",
+      "digest": "2112a01094344e7fa70f3aab69af956e1a98a07fcdeda23067a9fddc8c009e38",
+      "ausloeser": [
+        "de.eeg.settlement.batch-due",
+        "de.eeg.compliance.*",
+        "de.eeg.anlage.foerderung-auslaufend"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "einsd/list_unsettled_plants",
+          "wozu": "The batch's work list: plants not yet settled for the billing month."
+        },
+        {
+          "werkzeug": "einsd/get_plant",
+          "wozu": "Violation flags, Einspeisemanagement and Förderende for a plant in NEEDS_REVIEW."
+        },
+        {
+          "werkzeug": "einsd/check_einspeiseverguetung_anspruch",
+          "wozu": "The § 21 Abs. 1 Satz 1 Nr. 1 claim sweep across the portfolio."
+        },
+        {
+          "werkzeug": "einsd/check_sect44b_quota",
+          "wozu": "§ 44b EEG 2023 cap utilisation for every active biogas plant."
+        },
+        {
+          "werkzeug": "einsd/list_expiring",
+          "wozu": "Plants reaching Förderende inside the notice window."
+        },
+        {
+          "werkzeug": "einsd/get_settlement_state_history",
+          "wozu": "Whether a plant's state actually moved to SETTLED after the batch ran."
+        },
+        {
+          "werkzeug": "edmd/get_billing_period",
+          "wozu": "Prior-month meter data for the plant being settled."
+        },
+        {
+          "werkzeug": "productd/get_product",
+          "wozu": "Whether a post-EEG plant has a product configured to be paid on."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    }
+  ]
+}

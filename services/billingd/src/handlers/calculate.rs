@@ -435,6 +435,36 @@ pub async fn post_release(
     })))
 }
 
+/// `POST /api/v1/billing/{id}/reviewed`
+///
+/// An analyst's review of a REVIEW record: stamps who reviewed it and takes it
+/// off the work list. The invoice was already issued when the risk gate
+/// banded it, so this sends nothing — a finding that holds is answered with a
+/// correction (`POST …/correction`), not here. 409 when the record is not an
+/// unreviewed REVIEW record.
+pub async fn post_reviewed(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
+    Path(id): Path<Uuid>,
+) -> BillingResult<impl IntoResponse> {
+    let cfg = &deps.cfg;
+    authorize(&cedar, &claims, "review-billing", &cfg.tenant)?;
+    crate::pg::mark_reviewed(&pool, &cfg.tenant, id, claims.sub())
+        .await?
+        .ok_or_else(|| {
+            crate::error::BillingError::conflict(
+                "NOT_IN_REVIEW",
+                "record is not awaiting review (already reviewed, held, or never banded REVIEW)",
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "reviewed_by": claims.sub(),
+    })))
+}
+
 /// Everything a dry-run produces: the engine's invoice and the period it billed.
 pub struct Preview {
     pub invoice: Invoice,

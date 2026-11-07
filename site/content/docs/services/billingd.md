@@ -501,7 +501,7 @@ overlap or gap to the previous invoice, rolling deviation. The score is 0–100.
 | Band | Default threshold | Effect |
 |---|---|---|
 | SAMPLE | `sample_at = 20` | Dispatched |
-| REVIEW | `review_at = 50` | Listed in the review queue |
+| REVIEW | `review_at = 50` | Dispatched, and listed in the review queue until `POST …/reviewed` |
 | HELD | `hold_at = 80` | Withheld until `POST …/release` |
 
 `MWST_STICHTAG_IM_ZEITRAUM` and `BEHG_JAHRESGRENZE_IM_ZEITRAUM` are **blocking**
@@ -510,8 +510,10 @@ correct for such a period. Thresholds are validated at start (`sample_at <
 review_at < hold_at ≤ 100`).
 
 `hold_dispatch = false` runs the gate in shadow mode. `GET
-/api/v1/billing/review-queue` lists REVIEW and HELD; a release stamps `outcome =
-dispatched`, `released_by`, `released_at` and sends the event.
+/api/v1/billing/review-queue` lists the undecided REVIEW and HELD records; a
+release stamps `outcome = dispatched`, `released_by`, `released_at` and sends
+the event, a review stamps `reviewed_by`, `reviewed_at` and sends nothing.
+Either takes the record off the queue.
 
 ---
 
@@ -810,6 +812,7 @@ Art. 17 audit fields.
 | `POST` | `/api/v1/webhooks/vpp-dispatch` | Signed `de.vpp.dispatch.confirmed` |
 | `GET` | `/api/v1/billing/review-queue` | REVIEW and HELD, highest risk first |
 | `POST` | `/api/v1/billing/{id}/release` | Release a held record |
+| `POST` | `/api/v1/billing/{id}/reviewed` | Record the review of a REVIEW record; sends nothing |
 | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G (§ 4a EGovG i.V.m. ERechV) |
 | `GET` | `/api/v1/policy` | Operator policy (Cedar `read-policy`) |
 | `GET` | `/health/live` · `/health/ready` | Liveness; readiness |
@@ -855,12 +858,14 @@ equality is part of every rule, and Cedar is default-deny.
 | `settle-flexibility` | `/billing/vpp/{vpp_id}` | `LF`, `MSB`, `ESA` |
 | `correct-billing` | `…/correction` | `LF`, `MSB`, `ESA` |
 | `release-billing` | `…/release` | `LF`, `MSB`, `ESA` |
+| `review-billing` | `…/reviewed` | `LF`, `MSB`, `ESA` |
 | `submit-b2g` | `…/submit-b2g` | `LF`, `MSB`, `ESA` |
 | `use-mcp` | `/mcp`, after the `[mcp]` / OIDC credential check | any caller of the tenant |
 
 The VPP webhook is signature-authenticated and carries no Cedar action.
 `mako_roles` are market roles, so the policy cannot separate „may bill" from
-„may release"; `released_by` / `released_at` keep releases attributable.
+„may release"; `released_by` / `released_at` and `reviewed_by` / `reviewed_at`
+keep releases and reviews attributable.
 
 ---
 
@@ -884,7 +889,7 @@ Rechnung is a legally binding act for an OIDC identity, not a model.
 | `get_billing_summary` | Aggregates per MaLo or LF, each euro once |
 | `validate_tariff_config` | Engine validation (incl. `KEIN_ARBEITSPREIS`), § 41a iMSys guard, § 42 Energiemix disclosure |
 | `explain_invoice_position` | `PositionTrace` of a position |
-| `list_review_queue` | REVIEW + HELD records with their risk findings, typed (`Pruefposten`) |
+| `list_review_queue` | The undecided REVIEW + HELD records with their risk findings, typed (`Pruefposten`) |
 
 Prompts: `order-to-cash`, `preview-invoice`, `check-dynamic-tariff`,
 `14a-steuerungsrabatt`, `eeg-billing`, `gas-billing`. agentd's
@@ -897,7 +902,7 @@ Prompts: `order-to-cash`, `preview-invoice`, `check-dynamic-tariff`,
 
 | Table | Purpose |
 |---|---|
-| `billing_records` | `id`, `malo_id`, `lf_mp_id`, `product_code`, `category`, `rechnungsnummer`, `period_from/to`, `rechnung_json` (BO4E), `en16931_json` (model), `en16931_blocked`, `empfaenger_unternehmer`, `bo4e_version`, totals, `outcome` (`generated` → `dispatched` → `paid`/`partial`/`disputed`; `cancelled`), `risk_score/band/findings`, `released_by/at`, `template_hash`, `billing_run_id` |
+| `billing_records` | `id`, `malo_id`, `lf_mp_id`, `product_code`, `category`, `rechnungsnummer`, `period_from/to`, `rechnung_json` (BO4E), `en16931_json` (model), `en16931_blocked`, `empfaenger_unternehmer`, `bo4e_version`, totals, `outcome` (`generated` → `dispatched` → `paid`/`partial`/`disputed`; `cancelled`), `risk_score/band/findings`, `released_by/at`, `reviewed_by/at`, `template_hash`, `billing_run_id` |
 | `invoice_number_series` | `(tenant, series, year)` → `last_value`, allocated by upsert under a row lock |
 | `vpp_dispatch_ledger` | `tx_id` (PK), `tenant`, `record_id` |
 | `billing_run_log` | Monthly sweep audit |

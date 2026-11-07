@@ -98,6 +98,13 @@
               "description": "MP-ID of the Rechnungssteller.",
               "type": "string"
             },
+            "rechnungsnummer": {
+              "description": "The Rechnungsnummer the Rechnungssteller gave the invoice, where the\nINVOIC carried one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "received_at": {
               "description": "RFC 3339 in UTC.",
               "type": "string",
@@ -114,6 +121,17 @@
                 "null"
               ],
               "format": "date-time"
+            },
+            "abgesendet": {
+              "description": "The refusal (REMADV) went out to the Rechnungssteller. When it did not,\n`POST /api/v1/receipts/{id}/dispatch-answer` sends it — a market\nmessage; when it did, what is left is closing the dispute\n(`POST /api/v1/receipts/{id}/resolve-dispute`), which sends nothing.",
+              "type": "boolean"
+            },
+            "befunde": {
+              "description": "The invoic-checker findings that disputed the invoice, in its words.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DisputBefund"
+              }
             }
           },
           "required": [
@@ -121,9 +139,35 @@
             "process_id",
             "pid",
             "sender_mp_id",
+            "rechnungsnummer",
             "received_at",
             "bo4e_version",
-            "frist"
+            "frist",
+            "abgesendet",
+            "befunde"
+          ]
+        },
+        "DisputBefund": {
+          "description": "One finding a dispute rests on.",
+          "type": "object",
+          "properties": {
+            "art": {
+              "description": "The finding's kind, as `get_check_result` names it (`TariffDeviation`, …)\n— an identifier, not for a reader.",
+              "type": "string"
+            },
+            "bezeichnung": {
+              "description": "What the kind is called in German (`Preis weicht vom Preisblatt ab`).",
+              "type": "string"
+            },
+            "text": {
+              "description": "The checker's sentence.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "art",
+            "bezeichnung",
+            "text"
           ]
         }
       },

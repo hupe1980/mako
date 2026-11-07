@@ -16,8 +16,9 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
-        received_at: OffsetDateTime,
+        inbound: Inbound<'_>,
     ) -> Result<IngestOutcome, EngineError> {
+        let received_at = inbound.received_at;
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
 
@@ -37,6 +38,7 @@ impl EdifactIngestDispatcher {
                     let due_at =
                         fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
                     self.spawn_or_resume_guarded::<GaBiGasInvoicWorkflow>(
+                        inbound,
                         &invoice_ref,
                         "gabi-gas-invoic",
                         cmd,
@@ -52,6 +54,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gabi_gas_comdis_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_comdis(msg);
                     self.resume_by_key::<GaBiGasInvoicWorkflow>(
+                        inbound,
                         &invoice_ref,
                         "gabi-gas-invoic",
                         cmd,
@@ -77,6 +80,7 @@ impl EdifactIngestDispatcher {
                         adapters::gpke_allokationsliste_mscons_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeAllokationslisteWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-allokationsliste",
                         cmd,
@@ -104,6 +108,7 @@ impl EdifactIngestDispatcher {
         msg: &dvgw_edi::DvgwMessage,
         workflow_name: &str,
         pid: u32,
+        inbound: Inbound<'_>,
     ) -> Result<IngestOutcome, EngineError> {
         // DVGW publishes no BDEW Formatversion, so there is nothing on the wire
         // to derive one from. `UNH` DE 0057 is a DVGW package code (`DVGW17`) or
@@ -204,6 +209,7 @@ impl EdifactIngestDispatcher {
                 if mako_gabi_gas::nomination::NOMRES_PIDS.contains(&pid) {
                     return self
                         .resume_by_key::<GaBiGasNominationWorkflow>(
+                            inbound,
                             &key,
                             "gabi-gas-nomination",
                             cmd,
@@ -211,6 +217,7 @@ impl EdifactIngestDispatcher {
                         .await;
                 }
                 self.spawn_or_resume_guarded::<GaBiGasNominationWorkflow>(
+                    inbound,
                     &key,
                     "gabi-gas-nomination",
                     cmd,
@@ -261,12 +268,14 @@ impl EdifactIngestDispatcher {
                         )
                     },
                 );
-                self.spawn_or_resume::<GaBiGasAllocationWorkflow>(
+                self.spawn_or_resume_guarded::<GaBiGasAllocationWorkflow>(
+                    inbound,
                     &key,
                     "gabi-gas-allocation",
                     cmd.clone(),
                     &fv,
                     &[(mako_gabi_gas::FINAL_ALOCAT_DEADLINE_LABEL, final_due_at)],
+                    mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                 )
                 .await
             }
@@ -284,12 +293,14 @@ impl EdifactIngestDispatcher {
                     });
                 }
                 let cmd = adapters::gabi_gas_mehr_mindermengen_registry().dispatch(raw, &fv)?;
-                self.spawn_or_resume::<GaBiGasMehrMindermengenWorkflow>(
+                self.spawn_or_resume_guarded::<GaBiGasMehrMindermengenWorkflow>(
+                    inbound,
                     &key,
                     "gabi-gas-mehr-mindermengen",
                     cmd,
                     &fv,
                     &[],
+                    mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                 )
                 .await
             }

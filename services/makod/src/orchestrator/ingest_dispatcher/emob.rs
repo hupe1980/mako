@@ -51,6 +51,7 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
+        inbound: Inbound<'_>,
     ) -> Result<IngestOutcome, EngineError> {
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
@@ -67,6 +68,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::$anfrage().dispatch(raw, &fv)?;
                     let deadlines: Vec<_> = antwortfrist(pid, now).into_iter().collect();
                     self.spawn_or_resume_guarded::<$wf>(
+                        inbound,
                         malo.as_str(),
                         <$wf>::WORKFLOW_NAME,
                         cmd,
@@ -77,7 +79,7 @@ impl EdifactIngestDispatcher {
                     .await
                 } else {
                     let cmd = adapters::$antwort().dispatch(raw, &fv)?;
-                    self.resume_by_key::<$wf>(malo.as_str(), <$wf>::WORKFLOW_NAME, cmd)
+                    self.resume_by_key::<$wf>(inbound, malo.as_str(), <$wf>::WORKFLOW_NAME, cmd)
                         .await
                 }
             }};

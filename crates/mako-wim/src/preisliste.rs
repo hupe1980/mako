@@ -139,6 +139,17 @@ pub enum PreislisteState {
     },
 }
 
+/// A Preisliste holds its publisher while it waits to be recorded; once
+/// recorded or refused it is settled, and the next PRICAT is its own process.
+impl mako_engine::workflow::OccupiesBusinessKey for PreislisteState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            Self::Eingegangen(_) => true,
+            Self::New | Self::Aufgezeichnet(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl PreislisteState {
     /// Stable string label for the current variant.
     #[must_use]

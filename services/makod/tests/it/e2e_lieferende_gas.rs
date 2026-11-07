@@ -114,7 +114,7 @@ impl MockGnb {
 
         let unh_ref = raw.message_ref().to_owned();
 
-        let cmd = geli_gas_registry()
+        let cmd = geli_gas_registry(time::OffsetDateTime::now_utc())
             .dispatch(&raw as &dyn Any, &self.fv)
             .expect("GNB: adapt UTILMD G 44004 to GasSupplierChangeCommand");
 

@@ -22,7 +22,7 @@ a model-backed specialist.
 | | |
 |---|---|
 | **Specialists** | 29 manifests in [`agents/`](agents/) — 26 `tool-calling`, 2 model-free coded skills ([`src/skills/`](src/skills/)) |
-| **Grants** | read-only only: 155 grants across 29 manifests, each named by its procedure (`cargo xtask check-tool-grants`, `check-prompt-tools`) |
+| **Grants** | read-only only: 157 grants across 29 manifests, each named by its procedure (`cargo xtask check-tool-grants`, `check-prompt-tools`) |
 | **Prompts** | mako's MCP servers publish 54 step-by-step prompts across 11 servers; specialists reference them through `context.prompts` |
 | **Answers** | All 29 specialists declare a closed `output.schema`; coded finding codes are enums |
 | **Oversight** | triage rules open worklist rows under `/api/v1/oversight/*`; rows escalate, never expire. Mounted only with `[oidc]` |
@@ -37,7 +37,7 @@ a model-backed specialist.
 |---|---|
 | `POST /webhook` | CloudEvent ingest. Admission commits before the answer: `202` admitted, `204` no subscriber, `429` transient (quota), `422` unprocessable, dead-lettered |
 | `GET /api/v1/hinweise` | the open worklist rows the caller may answer, each filed under its Anker |
-| `GET /api/v1/vorschlaege?freigabe=…` | each Freigabe's waiting proposal, computed once per entry by the `[vorschlaege]` tick; starts no run |
+| `GET /api/v1/vorschlaege?freigabe=…&disput=…` | each Freigabe's and Rechnungsdisput's waiting proposal, computed once per entry by the `[vorschlaege]` tick; starts no run |
 | `GET /api/v1/runs/{run}/antwort` | the answer, sentence by sentence, each checked against the call it cites |
 | `POST /api/v1/runs/{run}/bewertung` | a person's „hilfreich" verdict on an answer or a Hinweis, or what became of a proposal (sent, edited, dismissed), kept beside the run |
 | `POST /api/v1/runs` | start a run: `202` with the run ids, read at `/api/v1/oversight/runs/{run}`; honours `Idempotency-Key`, refuses an unknown field |

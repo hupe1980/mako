@@ -101,7 +101,10 @@ async fn relay_pending(
         // three `mako-pruefung` walks and the operator queue with its Fristen
         // never ran at all. Acknowledged here so the loopback stays a *wire*
         // relay; the notification contract itself is pinned in `mako-wim`.
-        if &*om.message_type == "ProcessInitiated" {
+        // The Anerkennungsmeldung every processed Strom message is owed
+        // (APERAK AHB 1.1 § 2.4) answers the relay's own messages; it opens no
+        // step of the handshake under test.
+        if matches!(&*om.message_type, "ProcessInitiated" | "APERAK") {
             OutboxStore::acknowledge(&**store, om.message_id)
                 .await
                 .expect("acknowledge");

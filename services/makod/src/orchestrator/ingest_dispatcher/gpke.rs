@@ -30,8 +30,9 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
-        received_at: OffsetDateTime,
+        inbound: Inbound<'_>,
     ) -> Result<IngestOutcome, EngineError> {
+        let received_at = inbound.received_at;
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
 
@@ -46,24 +47,20 @@ impl EdifactIngestDispatcher {
                     // Business answer Frist: „spätester ÜT ist der 1. WT nach
                     // dem ÜT" for the ORDRSP 19116/19117 (GPKE Teil 2
                     // §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2) — a Werktag
-                    // deadline, not 24 wall-clock hours. The APERAK is a
-                    // separate 45-minute clock on the same message (APERAK AHB
-                    // 1.0 §2.4.1; Saturday → Sunday 12:00 Berlin).
+                    // deadline, not 24 wall-clock hours. The APERAK window is
+                    // a separate clock, opened by `dispatch` for every message.
                     let received = received_at;
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
                     // Also index the process under this Sperrauftrag's Belegnummer so
                     // a later ORDCHG 39000 Stornierung (which carries no LOC) can
                     // resume it by the RFF+ON order reference.
                     self.spawn_or_resume_keyed::<GpkeSperrungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-sperrung",
                         cmd,
                         &fv,
-                        &[
-                            (mako_gpke::SPERRUNG_WINDOW_LABEL, process_due_at),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(mako_gpke::SPERRUNG_WINDOW_LABEL, process_due_at)],
                         &[msg.message_ref()],
                         Some(|s| !s.is_terminal()),
                     )
@@ -73,6 +70,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_sperrung_msb_response_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeSperrungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-sperrung",
                         cmd,
@@ -85,8 +83,13 @@ impl EdifactIngestDispatcher {
                 39000 | 39001 => {
                     let cmd = adapters::gpke_sperrung_stornierung_registry().dispatch(raw, &fv)?;
                     let order_ref = extract_order_ref_from_msg(msg);
-                    self.resume_by_key::<GpkeSperrungWorkflow>(&order_ref, "gpke-sperrung", cmd)
-                        .await
+                    self.resume_by_key::<GpkeSperrungWorkflow>(
+                        inbound,
+                        &order_ref,
+                        "gpke-sperrung",
+                        cmd,
+                    )
+                    .await
                 }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "gpke-sperrung",
@@ -104,6 +107,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_sperrung_lf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeSperrungLfWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-sperrung-lf",
                         cmd,
@@ -130,20 +134,17 @@ impl EdifactIngestDispatcher {
                     // Business answer Frist, per PID, from the GPKE Teil 2
                     // table in `mako_gpke::antwortfrist` — 11:00 Uhr des 1. WT
                     // nach dem ÜT for an Anmeldung (55001/55077), 06:00 for an
-                    // Abmeldung (55004). The APERAK acknowledgement is a
-                    // separate, 45-minute clock on the same message.
+                    // Abmeldung (55004). The APERAK window is a separate
+                    // clock, opened by `dispatch` for every message.
                     let received = received_at;
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeSupplierChangeWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-supplier-change",
                         cmd,
                         &fv,
-                        &[
-                            (mako_gpke::GPKE_PROCESS_RESPONSE_LABEL, process_due_at),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(mako_gpke::GPKE_PROCESS_RESPONSE_LABEL, process_due_at)],
                     )
                     .await
                 }
@@ -155,6 +156,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeSupplierChangeWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-supplier-change",
                         cmd,
@@ -184,21 +186,17 @@ impl EdifactIngestDispatcher {
                 55007 => {
                     let cmd = adapters::gpke_lf_abmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK AHB 1.1 §2.4.1: Strom UTILMD — 45 min; Sonntag 12:00 on a Saturday.
                     let received = received_at;
                     // 05:00 Uhr des 1. WT nach dem ÜT (GPKE Teil 2, SD
                     // Lieferende von NB an LF Prozessschritt 2).
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeLfAbmeldungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-lf-abmeldung",
                         cmd,
                         &fv,
-                        &[
-                            (mako_gpke::LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, process_due_at),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(mako_gpke::LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, process_due_at)],
                     )
                     .await
                 }
@@ -221,6 +219,7 @@ impl EdifactIngestDispatcher {
                         .dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeBeendigungZuordnungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-beendigung-zuordnung",
                         cmd,
@@ -234,19 +233,17 @@ impl EdifactIngestDispatcher {
                     // 09:00 Uhr des 1. WT nach dem ÜT (GPKE Teil 2, SD
                     // Lieferbeginn Prozessschritt 4).
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
-                    self.spawn_or_resume::<GpkeBeendigungZuordnungWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeBeendigungZuordnungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-beendigung-zuordnung",
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_gpke::BEENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(
+                            mako_gpke::BEENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
+                            process_due_at,
+                        )],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -267,13 +264,10 @@ impl EdifactIngestDispatcher {
                 if mako_gpke::ZUORDNUNGSMELDUNG_PIDS.contains(&pid) {
                     let cmd = adapters::gpke_zuordnungsmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // **No deadline at all**, not even the APERAK one. The
-                    // Anerkennung is enqueued in the same transactional write
-                    // as the event, so a 45-minute timer could only ever fire
-                    // on an obligation already discharged — the defect
-                    // `deadline_labels.rs` exists to prevent. A delivery
-                    // failure surfaces through the outbox worker's own retry
-                    // and dead-letter path instead.
+                    // No business deadline: there is no Antwortnachricht to be
+                    // late with. The APERAK window `dispatch` opens is retired
+                    // when the Anerkennung enqueued with the event is
+                    // delivered.
                     //
                     // Guarded with an always-`false` occupancy verdict: three
                     // Meldungen are owed on one MaLo around a single
@@ -281,6 +275,7 @@ impl EdifactIngestDispatcher {
                     // rather than resume the first — which would refuse it as
                     // an invalid state transition and drop the message.
                     self.spawn_or_resume_guarded::<mako_gpke::GpkeZuordnungsmeldungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-zuordnungsmeldung",
                         cmd,
@@ -308,19 +303,17 @@ impl EdifactIngestDispatcher {
                     // Ablauf des 1. WT nach dem ÜT (GPKE Teil 2, SD Kündigung
                     // Prozessschritt 2).
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
-                    self.spawn_or_resume::<mako_gpke::GpkeKuendigungWorkflow>(
+                    self.spawn_or_resume_guarded::<mako_gpke::GpkeKuendigungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-kuendigung",
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_gpke::kuendigung::KUENDIGUNG_ANTWORT_WINDOW_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(
+                            mako_gpke::kuendigung::KUENDIGUNG_ANTWORT_WINDOW_LABEL,
+                            process_due_at,
+                        )],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -332,16 +325,16 @@ impl EdifactIngestDispatcher {
             // ── GPKE Ersatz-/Grundversorgung (§36/§38 EnWG) ─────────────────
             //
             // PID 55013 (Anmeldung/Zuordnung EOG, NB → LF) — spawn the E/G
-            // responder. Deadlines (APERAK 45-min + answer window at 15:00
-            // next Werktag) are registered by the workflow itself from
-            // `received_at`.
+            // responder. The answer window (15:00 next Werktag) is registered
+            // by the workflow itself from `received_at`.
             // PIDs 55014/55015 (Bestätigung/Ablehnung, LF → NB) — resume the
             // NB initiator by MaLo.
             "gpke-eog" => match pid {
                 55013 => {
-                    let cmd = adapters::gpke_eog_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::gpke_eog_registry(received_at).dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.spawn_or_resume_guarded::<mako_gpke::GpkeEogWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-eog",
                         cmd,
@@ -352,9 +345,10 @@ impl EdifactIngestDispatcher {
                     .await
                 }
                 55014 | 55015 => {
-                    let cmd = adapters::gpke_eog_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::gpke_eog_registry(received_at).dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<mako_gpke::GpkeEogWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-eog",
                         cmd,
@@ -368,23 +362,26 @@ impl EdifactIngestDispatcher {
             },
             // ── GPKE Teil 4 Stammdatenänderung ──────────────────────────────
             // Änderung PIDs spawn a Berechtigter process (apply + Rückmeldung);
-            // Rückmeldung PIDs resume a change we initiated. Deadlines (APERAK
-            // 45-min + 2-WT Rückmeldung window) are registered by the workflow.
+            // Rückmeldung PIDs resume a change we initiated. The 2-WT
+            // Rückmeldung window is registered by the workflow.
             "gpke-stammdatenaenderung" => {
                 let malo_id = extract_malo_from_msg(msg);
                 if mako_gpke::is_aenderung_pid(pid) {
-                    let cmd = adapters::gpke_stammdaten_registry().dispatch(raw, &fv)?;
-                    self.spawn_or_resume::<mako_gpke::GpkeStammdatenaenderungWorkflow>(
+                    let cmd = adapters::gpke_stammdaten_registry(received_at).dispatch(raw, &fv)?;
+                    self.spawn_or_resume_guarded::<mako_gpke::GpkeStammdatenaenderungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-stammdatenaenderung",
                         cmd,
                         &fv,
                         &[],
+                        |s| !s.is_terminal(),
                     )
                     .await
                 } else if mako_gpke::is_rueckmeldung_pid(pid) {
-                    let cmd = adapters::gpke_stammdaten_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::gpke_stammdaten_registry(received_at).dispatch(raw, &fv)?;
                     self.resume_by_key::<mako_gpke::GpkeStammdatenaenderungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-stammdatenaenderung",
                         cmd,
@@ -406,6 +403,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_lf_anmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeLfAnmeldungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-lf-anmeldung",
                         cmd,
@@ -433,6 +431,7 @@ impl EdifactIngestDispatcher {
                         adapters::gpke_allokationsliste_ordrsp_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeAllokationslisteWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-allokationsliste",
                         cmd,
@@ -444,6 +443,7 @@ impl EdifactIngestDispatcher {
                         adapters::gpke_allokationsliste_mscons_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeAllokationslisteWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-allokationsliste",
                         cmd,
@@ -490,6 +490,7 @@ impl EdifactIngestDispatcher {
                         )
                     });
                     self.spawn_or_resume_guarded::<GpkeAbrechnungWorkflow>(
+                        inbound,
                         &invoice_ref,
                         "gpke-abrechnung",
                         cmd,
@@ -504,6 +505,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_abrechnung_remadv_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_remadv(msg);
                     self.resume_by_key::<GpkeAbrechnungWorkflow>(
+                        inbound,
                         &invoice_ref,
                         "gpke-abrechnung",
                         cmd,
@@ -515,6 +517,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_abrechnung_comdis_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_comdis(msg);
                     self.resume_by_key::<GpkeAbrechnungWorkflow>(
+                        inbound,
                         &invoice_ref,
                         "gpke-abrechnung",
                         cmd,
@@ -542,16 +545,14 @@ impl EdifactIngestDispatcher {
                     // than citing a Festlegung that does not state it.
                     let received = received_at;
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
-                    self.spawn_or_resume::<GpkeKonfigurationWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeKonfigurationWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-konfiguration",
                         cmd,
                         &fv,
-                        &[
-                            (mako_gpke::KONFIGURATION_WINDOW_LABEL, process_due_at),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(mako_gpke::KONFIGURATION_WINDOW_LABEL, process_due_at)],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -559,6 +560,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_konfiguration_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeKonfigurationWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-konfiguration",
                         cmd,
@@ -580,19 +582,17 @@ impl EdifactIngestDispatcher {
                     // fallback is an operating convention, not a citation.
                     let received = received_at;
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
-                    self.spawn_or_resume::<GpkeStornierungWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeStornierungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-stornierung",
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_gpke::STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(
+                            mako_gpke::STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL,
+                            process_due_at,
+                        )],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -612,22 +612,19 @@ impl EdifactIngestDispatcher {
                     // (GPKE Teil 2 § 2.4.2.2 Nr. 2). Missing it is not a lapsed
                     // obligation — Prozessschritt 3 has the NB assign the LFN
                     // without an answer.
-                    // APERAK AHB 1.1 §2.4.1: Strom UTILMD — 45 min; Sonntag 12:00 on a Saturday.
                     let received = received_at;
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
-                    self.spawn_or_resume::<GpkeAnkuendigungZuordnungLfWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeAnkuendigungZuordnungLfWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-ankuendigung-zuordnung-lf",
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_gpke::ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(
+                            mako_gpke::ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
+                            process_due_at,
+                        )],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -648,19 +645,17 @@ impl EdifactIngestDispatcher {
                     // a newly commissioned Marktlokation.
                     let received = received_at;
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
-                    self.spawn_or_resume::<GpkeNeuanlageWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeNeuanlageWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-neuanlage",
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_gpke::neuanlage::NEUANLAGE_ANTWORT_WINDOW_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(
+                            mako_gpke::neuanlage::NEUANLAGE_ANTWORT_WINDOW_LABEL,
+                            process_due_at,
+                        )],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -676,22 +671,20 @@ impl EdifactIngestDispatcher {
                     let malo_id = extract_malo_from_msg(msg);
                     // „2. Werktag nach dem ÜT" (GPKE Teil 2 §§ 3.1.1.2 /
                     // 3.1.2.2 / 3.1.3.2) — a business Frist, longer than the
-                    // 45-minute APERAK clock that runs beside it.
+                    // APERAK window that runs beside it.
                     let received = received_at;
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
-                    self.spawn_or_resume::<mako_gpke::GpkeAbrechnungsdatenWorkflow>(
+                    self.spawn_or_resume_guarded::<mako_gpke::GpkeAbrechnungsdatenWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-abrechnungsdaten",
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_gpke::abrechnungsdaten::BEARBEITUNGSSTAND_WINDOW_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(
+                            mako_gpke::abrechnungsdaten::BEARBEITUNGSSTAND_WINDOW_LABEL,
+                            process_due_at,
+                        )],
+                        |s| !s.is_terminal(),
                     )
                     .await
                 }
@@ -707,19 +700,17 @@ impl EdifactIngestDispatcher {
                     let malo_id = extract_malo_from_msg(msg);
                     let received = received_at;
                     let process_due_at = antwort_due_at(pid, received);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received);
-                    self.spawn_or_resume::<GpkeAnfrageBestellungWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeAnfrageBestellungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-anfrage-bestellung",
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_gpke::anfrage_bestellung::ANFRAGE_WINDOW_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(
+                            mako_gpke::anfrage_bestellung::ANFRAGE_WINDOW_LABEL,
+                            process_due_at,
+                        )],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -732,14 +723,16 @@ impl EdifactIngestDispatcher {
             "gpke-partin" => {
                 if mako_gpke::partin::PARTIN_STROM_PIDS.contains(&pid) {
                     let cmd = adapters::gpke_partin_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_malo_from_msg(msg);
-                    // No APERAK Frist for pure data delivery messages.
-                    self.spawn_or_resume::<GpkePartinWorkflow>(
+                    // Kommunikationsdaten describe the sending Marktpartner.
+                    let malo_id = extract_sender_key(msg);
+                    self.spawn_or_resume_guarded::<GpkePartinWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-partin",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else {
@@ -776,7 +769,7 @@ impl EdifactIngestDispatcher {
                             // stays open with its Lieferung unmarked. Both
                             // looked like nothing happened.
                             if let Err(e) = self
-                                .resume_by_key::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
+                                .resume_by_key::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(inbound,
                                     &key,
                                     mako_wim::esa_wertebestellung::WORKFLOW_NAME,
                                     mako_wim::esa_wertebestellung::EsaWertebestellungCommand::MarkLieferungBegonnen,
@@ -794,12 +787,14 @@ impl EdifactIngestDispatcher {
                         }
                     }
                     // No deadline for pure data delivery.
-                    self.spawn_or_resume::<GpkeMesswerteLieferungWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeMesswerteLieferungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-messwerte",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else {
@@ -814,12 +809,14 @@ impl EdifactIngestDispatcher {
                 if mako_gpke::utilts::UTILTS_PIDS.contains(&pid) {
                     let cmd = adapters::gpke_utilts_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.spawn_or_resume::<GpkeUtiltsWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeUtiltsWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-utilts",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else {
@@ -838,6 +835,7 @@ impl EdifactIngestDispatcher {
                     let malo_id = extract_malo_from_msg(msg);
                     // Resume existing process; no spawn — LF initiates.
                     self.resume_by_key::<GpkeDatenabrufWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-datenabruf",
                         cmd,
@@ -863,19 +861,15 @@ impl EdifactIngestDispatcher {
                 if pid == mako_gpke::GDA_ANFRAGE_PID.as_u32() {
                     // „Unverzüglich, jedoch spätester ÜZ ist 1 WT nach dem ÜZ von
                     // Nr. 1" (GPKE Teil 4 Kap. 3.2 Nr. 2), read from
-                    // `mako_fristen::antwort`; the APERAK runs beside it on 45
-                    // minutes (APERAK AHB 1.1 § 2.4.1).
+                    // `mako_fristen::antwort`.
                     let process_due_at = antwort_due_at(pid, received_at);
-                    let aperak_due_at = fristen::aperak_strom_due_at(received_at);
                     self.spawn_or_resume_guarded::<GpkeGeschaeftsdatenanfrageWorkflow>(
+                        inbound,
                         &key,
                         "gpke-geschaeftsdatenanfrage",
                         cmd,
                         &fv,
-                        &[
-                            (mako_gpke::GDA_ANTWORT_WINDOW_LABEL, process_due_at),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[(mako_gpke::GDA_ANTWORT_WINDOW_LABEL, process_due_at)],
                         |s| !s.is_terminal(),
                     )
                     .await
@@ -883,6 +877,7 @@ impl EdifactIngestDispatcher {
                     // An answer resumes the Anfrage this party sent; with none on
                     // the key it is refused (`process_not_found`), never spawned.
                     self.resume_by_key::<GpkeGeschaeftsdatenanfrageWorkflow>(
+                        inbound,
                         &key,
                         "gpke-geschaeftsdatenanfrage",
                         cmd,
@@ -902,6 +897,7 @@ impl EdifactIngestDispatcher {
                         adapters::gpke_konfiguration_aenderung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeKonfigurationAenderungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "gpke-konfiguration-aenderung",
                         cmd,

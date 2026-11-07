@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { lazy } from "react";
 import { AssistentView } from "../views/Assistent";
+import { DeadLettersView } from "../views/DeadLetters";
 import { FreigabenView } from "../views/Freigaben";
 import { FristenView } from "../views/Fristen";
 import { HeuteView } from "../views/Heute";
@@ -84,6 +85,12 @@ const fristen = createRoute({
   component: FristenView,
 });
 
+const deadLetters = createRoute({
+  getParentRoute: () => root,
+  path: "/dead-letters",
+  component: DeadLettersView,
+});
+
 // The gallery is a development page: production builds never import it.
 const Gallery = lazy(() => import("../gallery/Gallery").then((m) => ({ default: m.Gallery })));
 
@@ -107,8 +114,31 @@ const stringifySearch = (search: Record<string, unknown>) => {
 
 const routeTree = root.addChildren(
   import.meta.env.DEV
-    ? [index, ueberblick, freigaben, fristen, heute, prozess, kunden, kunde, assistent, gallery]
-    : [index, ueberblick, freigaben, fristen, heute, prozess, kunden, kunde, assistent],
+    ? [
+        index,
+        ueberblick,
+        freigaben,
+        fristen,
+        deadLetters,
+        heute,
+        prozess,
+        kunden,
+        kunde,
+        assistent,
+        gallery,
+      ]
+    : [
+        index,
+        ueberblick,
+        freigaben,
+        fristen,
+        deadLetters,
+        heute,
+        prozess,
+        kunden,
+        kunde,
+        assistent,
+      ],
 );
 
 /** A Desk router — the app makes one; each test makes its own. */

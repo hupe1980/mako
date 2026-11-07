@@ -6,6 +6,7 @@ import type { Service } from "../data/mcp";
 
 export const DIENST: Record<Service | "agentd", string> = {
   makod: "Marktkommunikation",
+  marktd: "Marktstammdaten",
   processd: "Prozessüberwachung",
   vertragd: "Kundenverwaltung",
   billingd: "Abrechnung",
@@ -18,7 +19,6 @@ export const DIENST: Record<Service | "agentd", string> = {
 /** Every service an assistant skill may read, as an operator knows it. */
 const ALLE: Record<string, string> = {
   ...DIENST,
-  marktd: "Marktstammdaten",
   accountingd: "Kundenkonten",
   einsd: "EEG-Abrechnung",
   productd: "Produktkatalog",
@@ -42,6 +42,8 @@ const WERKZEUG: Record<string, string> = {
   list_anmeldungen: "Anmeldungen",
   list_open_processes: "offene Prozesse",
   list_overdue_processes: "Fristen",
+  get_receipt: "Rechnung",
+  get_check_result: "Prüfbefunde",
 };
 
 /** The service a `server/tool` reference reaches, as an operator knows it. */

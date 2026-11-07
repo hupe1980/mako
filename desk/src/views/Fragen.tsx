@@ -8,6 +8,7 @@ import { FRAGEN } from "../app/keys";
 import { useRolle } from "../app/rollen";
 import {
   AgentAbgelehnt,
+  AKTION,
   type Anker,
   type Answer,
   antwort,
@@ -20,8 +21,9 @@ import { useVerweigert, Verweigert } from "../data/verweigert";
 import { Icon } from "../design/Icon";
 import { Bewertung } from "./Bewertung";
 
-const VORSCHLAEGE: Record<"kunde" | "malo" | "freigabe", string[]> = {
+const VORSCHLAEGE: Record<"kunde" | "malo" | "freigabe" | "disput", string[]> = {
   freigabe: ["Was schlägst du vor?", "Warum liegt das bei uns?", "Was kam zuletzt an?"],
+  disput: ["Was schlägst du vor?", "Worauf beruht der Disput?", "Ist die Ablehnung versandt?"],
   kunde: [
     "Was ist bei diesem Kunden offen?",
     "Wie steht die Anmeldung?",
@@ -100,22 +102,33 @@ function Lesen({ schritte }: { schritte: Answer["schritte"] }) {
 }
 
 /**
- * The assistant's proposal for a Freigabe: what to do, the code, and the one
- * sentence why, checked like any other. „Übernehmen" fills the decision form
- * and sends nothing; „Verwerfen" hides it and, once its hold ends, says so
- * beside the run — a routine decision, taken back with „Rückgängig" (FR-029).
+ * The assistant's proposal for a Freigabe or a Disput: what to do, the code or
+ * the finding it rests on, and the one sentence why, checked like any other.
+ * „Übernehmen" fills the decision form and sends nothing; „Verwerfen" hides it
+ * and, once its hold ends, says so beside the run — a routine decision, taken
+ * back with „Rückgängig" (FR-029).
  */
 export function VorschlagKarte({
   v,
   run,
   onUebernehmen,
   disclosure,
+  hinweis,
+  befund,
 }: {
   v: Vorschlag;
   run: string;
-  onUebernehmen: (v: Vorschlag, run: string) => void;
+  /** Absent where the proposal leaves nothing to fill in. */
+  onUebernehmen?: ((v: Vorschlag, run: string) => void) | undefined;
   /** agentd's disclosure, where the card stands outside the answer that carries it. */
   disclosure?: string;
+  /** What taking it in would mean, where there is nothing to take in. */
+  hinweis?: string | undefined;
+  /**
+   * The finding a Disput's proposal rests on, as the Rechnungseingang names it
+   * in German; the proposal itself carries only the finding's identifier.
+   */
+  befund?: string | undefined;
 }) {
   const [weg, setWeg] = useState(false);
   const hold = useHold();
@@ -127,11 +140,17 @@ export function VorschlagKarte({
         <Icon name="sparkle" size={12} />
         Vorschlag
         <span className="text-text">
-          {v.aktion === "freigeben" ? "Freigeben" : "Ablehnen"}
+          {AKTION[v.aktion]}
           {v.antwortcode && <span className="ml-1 font-mono">{v.antwortcode}</span>}
         </span>
+        {befund && (
+          <span className="font-normal text-text-2">
+            wegen <span className="text-text">{befund}</span>
+          </span>
+        )}
       </p>
       <p className="m-0 mt-1 text-callout text-text">{v.begruendung}</p>
+      {hinweis && <p className="m-0 mt-1 text-caption text-text-2">{hinweis}</p>}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         {v.quelle && (
           <span className="inline-flex h-5 items-center gap-1 rounded-full border border-ai-border px-2 text-caption font-medium text-ai">
@@ -162,16 +181,18 @@ export function VorschlagKarte({
         >
           Verwerfen
         </AriaButton>
-        <AriaButton
-          onPress={() => onUebernehmen(v, run)}
-          aria-keyshortcuts="U"
-          className="focus-ring inline-flex h-7 items-center gap-2 rounded-full bg-ai px-3 text-body font-semibold text-on-accent"
-        >
-          In die Entscheidung übernehmen
-          <kbd aria-hidden className="font-sans text-caption opacity-80">
-            U
-          </kbd>
-        </AriaButton>
+        {onUebernehmen && (
+          <AriaButton
+            onPress={() => onUebernehmen(v, run)}
+            aria-keyshortcuts="U"
+            className="focus-ring inline-flex h-7 items-center gap-2 rounded-full bg-ai px-3 text-body font-semibold text-on-accent"
+          >
+            In die Entscheidung übernehmen
+            <kbd aria-hidden className="font-sans text-caption opacity-80">
+              U
+            </kbd>
+          </AriaButton>
+        )}
       </div>
     </div>
   );
@@ -213,7 +234,14 @@ export function Fragen({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   const verweigert = useVerweigert({ dienst: "agentd", aktion: "fragen" });
-  const kind = "kunde" in anker ? "kunde" : "malo" in anker ? "malo" : "freigabe";
+  const kind =
+    "kunde" in anker
+      ? "kunde"
+      : "malo" in anker
+        ? "malo"
+        : "disput" in anker
+          ? "disput"
+          : "freigabe";
   const start = useMutation({ mutationFn: (q: string) => fragen(q, anker) });
   const run = start.data;
   const answer = useQuery({

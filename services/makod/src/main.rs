@@ -1304,7 +1304,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
         )
         .with_marktd_client(marktd_client.clone())
-        .with_mp_id_registry(Arc::clone(&mp_id_registry)),
+        .with_mp_id_registry(Arc::clone(&mp_id_registry))
+        .with_unbekannter_vorgang(cli.policy.ingest.unbekannter_vorgang.get()),
     );
 
     // ── Shared health state ───────────────────────────────────────────────────
@@ -2481,6 +2482,8 @@ mod config_surface_tests {
             "tls_key_pem_file",
             "policy",
             "unbekannte_absender",
+            "ingest",
+            "unbekannter_vorgang",
         ];
 
         let merge_body = MAIN_SOURCE

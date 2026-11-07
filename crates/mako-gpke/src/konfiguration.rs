@@ -236,6 +236,19 @@ pub enum KonfigurationState {
     },
 }
 
+/// Whether a Konfigurationsbeauftragung still holds its Marktlokation: live
+/// while the MSB's ORDRSP is owed, settled once it confirmed or refused.
+impl mako_engine::workflow::OccupiesBusinessKey for KonfigurationState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the Beauftragung open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::Beauftragt(_) => true,
+            Self::New | Self::Bestaetigt { .. } | Self::Abgelehnt { .. } => false,
+        }
+    }
+}
+
 impl KonfigurationState {
     /// Stable string label for the current variant.
     #[must_use]

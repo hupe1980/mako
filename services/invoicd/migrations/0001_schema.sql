@@ -79,13 +79,18 @@ CREATE TABLE invoic_receipts (
     -- and its DE 2379 admits only 303 (CCYYMMDDHHMMZZZ).
     pay_by                  TIMESTAMPTZ,
 
-    -- Dispute resolution.
+    -- Dispute resolution: when, by whom (the verified caller), and why.
     dispute_resolved_at     TIMESTAMPTZ,
+    dispute_resolved_by     TEXT,
     dispute_resolution_note TEXT,
 
     received_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     checked_at              TIMESTAMPTZ,
     dispatched_at           TIMESTAMPTZ,
+    -- The answer command's payload as built at the check — Antwortcode, EBD,
+    -- Befunde, Ablehnungsgrund. A re-dispatch sends exactly this, so a REMADV
+    -- sent by an operator says what the automatic one would have.
+    antwort                 JSONB,
     payment_confirmed_at    TIMESTAMPTZ,
 
     -- Set once `de.invoic.payment.overdue` has gone out for this receipt, so a
@@ -101,9 +106,10 @@ CREATE TABLE invoic_receipts (
 
     tenant                  TEXT        NOT NULL,
 
-    -- A dispute resolution has both parts or neither.
+    -- A dispute resolution has its time and its decider, or neither.
     CONSTRAINT invoic_resolution_timed CHECK (
         (outcome = 'Resolved') = (dispute_resolved_at IS NOT NULL)
+        AND (outcome = 'Resolved') = (dispute_resolved_by IS NOT NULL)
     )
 );
 

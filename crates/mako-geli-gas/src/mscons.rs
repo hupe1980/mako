@@ -200,6 +200,21 @@ pub enum GasMsconsDatenState {
     },
 }
 
+/// A delivery is settled once it is validated: each MSCONS is its own
+/// process, so the next one for the same Marktlokation spawns rather than
+/// being fed into a finished delivery (whose `ReceiveMscons` records nothing
+/// outside `New`).
+impl mako_engine::workflow::OccupiesBusinessKey for GasMsconsDatenState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Received, not yet validated — never left standing by one
+            // command, so read as live.
+            Self::DatenErhalten(_) => true,
+            Self::New | Self::ValidationPassed(_) | Self::ValidationFailed { .. } => false,
+        }
+    }
+}
+
 impl GasMsconsDatenState {
     /// Stable string label for the current variant.
     #[must_use]

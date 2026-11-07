@@ -29,6 +29,7 @@
 //! | `get_melo_standorteigenschaften`  | Read BO4E Standorteigenschaften for a MeLo |
 //! | `list_partners`                   | List registered trading partners |
 //! | `get_partner`                     | Read a single partner by MP-ID |
+//! | `partner_namen`                   | Names of up to 200 partners by MP-ID, typed (`PartnerNamen`) |
 //! | `get_preisblatt`                  | Read the current PreisblattNetznutzung for an NB |
 //! | `get_versorgungsstatus`           | Read the current VersorgungsStatus for a MaLo |
 //! | `get_versorgungsstatus_history`   | Read full supply-state change history |
@@ -60,7 +61,7 @@ use rmcp::{
     },
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
@@ -206,6 +207,41 @@ pub struct GetVersorgungAtParams {
     pub malo_id: String,
     /// Reference date (YYYY-MM-DD).  Returns the supply status valid on that date.
     pub at: String,
+}
+
+/// `partner_namen`' arguments.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PartnerNamenParams {
+    /// The 13-digit MP-IDs to name, at most 200.
+    pub mp_ids: Vec<String>,
+}
+
+/// One Marktpartner's name.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PartnerName {
+    pub mp_id: String,
+    /// The registered display name, else the BO4E Geschäftspartner's `name1`.
+    pub name: String,
+}
+
+/// `partner_namen`' answer: the MP-IDs this registry knows a name for.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PartnerNamen {
+    pub partner: Vec<PartnerName>,
+}
+
+/// The name a person knows a partner by: its display name, else the
+/// Geschäftspartner's `name1`; none when neither says anything.
+fn partner_name(
+    display_name: Option<String>,
+    geschaeftspartner: &serde_json::Value,
+) -> Option<String> {
+    display_name.filter(|n| !n.trim().is_empty()).or_else(|| {
+        geschaeftspartner["name1"]
+            .as_str()
+            .filter(|n| !n.trim().is_empty())
+            .map(str::to_owned)
+    })
 }
 
 #[derive(Clone)]
@@ -1021,6 +1057,48 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
         }
     }
 
+    /// Name many Marktpartner in one read — a list of invoices or messages
+    /// titles its rows by who sent them without one call per row.
+    #[tool(
+        description = "Names of up to 200 Marktpartner by MP-ID, in one read: the registered display name, else the BO4E Geschaeftspartner's name1. MP-IDs the registry does not know, or knows no name for, are left out.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<PartnerNamen>()
+    )]
+    async fn partner_namen(
+        &self,
+        Parameters(p): Parameters<PartnerNamenParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if p.mp_ids.len() > 200 {
+            return Err(McpError::invalid_params(
+                format!("at most 200 MP-IDs per call, {} given", p.mp_ids.len()),
+                None,
+            ));
+        }
+        let rows = sqlx::query_as::<_, (String, Option<String>, serde_json::Value)>(
+            r"SELECT mp_id, display_name, geschaeftspartner
+              FROM partners
+              WHERE mp_id = ANY($1)
+              ORDER BY mp_id",
+        )
+        .bind(&p.mp_ids)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let partner = rows
+            .into_iter()
+            .filter_map(|(mp_id, display_name, gp)| {
+                Some(PartnerName {
+                    name: partner_name(display_name, &gp)?,
+                    mp_id,
+                })
+            })
+            .collect();
+        Ok(CallToolResult::structured(
+            serde_json::to_value(PartnerNamen { partner })
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
+    }
+
     /// Read a single trading partner by its 13-digit MP-ID.
     ///
     /// Returns display name, AS4 endpoints (`makoadresse`), the BO4E
@@ -1297,6 +1375,7 @@ impl ServerHandler for MdmdMcpHandler {
              - `get_melo_standorteigenschaften` — Redispatch 2.0 site properties for a MeLo\n\
              - `list_partners` — list registered trading partners (MP-ID, AS4 endpoint, Geschaeftspartner)\n\
              - `get_partner` — read a single trading partner by MP-ID\n\
+             - `partner_namen` — names of up to 200 partners by MP-ID, in one read\n\
              - `get_preisblatt` — read the PreisblattNetznutzung for an NB (used by invoicd for § 147 AO / GoBD)\n\
              - `get_versorgungsstatus` — read VersorgungsStatus (Beliefert/Unbeliefert/…) for a MaLo\n\
              - `get_versorgungsstatus_history` — full supply state transition history for a MaLo\n\
@@ -1352,4 +1431,41 @@ pub fn router(state: Arc<MdmdMcpState>, shutdown: CancellationToken) -> Router {
             state.clone(),
             mcp_auth_middleware,
         ))
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    /// The served tool contract is the committed `mcp.snapshot.json`
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it); the Desk generates its types from it.
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let tools: Vec<serde_json::Value> = MdmdMcpHandler::tool_router()
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
+    }
+
+    /// A partner is named by its display name, else by its Geschäftspartner's
+    /// `name1`; a blank one is no name, so the caller falls back to its own.
+    #[test]
+    fn a_partner_is_named_by_display_name_then_name1() {
+        let gp = serde_json::json!({ "name1": "Stadtwerke Musterstadt" });
+        assert_eq!(
+            partner_name(Some("SWM Netz".to_owned()), &gp).as_deref(),
+            Some("SWM Netz")
+        );
+        assert_eq!(
+            partner_name(Some("  ".to_owned()), &gp).as_deref(),
+            Some("Stadtwerke Musterstadt")
+        );
+        assert_eq!(partner_name(None, &serde_json::json!({})), None);
+    }
 }

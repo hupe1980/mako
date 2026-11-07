@@ -18,7 +18,7 @@ use uuid::Uuid;
 use invoicd::pg::ReceiptRow;
 use invoicd::pg::receipts::{
     DEAD_LETTER_ATTEMPTS, claim_erp_pending, dead_letter_erp, dispatch_target, record_erp_failure,
-    upsert_receipt,
+    store_antwort, upsert_receipt,
 };
 
 /// Container guard the test holds until it ends — dropping it removes the
@@ -214,6 +214,27 @@ async fn a_redispatch_finds_the_message_reference_and_pid() {
     assert_eq!(target.invoice_ref.as_deref(), Some("INV-2026-000123"));
     assert_eq!(target.pid, 31002);
     assert!(!target.already_dispatched);
+    assert!(
+        target.antwort.is_none(),
+        "nothing recorded before the check answered"
+    );
+
+    // The answer is recorded before it is sent, and a re-dispatch reads back
+    // exactly it — the Antwortcode and the German Ablehnungsgrund included.
+    let antwort = serde_json::json!({
+        "invoice_ref": "INV-2026-000123",
+        "antwort_code": "A70",
+        "antwort_codeliste": "E_0406",
+        "ablehnungsgrund": "Position 1 (Arbeitspreis): Einzelpreis 0,31200 EUR/kWh.",
+    });
+    store_antwort(&pool, TENANT, process_id, &antwort)
+        .await
+        .expect("record the answer");
+    let target = dispatch_target(&pool, id, TENANT)
+        .await
+        .expect("query")
+        .expect("found");
+    assert_eq!(target.antwort, Some(antwort));
 
     // Another tenant's id is not visible, whatever the row id.
     assert!(
@@ -405,8 +426,8 @@ async fn the_claim_is_tenant_scoped_and_carries_the_dispatch_state() {
     assert_eq!(row.findings_count, 2);
 }
 
-/// A dispute resolution has both parts or neither — a `Resolved` outcome
-/// without the timestamp loses when the operator closed it.
+/// A dispute resolution has its time and its decider or neither — a
+/// `Resolved` outcome without them loses when, and by whom, it was closed.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_resolution_cannot_be_recorded_without_its_timestamp() {
@@ -430,9 +451,33 @@ async fn a_resolution_cannot_be_recorded_without_its_timestamp() {
             .await
             .expect("read id");
     assert!(
-        invoicd::pg::receipts::resolve_dispute(&pool, receipt_id, TENANT, Some("NB korrigiert"))
+        invoicd::pg::receipts::resolve_dispute(
+            &pool,
+            receipt_id,
+            TENANT,
+            "anna.sachbearbeiterin",
+            Some("NB korrigiert")
+        )
+        .await
+        .expect("resolve"),
+        "the resolution path sets outcome, timestamp and decider together"
+    );
+    let by: Option<String> =
+        sqlx::query_scalar("SELECT dispute_resolved_by FROM invoic_receipts WHERE id = $1")
+            .bind(receipt_id)
+            .fetch_one(&pool)
             .await
-            .expect("resolve"),
-        "the resolution path sets outcome and timestamp together"
+            .expect("read decider");
+    assert_eq!(by.as_deref(), Some("anna.sachbearbeiterin"));
+
+    // A resolution with no decider is refused by the table itself.
+    let unattributed =
+        sqlx::query("UPDATE invoic_receipts SET dispute_resolved_by = NULL WHERE id = $1")
+            .bind(receipt_id)
+            .execute(&pool)
+            .await;
+    assert!(
+        unattributed.is_err(),
+        "a 'Resolved' row without its decider must be refused"
     );
 }

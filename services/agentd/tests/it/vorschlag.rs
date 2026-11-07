@@ -1,6 +1,7 @@
-//! The proposal that is waiting: every open Freigabe gets exactly one
-//! desk-assistant run, however often the tick reads processd's queue, and its
-//! checked proposal is read back by the Freigabe's id without starting another.
+//! The proposal that is waiting: every open Freigabe and Rechnungsdisput gets
+//! exactly one desk-assistant run, however often the tick reads its list, and
+//! its checked proposal is read back by its kind and id without starting
+//! another.
 
 use std::sync::Arc;
 
@@ -10,9 +11,11 @@ use agentplane::testkit::FakeProvider;
 use agentplane::tools::{ToolClient, ToolError, ToolId};
 use serde_json::{Value, json};
 
+use agentd::plane::vorschlag::Art;
 use agentd::plane::{Activation, Plane, PlaneConfig, Stores};
 
-/// processd with two open Freigaben, and the entry the run reads.
+/// processd with two open Freigaben and invoicd with one open dispute, and the
+/// entry the run reads.
 #[derive(Debug, Default)]
 struct Processd;
 
@@ -34,23 +37,23 @@ impl ToolClient for Processd {
                 "count": 2,
                 "saturated": false,
             }),
+            "list_disputes" => json!({
+                "disputes": [{ "id": "d1" }],
+                "count": 1,
+                "saturated": false,
+            }),
             _ => json!({ "id": "e1", "malo_id": "51238696012", "pid": 55001 }),
         })
     }
 }
 
-fn proposal() -> Completion {
+fn proposal(vorschlag: Value) -> Completion {
     Completion {
         text: String::new(),
         model: None,
         structured: Some(json!({
             "saetze": [{ "text": "Die Anmeldung für 51238696012 ist gehalten.", "quelle": "processd/get_queue_entry" }],
-            "vorschlag": {
-                "aktion": "freigeben",
-                "antwortcode": null,
-                "begruendung": "Die Anmeldung für 51238696012 ist gehalten.",
-                "quelle": "processd/get_queue_entry"
-            }
+            "vorschlag": vorschlag,
         })),
         stop_reason: Some("end_turn".to_owned()),
         tool_calls: Vec::new(),
@@ -71,9 +74,16 @@ async fn every_open_freigabe_gets_one_proposal_run_however_often_the_tick_reads(
         .into_iter()
         .map(|name| (name, Arc::clone(&processd)))
         .collect();
+    let freigeben = json!({
+        "aktion": "freigeben",
+        "antwortcode": null,
+        "befund": null,
+        "begruendung": "Die Anmeldung für 51238696012 ist gehalten.",
+        "quelle": "processd/get_queue_entry"
+    });
     let provider = FakeProvider::new();
-    provider.will_answer(proposal());
-    provider.will_answer(proposal());
+    provider.will_answer(proposal(freigeben.clone()));
+    provider.will_answer(proposal(freigeben));
     let plane = Plane::new(
         Stores::redb(RedbStore::open_in_memory().expect("store"), &tenant),
         PlaneConfig {
@@ -98,16 +108,16 @@ async fn every_open_freigabe_gets_one_proposal_run_however_often_the_tick_reads(
     // starts nothing.
     assert!(
         plane
-            .vorschlag_of("e1", "erika")
+            .vorschlag_of(Art::Freigabe, "e1", "erika")
             .await
             .expect("readable")
             .is_none()
     );
 
-    let first = agentd::plane::vorschlag::tick(&plane, processd.as_ref())
+    let first = agentd::plane::vorschlag::tick(&plane, Art::Freigabe, processd.as_ref())
         .await
         .expect("the tick reads the queue");
-    let second = agentd::plane::vorschlag::tick(&plane, processd.as_ref())
+    let second = agentd::plane::vorschlag::tick(&plane, Art::Freigabe, processd.as_ref())
         .await
         .expect("the tick reads the queue");
     assert_eq!(
@@ -116,15 +126,7 @@ async fn every_open_freigabe_gets_one_proposal_run_however_often_the_tick_reads(
         "two entries are two runs, not four"
     );
 
-    let mut answer = None;
-    for _ in 0..200 {
-        answer = plane.vorschlag_of("e1", "erika").await.expect("readable");
-        if answer.as_ref().is_some_and(|a| a.status != "running") {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    let answer = answer.expect("e1 has its proposal run");
+    let answer = concluded(&plane, Art::Freigabe, "e1").await;
     assert_eq!(answer.status, "succeeded", "{answer:?}");
     let vorschlag = answer.vorschlag.expect("a proposal");
     assert_eq!(vorschlag.aktion, "freigeben");
@@ -135,13 +137,61 @@ async fn every_open_freigabe_gets_one_proposal_run_however_often_the_tick_reads(
     // A Freigabe no tick saw has none, and asking admits nothing.
     assert!(
         plane
-            .vorschlag_of("e3", "erika")
+            .vorschlag_of(Art::Freigabe, "e3", "erika")
             .await
             .expect("readable")
             .is_none()
     );
-    let third = agentd::plane::vorschlag::tick(&plane, processd.as_ref())
+    let third = agentd::plane::vorschlag::tick(&plane, Art::Freigabe, processd.as_ref())
         .await
         .expect("the tick reads the queue");
     assert_eq!(third, 0);
+
+    // The Freigaben have concluded; the dispute's run is the next one asked.
+    concluded(&plane, Art::Freigabe, "e2").await;
+    provider.will_answer(proposal(json!({
+        "aktion": "aufrechterhalten",
+        "antwortcode": null,
+        "befund": "TariffDeviation",
+        "begruendung": "Der Preis weicht vom Preisblatt ab.",
+        "quelle": "invoicd/get_check_result"
+    })));
+    let disputes = agentd::plane::vorschlag::tick(&plane, Art::Disput, processd.as_ref())
+        .await
+        .expect("the tick reads the disputes");
+    let again = agentd::plane::vorschlag::tick(&plane, Art::Disput, processd.as_ref())
+        .await
+        .expect("the tick reads the disputes");
+    assert_eq!((disputes, again), (1, 0), "one dispute is one run");
+    let answer = concluded(&plane, Art::Disput, "d1").await;
+    let vorschlag = answer.vorschlag.expect("a proposal for the dispute");
+    assert_eq!(vorschlag.aktion, "aufrechterhalten");
+    assert_eq!(vorschlag.befund.as_deref(), Some("TariffDeviation"));
+    // The run read no findings, so the finding is not one a read names.
+    assert!(!vorschlag.belegt, "{vorschlag:?}");
+
+    // A Freigabe's run is not a dispute's, though they share the store.
+    assert!(
+        plane
+            .vorschlag_of(Art::Disput, "e1", "erika")
+            .await
+            .expect("readable")
+            .is_none()
+    );
+}
+
+/// The proposal run of one entry, once it has concluded.
+async fn concluded(plane: &Plane, art: Art, id: &str) -> agentd::plane::Answer {
+    let mut answer = None;
+    for _ in 0..200 {
+        answer = plane
+            .vorschlag_of(art, id, "erika")
+            .await
+            .expect("readable");
+        if answer.as_ref().is_some_and(|a| a.status != "running") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    answer.unwrap_or_else(|| panic!("{id} has its proposal run"))
 }

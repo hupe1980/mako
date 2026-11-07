@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 /// alerted on by the dispatcher when they fire, owned by no workflow.
 const DELIVERY_WINDOWS: &[&str] = &[
     "APERAK_STROM_WINDOW_LABEL",
+    "APERAK_STROM_ALLGEMEIN_LABEL",
     "APERAK_GAS_FOLGEPROZESS_LABEL",
     "APERAK_GAS_INITIALPROZESS_LABEL",
     "APERAK_WINDOW_LABEL_PREFIX",

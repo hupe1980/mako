@@ -41,6 +41,11 @@ export interface Disput {
    */
   sender_mp_id: string;
   /**
+   * The Rechnungsnummer the Rechnungssteller gave the invoice, where the
+   * INVOIC carried one.
+   */
+  rechnungsnummer: string | null;
+  /**
    * RFC 3339 in UTC.
    */
   received_at: Instant;
@@ -53,6 +58,35 @@ export interface Disput {
    * in UTC; `None` when the INVOIC carries no Zahlungsziel.
    */
   frist: Instant | null;
+  /**
+   * The refusal (REMADV) went out to the Rechnungssteller. When it did not,
+   * `POST /api/v1/receipts/{id}/dispatch-answer` sends it — a market
+   * message; when it did, what is left is closing the dispute
+   * (`POST /api/v1/receipts/{id}/resolve-dispute`), which sends nothing.
+   */
+  abgesendet: boolean;
+  /**
+   * The invoic-checker findings that disputed the invoice, in its words.
+   */
+  befunde: DisputBefund[];
+}
+/**
+ * One finding a dispute rests on.
+ */
+export interface DisputBefund {
+  /**
+   * The finding's kind, as `get_check_result` names it (`TariffDeviation`, …)
+   * — an identifier, not for a reader.
+   */
+  art: string;
+  /**
+   * What the kind is called in German (`Preis weicht vom Preisblatt ab`).
+   */
+  bezeichnung: string;
+  /**
+   * The checker's sentence.
+   */
+  text: string;
 }
 
 /** Tools invoicd serves without an output schema: no view may read them. */

@@ -1,17 +1,22 @@
-//! The proposal that is waiting on every Freigabe.
+//! The proposal that is waiting on every decision held for a person.
 //!
 //! A decision held for a person is answered from the same reads every time
 //! somebody asks the desk assistant „Was schlägst du vor?". Asking once per
-//! Freigabe instead of once per look costs one model run per entry, and the
+//! decision instead of once per look costs one model run per entry, and the
 //! person starts from a checked answer rather than an empty form.
 //!
-//! The tick reads processd's open Freigaben and admits one desk-assistant run
-//! per entry ([`Plane::vorschlag_zulassen`]). It is a pull, not an event:
-//! processd's queue is already the durable record, so an entry a tick missed
-//! is admitted by the next one, and admission keyed on the entry id makes any
-//! number of ticks — on any number of instances — one run. The run sends
-//! nothing: the proposal is prefilled in the Desk, and the send is the
-//! person's.
+//! Two kinds of decision get one ([`Art`]): processd's Freigaben and
+//! invoicd's Rechnungsdispute. The tick reads each kind's open list and admits
+//! one desk-assistant run per entry ([`Plane::vorschlag_zulassen`]). It is a
+//! pull, not an event: the owning service's list is already the durable
+//! record, so an entry a tick missed is admitted by the next one, and
+//! admission keyed on the kind and the entry id makes any number of ticks — on
+//! any number of instances — one run. The run sends nothing: the proposal is
+//! prefilled in the Desk, and the send is the person's.
+//!
+//! billingd's Prüfposten get none: releasing an invoice the risk gate held
+//! overrides a deterministic check on money, and a model's reading of the
+//! same findings adds no evidence the gate did not already weigh.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,24 +35,82 @@ pub const SKILL: &str = "desk-assistant";
 /// asked what to do.
 pub const FRAGE: &str = "Was schlägst du vor?";
 
-/// The tool listing the open Freigaben, on the `processd` server.
-const LISTE: &str = "list_pending_approvals";
-
 /// Entries read per tick; a saturated page is reported, and the next tick
 /// admits what this one did not reach.
 const SEITE: u32 = 200;
 
-/// The admission event id of one Freigabe's proposal.
-#[must_use]
-pub fn ereignis(freigabe: &str) -> String {
-    format!("vorschlag:{freigabe}")
+/// What a waiting proposal decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Art {
+    /// A processd Freigabe: approve or refuse the held answer.
+    Freigabe,
+    /// An invoicd Rechnungsdisput: close it, or let the refusal stand.
+    Disput,
 }
 
-/// The entry ids of a `list_pending_approvals` result, and whether the page
-/// was full.
+impl Art {
+    /// Every kind, in the order the tick reads them.
+    pub const ALLE: [Self; 2] = [Self::Freigabe, Self::Disput];
+
+    /// The Anker key: the run input's field, and the `vorschlaege` query's.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Freigabe => "freigabe",
+            Self::Disput => "disput",
+        }
+    }
+
+    /// The MCP server whose list holds the open entries.
+    #[must_use]
+    pub const fn server(self) -> &'static str {
+        match self {
+            Self::Freigabe => "processd",
+            Self::Disput => "invoicd",
+        }
+    }
+
+    /// The actions a proposal of this kind may name — the Desk's own for it.
+    #[must_use]
+    pub const fn aktionen(self) -> &'static [&'static str] {
+        match self {
+            Self::Freigabe => &["freigeben", "ablehnen"],
+            Self::Disput => &["beilegen", "aufrechterhalten"],
+        }
+    }
+
+    /// The kind whose proposal names `aktion`.
+    #[must_use]
+    pub fn von_aktion(aktion: &str) -> Option<Self> {
+        Self::ALLE
+            .into_iter()
+            .find(|a| a.aktionen().contains(&aktion))
+    }
+
+    /// The listing tool, its arguments, and the field its entries are under.
+    fn liste(self) -> (&'static str, Value, &'static str) {
+        match self {
+            Self::Freigabe => (
+                "list_pending_approvals",
+                serde_json::json!({ "limit": SEITE }),
+                "freigaben",
+            ),
+            Self::Disput => ("list_disputes", serde_json::json!({}), "disputes"),
+        }
+    }
+}
+
+/// The admission event id of one entry's proposal.
 #[must_use]
-pub fn eintraege(output: &Value) -> (Vec<String>, bool) {
-    let ids = output["freigaben"]
+pub fn ereignis(art: Art, id: &str) -> String {
+    format!("vorschlag:{}:{id}", art.key())
+}
+
+/// The entry ids of a listing of `art`, and whether the page was full.
+#[must_use]
+pub fn eintraege(art: Art, output: &Value) -> (Vec<String>, bool) {
+    let (_, _, feld) = art.liste();
+    let ids = output[feld]
         .as_array()
         .map(|a| {
             a.iter()
@@ -60,32 +123,35 @@ pub fn eintraege(output: &Value) -> (Vec<String>, bool) {
     (ids, output["saturated"].as_bool().unwrap_or(false))
 }
 
-/// One tick: admit a proposal run for every open Freigabe that has none.
-/// Returns how many runs were freshly admitted.
+/// One tick over one kind: admit a proposal run for every open entry that has
+/// none. Returns how many runs were freshly admitted.
 ///
 /// # Errors
 ///
-/// processd's tool failing or answering something that is not a list.
-pub async fn tick(plane: &Plane, processd: &dyn ToolClient) -> Result<usize, String> {
-    let tool = ToolId::new("processd", LISTE);
-    let output = processd
-        .call(&tool, &serde_json::json!({ "limit": SEITE }), None)
+/// The owning service's tool failing, or the desk-assistant not activated.
+pub async fn tick(plane: &Plane, art: Art, client: &dyn ToolClient) -> Result<usize, String> {
+    let (liste, args, _) = art.liste();
+    let tool = ToolId::new(art.server(), liste);
+    let output = client
+        .call(&tool, &args, None)
         .await
         .map_err(|e| e.to_string())?;
-    let (ids, saturated) = eintraege(&output);
+    let (ids, saturated) = eintraege(art, &output);
     if saturated {
         warn!(
+            art = art.key(),
             read = ids.len(),
-            "agentd vorschlaege: more Freigaben are open than one tick reads — the rest are \
+            "agentd vorschlaege: more entries are open than one tick reads — the rest are \
              admitted on the next ticks"
         );
     }
     let mut fresh = 0;
     for id in &ids {
-        match plane.vorschlag_zulassen(id).await {
+        match plane.vorschlag_zulassen(art, id).await {
             Some(a) if a.fresh => fresh += 1,
             Some(a) if a.refused.is_some() => warn!(
-                freigabe = %id,
+                art = art.key(),
+                entry = %id,
                 refused = a.refused.as_deref().unwrap_or_default(),
                 "agentd vorschlaege: the proposal run was not admitted"
             ),
@@ -96,10 +162,10 @@ pub async fn tick(plane: &Plane, processd: &dyn ToolClient) -> Result<usize, Str
     Ok(fresh)
 }
 
-/// Run the tick until shutdown.
+/// Run the tick until shutdown, over every kind whose service is configured.
 pub fn spawn(
     state: Arc<crate::handlers::AppState>,
-    processd: Arc<dyn ToolClient>,
+    quellen: Vec<(Art, Arc<dyn ToolClient>)>,
     every: Duration,
     shutdown: CancellationToken,
 ) {
@@ -109,11 +175,16 @@ pub fn spawn(
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => break,
-                _ = ticker.tick() => match tick(&state.plane, processd.as_ref()).await {
-                    Ok(0) => {}
-                    Ok(n) => info!(admitted = n, "agentd vorschlaege: proposal runs admitted"),
-                    Err(e) => warn!(error = %e, "agentd vorschlaege: tick failed"),
-                },
+                _ = ticker.tick() => {
+                    // One kind failing leaves the others' proposals coming.
+                    for (art, client) in &quellen {
+                        match tick(&state.plane, *art, client.as_ref()).await {
+                            Ok(0) => {}
+                            Ok(n) => info!(art = art.key(), admitted = n, "agentd vorschlaege: proposal runs admitted"),
+                            Err(e) => warn!(art = art.key(), error = %e, "agentd vorschlaege: tick failed"),
+                        }
+                    }
+                }
             }
         }
     });
@@ -124,22 +195,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_entry_ids_are_read_off_the_listing() {
+    fn the_entry_ids_are_read_off_each_kinds_listing() {
         let out = serde_json::json!({
             "freigaben": [{ "id": "a" }, { "id": "" }, { "id": "b" }, {}],
             "count": 4,
             "saturated": true,
         });
         assert_eq!(
-            eintraege(&out),
+            eintraege(Art::Freigabe, &out),
             (vec!["a".to_owned(), "b".to_owned()], true)
         );
-        assert_eq!(eintraege(&serde_json::json!({})), (vec![], false));
+        assert_eq!(eintraege(Art::Disput, &out), (vec![], true));
+        let disputes = serde_json::json!({ "disputes": [{ "id": "d1" }], "saturated": false });
+        assert_eq!(
+            eintraege(Art::Disput, &disputes),
+            (vec!["d1".to_owned()], false)
+        );
+        assert_eq!(
+            eintraege(Art::Freigabe, &serde_json::json!({})),
+            (vec![], false)
+        );
     }
 
+    /// One entry is one admission event, and a Freigabe and a Disput that
+    /// happen to share an id are two.
     #[test]
-    fn one_freigabe_is_one_admission_event() {
-        assert_eq!(ereignis("e1"), ereignis("e1"));
-        assert_ne!(ereignis("e1"), ereignis("e2"));
+    fn one_entry_of_one_kind_is_one_admission_event() {
+        assert_eq!(ereignis(Art::Freigabe, "e1"), ereignis(Art::Freigabe, "e1"));
+        assert_ne!(ereignis(Art::Freigabe, "e1"), ereignis(Art::Freigabe, "e2"));
+        assert_ne!(ereignis(Art::Freigabe, "e1"), ereignis(Art::Disput, "e1"));
+    }
+
+    /// The two kinds name disjoint actions, so a proposal's action says which
+    /// decision it is for.
+    #[test]
+    fn each_action_belongs_to_one_kind() {
+        for art in Art::ALLE {
+            for a in art.aktionen() {
+                assert_eq!(Art::von_aktion(a), Some(art), "{a}");
+            }
+        }
+        assert_eq!(Art::von_aktion("senden"), None);
     }
 }

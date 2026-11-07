@@ -321,7 +321,7 @@
           "type": "object",
           "properties": {
             "id": {
-              "description": "The billing record — what `POST /api/v1/billing/{id}/release` addresses.",
+              "description": "The billing record — what `POST /api/v1/billing/{id}/release` (HELD) and\n`POST /api/v1/billing/{id}/reviewed` (REVIEW) address.",
               "type": "string"
             },
             "malo_id": {

@@ -211,7 +211,6 @@ fn the_supplier_change_workflow_enqueues_a_renderable_aperak() {
             kunde_name: Some("Mustermann".to_owned()),
             kunde_namensformat: Some("Z01".to_owned()),
             message_ref: MessageRef::new("MSG-001"),
-            received_at: time::OffsetDateTime::now_utc(),
             validation_passed: true,
             validation_errors: vec![],
         },
@@ -243,5 +242,55 @@ fn the_supplier_change_workflow_enqueues_a_renderable_aperak() {
             .map(|i| format!("  [{}] {}", i.rule_id.as_deref().unwrap_or("-"), i.message))
             .collect::<Vec<_>>()
             .join("\n"),
+    );
+}
+
+/// The Anerkennungsmeldung the ingest door owes names the acknowledged
+/// message's Dokumentennummer (`SG2 RFF+AGO`) and Dokumentendatum (`SG2
+/// DTM+171`), not its own (APERAK AHB 1.1 Kap. 3, S. 26).
+#[test]
+fn an_anerkennung_references_the_acknowledged_document() {
+    let payload = mako_engine::payload::AperakPayload::anerkennung(NB, LF, ORIG_REF)
+        .referencing("DOK13018", Some("202610010000".to_owned()));
+    let wire = render_and_validate(PendingOutbox::typed(LF, &payload));
+    assert!(wire.contains("RFF+AGO:DOK13018'"), "{wire}");
+    assert!(wire.contains("DTM+171:202610010000?+00:303'"), "{wire}");
+}
+
+/// The door's two Verarbeitbarkeitsfehlermeldungen pass the APERAK AHB:
+/// `Z31` (no Ortsangabe) and `Z29` with its obligatory `FTX+Z02` (§ 2.1.2.2).
+#[test]
+fn the_doors_fehlermeldungen_pass_the_ahb() {
+    let z31 =
+        mako_engine::payload::AperakPayload::fehler(NB, LF, ORIG_REF, "Z31", "nicht verarbeitet");
+    let wire = render_and_validate(PendingOutbox::typed(LF, &z31));
+    assert!(wire.contains("ERC+Z31'"), "{wire}");
+    let mut z29 = mako_engine::payload::AperakPayload::fehler(NB, LF, ORIG_REF, "Z29", "fehlt");
+    z29.ortsangabe = Some("Nachrichtendatum".to_owned());
+    let wire = render_and_validate(PendingOutbox::typed(LF, &z29));
+    assert!(wire.contains("ERC+Z29'"), "{wire}");
+    assert!(wire.contains("FTX+Z02+++Nachrichtendatum'"), "{wire}");
+}
+
+/// Two AHB-Fehler render as two `SG4 ERC` groups, each with its `FTX+Z02`.
+#[test]
+fn two_ahb_fehler_render_as_two_erc_groups() {
+    let mut payload = mako_engine::payload::AperakPayload::fehler(NB, LF, ORIG_REF, "Z29", "fehlt");
+    payload.ortsangabe = Some("Nachrichtendatum".to_owned());
+    payload
+        .weitere_fehler
+        .push(mako_engine::payload::AperakFehler {
+            error_code: "Z39".to_owned(),
+            reason: Some("falscher Code".to_owned()),
+            ortsangabe: Some("Mengen- und Statusangaben".to_owned()),
+        });
+    let wire = render_and_validate(PendingOutbox::typed(LF, &payload));
+    assert_eq!(wire.matches("ERC+").count(), 2, "{wire}");
+    assert!(wire.contains("ERC+Z29'"), "{wire}");
+    assert!(wire.contains("ERC+Z39'"), "{wire}");
+    assert!(wire.contains("FTX+Z02+++Nachrichtendatum'"), "{wire}");
+    assert!(
+        wire.contains("FTX+Z02+++Mengen- und Statusangaben'"),
+        "{wire}"
     );
 }

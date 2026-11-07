@@ -13,6 +13,7 @@ import type { BillingdTools } from "./gen/billingd";
 import type { EdmdTools } from "./gen/edmd";
 import type { InvoicdTools } from "./gen/invoicd";
 import type { MakodTools } from "./gen/makod";
+import type { MarktdTools } from "./gen/marktd";
 import type { NetzbilanzdTools } from "./gen/netzbilanzd";
 import type { ProcessdTools } from "./gen/processd";
 import type { VertragdTools } from "./gen/vertragd";
@@ -23,6 +24,7 @@ export interface ServiceTools {
   edmd: EdmdTools;
   invoicd: InvoicdTools;
   makod: MakodTools;
+  marktd: MarktdTools;
   netzbilanzd: NetzbilanzdTools;
   processd: ProcessdTools;
   vertragd: VertragdTools;

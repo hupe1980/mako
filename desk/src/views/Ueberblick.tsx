@@ -3,6 +3,7 @@ import { DIENST } from "../app/dienste";
 import { ROLLEN, useRolle } from "../app/rollen";
 import { call, type Service, ServiceUnavailable } from "../data/mcp";
 import { Tile, type TileState } from "../design/Tile";
+import { useDeadLetters } from "./DeadLetters";
 import { Hinweise } from "./Hinweise";
 
 /** A tile's state from its query: the service's number, or why there is none. */
@@ -60,6 +61,82 @@ function AnmeldungenTile() {
   );
 }
 
+function DeadLettersTile() {
+  const q = useDeadLetters();
+  // `gesamt` is every dead letter the service holds, not the page it lists.
+  // It marks no breach, so the tile stays uncoloured.
+  return (
+    <Tile
+      label="Dead Letters"
+      source={DIENST.makod}
+      href="/dead-letters"
+      state={tileState(q, "makod", (d) => ({ n: d.gesamt }))}
+    />
+  );
+}
+
+// The tiles below count what a Heute source lists, with the same read Heute
+// makes (same key, same arguments), so the number is the rows the click
+// shows — a page's count, a floor where the service says it is saturated.
+const SEITE = 50;
+
+function PruefpostenTile() {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "billingd", "list_review_queue"],
+    queryFn: () => call("billingd", "list_review_queue", { limit: SEITE }),
+    refetchInterval: 60_000,
+  });
+  return (
+    <Tile
+      label="Rechnungsprüfung"
+      source={DIENST.billingd}
+      href="/heute"
+      state={tileState(q, "billingd", (d) => ({ n: d.count, atLeast: d.saturated }))}
+    />
+  );
+}
+
+function DisputeTile() {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "invoicd", "list_disputes"],
+    queryFn: () => call("invoicd", "list_disputes", {}),
+    refetchInterval: 60_000,
+  });
+  return (
+    <Tile
+      label="Rechnungsdispute"
+      source={DIENST.invoicd}
+      href="/heute"
+      state={tileState(q, "invoicd", (d) => ({ n: d.count, atLeast: d.saturated }))}
+    />
+  );
+}
+
+function AbleseauftraegeTile() {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "edmd", "list_overdue_reading_orders"],
+    queryFn: () => call("edmd", "list_overdue_reading_orders", { limit: SEITE }),
+    refetchInterval: 60_000,
+  });
+  // Every row is past the ausfuehrt_bis edmd states, so a non-empty answer is
+  // the service's own breach.
+  return (
+    <Tile
+      label="Ableseaufträge überfällig"
+      source={DIENST.edmd}
+      href="/heute"
+      state={tileState(q, "edmd", (d) => ({
+        n: d.count,
+        atLeast: d.saturated,
+        breach: d.count > 0,
+      }))}
+    />
+  );
+}
+
 /**
  * Überblick: a few numbers for whoever answers for the Rolle — each one a
  * service's own figure, each opening the list it counts.
@@ -78,7 +155,15 @@ export function UeberblickView() {
       <Hinweise />
       <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
         <FristenTile />
-        {rolle === "lieferant" && <AnmeldungenTile />}
+        {rolle === "netz" && <DeadLettersTile />}
+        {rolle === "lieferant" && (
+          <>
+            <AnmeldungenTile />
+            <PruefpostenTile />
+            <DisputeTile />
+          </>
+        )}
+        {rolle === "messstelle" && <AbleseauftraegeTile />}
       </div>
     </div>
   );

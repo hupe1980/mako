@@ -426,47 +426,78 @@ pub async fn answer(
     }
 }
 
-/// `?freigabe=<id>,<id>…` — the Freigaben whose waiting proposal is asked for.
+/// `?freigabe=<id>,…&disput=<id>,…` — the entries, per kind, whose waiting
+/// proposal is asked for.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VorschlaegeQuery {
-    pub freigabe: String,
+    #[serde(default)]
+    pub freigabe: Option<String>,
+    #[serde(default)]
+    pub disput: Option<String>,
 }
 
 /// Ids per request — the most rows Heute shows at once.
 const VORSCHLAEGE_MAX: usize = 100;
 
-/// `GET /api/v1/vorschlaege?freigabe=<id>,…` — each Freigabe's waiting
-/// proposal: its run's answer (`running`, or concluded with its checked
-/// `vorschlag`), or `null` where none was admitted. Read under the verb a
-/// run's answer is; it never starts a run.
+/// Each entry's waiting proposal, per kind and id.
+pub type Vorschlaege = std::collections::BTreeMap<
+    &'static str,
+    std::collections::BTreeMap<String, Option<crate::plane::Answer>>,
+>;
+
+/// `GET /api/v1/vorschlaege?freigabe=<id>,…&disput=<id>,…` — each entry's
+/// waiting proposal, under its kind: its run's answer (`running`, or
+/// concluded with its checked `vorschlag`), or `null` where none was
+/// admitted. Read under the verb a run's answer is; it never starts a run.
 pub async fn vorschlaege(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     axum::extract::Query(q): axum::extract::Query<VorschlaegeQuery>,
-) -> ApiResult<Json<std::collections::BTreeMap<String, Option<crate::plane::Answer>>>> {
+) -> ApiResult<Json<Vorschlaege>> {
+    use crate::plane::vorschlag::Art;
     if let Some(refused) = refusal(&state, &claims, agentplane::api::action::RUN_READ) {
         return Err(refused);
     }
-    let ids: Vec<&str> = q
-        .freigabe
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-    if ids.len() > VORSCHLAEGE_MAX {
+    let ids = |raw: Option<&str>| -> Vec<String> {
+        raw.unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    let gefragt = [
+        (Art::Freigabe, ids(q.freigabe.as_deref())),
+        (Art::Disput, ids(q.disput.as_deref())),
+    ];
+    let n: usize = gefragt.iter().map(|(_, i)| i.len()).sum();
+    if n > VORSCHLAEGE_MAX {
         return Err(ApiError::unprocessable(format!(
-            "at most {VORSCHLAEGE_MAX} Freigaben per request, {} given",
-            ids.len()
+            "at most {VORSCHLAEGE_MAX} entries per request, {n} given"
         )));
     }
     let reader = &claims.principal().sub;
-    let mut out = std::collections::BTreeMap::new();
-    for id in ids {
-        let answer = state.plane.vorschlag_of(id, reader).await.map_err(|e| {
-            ApiError::internal(anyhow::anyhow!("read the proposal of Freigabe {id}: {e}"))
-        })?;
-        out.insert(id.to_owned(), answer);
+    let mut out = Vorschlaege::new();
+    for (art, ids) in gefragt {
+        if ids.is_empty() {
+            continue;
+        }
+        let mut je = std::collections::BTreeMap::new();
+        for id in ids {
+            let answer = state
+                .plane
+                .vorschlag_of(art, &id, reader)
+                .await
+                .map_err(|e| {
+                    ApiError::internal(anyhow::anyhow!(
+                        "read the proposal of {} {id}: {e}",
+                        art.key()
+                    ))
+                })?;
+            je.insert(id, answer);
+        }
+        out.insert(art.key(), je);
     }
     Ok(Json(out))
 }
@@ -817,6 +848,37 @@ mod tests {
         assert_eq!(named.input, serde_json::Value::Null);
     }
 
+    /// The catalog is the committed `catalog.snapshot.json`
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it): a grant added to a manifest, a
+    /// model swapped or a trigger widened changes the Beipackzettel, and has to
+    /// change the snapshot in the same commit. `aktiv` is the deployment's, not
+    /// the binary's, so it is left out. Compared only where every Marktrolle's
+    /// specialists are compiled in, since a role build lists its own.
+    #[cfg(any(
+        not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
+        all(feature = "role-lf", feature = "role-nb", feature = "role-msb"),
+    ))]
+    #[test]
+    fn the_catalog_matches_the_snapshot() {
+        let faehigkeiten: Vec<serde_json::Value> = crate::builtin::all()
+            .map(|d| {
+                let serde_json::Value::Object(f) =
+                    serde_json::to_value(super::faehigkeit(d, false)).expect("serializes")
+                else {
+                    unreachable!("a struct serializes to an object")
+                };
+                f.into_iter().filter(|(k, _)| k != "aktiv").collect()
+            })
+            .collect();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("catalog.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare_json(
+            &serde_json::json!({ "faehigkeiten": faehigkeiten }),
+            &path,
+        ) {
+            panic!("{e}");
+        }
+    }
+
     /// Every specialist names itself for an operator — a Beipackzettel entry
     /// without a title or a purpose would show a crate-style name instead.
     #[test]
@@ -844,7 +906,7 @@ mod tests {
         );
         assert!(desk.nur_lesend);
         assert!(desk.modell.is_some());
-        assert_eq!(desk.liest.len(), 5);
+        assert_eq!(desk.liest.len(), 7);
         assert!(
             desk.liest
                 .iter()

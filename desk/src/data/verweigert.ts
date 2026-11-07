@@ -10,6 +10,8 @@ import { useSyncExternalStore } from "react";
 /** An action the Desk offers, by the service that decides it. */
 export type Handlung =
   | { dienst: "processd"; aktion: "entscheiden" }
+  | { dienst: "invoicd"; aktion: "entscheiden" }
+  | { dienst: "billingd"; aktion: "freigeben" | "pruefen" }
   | { dienst: "agentd"; aktion: "fragen" | "bewerten" };
 
 /** The service refused the person this action: its reason, as it wrote it. */

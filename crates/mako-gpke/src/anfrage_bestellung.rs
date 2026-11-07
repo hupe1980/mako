@@ -232,6 +232,20 @@ pub enum AnfrageBestellungState {
     },
 }
 
+/// Whether an Anfrage Daten der individuellen Bestellung still holds its
+/// Vorgang: live while the answer is owed, settled once it is dispatched or
+/// the Anfrage refused.
+impl mako_engine::workflow::OccupiesBusinessKey for AnfrageBestellungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::Initiated(_) | Self::ValidationPassed(_) => true,
+            Self::New | Self::ResponseDispatched(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl AnfrageBestellungState {
     /// Stable status string for metrics and projections.
     #[must_use]

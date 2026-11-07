@@ -138,13 +138,20 @@ CREATE TABLE billing_records (
     -- ── Risk scoring (deterministic release gate) ────────────────────────────
     -- Score 0–100 from the coded findings in risk_findings; band decides the
     -- action: AUTO_RELEASED/SAMPLE dispatch immediately, REVIEW dispatches but
-    -- queues for analysts, HELD blocks dispatch until released_by/-at is set
-    -- via POST /api/v1/billing/{id}/release.
+    -- queues for analysts until reviewed_by/-at is set via
+    -- POST /api/v1/billing/{id}/reviewed, HELD blocks dispatch until
+    -- released_by/-at is set via POST /api/v1/billing/{id}/release.
     risk_score        SMALLINT,
     risk_band         TEXT CHECK (risk_band IN ('AUTO_RELEASED','SAMPLE','REVIEW','HELD')),
     risk_findings     JSONB,
     released_by       TEXT,
     released_at       TIMESTAMPTZ,
+    reviewed_by       TEXT,
+    reviewed_at       TIMESTAMPTZ,
+    -- Each stamp has its decider, and only its own band carries it.
+    CONSTRAINT br_release_attributed CHECK ((released_by IS NULL) = (released_at IS NULL)),
+    CONSTRAINT br_review_attributed  CHECK ((reviewed_by IS NULL) = (reviewed_at IS NULL)),
+    CONSTRAINT br_review_is_review   CHECK (reviewed_at IS NULL OR risk_band = 'REVIEW'),
 
     -- An issued document records the template that produced it, so its
     -- appearance is reproducible for as long as the document must be kept.
@@ -213,9 +220,9 @@ CREATE UNIQUE INDEX br_unique_original
 CREATE INDEX br_malo_period   ON billing_records (malo_id, lf_mp_id, period_from DESC);
 -- Outcome workflow
 CREATE INDEX br_outcome       ON billing_records (outcome, lf_mp_id);
--- Analyst work list
+-- Analyst work list: what is still undecided
 CREATE INDEX br_review_queue  ON billing_records (tenant, risk_score DESC)
-    WHERE risk_band IN ('REVIEW','HELD');
+    WHERE risk_band IN ('REVIEW','HELD') AND released_at IS NULL AND reviewed_at IS NULL;
 -- Correction chain lookup
 CREATE INDEX br_corrections   ON billing_records (original_record_id)
     WHERE is_correction = true;

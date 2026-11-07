@@ -61,6 +61,96 @@ pub struct OverdueProcesses {
     pub limit: i64,
 }
 
+/// What `get_kpi_report` returns for one PID and calendar month.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct KpiReportView {
+    /// BDEW Prüfidentifikator.
+    pub pid: u32,
+    /// First day of the month, `YYYY-MM-DD`.
+    #[schemars(extend("format" = "date"))]
+    pub period_from: String,
+    /// Last day of the month, `YYYY-MM-DD`.
+    #[schemars(extend("format" = "date"))]
+    pub period_to: String,
+    /// Processes started in the month.
+    pub total_initiated: u64,
+    pub total_completed: u64,
+    pub total_rejected: u64,
+    pub total_failed: u64,
+    /// The GPKE / GeLi Gas Lieferantenwechsel reporting its own Antwortfrist
+    /// lapse — not an APERAK delivery window.
+    pub antwortfrist_abgelaufen: u64,
+    /// Processes past their business Antwortfrist (`deadline_at`) without
+    /// closing, or closed after it.
+    pub frist_breached: u64,
+    /// The denominator of `frist_compliance_rate`: a small one means the
+    /// month is mostly unmeasured, which a rate near 1.0 hides.
+    pub with_published_frist: u64,
+    /// `1 − frist_breached / with_published_frist`; `None` when nothing in
+    /// the month carries a published Frist — never 0.
+    pub frist_compliance_rate: Option<f64>,
+    /// Mean hours from start to end; `None` when nothing has closed.
+    pub avg_cycle_time_hours: Option<f64>,
+    /// 95th-percentile hours from start to end; `None` when nothing has closed.
+    pub p95_cycle_time_hours: Option<f64>,
+    pub note: &'static str,
+}
+
+const KPI_NOTE: &str = "frist_breached is the business Antwortfrist measured against \
+deadline_at; antwortfrist_abgelaufen counts processes the GPKE / GeLi Gas supplier-change \
+workflow reported as past its Antwortfrist. Neither measures an APERAK delivery window. Null \
+rates mean nothing measurable in the bucket, not perfect performance.";
+
+impl From<crate::obs::domain::KpiReport> for KpiReportView {
+    fn from(r: crate::obs::domain::KpiReport) -> Self {
+        Self {
+            pid: r.pid,
+            period_from: r.period_from.to_string(),
+            period_to: r.period_to.to_string(),
+            total_initiated: r.total_initiated,
+            total_completed: r.total_completed,
+            total_rejected: r.total_rejected,
+            total_failed: r.total_failed,
+            antwortfrist_abgelaufen: r.total_antwortfrist_abgelaufen,
+            frist_breached: r.total_frist_breached,
+            with_published_frist: r.total_with_frist,
+            frist_compliance_rate: r.frist_compliance_rate,
+            avg_cycle_time_hours: r.avg_cycle_time_hours,
+            p95_cycle_time_hours: r.p95_cycle_time_hours,
+            note: KPI_NOTE,
+        }
+    }
+}
+
+/// What `get_process_stp_rate` returns: processes started in the window,
+/// by how they ended.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct ProcessStpRate {
+    /// The window, in days back from now.
+    pub days: i32,
+    pub total_started: i64,
+    /// `completed + rejected + failed` — the denominator.
+    pub ended: i64,
+    pub completed: i64,
+    pub rejected: i64,
+    pub failed: i64,
+    /// Initiated or running.
+    pub in_flight: i64,
+    /// A lapsed Antwortfrist the workflow reported: not an ending, the
+    /// answer can still arrive.
+    pub antwortfrist_abgelaufen: i64,
+    /// Past their business Antwortfrist without closing, or closed after it.
+    pub frist_breached: i64,
+    /// `completed / ended`, rounded to four places; `None` when nothing
+    /// ended in the window — no rate, not a zero one.
+    pub stp_rate: Option<f64>,
+    pub note: &'static str,
+}
+
+const PROCESS_STP_NOTE: &str = "stp_rate = completed / (completed + rejected + failed). \
+antwortfrist_abgelaufen is a lapsed Antwortfrist the supplier-change workflow reported and is \
+not an ending — the answer can still arrive. No regulatory STP target exists.";
+
 /// One open process with its Frist.
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct ProcessRow {
@@ -459,7 +549,8 @@ impl ProcessdMcpHandler {
                        counts the supplier-change workflows' own Antwortfrist-lapse reports. \
                        Neither measures an APERAK delivery window. Rates are null when the \
                        bucket contains nothing measurable — never 0.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<KpiReportView>()
     )]
     async fn get_kpi_report(
         &self,
@@ -474,33 +565,9 @@ impl ProcessdMcpHandler {
         // `started_at <= <last day at 00:00>` silently drops every process
         // started on the last day of the month.
         match repo.kpi_report(p.pid, from, to, &self.state.tenant).await {
-            Ok(report) => ContentBlock::json(serde_json::json!({
-                "pid": report.pid,
-                "period_from": report.period_from.to_string(),
-                "period_to": report.period_to.to_string(),
-                "total_initiated": report.total_initiated,
-                "total_completed": report.total_completed,
-                "total_rejected": report.total_rejected,
-                "total_failed": report.total_failed,
-                // The GPKE / GeLi Gas Lieferantenwechsel reporting its own
-                // Antwortfrist lapse — not an APERAK delivery window.
-                "antwortfrist_abgelaufen": report.total_antwortfrist_abgelaufen,
-                // The business Antwortfrist. `total_with_frist` is the
-                // denominator and is reported because a small one means the
-                // bucket is mostly *unmeasured*, which a rate near 1.0 hides.
-                "frist_breached": report.total_frist_breached,
-                "with_published_frist": report.total_with_frist,
-                "frist_compliance_rate": report.frist_compliance_rate,
-                "avg_cycle_time_hours": report.avg_cycle_time_hours,
-                "p95_cycle_time_hours": report.p95_cycle_time_hours,
-                "note": "frist_breached is the business Antwortfrist measured against \
-                         deadline_at; antwortfrist_abgelaufen counts processes the GPKE / GeLi Gas \
-                         supplier-change workflow reported as past its Antwortfrist. Neither \
-                         measures an APERAK delivery window. Null rates mean nothing measurable \
-                         in the bucket, not perfect performance.",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(report) => serde_json::to_value(KpiReportView::from(report))
+                .map(CallToolResult::structured)
+                .map_err(|e| McpError::internal_error(e.to_string(), None)),
             Err(crate::obs::error::ObsError::NoKpiData { .. }) => {
                 Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "no_data: no process with PID {} started between {from} and {to}.",
@@ -612,7 +679,8 @@ impl ProcessdMcpHandler {
                        antwortfrist_abgelaufen processes are reported separately because neither has \
                        ended. Null when nothing ended in the window. No regulatory target \
                        exists — compare against your own operating goal.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ProcessStpRate>()
     )]
     async fn get_process_stp_rate(
         &self,
@@ -654,23 +722,21 @@ impl ProcessdMcpHandler {
         let stp_rate =
             (ended > 0).then(|| ((completed as f64 / ended as f64) * 10_000.0).round() / 10_000.0);
 
-        ContentBlock::json(serde_json::json!({
-            "days": days,
-            "total_started": n("total"),
-            "ended": ended,
-            "completed": completed,
-            "rejected": rejected,
-            "failed": failed,
-            "in_flight": n("in_flight"),
-            "antwortfrist_abgelaufen": n("antwortfrist_abgelaufen"),
-            "frist_breached": n("frist_breached"),
-            "stp_rate": stp_rate,
-            "note": "stp_rate = completed / (completed + rejected + failed). antwortfrist_abgelaufen is \
-                     a lapsed Antwortfrist the supplier-change workflow reported and is not an \
-                     ending — the answer can still arrive. No regulatory STP target exists.",
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+        serde_json::to_value(ProcessStpRate {
+            days,
+            total_started: n("total"),
+            ended,
+            completed,
+            rejected,
+            failed,
+            in_flight: n("in_flight"),
+            antwortfrist_abgelaufen: n("antwortfrist_abgelaufen"),
+            frist_breached: n("frist_breached"),
+            stp_rate,
+            note: PROCESS_STP_NOTE,
+        })
+        .map(CallToolResult::structured)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
     /// List processes by workflow family.

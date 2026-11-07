@@ -100,6 +100,9 @@ fn alert_delivery_window(deadline: &Deadline) {
     } else if label == mako_fristen::APERAK_STROM_WINDOW_LABEL {
         "the Strom APERAK was not delivered within 45 minutes of receipt, or by \
          Sunday 12:00 on a Saturday (APERAK AHB 1.1 §2.4.1)"
+    } else if label == mako_fristen::APERAK_STROM_ALLGEMEIN_LABEL {
+        "the Strom APERAK for a message other than a UTILMD or an ORDERS was not \
+         delivered within its window (APERAK AHB 1.1 §2.4.1)"
     } else {
         "the Gas Verarbeitbarkeitsfehlermeldung was not delivered within its \
          window (APERAK AHB 1.1 §2.3.1)"

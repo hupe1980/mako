@@ -66,6 +66,15 @@ pub(super) fn render_aperak(
     if let Some(o) = payload.ortsangabe.as_deref() {
         builder = builder.ortsangabe(o);
     }
+    for f in &payload.weitere_fehler {
+        builder = builder.further_error(&f.error_code, f.reason.clone(), f.ortsangabe.clone());
+    }
+    if let Some(d) = payload.orig_document_number.as_deref() {
+        builder = builder.ago_ref(d);
+    }
+    if let Some(d) = payload.orig_document_date.as_deref() {
+        builder = builder.reference_date(d);
+    }
 
     finish_interchange(builder.serialize(), sender, receiver, msg)
 }

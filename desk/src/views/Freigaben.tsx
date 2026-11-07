@@ -82,7 +82,7 @@ export function Entscheiden({
   const verweigert = useVerweigert({ dienst: "processd", aktion: "entscheiden" });
   // The proposal agentd computed when the Freigabe was queued — read, never
   // asked for: nobody waits on a model here.
-  const wartend = useVorschlaege([f.id]).get(f.id);
+  const wartend = useVorschlaege({ freigabe: [f.id] }).freigabe.get(f.id);
   const wartet = wartend?.vorschlag ? { v: wartend.vorschlag, run: wartend.run } : null;
 
   // processd states, per action, the codes pressing it needs — none where the
@@ -141,6 +141,9 @@ export function Entscheiden({
   });
 
   function uebernehmen(v: Vorschlag, run: string) {
+    // agentd answers a Freigabe only with its two actions; anything else is
+    // not this form's to take.
+    if (v.aktion !== "freigeben" && v.aktion !== "ablehnen") return;
     setHerkunft({ run, v });
     setAktion(v.aktion);
     setCode(v.antwortcode);
@@ -387,7 +390,7 @@ export function FreigabenView() {
   const list = useFreigaben();
   const rows = list.data?.freigaben ?? [];
   const selected = rows.find((f) => f.id === id) ?? rows[0];
-  const vorschlaege = useVorschlaege(rows.slice(0, 100).map((f) => f.id));
+  const vorschlaege = useVorschlaege({ freigabe: rows.slice(0, 100).map((f) => f.id) }).freigabe;
 
   // J and K walk the queue in processd's order.
   useEffect(() => {

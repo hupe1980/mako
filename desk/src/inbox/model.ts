@@ -3,6 +3,8 @@
 // service returned, or none (FR-006, FR-007, FR-010).
 
 import type { Anker } from "../data/agent";
+import type { Pruefposten } from "../data/gen/billingd";
+import type { Disput } from "../data/gen/invoicd";
 import type { Freigabe } from "../data/gen/processd";
 import type { Instant } from "../format/brands";
 
@@ -31,8 +33,10 @@ export interface Eintrag {
   anker: Anker | null;
   /** Where ↵ goes; none while the Desk has no view of the record. */
   ziel: Ziel | null;
-  /** A Freigabe is decided in place, from Heute. */
+  /** A Freigabe, a Disput and a Prüfposten are decided in place, from Heute. */
   freigabe?: Freigabe;
+  disput?: Disput;
+  pruefposten?: Pruefposten;
 }
 
 export type QuelleId =

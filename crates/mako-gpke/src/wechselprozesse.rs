@@ -90,9 +90,8 @@ use mako_engine::{
     outbox::PendingOutbox,
     projection::Projection,
     types::{MaLo, MarktpartnerCode, MessageRef},
-    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
-use mako_fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
 
 /// `ZW7` „Gemessene Marktlokation" — the `SG4 STS+7` DE 9013 Ergänzung of a
 /// Bestätigung that names the Messlokationen behind the Marktlokation.
@@ -594,10 +593,6 @@ pub enum SupplierChangeCommand {
         kunde_namensformat: Option<String>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
-        /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
-        ///
-        /// Used to compute the APERAK 45-minute sending deadline per APERAK AHB 1.1 §2.4.1.
-        received_at: time::OffsetDateTime,
         /// `true` if `msg.validate()` returned a report with no errors.
         validation_passed: bool,
         /// Human-readable validation issue strings for the `Rejected` event.
@@ -944,7 +939,6 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 kunde_name,
                 kunde_namensformat,
                 message_ref,
-                received_at,
                 validation_passed,
                 validation_errors,
             } => {
@@ -1076,17 +1070,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     ]
                 };
 
-                // APERAK AHB 1.1 §2.4.1: register the 45-minute sending deadline.
-                // The engine persists this atomically alongside the events.
-                let aperak_deadline = PendingDeadline::new(
-                    APERAK_STROM_WINDOW_LABEL,
-                    aperak_strom_due_at(received_at),
-                );
-                Ok(WorkflowOutput::with_outbox_and_deadline(
-                    events,
-                    outbox,
-                    aperak_deadline,
-                ))
+                // The APERAK's delivery window is the ingest door's, derived
+                // from the message (APERAK AHB 1.1 §2.4.1).
+                Ok(WorkflowOutput::with_outbox(events, outbox))
             }
 
             SupplierChangeCommand::SendAntwort {

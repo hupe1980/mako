@@ -72,6 +72,25 @@ pub struct Overview {
     /// suppressing or misrouting a mandatory CONTRL.
     #[serde(default)]
     pub sparten: BTreeMap<String, Sparten>,
+    /// Where each Prüfidentifikator's assignment to a preceding
+    /// Geschäftsvorfall is checked — the overview's „Zuordnung zu einem
+    /// Geschäftsvorfall" and „Stelle der Zuordnungsprüfung" columns.
+    ///
+    /// `V` puts the check into the Verarbeitbarkeitsprüfung, so a failed
+    /// assignment is answered with an APERAK (`Z33`); `E` puts it into the
+    /// Entscheidungsbaum (APERAK AHB 1.1 § 2.1.3, S. 14). Only the rows that
+    /// name a Geschäftsvorfall tuple count.
+    #[serde(default)]
+    pub zuordnung: BTreeMap<String, Zuordnung>,
+}
+
+/// One Prüfidentifikator's assignment to a preceding Geschäftsvorfall.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Zuordnung {
+    /// At least one row names a „Zuordnung zu einem Geschäftsvorfall" tuple.
+    pub geschaeftsvorfall: bool,
+    /// The „Stelle der Zuordnungsprüfung" values of those rows (`V`, `E`).
+    pub stelle: BTreeSet<String>,
 }
 
 /// The Sparten one Prüfidentifikator runs in.
@@ -102,6 +121,20 @@ const COL_PID: &str = "D";
 const COL_STROM: &str = "R";
 /// Column marking the row as running in Sparte Gas (`X`, else `--`).
 const COL_GAS: &str = "S";
+/// Column naming the „Zuordnung zu einem Geschäftsvorfall" tuple (`--` for none).
+const COL_ZUORDNUNG_GV: &str = "N";
+/// Column „Stelle der Zuordnungsprüfung" (`V`, `E`, `--`).
+const COL_STELLE: &str = "Q";
+/// The headers the columns above must carry, so a reshuffled workbook fails
+/// the import rather than filling a field from the wrong column.
+const HEADERS: &[(&str, &str)] = &[
+    (COL_AHB, "AHB"),
+    (COL_PID, "Prüfidentifikator"),
+    (COL_ZUORDNUNG_GV, "Zuordnung zu einem Geschäftsvorfall"),
+    (COL_STELLE, "Stelle der Zuordnungs-prüfung"),
+    (COL_STROM, "Sparte Strom"),
+    (COL_GAS, "Sparte Gas"),
+];
 
 /// Extract the inventory from `xlsx` and write [`OVERVIEW_PATH`].
 ///
@@ -119,8 +152,27 @@ pub fn import(workspace_root: &Path, xlsx: &Path) -> Result<(), String> {
 
     let mut ahbs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut sparten: BTreeMap<String, Sparten> = BTreeMap::new();
+    let mut zuordnung: BTreeMap<String, Zuordnung> = BTreeMap::new();
+    let mut header_seen = false;
     for row in rows(&sheet_xml) {
         let cells = cells(row, &shared);
+        if !header_seen
+            && cells
+                .get(COL_PID)
+                .is_some_and(|v| v.trim() == "Prüfidentifikator")
+        {
+            header_seen = true;
+            for (col, want) in HEADERS {
+                let got = cells.get(*col).map_or("", |v| v.trim());
+                if got != *want {
+                    return Err(format!(
+                        "column {col} of sheet {SHEET:?} is headed {got:?}, not {want:?} — \
+                         the workbook layout changed"
+                    ));
+                }
+            }
+            continue;
+        }
         let (Some(ahb), Some(pid)) = (cells.get(COL_AHB), cells.get(COL_PID)) else {
             continue;
         };
@@ -145,6 +197,24 @@ pub fn import(workspace_root: &Path, xlsx: &Path) -> Result<(), String> {
         });
         entry.strom |= marked(COL_STROM);
         entry.gas |= marked(COL_GAS);
+
+        let z = zuordnung.entry(pid.to_owned()).or_default();
+        let tuple = cells.get(COL_ZUORDNUNG_GV).map_or("", |v| v.trim());
+        if !tuple.is_empty() && tuple != "--" {
+            z.geschaeftsvorfall = true;
+            if let Some(stelle) = cells
+                .get(COL_STELLE)
+                .map(|v| v.trim())
+                .filter(|v| !v.is_empty() && *v != "--")
+            {
+                z.stelle.insert(stelle.to_owned());
+            }
+        }
+    }
+    if !header_seen {
+        return Err(format!(
+            "no header row in sheet {SHEET:?} — has the workbook layout changed?"
+        ));
     }
     if ahbs.is_empty() {
         return Err(format!(
@@ -163,6 +233,7 @@ pub fn import(workspace_root: &Path, xlsx: &Path) -> Result<(), String> {
         ),
         ahbs,
         sparten,
+        zuordnung,
     };
 
     let out = workspace_root.join(OVERVIEW_PATH);
@@ -334,6 +405,21 @@ pub fn check(workspace_root: &Path) -> bool {
             return false;
         }
     };
+    // The door answers an orphan follow-up with `Z33` off this column; an
+    // inventory imported before it carried the column would answer none.
+    let missing: Vec<&String> = overview
+        .all()
+        .into_iter()
+        .filter(|pid| !overview.zuordnung.contains_key(*pid))
+        .collect();
+    if !missing.is_empty() {
+        eprintln!(
+            "check-pid-coverage: {} published Prüfidentifikatoren carry no „Stelle der \
+             Zuordnungsprüfung\" — re-run `cargo xtask import-pid-overview`: {missing:?}",
+            missing.len()
+        );
+        return false;
+    }
 
     let mut shipped = shipped_pids(workspace_root);
     if shipped.is_empty() {

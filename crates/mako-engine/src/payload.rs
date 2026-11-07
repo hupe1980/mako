@@ -75,6 +75,33 @@ pub struct AperakPayload {
     /// ERP and never the wire.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub suppress_wire: bool,
+    /// Every further Verarbeitbarkeitsfehler of the Geschäftsvorfall beyond the
+    /// first (`error_code`), each its own `SG4 ERC` group — APERAK AHB 1.1
+    /// § 2.1.1 (S. 10): „Es sind alle AHB-Fehler anzugeben"; the APERAK MIG
+    /// lets `SG4` repeat 99999 times.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weitere_fehler: Vec<AperakFehler>,
+    /// `BGM` DE 1004 of the acknowledged message — `SG2 RFF+AGO` on an
+    /// Anerkennungsmeldung (APERAK AHB 1.1 Kap. 3, Muss).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orig_document_number: Option<String>,
+    /// `DTM+137` of the acknowledged message, `CCYYMMDDHHMM` UTC — `SG2
+    /// DTM+171` Referenzdatum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orig_document_date: Option<String>,
+}
+
+/// One further `SG4 ERC` group of a Fehlermeldung.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AperakFehler {
+    /// `ERC` DE 9321.
+    pub error_code: String,
+    /// `FTX+ABO` free text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// `SG5 FTX+Z02` Ortsangabe des AHB-Fehlers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ortsangabe: Option<String>,
 }
 
 impl OutboundPayload for AperakPayload {
@@ -95,6 +122,9 @@ impl AperakPayload {
             reason: None,
             ortsangabe: None,
             suppress_wire: false,
+            weitere_fehler: Vec::new(),
+            orig_document_number: None,
+            orig_document_date: None,
         }
     }
 
@@ -117,7 +147,20 @@ impl AperakPayload {
             reason: Some(reason.into()),
             ortsangabe: None,
             suppress_wire: false,
+            weitere_fehler: Vec::new(),
+            orig_document_number: None,
+            orig_document_date: None,
         }
+    }
+
+    /// Name the acknowledged message's `BGM` Dokumentennummer and its
+    /// `DTM+137` Dokumentendatum (`CCYYMMDDHHMM` UTC), which `SG2 RFF+AGO` and
+    /// `SG2 DTM+171` carry.
+    #[must_use]
+    pub fn referencing(mut self, document_number: &str, document_date: Option<String>) -> Self {
+        self.orig_document_number = Some(document_number.to_owned());
+        self.orig_document_date = document_date;
+        self
     }
 
     /// Keep this entry off the wire — a positive Gas decision, which APERAK

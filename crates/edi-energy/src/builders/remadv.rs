@@ -91,6 +91,10 @@ pub struct Abweichungsgrund {
     pub code: String,
     /// DE 1082 — the EBD that publishes it (`E_0406`, `E_0519`, …).
     pub ebd: Option<String>,
+    /// `SG7 FTX+ABO` DE 4440 „Nähere Erläuterung des Abweichungsgrundes" — on
+    /// the Kopfebene only; its content „ergibt sich aus dem zugehörigen EBD"
+    /// (REMADV AHB condition `[548]`). At most `an..512`.
+    pub erlaeuterung: Option<String>,
 }
 
 impl Abweichungsgrund {
@@ -100,7 +104,15 @@ impl Abweichungsgrund {
         Self {
             code: code.into(),
             ebd: Some(ebd.into()),
+            erlaeuterung: None,
         }
+    }
+
+    /// The same Abweichungsgrund with its `FTX+ABO` explanation.
+    #[must_use]
+    pub fn mit_erlaeuterung(mut self, text: impl Into<String>) -> Self {
+        self.erlaeuterung = Some(text.into());
+        self
     }
 }
 
@@ -267,6 +279,16 @@ impl<S, R> RemadvBuilder<S, R> {
     ///     .abweichungsgrund(Abweichungsgrund::new("A70", "E_0406"))
     ///     .serialize()?;
     /// assert!(String::from_utf8(edi).unwrap().contains("AJT+A70+E_0406"));
+    ///
+    /// // With the explanation its EBD asks for, in `SG7 FTX+ABO` beside it.
+    /// let edi = RemadvBuilder::new(Release::new("2.9e"))
+    ///     .sender("9900987654321")
+    ///     .receiver("9900123456789")
+    ///     .abweichungsgrund(
+    ///         Abweichungsgrund::new("A70", "E_0406").mit_erlaeuterung("Preis weicht ab"),
+    ///     )
+    ///     .serialize()?;
+    /// assert!(String::from_utf8(edi).unwrap().contains("AJT+A70+E_0406'FTX+ABO+++Preis weicht ab'"));
     /// # Ok::<(), edi_energy::Error>(())
     /// ```
     pub fn abweichungsgrund(mut self, grund: Abweichungsgrund) -> Self {
@@ -352,6 +374,10 @@ impl<S, R> RemadvBuilder<S, R> {
                 emit_seg!(w, "AJT", &grund.code, ebd);
             } else {
                 emit_seg!(w, "AJT", &grund.code);
+            }
+            // `SG7 FTX+ABO+++<text>` — its explanation, `C108` at element 4.
+            if let Some(text) = grund.erlaeuterung.as_deref() {
+                emit_comp!(w, "FTX", ["ABO"], [], [], [text]);
             }
         }
         // `SG10 DLI` + `SG12 AJT`/`FTX` — the Positionsebene, repeated until

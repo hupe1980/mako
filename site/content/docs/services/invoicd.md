@@ -58,10 +58,11 @@ actions in code and policy to each other in both directions.
 
 ### `POST /api/v1/receipts/{id}/dispatch-answer`
 
-Re-sends the answer for a receipt whose automatic dispatch failed
-(`dispatched_at IS NULL`), using the stored INVOIC reference and the routing
-table's command. `409` when already dispatched, `422` without a message
-reference.
+Sends the answer for a receipt whose automatic dispatch failed
+(`dispatched_at IS NULL`) — exactly the answer recorded at the check, with its
+Antwortcode, Entscheidungsbaum and German Ablehnungsgrund, which makod writes
+as the REMADV's `SG7 FTX+ABO`. `409` when already dispatched, `422` without a
+message reference or a recorded answer.
 
 ---
 
@@ -212,6 +213,13 @@ outcomes auto-approve unless the invoice net exceeds `auto_dispute_threshold_eur
 (`0` = always approve, the default). For Gas, energy = m³ ×
 `brennwert_kwh_per_m3` × `zustandszahl`, both from `edmd` via PID 13007.
 
+Every finding carries a German sentence written for the Rechnungssteller —
+what deviates, the stated and the expected figure, decimal comma — and a
+German name for its kind (`bezeichnung`). A refusal's `ablehnungsgrund` joins
+the disputing findings' sentences within one REMADV `SG7 FTX+ABO` DE 4440
+(`an..512`, REMADV MIG): it ends on a whole finding and says how many more did
+not fit; every finding stays on the receipt (`get_check_result`).
+
 ---
 
 ## Payment CloudEvents
@@ -354,7 +362,7 @@ stateDiagram-v2
     Dispatched --> Settled : POST /confirm-payment (ERP ack)
     Dispatched --> Overdue : pay_by passes without confirmation
     Overdue --> Settled : POST /confirm-payment (late ERP ack)
-    Disputed --> Resolved : POST /resolve-dispute (operator closes after NB agreement)
+    Disputed --> Resolved : POST /resolve-dispute (operator closes after NB agreement, recorded with the decider)
     Resolved --> [*] : § 147 AO / GoBD audit trail complete
     Settled --> [*] : § 147 AO / GoBD audit trail complete
 ```
@@ -434,7 +442,7 @@ hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
 | Tool | Description |
 |------|-------------|
 | `get_receipt` | Get a single INVOIC receipt by process UUID |
-| `list_disputes` | Receipts with outcome `Dispute`, typed (`Disput`); `frist` is the end of the Zahlungsziel's Berlin day |
+| `list_disputes` | Receipts with outcome `Dispute`, typed (`Disput`); `frist` is the end of the Zahlungsziel's Berlin day, `rechnungsnummer`, `abgesendet` whether the refusal (REMADV) went out, `befunde` the disputing checker findings, each with its German `bezeichnung` beside the `art` identifier |
 | `get_check_result` | Get the full invoic-checker findings for a process |
 | `list_overdue_remadv` | Receipts approaching Zahlungsziel without dispatched REMADV |
 | `get_zahlungsstatus` | Payment status per MaLo-ID (settled / pending / overdue counts) |

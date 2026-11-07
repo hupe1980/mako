@@ -5,7 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { nichtErreichbar } from "../app/dienste";
 import { ROLLEN, type Rolle, useRolle } from "../app/rollen";
-import { type Answer, type Hinweis, hinweise, vorschlaege } from "../data/agent";
+import { type Answer, type Hinweis, hinweise, type VorschlagArt, vorschlaege } from "../data/agent";
 import { call, ServiceUnavailable } from "../data/mcp";
 import type { Decimal, Instant } from "../format/brands";
 import { formatBusinessDate } from "../format/date";
@@ -215,7 +215,11 @@ function useAbleseauftraege(aktiv: boolean): Stand {
   return stand("ableseauftraege", "Ableseaufträge", q, eintraege, q.data?.saturated ?? false);
 }
 
-/** INVOIC in dispute, due by the Zahlungsziel the invoice stated. */
+/**
+ * INVOIC in dispute, due by the Zahlungsziel the invoice stated, each titled
+ * by who sent it — every Rechnungssteller of the page named in one marktd
+ * read, never one per row.
+ */
 function useDispute(aktiv: boolean): Stand {
   const { rolle } = useRolle();
   const q = useQuery({
@@ -224,17 +228,35 @@ function useDispute(aktiv: boolean): Stand {
     enabled: aktiv,
     refetchInterval: TAKT,
   });
+  const mpIds = [...new Set((q.data?.disputes ?? []).map((d) => d.sender_mp_id))].sort();
+  const namen = useQuery({
+    queryKey: [rolle, "marktd", "partner_namen", mpIds],
+    queryFn: () => call("marktd", "partner_namen", { mp_ids: mpIds }),
+    enabled: aktiv && mpIds.length > 0,
+    staleTime: 300_000,
+  });
+  const name = new Map((namen.data?.partner ?? []).map((p) => [p.mp_id, p.name]));
   const eintraege: Eintrag[] = (q.data?.disputes ?? []).map((d) => ({
     id: `prozess:${d.process_id}`,
     quelle: "dispute",
-    titel: d.sender_mp_id,
-    kennung: true,
-    detail: `PID ${d.pid}`,
-    grund: "Rechnung im Disput — bis zum Zahlungsziel zu klären",
+    titel:
+      name.get(d.sender_mp_id) ??
+      (d.rechnungsnummer ? `Rechnung ${d.rechnungsnummer}` : "Rechnung im Disput"),
+    kennung: false,
+    detail: [
+      name.has(d.sender_mp_id) && d.rechnungsnummer ? `Rechnung ${d.rechnungsnummer}` : null,
+      d.sender_mp_id,
+      `PID ${d.pid}`,
+      d.abgesendet ? "Ablehnung versandt" : "Ablehnung nicht versandt",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    grund: d.befunde[0]?.bezeichnung ?? "Rechnung im Disput — bis zum Zahlungsziel zu klären",
     frist: d.frist ?? null,
     bezug: [d.process_id],
-    anker: null,
+    anker: { disput: d.id },
     ziel: { to: "/prozess", search: { key: d.process_id } },
+    disput: d,
   }));
   return stand("dispute", "Rechnungsdispute", q, eintraege, q.data?.saturated ?? false);
 }
@@ -261,6 +283,7 @@ function usePruefposten(aktiv: boolean): Stand {
     bezug: [r.malo_id],
     anker: { malo: r.malo_id },
     ziel: null,
+    pruefposten: r,
   }));
   return stand("pruefposten", "Rechnungsprüfung", q, eintraege, q.data?.saturated ?? false);
 }
@@ -277,25 +300,36 @@ export function useHinweise(): { hinweise: Hinweis[]; fehler: string | null } {
   return { hinweise: q.data ?? [], fehler: q.error ? fehlerText(q.error) : null };
 }
 
+/** Each kind's waiting proposals, by entry id. */
+export type Wartend = Record<VorschlagArt, Map<string, Answer>>;
+
 /**
- * The proposals waiting on the Freigaben on screen. Polled while one is still
- * being prepared or not yet admitted; quiet once each has its answer. A
- * failure shows no proposal — the decision stands on its own.
+ * The proposals waiting on the Freigaben and Dispute on screen, in one read.
+ * Polled while one is still being prepared or not yet admitted; quiet once
+ * each has its answer. A failure shows no proposal — the decision stands on
+ * its own.
  */
-export function useVorschlaege(ids: string[]): Map<string, Answer> {
+export function useVorschlaege(ids: Partial<Record<VorschlagArt, string[]>>): Wartend {
+  const gefragt = (Object.entries(ids) as [VorschlagArt, string[]][]).filter(
+    ([, v]) => v.length > 0,
+  );
   const q = useQuery({
-    queryKey: ["agentd", "vorschlaege", ids],
+    queryKey: ["agentd", "vorschlaege", gefragt],
     queryFn: () => vorschlaege(ids),
-    enabled: ids.length > 0,
+    enabled: gefragt.length > 0,
     retry: false,
     refetchInterval: (query) => {
       const d = query.state.data;
       if (!d) return false;
-      return ids.some((id) => !d[id] || d[id]?.status === "running") ? 15_000 : false;
+      const offen = gefragt.some(([art, v]) =>
+        v.some((id) => !d[art]?.[id] || d[art]?.[id]?.status === "running"),
+      );
+      return offen ? 15_000 : false;
     },
   });
-  const m = new Map<string, Answer>();
-  for (const [id, a] of Object.entries(q.data ?? {})) if (a) m.set(id, a);
+  const m: Wartend = { freigabe: new Map(), disput: new Map() };
+  for (const art of ["freigabe", "disput"] as const)
+    for (const [id, a] of Object.entries(q.data?.[art] ?? {})) if (a) m[art].set(id, a);
   return m;
 }
 
@@ -342,7 +376,10 @@ export function useBenannt(eintraege: Eintrag[], aktiv: boolean): Eintrag[] {
       titel: k.name,
       kennung: false,
       detail: [e.titel, e.detail, k.kunden_nr].filter(Boolean).join(" · "),
-      anker: e.anker && "freigabe" in e.anker ? e.anker : { kunde: k.kunden_id },
+      anker:
+        e.anker && ("freigabe" in e.anker || "disput" in e.anker)
+          ? e.anker
+          : { kunde: k.kunden_id },
       ziel:
         e.ziel?.to === "/freigaben" ? e.ziel : { to: "/kunde/$id", params: { id: k.kunden_id } },
     };

@@ -13,6 +13,10 @@
 //!
 //! Set `BLESS_MCP_SNAPSHOT=1` to rewrite the file instead of comparing.
 //!
+//! [`compare_json`] pins any other contract a service serves to the Desk the
+//! same way — agentd's skill catalog is one — with the same variable and the
+//! same line diff.
+//!
 //! ```rust,ignore
 //! let tools: Vec<serde_json::Value> = Handler::tool_router()
 //!     .list_all()
@@ -37,9 +41,9 @@ pub enum SnapshotError {
         /// The underlying error.
         source: std::io::Error,
     },
-    /// The committed snapshot is not the tool list the router serves.
+    /// The committed snapshot is not what the service serves.
     #[error(
-        "{path} does not match the served MCP tools; rerun with BLESS_MCP_SNAPSHOT=1 \
+        "{path} does not match what the service serves; rerun with BLESS_MCP_SNAPSHOT=1 \
          and regenerate the Desk's types (`just desk-gen`) if the change is intended.\n\
          --- committed\n+++ served\n{diff}"
     )]
@@ -84,19 +88,36 @@ pub fn render(tools: &[Value]) -> String {
 /// [`SnapshotError::Io`] when it cannot be read or written.
 #[must_use = "a snapshot comparison that is not checked proves nothing"]
 pub fn compare(tools: &[Value], path: &Path) -> Result<(), SnapshotError> {
-    let served = render(tools);
+    compare_text(&render(tools), path)
+}
+
+/// Compare any served contract with the snapshot at `path`, pretty-printed as
+/// it stands, or rewrite the snapshot when `BLESS_MCP_SNAPSHOT` is set.
+///
+/// # Errors
+///
+/// [`SnapshotError::Drift`] when the file differs, [`SnapshotError::Io`] when
+/// it cannot be read or written.
+#[must_use = "a snapshot comparison that is not checked proves nothing"]
+pub fn compare_json(value: &Value, path: &Path) -> Result<(), SnapshotError> {
+    let mut text = serde_json::to_string_pretty(value).unwrap_or_else(|_| String::from("null"));
+    text.push('\n');
+    compare_text(&text, path)
+}
+
+fn compare_text(served: &str, path: &Path) -> Result<(), SnapshotError> {
     let io = |source| SnapshotError::Io {
         path: path.to_owned(),
         source,
     };
     if std::env::var_os("BLESS_MCP_SNAPSHOT").is_some() {
-        return std::fs::write(path, &served).map_err(io);
+        return std::fs::write(path, served).map_err(io);
     }
     let committed = std::fs::read_to_string(path).map_err(io)?;
     if committed == served {
         return Ok(());
     }
-    let diff = diff_lines(&committed, &served);
+    let diff = diff_lines(&committed, served);
     Err(SnapshotError::Drift {
         path: path.to_owned(),
         diff,
@@ -156,6 +177,31 @@ mod tests {
         };
         assert!(diff.contains('-') && diff.contains("\"id\""), "{diff}");
         assert!(diff.contains("\"identifier\""), "{diff}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_changed_value_is_drift_with_its_line() {
+        let dir = std::env::temp_dir().join(format!("json-snapshot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("catalog.snapshot.json");
+        let pinned = json!({"liest": ["makod/get_process"]});
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(&pinned).expect("json")),
+        )
+        .expect("write");
+
+        assert!(compare_json(&pinned, &path).is_ok());
+        let err = compare_json(
+            &json!({"liest": ["makod/get_process", "makod/post_command"]}),
+            &path,
+        )
+        .expect_err("drift");
+        assert!(
+            err.to_string().contains("+    \"makod/post_command\""),
+            "{err}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

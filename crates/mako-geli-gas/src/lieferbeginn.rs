@@ -59,10 +59,6 @@ use mako_engine::{
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
-use mako_fristen::{
-    APERAK_GAS_FOLGEPROZESS_LABEL, APERAK_GAS_INITIALPROZESS_LABEL, aperak_gas_folgeprozess_due_at,
-    aperak_gas_initialprozess_due_at,
-};
 use time::OffsetDateTime;
 
 // ── Stable names ──────────────────────────────────────────────────────────────
@@ -936,8 +932,6 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 // Clone before move for APERAK emission in the validation-failed path.
                 let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
-                // 44001 = Lieferbeginn Anfrage (Initialprozess); all others are Folgeprozesse.
-                let is_initialprozess = pid.as_u32() == 44_001;
                 // Clone before move into Initiated event for ProcessInitiated outbox.
                 let malo_id_str = malo_id.as_str().to_owned();
                 let process_date_clone = process_date.clone();
@@ -1012,20 +1006,8 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         reason: reason.clone(),
                     });
                     // APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) — mandatory
-                    // per APERAK AHB 1.1 §2.1.1 when AHB validation fails.
-                    // Validation failure → APERAK sent immediately: register the sending
-                    // deadline so the OutboxWorker delivery is monitored.
-                    let aperak_send_dl = if is_initialprozess {
-                        PendingDeadline::new(
-                            APERAK_GAS_INITIALPROZESS_LABEL,
-                            aperak_gas_initialprozess_due_at(received_at),
-                        )
-                    } else {
-                        PendingDeadline::new(
-                            APERAK_GAS_FOLGEPROZESS_LABEL,
-                            aperak_gas_folgeprozess_due_at(received_at),
-                        )
-                    };
+                    // per APERAK AHB 1.1 §2.1.1 when AHB validation fails. The
+                    // ingest door opens its delivery window beside it.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -1036,11 +1018,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         )
                         .caused_by(0),
                     ];
-                    Ok(WorkflowOutput::with_outbox_and_deadlines(
-                        events,
-                        outbox,
-                        vec![aperak_send_dl],
-                    ))
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
             }
 
@@ -2105,8 +2083,8 @@ mod tests {
         let state = apply_all(state, &out.events);
         for label in [
             RESPONSE_WINDOW_LABEL,
-            APERAK_GAS_INITIALPROZESS_LABEL,
-            APERAK_GAS_FOLGEPROZESS_LABEL,
+            mako_fristen::APERAK_GAS_INITIALPROZESS_LABEL,
+            mako_fristen::APERAK_GAS_FOLGEPROZESS_LABEL,
         ] {
             let out = GeliGasSupplierChangeWorkflow::handle(&state, timeout(label)).unwrap();
             assert!(
@@ -2116,11 +2094,12 @@ mod tests {
         }
     }
 
-    /// A processable Gas Anmeldung sends no APERAK (APERAK AHB 1.1 §2.3), so it
-    /// arms no APERAK window; a rejected one sends the Verarbeitbarkeits-
-    /// fehlermeldung and arms the window that watches its delivery.
+    /// A processable Gas Anmeldung sends no APERAK (APERAK AHB 1.1 §2.3); a
+    /// rejected one enqueues the Verarbeitbarkeitsfehlermeldung, which the
+    /// ingest door's delivery window rides. The workflow arms no APERAK window
+    /// itself in either case.
     #[test]
-    fn only_a_sent_aperak_arms_an_aperak_window() {
+    fn only_a_rejection_enqueues_an_aperak() {
         let ok = GeliGasSupplierChangeWorkflow::handle(
             &GasSupplierChangeState::default(),
             receive_cmd(44001, true),
@@ -2139,10 +2118,14 @@ mod tests {
         )
         .unwrap();
         assert!(
-            bad.deadlines
+            !bad.deadlines
                 .iter()
-                .any(|d| &*d.label == APERAK_GAS_INITIALPROZESS_LABEL)
+                .any(|d| mako_fristen::is_delivery_window(&d.label)),
+            "{:?}",
+            bad.deadlines
         );
+        assert!(!ok.outbox.iter().any(|o| &*o.message_type == "APERAK"));
+        assert!(bad.outbox.iter().any(|o| &*o.message_type == "APERAK"));
     }
 
     /// The E/G's silence on a 44013 is the Zuordnung (GeLi Gas 3.0 Kap. 3.3):

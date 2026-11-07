@@ -500,6 +500,23 @@ The default is the direction that cannot act on a message from a party the
 operator has not chosen to deal with. makod logs the value with its source at
 startup and under `--check`.
 
+#### `[policy.ingest] unbekannter_vorgang` {#policy-ingest-unbekannter-vorgang}
+
+What a follow-up no process takes is answered with, where the PID-Übersicht
+puts its assignment into the Verarbeitbarkeitsprüfung („Stelle der
+Zuordnungsprüfung" `V`).
+
+| Value | Behaviour | Source |
+|---|---|---|
+| `z33` (default) | Refused with the Verarbeitbarkeitsfehlermeldung `Z33` „Referenziertes Geschäftsvorfall-Tupel nicht vorhanden" | APERAK AHB 1.1 Kap. 2.1.3 (S. 14), Kap. 4.3 (S. 43) |
+| `zur_pruefung` | Recorded as a dead letter for a person; no APERAK goes out | APERAK AHB 1.1 Kap. 1.3 (S. 7): „Sofern die Ursache für das Misslingen auf Seiten des Empfängers liegt, hat dieser die ursprüngliche Übertragungsdatei in die fristgerechte Verarbeitung aufzunehmen" |
+
+`z33` is right whenever makod's process store is the whole of the operator's
+Geschäftsvorfälle. Set `zur_pruefung` for a cutover from another MaKo system,
+or while initiating messages still leave through another system: their answers
+reach makod for processes it never started, and the tuple does exist at the
+operator. Set it back once the cutover is complete.
+
 **Startup refusals** (all also run under `--check`):
 
 | Condition | Why |
@@ -679,7 +696,7 @@ Cedar `UseMcp` action; unauthenticated requests are `401`.
 | `list_overdue_deadlines` | `read_only` | Deadlines past due and not yet fired — the deadline worker's backlog, not missed Fristen (those are processd `list_overdue_processes`) |
 | `list_active_processes` | `read_only` | Processes started for the tenant, finished ones included — one event stream each |
 | `get_outbox_status` | `read_only` | Pending outbox count and oldest age — alert when stuck > 5 min |
-| `list_dead_letters` | `read_only` | 20 most recent dead letters (§ 147 AO / GoBD) |
+| `list_dead_letters` | `read_only` | Typed `{ dead_letters, gesamt }`: the 20 most recent dead letters, each with `rejected_at` (RFC 3339), `reason_label` and `reason_detail`, and how many the store holds in all (`outputSchema` declared) |
 | `get_format_version_coverage` | `read_only` | Per message type: `stable` or `transition`, and which releases are in force today |
 
 `tool_inventory_tests` in `mcp_server.rs` pins this list.
@@ -1846,6 +1863,27 @@ outcomes.
 | A label not in the workflow's `DEADLINE_LABELS`, or a workflow with no driver in this build | Nothing acts | `ERROR deadline fired under a label its workflow does not own` |
 | An owned label whose window is closed (the answer went out or came in) | Nothing acts | nothing |
 | An owned label whose window is open | The Festlegung's outcome for the silence, or `FristAbgelaufen` where it gives none | `WARN Frist lapsed with its window still open`; the workflow's `de.mako.antwortfrist.abgelaufen` where it carries one |
+
+The ingest dispatcher opens every inbound message's APERAK window itself, on a
+spawn and on a resume, from the message type, the Sparte and the PID (APERAK
+AHB 1.1 §2.4.1, §2.3.1): a Strom UTILMD or ORDERS 45 minutes (Samstag: Sonntag
+12 Uhr, `aperak-strom-45min-window`), every other Strom message the next Werktag
+12 Uhr (`aperak-strom-naechster-wt-1200`), and a Gas message the Folge- or
+Initialprozess window — only when the run enqueues an APERAK, because a
+processable Gas message is answered by silence. A processed Strom message whose
+workflow enqueues no APERAK of its own is answered by the dispatcher with the
+Anerkennungsmeldung (`BGM+312`, APERAK 29002, naming the message's `UNH`, `BGM`
+and `DTM+137` in `SG2`), in the same write as the run; the WiM Gerätewechsel,
+whose operator decides the APERAK later (`wim.geraetewechsel.aperak`), gets
+none. A message failing its AHB check is answered with the
+Verarbeitbarkeitsfehlermeldung instead — `Z29` for a missing Muss element,
+`Z39` for a code outside the permitted ones, the segment's MIG name as
+`FTX+Z02`, one `ERC` group per finding — in both Sparten; a message whose
+Prüfidentifikator no Marktrolle of the deployment processes with `Z31`,
+written in the same transaction as its dead letter; and a follow-up no process
+takes with `Z33`, where the PID-Übersicht's „Stelle der Zuordnungsprüfung" is
+`V` (read from `pid-overview.json`). Every notification a dispatched message causes carries the receipt
+instant as its CloudEvent `time`.
 
 `FristAbgelaufen` is a breach to act on, not an outcome: the process keeps
 waiting, and a late answer still goes out or still lands.

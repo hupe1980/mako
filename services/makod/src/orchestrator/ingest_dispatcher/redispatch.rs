@@ -13,6 +13,7 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
+        inbound: Inbound<'_>,
     ) -> Result<IngestOutcome, EngineError> {
         let fv = detect_format_version(msg);
 
@@ -34,12 +35,14 @@ impl EdifactIngestDispatcher {
                         receiver,
                         message_ref,
                     };
-                    self.spawn_or_resume::<mako_redispatch::aktivierung::AktivierungWorkflow>(
+                    self.spawn_or_resume_guarded::<mako_redispatch::aktivierung::AktivierungWorkflow>(
+                        inbound,
                         &key,
                         "redispatch-aktivierung",
                         cmd,
                         &fv,
                         &[],
+                        occupied_by_own_reference,
                     )
                     .await
                 }
@@ -54,12 +57,14 @@ impl EdifactIngestDispatcher {
                             receiver,
                             message_ref,
                         };
-                    self.spawn_or_resume::<mako_redispatch::aktivierung::AktivierungWorkflow>(
+                    self.spawn_or_resume_guarded::<mako_redispatch::aktivierung::AktivierungWorkflow>(
+                        inbound,
                         &key,
                         "redispatch-aktivierung",
                         cmd,
                         &fv,
                         &[],
+                        occupied_by_own_reference,
                     )
                     .await
                 }

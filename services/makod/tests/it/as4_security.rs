@@ -179,6 +179,15 @@ impl DeadLetterSink for RecordingSink {
         self.reasons.lock().unwrap().push(reason.to_string());
         Box::pin(std::future::ready(Ok(())))
     }
+
+    /// The answer a refusal owes is part of the same record here.
+    fn reject_answered<'a>(
+        &'a self,
+        reason: &'a DeadLetterReason,
+        _answers: &'a [mako_engine::outbox::OutboxMessage],
+    ) -> RejectFuture<'a> {
+        self.reject(reason)
+    }
 }
 
 fn registry() -> Arc<makod::party_registry::MpIdRegistry> {

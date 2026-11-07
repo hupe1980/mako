@@ -42,9 +42,7 @@ use mako_engine::{
     types::{DeviceId, MarktpartnerCode, MeLo, MessageRef, Sparte},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
-use mako_fristen::{
-    APERAK_STROM_WINDOW_LABEL, HolidayCalendar, aperak_strom_due_at, deadline_at_werktage,
-};
+use mako_fristen::{HolidayCalendar, deadline_at_werktage};
 use time::OffsetDateTime;
 
 /// Stable workflow name used as the `WorkflowId.name` and in the `ProcessRegistry`.
@@ -487,28 +485,16 @@ fn parse_yyyymmdd(raw: &str) -> Option<time::Date> {
     time::Date::from_calendar_date(year, month, day).ok()
 }
 
-/// The APERAK *sending* deadline for an inbound WiM order, per Sparte.
+/// The Gas APERAK *sending* deadline for a Verarbeitbarkeitsfehlermeldung
+/// decided after the order's arrival — nächster Werktag **12:00** in a
+/// Folgeprozess, **3 Werktage** in an Initialprozess (APERAK AHB 1.1 §2.3.1).
 ///
-/// Two different regimes, and the numbers do not overlap:
-///
-/// | Sparte | Window | Fundstelle |
-/// |---|---|---|
-/// | Strom | **45 Minuten** for UTILMD/ORDERS; Saturday → Sonntag 12:00 | APERAK AHB 1.1 §2.4.1 |
-/// | Gas | nächster Werktag **12:00** (Folgeprozess) / **3 Werktage** (Initialprozess) | APERAK AHB 1.1 §2.3.1 |
-///
-/// The Gas branch picks its window from the Prüfidentifikator, because that is
-/// what the BDEW made the discriminator — see
-/// [`mako_fristen::GAS_INITIALPROZESS_PIDS`].
-fn aperak_deadline(sparte: Sparte, pid: u32, received_at: OffsetDateTime) -> PendingDeadline {
-    match sparte {
-        Sparte::Strom => {
-            PendingDeadline::new(APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at(received_at))
-        }
-        Sparte::Gas => {
-            let (label, due) = mako_fristen::aperak_gas_due_at(pid, received_at);
-            PendingDeadline::new(label, due)
-        }
-    }
+/// The Prüfidentifikator picks the window, because that is what the BDEW made
+/// the discriminator — see [`mako_fristen::GAS_INITIALPROZESS_PIDS`]. Every
+/// other APERAK window is opened by the ingest door on receipt.
+fn gas_aperak_deadline(pid: u32, received_at: OffsetDateTime) -> PendingDeadline {
+    let (label, due) = mako_fristen::aperak_gas_due_at(pid, received_at);
+    PendingDeadline::new(label, due)
 }
 
 /// The end of a calendar date in Europe/Berlin: a Frist naming a Werktag runs
@@ -1275,6 +1261,10 @@ impl Workflow for WimDeviceChangeWorkflow {
         ZUORDNUNG_ANTWORT_WINDOW_LABEL,
     ];
 
+    /// The APERAK of an order that passed validation is the operator's to
+    /// decide (`DispatchAperak`), after the receipt.
+    const APERAK_AFTER_RECEIPT: bool = true;
+
     /// Deadline compensation for the windows this workflow arms.
     ///
     /// | Label | Open while | Frist | Lapse |
@@ -1691,12 +1681,12 @@ impl Workflow for WimDeviceChangeWorkflow {
                 // PID guard: reject any PID not in the WiM MSB-Wechsel family.
                 // `WimModule` registers exactly `DEVICE_CHANGE_PIDS`; this guard
                 // is defence-in-depth for direct callers.
-                let Some(sparte) = wim_sparte(pid.as_u32()) else {
+                if wim_sparte(pid.as_u32()).is_none() {
                     return Err(WorkflowError::rejected(format!(
                         "PID {} is not a WiM Messstellenbetrieb PID (expected one of {DEVICE_CHANGE_PIDS:?})",
                         pid.as_u32()
                     )));
-                };
+                }
                 // Clone before move for APERAK emission in the validation-failed path.
                 let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
@@ -1739,29 +1729,18 @@ impl Workflow for WimDeviceChangeWorkflow {
                         ANTWORT_FRIST_WINDOW_LABEL,
                         deadline_at_werktage(received_at, frist_wt, HolidayCalendar::BdewMaKo),
                     );
-                    let deadlines = match sparte {
-                        Sparte::Strom => {
-                            vec![
-                                aperak_deadline(sparte, pid.as_u32(), received_at),
-                                process_dl,
-                            ]
-                        }
-                        Sparte::Gas => vec![process_dl],
-                    };
                     Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,
                         vec![],
-                        deadlines,
+                        vec![process_dl],
                     ))
                 } else {
                     let reason = validation_errors.join("; ");
                     events.push(DeviceChangeEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
-                    // Validation failed → APERAK sent immediately: register the 45-min
-                    // *sending* deadline so the OutboxWorker is monitored (APERAK AHB 1.1 §2.4.1).
-                    let aperak_send_dl = aperak_deadline(sparte, pid.as_u32(), received_at);
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1. The
+                    // ingest door opens its delivery window beside it.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -1772,11 +1751,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                         )
                         .caused_by(0),
                     ];
-                    Ok(WorkflowOutput::with_outbox_and_deadlines(
-                        events,
-                        outbox,
-                        vec![aperak_send_dl],
-                    ))
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
             }
 
@@ -1831,16 +1806,16 @@ impl Workflow for WimDeviceChangeWorkflow {
                     AperakPayload::fehler(from, to, orig, mako_engine::erc::codes::Z29, why)
                 };
                 let outbox_entry = PendingOutbox::typed(to, &aperak).caused_by(0);
-                // Strom registered its APERAK window on receipt. Gas registered
-                // none — a processable Gas message is acknowledged by silence —
-                // so a Verarbeitbarkeitsfehlermeldung decided only now opens its
-                // window here, anchored on the order's arrival (APERAK AHB 1.1
-                // §2.3.1).
+                // The ingest door opened the Strom APERAK window on receipt. It
+                // opened no Gas one — a processable Gas message is acknowledged
+                // by silence — so a Verarbeitbarkeitsfehlermeldung decided only
+                // now opens its window here, anchored on the order's arrival
+                // (APERAK AHB 1.1 §2.3.1).
                 let window: Vec<PendingDeadline> = data
                     .received_at
                     .filter(|_| sparte == Sparte::Gas && !positive)
                     .map(|received_at| {
-                        aperak_deadline(sparte, data.pruefidentifikator.as_u32(), received_at)
+                        gas_aperak_deadline(data.pruefidentifikator.as_u32(), received_at)
                     })
                     .into_iter()
                     .collect();

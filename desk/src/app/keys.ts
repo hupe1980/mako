@@ -6,7 +6,7 @@ export interface Shortcut {
   /** As printed on the keyboard. */
   keys: string;
   label: string;
-  group: "Überall" | "Listen" | "Freigaben";
+  group: "Überall" | "Listen" | "Entscheiden";
   /** For a key the Desk itself listens for; list keys belong to React Aria. */
   match?: (e: KeyboardEvent) => boolean;
 }
@@ -58,21 +58,21 @@ export const VORIGE: Shortcut = {
 };
 export const FREIGEBEN: Shortcut = {
   keys: "A",
-  label: "Freigeben wählen",
-  group: "Freigaben",
+  label: "Freigeben wählen — beim Disput Beilegen, beim Prüfposten Geprüft",
+  group: "Entscheiden",
   match: letter("a"),
 };
 export const ABLEHNEN: Shortcut = {
   keys: "R",
-  label: "Ablehnen wählen",
-  group: "Freigaben",
+  label: "Ablehnen wählen — beim Disput Ablehnung senden",
+  group: "Entscheiden",
   match: letter("r"),
 };
 
 export const UEBERNEHMEN: Shortcut = {
   keys: "U",
   label: "Vorschlag des Assistenten übernehmen",
-  group: "Freigaben",
+  group: "Entscheiden",
   match: letter("u"),
 };
 
@@ -108,5 +108,5 @@ export const SHORTCUTS: Shortcut[] = [
   FREIGEBEN,
   ABLEHNEN,
   UEBERNEHMEN,
-  { keys: "↵", label: "Senden bestätigen", group: "Freigaben" },
+  { keys: "↵", label: "Senden bestätigen", group: "Entscheiden" },
 ];

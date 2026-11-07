@@ -201,12 +201,20 @@ impl Daemon for Agentd {
                 .await
                 .context("connect MCP tool transports")?;
 
-        // The proposal tick reads processd's queue over the transport the
-        // manifests' processd grants already use.
-        let processd_tools = tool_servers
-            .iter()
-            .find(|(name, _)| name == "processd")
-            .map(|(_, client)| Arc::clone(client));
+        // The proposal tick reads processd's queue and invoicd's disputes over
+        // the transport the manifests' grants on those servers already use.
+        let vorschlag_quellen: Vec<(
+            crate::plane::vorschlag::Art,
+            Arc<dyn agentplane::tools::ToolClient>,
+        )> = crate::plane::vorschlag::Art::ALLE
+            .into_iter()
+            .filter_map(|art| {
+                tool_servers
+                    .iter()
+                    .find(|(name, _)| name == art.server())
+                    .map(|(_, client)| (art, Arc::clone(client)))
+            })
+            .collect();
 
         // Only specialists the operator activated are registered and routed. An
         // `enable` name that matches nothing compiled in refuses to boot rather
@@ -497,23 +505,32 @@ impl Daemon for Agentd {
             policy: policy_for_routes,
         });
 
-        // ── The proposal waiting on every Freigabe ───────────────────────
-        match (cfg.vorschlaege.automatisch, processd_tools) {
+        // ── The proposal waiting on every Freigabe and Disput ───────────────
+        let ohne: Vec<&str> = crate::plane::vorschlag::Art::ALLE
+            .into_iter()
+            .filter(|art| vorschlag_quellen.iter().all(|(a, _)| a != art))
+            .map(|art| art.server())
+            .collect();
+        if cfg.vorschlaege.automatisch && !ohne.is_empty() {
+            warn!(
+                servers = ?ohne,
+                "agentd: [vorschlaege] automatisch is on but these MCP servers are not \
+                 configured — their entries get no waiting proposal"
+            );
+        }
+        match (cfg.vorschlaege.automatisch, vorschlag_quellen.is_empty()) {
             (false, _) => info!(
-                "agentd: [vorschlaege] automatisch = false — a Freigabe's proposal is computed \
-                 only when a person asks for one"
+                "agentd: [vorschlaege] automatisch = false — a proposal is computed only when a \
+                 person asks for one"
             ),
-            (true, None) => warn!(
-                "agentd: [vorschlaege] automatisch is on but no `processd` MCP server is \
-                 configured — no Freigabe gets a waiting proposal"
-            ),
-            (true, Some(_)) if !activated.includes(crate::plane::vorschlag::SKILL) => warn!(
+            (true, true) => {}
+            (true, false) if !activated.includes(crate::plane::vorschlag::SKILL) => warn!(
                 "agentd: [vorschlaege] automatisch is on but the desk-assistant is not \
-                 activated — no Freigabe gets a waiting proposal"
+                 activated — no entry gets a waiting proposal"
             ),
-            (true, Some(processd)) => crate::plane::vorschlag::spawn(
+            (true, false) => crate::plane::vorschlag::spawn(
                 Arc::clone(&state),
-                processd,
+                vorschlag_quellen,
                 std::time::Duration::from_secs(cfg.vorschlaege.intervall_secs),
                 ctx.shutdown.clone(),
             ),

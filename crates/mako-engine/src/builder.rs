@@ -2809,6 +2809,7 @@ mod tests {
         // (message type, the window it answers for)
         for (message_type, window) in [
             ("APERAK", mako_fristen::APERAK_STROM_WINDOW_LABEL),
+            ("APERAK", mako_fristen::APERAK_STROM_ALLGEMEIN_LABEL),
             ("APERAK", mako_fristen::APERAK_GAS_FOLGEPROZESS_LABEL),
             ("APERAK", mako_fristen::APERAK_GAS_INITIALPROZESS_LABEL),
             ("CONTRL", mako_fristen::CONTRL_FRIST_LABEL),
@@ -2886,6 +2887,7 @@ mod tests {
     fn every_delivery_window_label_is_discharged_by_its_message() {
         for (message_type, label) in [
             ("APERAK", mako_fristen::APERAK_STROM_WINDOW_LABEL),
+            ("APERAK", mako_fristen::APERAK_STROM_ALLGEMEIN_LABEL),
             ("APERAK", mako_fristen::APERAK_GAS_FOLGEPROZESS_LABEL),
             ("APERAK", mako_fristen::APERAK_GAS_INITIALPROZESS_LABEL),
             ("CONTRL", mako_fristen::CONTRL_FRIST_LABEL),

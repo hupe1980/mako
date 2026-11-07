@@ -421,9 +421,18 @@ async function recordedRechnungen(context: BrowserContext) {
           process_id: "c0ffee00-0000-4000-8000-000000000031",
           pid: 31002,
           sender_mp_id: "9900357000004",
+          rechnungsnummer: "NNE-2026-10-4471",
           received_at: "2026-11-02T08:00:00Z",
           bo4e_version: "202607.1.0",
           frist: "2026-11-09T23:00:00Z",
+          abgesendet: true,
+          befunde: [
+            {
+              art: "TariffDeviation",
+              bezeichnung: "Preis weicht vom Preisblatt ab",
+              text: "Position 1 (Arbeitspreis): Einzelpreis 0,31200 EUR/kWh, das Preisblatt von 9900357000004 zum 01.10.2026 nennt 0,29800 EUR/kWh (Toleranz 1,0 %).",
+            },
+          ],
         },
       ],
       count: 1,
@@ -456,8 +465,12 @@ async function recordedRechnungen(context: BrowserContext) {
       count: 1,
       saturated: false,
     },
+    // The Rechnungssteller's name, as the Marktstammdaten register it.
+    partner_namen: {
+      partner: [{ mp_id: "9900357000004", name: "Stadtwerke Musterstadt Netz GmbH" }],
+    },
   };
-  for (const service of ["invoicd", "billingd"]) {
+  for (const service of ["invoicd", "billingd", "marktd"]) {
     await context.route(`**/svc/${service}/mcp`, async (route) => {
       const message = JSON.parse(route.request().postData() ?? "{}");
       if (message.id === undefined) return route.fulfill({ status: 202 });
@@ -590,10 +603,31 @@ async function recordedAgentd(context: BrowserContext) {
   await context.route("**/svc/agentd/api/v1/runs/run-freigabe-1/antwort", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(proposal) }),
   );
+  // The dispute's proposal: the finding it rests on, the refusal kept.
+  const disputVorschlag = {
+    ...proposal,
+    run: "run-disput-1",
+    saetze: [],
+    vorschlag: {
+      aktion: "aufrechterhalten",
+      antwortcode: null,
+      befund: "TariffDeviation",
+      begruendung: "Der Arbeitspreis von 31,20 ct/kWh liegt über den 29,80 ct/kWh des Preisblatts.",
+      quelle: "invoicd/get_check_result",
+      belegt: true,
+    },
+    schritte: [
+      { quelle: "invoicd/get_receipt", fertig: true },
+      { quelle: "invoicd/get_check_result", fertig: true },
+    ],
+  };
   await context.route("**/svc/agentd/api/v1/vorschlaege*", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify(Object.fromEntries(freigaben.map((f) => [f.id, proposal]))),
+      body: JSON.stringify({
+        freigabe: Object.fromEntries(freigaben.map((f) => [f.id, proposal])),
+        disput: { "7d1c0e1a-2b3c-4d5e-8f90-1a2b3c4d5e6f": disputVorschlag },
+      }),
     }),
   );
 }
@@ -693,8 +727,21 @@ try {
     await page.getByText("Max Mustermann").waitFor();
     await shot(page, "heute", theme);
 
+    // A disputed invoice decided where it stands: its finding, the proposal
+    // resting on it, and the two decisions the Rechnungseingang offers.
+    await page.getByRole("button", { name: /Stadtwerke Musterstadt Netz/ }).click();
+    await page.getByRole("list", { name: "Befunde" }).waitFor();
+    await page
+      .getByText(/Vorschlag/)
+      .first()
+      .waitFor();
+    await page.getByRole("list", { name: "Befunde" }).scrollIntoViewIfNeeded();
+    await shot(page, "heute-disput", theme);
+
     await page.goto(`${base}ueberblick`);
     await page.getByRole("link", { name: "Anmeldungen offen: 4" }).waitFor();
+    await page.getByRole("link", { name: "Rechnungsprüfung: 1" }).waitFor();
+    await page.getByRole("link", { name: "Rechnungsdispute: 1" }).waitFor();
     await shot(page, "ueberblick", theme);
 
     await page.goto(`${base}fristen`);

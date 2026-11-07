@@ -346,6 +346,7 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
         }),
         payload_schema: None,
         created_at: time::OffsetDateTime::now_utc(),
+        occurred_at: None,
         deliver_after: None,
         attempt_count: 0,
         first_attempt_at: None,

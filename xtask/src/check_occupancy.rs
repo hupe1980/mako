@@ -24,7 +24,7 @@ use crate::check_workflow_purity::{
 };
 
 /// Arms deciding on presence alone, today.
-const PRESENCE_ARMS: usize = 27;
+const PRESENCE_ARMS: usize = 2;
 
 /// The tree scanned.
 const DISPATCHER: &str = "services/makod/src/orchestrator/ingest_dispatcher";

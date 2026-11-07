@@ -262,6 +262,88 @@ pub(crate) fn ahb_verdict(msg: &AnyMessage) -> (bool, Vec<String>) {
     )
 }
 
+/// What the Verarbeitbarkeitsprüfung's AHB step (APERAK AHB 1.1 § 2.1.2)
+/// found in a message, as far as an APERAK can say it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AhbBefund {
+    /// No AHB-Fehler — or no profile to judge the message by, which is not a
+    /// rule broken.
+    Verarbeitbar,
+    /// The AHB-Fehler the APERAK has a code for (Kap. 4.3), every one of them
+    /// (§ 2.1.1, S. 10: „Es sind alle AHB-Fehler anzugeben"), in the order
+    /// found. Never empty.
+    Fehler(Vec<AhbFehler>),
+    /// Errors the APERAK names no code for here (a MIG or semantic finding):
+    /// neither an Anerkennung nor a guessed Fehlermeldung is owed by the door.
+    Ungeklaert,
+}
+
+/// One coded AHB-Fehler — one `SG4 ERC` group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AhbFehler {
+    /// The `ERC` DE 9321: `Z29` for a missing Muss element, `Z39` for a code
+    /// outside the permitted ones.
+    pub(crate) code: &'static str,
+    /// The MIG name of the faulty segment — the obligatory Ortsangabe
+    /// (§ 2.1.2.1).
+    pub(crate) ortsangabe: Option<String>,
+    /// The finding, for `FTX+ABO`.
+    pub(crate) reason: String,
+}
+
+/// Classify `msg`'s AHB findings into what an APERAK can answer.
+///
+/// An element „not part of the Prüfschablone" is no AHB-Fehler: § 2.1.2
+/// (S. 11) has the receiver ignore „Informationen, die gemäß des
+/// Prüfidentifikators nicht enthalten sein sollten". Every coded finding is
+/// its own [`AhbFehler`]; a finding with no code beside them is named in the
+/// first one's text, so nothing the check found goes unreported.
+pub(crate) fn ahb_befund(msg: &AnyMessage) -> AhbBefund {
+    let Some(report) = msg.validate_on_date(mako_fristen::heute()).ok() else {
+        return AhbBefund::Verarbeitbar;
+    };
+    let errors: Vec<_> = report
+        .errors()
+        .iter()
+        .filter(|e| !e.rule_id().is_some_and(|r| r.ends_with("-NOT-PERMITTED")))
+        .collect();
+    if errors.is_empty() {
+        return AhbBefund::Verarbeitbar;
+    }
+    let code_of = |e: &edifact_rs::ValidationIssue| {
+        let rule = e.rule_id().filter(|r| r.starts_with("AHB-"))?;
+        if rule.ends_with("-MISSING") {
+            Some(mako_engine::erc::codes::Z29)
+        } else if rule.ends_with("-CODE") {
+            Some(mako_engine::erc::codes::Z39)
+        } else {
+            None
+        }
+    };
+    let mut fehler: Vec<AhbFehler> = Vec::new();
+    let mut uncoded: Vec<String> = Vec::new();
+    for e in &errors {
+        match code_of(e) {
+            Some(code) => fehler.push(AhbFehler {
+                code,
+                ortsangabe: e
+                    .context_get("segment_name")
+                    .map(str::to_owned)
+                    .or_else(|| e.segment_tag().map(str::to_owned)),
+                reason: e.message.clone(),
+            }),
+            None => uncoded.push(e.message.clone()),
+        }
+    }
+    let Some(first) = fehler.first_mut() else {
+        return AhbBefund::Ungeklaert;
+    };
+    if !uncoded.is_empty() {
+        first.reason = format!("{}; ferner: {}", first.reason, uncoded.join("; "));
+    }
+    AhbBefund::Fehler(fehler)
+}
+
 // ── MSCONS interval decoding ──────────────────────────────────────────────────
 
 /// `SG10 DTM` DE 2379 format `303` — `CCYYMMDDHHMMZZZ`.
@@ -436,7 +518,10 @@ fn build_gpke_iftsta_command(msg: &AnyMessage) -> Result<SupplierChangeCommand, 
 /// routed to the WiM device-change workflow (PIDs 21009–21018).
 ///
 /// Called from `wim_registry()` when `msg` is `AnyMessage::Iftsta`.
-fn build_wim_iftsta_command(msg: &AnyMessage) -> Result<DeviceChangeCommand, EngineError> {
+fn build_wim_iftsta_command(
+    msg: &AnyMessage,
+    received_at: time::OffsetDateTime,
+) -> Result<DeviceChangeCommand, EngineError> {
     let AnyMessage::Iftsta(i) = msg else {
         return Err(EngineError::Deserialization(
             "WiM IFTSTA adapter: expected AnyMessage::Iftsta".into(),
@@ -462,9 +547,9 @@ fn build_wim_iftsta_command(msg: &AnyMessage) -> Result<DeviceChangeCommand, Eng
                     pid,
                     zuordnungsbeginn,
                     message_ref: MessageRef::new(msg.message_ref()),
-                    // The ÜT of Nr. 7 — resolved here at the ingest boundary
-                    // so the pure workflow never reads a clock.
-                    received_at: time::OffsetDateTime::now_utc(),
+                    // The ÜT of Nr. 7 — the door's receipt instant, so the
+                    // pure workflow never reads a clock.
+                    received_at,
                 }
             }
             _ => DeviceChangeCommand::ReceiveZuordnungsantwort {
@@ -754,13 +839,13 @@ coverage_table! {
     geli_gas_lf_anmeldung_registry,
     geli_gas_mscons_registry,
     geli_gas_partin_registry,
-    geli_gas_registry,
+    geli_gas_registry(time::OffsetDateTime::UNIX_EPOCH),
     geli_gas_sperrprozesse_invoic_registry,
     geli_gas_sperrung_lf_registry,
     geli_gas_sperrung_nb_registry,
     geli_gas_sperrung_nb_response_registry,
     geli_gas_sperrung_nb_stornierung_registry,
-    geli_gas_stammdaten_registry,
+    geli_gas_stammdaten_registry(time::OffsetDateTime::UNIX_EPOCH),
     geli_gas_stornierung_lf_registry,
     geli_gas_stornierung_registry,
     geli_gas_zuordnungsmeldung_registry,
@@ -776,7 +861,7 @@ coverage_table! {
     gpke_kuendigung_registry,
     gpke_datenabruf_registry,
     gpke_geschaeftsdatenanfrage_registry,
-    gpke_eog_registry,
+    gpke_eog_registry(time::OffsetDateTime::UNIX_EPOCH),
     gpke_konfiguration_aenderung_registry,
     gpke_konfiguration_registry,
     gpke_abrechnungsdaten_registry,
@@ -791,7 +876,7 @@ coverage_table! {
     gpke_sperrung_msb_response_registry,
     gpke_sperrung_registry,
     gpke_sperrung_stornierung_registry,
-    gpke_stammdaten_registry,
+    gpke_stammdaten_registry(time::OffsetDateTime::UNIX_EPOCH),
     gpke_stornierung_registry,
     gpke_utilts_registry,
     mabis_anforderung_ablehnung_registry,
@@ -803,15 +888,15 @@ coverage_table! {
     mabis_summenzeitreihe_registry,
     mabis_zp_lifecycle_antwort_registry,
     mabis_zp_lifecycle_registry,
-    wim_geraeteubernahme_registry(mako_engine::types::Sparte::Strom),
-    wim_insrpt_registry(mako_engine::types::Sparte::Strom, mako_fristen::antwort::Messtechnik::RlmOderImsMsHs),
+    wim_geraeteubernahme_registry(time::OffsetDateTime::UNIX_EPOCH, mako_engine::types::Sparte::Strom),
+    wim_insrpt_registry(time::OffsetDateTime::UNIX_EPOCH, mako_engine::types::Sparte::Strom, mako_fristen::antwort::Messtechnik::RlmOderImsMsHs),
     wim_invoic_comdis_registry,
     wim_invoic_registry,
     wim_invoic_remadv_registry,
     wim_preisanfrage_registry,
     wim_preisliste_registry,
     wim_rechnungsabwicklung_registry,
-    wim_registry,
+    wim_registry(time::OffsetDateTime::UNIX_EPOCH),
     wim_technik_aenderung_registry,
     wim_weiterverpflichtung_registry(mako_engine::types::Sparte::Strom),
     wim_ersteinbau_registry(),

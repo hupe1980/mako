@@ -119,6 +119,7 @@ async fn a_question_is_answered_in_sentences_each_checked_against_its_call() {
         ], "vorschlag": {
             "aktion": "ablehnen",
             "antwortcode": "A02",
+            "befund": null,
             "begruendung": "Die Frist endet am 05.11.2026 um 11:00 Uhr.",
             "quelle": "makod/get_process"
         }})),

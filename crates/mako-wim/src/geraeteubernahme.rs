@@ -656,7 +656,7 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                             sparte,
                             Some(&reason),
                         )],
-                        vec![aperak_deadline(sparte, pid.as_u32(), received_at)],
+                        vec![],
                     ));
                 }
 
@@ -697,26 +697,20 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                             sparte,
                             Some(&reason),
                         )],
-                        vec![aperak_deadline(sparte, pid.as_u32(), received_at)],
+                        vec![],
                     ));
                 }
 
                 events.push(GeraeteubernahmeEvent::ValidationPassed { message_ref });
 
-                // Two clocks. The APERAK says the ORDERS could be processed —
-                // 45 minutes in Strom, and in Gas only if it could *not*, so a
-                // processable Gas ORDERS puts no APERAK on the wire and arms no
-                // window for one. The business answer is the ORDRSP, and its
-                // window depends on which Use-Case the PID opens.
-                let mut deadlines = match sparte {
-                    Sparte::Strom => vec![aperak_deadline(sparte, pid.as_u32(), received_at)],
-                    Sparte::Gas => vec![],
-                };
-                deadlines.push(antwort_deadline(
+                // The business answer is the ORDRSP, and its window depends on
+                // which Use-Case the PID opens. The APERAK window beside it is
+                // the ingest door's, derived from the message.
+                let deadlines = vec![antwort_deadline(
                     pid.as_u32(),
                     termin.as_deref(),
                     received_at,
-                )?);
+                )?];
 
                 Ok(WorkflowOutput::with_outbox_and_deadlines(
                     events,
@@ -845,21 +839,6 @@ fn aperak(
         None => AperakPayload::anerkennung(from.as_str(), to.as_str(), orders_ref),
     };
     PendingOutbox::typed(to.as_str(), &payload).caused_by(0)
-}
-
-/// The APERAK *sending* deadline, per Sparte — 45 minutes in Strom, and in Gas
-/// the window the PID's Initial-/Folgeprozess classification selects.
-fn aperak_deadline(sparte: Sparte, pid: u32, received_at: OffsetDateTime) -> PendingDeadline {
-    match sparte {
-        Sparte::Strom => PendingDeadline::new(
-            mako_fristen::APERAK_STROM_WINDOW_LABEL,
-            mako_fristen::aperak_strom_due_at(received_at),
-        ),
-        Sparte::Gas => {
-            let (label, due) = mako_fristen::aperak_gas_due_at(pid, received_at);
-            PendingDeadline::new(label, due)
-        }
-    }
 }
 
 /// The ORDRSP answer deadline, which is anchored differently per Use-Case.
@@ -1210,7 +1189,8 @@ mod tests {
                 );
                 // Only the APERAK goes out — no ORDRSP answer window is opened
                 // on a Frist that cannot be met.
-                assert!(out.deadlines.iter().all(|d| d.label.starts_with("aperak-")));
+                assert!(out.deadlines.is_empty(), "{:?}", out.deadlines);
+                assert!(out.outbox.iter().any(|o| &*o.message_type == "APERAK"));
             }
         }
     }

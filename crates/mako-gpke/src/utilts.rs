@@ -145,6 +145,20 @@ pub enum UtiltsKonfigState {
     },
 }
 
+/// A UTILTS is settled once it is validated: each message is its own
+/// process, so the next one for the same key spawns rather than being fed into
+/// a finished one (whose receive command refuses anything but `New`).
+impl mako_engine::workflow::OccupiesBusinessKey for UtiltsKonfigState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Received, not yet validated — never left standing by one
+            // command, so read as live.
+            Self::UtiltsErhalten(_) => true,
+            Self::New | Self::ValidationPassed(_) | Self::ValidationFailed { .. } => false,
+        }
+    }
+}
+
 impl UtiltsKonfigState {
     /// Stable string label for the current variant.
     #[must_use]

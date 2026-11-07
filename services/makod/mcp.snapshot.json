@@ -319,7 +319,58 @@
       "type": "object",
       "properties": {}
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "DeadLetter": {
+          "description": "One message that permanently failed.",
+          "type": "object",
+          "properties": {
+            "rejected_at": {
+              "description": "When it was rejected, RFC 3339 in UTC; `None` when the stored instant\ncannot be read as one.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "reason_label": {
+              "description": "The rejection category.",
+              "type": "string"
+            },
+            "reason_detail": {
+              "description": "What went wrong, in the engine's words.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rejected_at",
+            "reason_label",
+            "reason_detail"
+          ]
+        }
+      },
+      "required": [
+        "dead_letters",
+        "gesamt"
+      ],
+      "type": "object",
+      "properties": {
+        "dead_letters": {
+          "description": "The most recent first, at most 20.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DeadLetter"
+          }
+        },
+        "gesamt": {
+          "description": "Every dead letter the store holds — not the length of the page.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      }
+    }
   },
   {
     "name": "list_overdue_deadlines",

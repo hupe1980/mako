@@ -9,6 +9,110 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.27.0] — unreleased
+
+### Added
+
+- Desk: a Rechnungsdisput is decided in Heute — Beilegen held for undo,
+  Ablehnung senden (a REMADV) after the confirm — and so is a Prüfposten: a
+  held invoice released after the confirm, one under review marked „Geprüft"
+  on a hold. The assistant's waiting proposal covers disputes, belegt only when
+  the cited check result names the finding it rests on. A disputed invoice is
+  titled by its Rechnungssteller's name and Rechnungsnummer, and every finding
+  by its German name (`FindingKind::bezeichnung`), never the checker's
+  identifier.
+- marktd `partner_namen` names up to 200 Marktpartner by MP-ID in one typed
+  read; marktd's MCP contract is pinned by `mcp.snapshot.json`, and the Desk's
+  gateway routes marktd.
+- Desk Überblick: Dead Letters for Netz (with a new Dead-Letters list),
+  Rechnungsprüfung and Rechnungsdispute for Lieferant, überfällige
+  Ableseaufträge for Messstelle — each counting what its Heute source lists.
+- makod answers every processed Strom message whose workflow sends no APERAK
+  of its own with the Anerkennungsmeldung (APERAK 29002 — `SG2 RFF+ACE`,
+  `RFF+AGO`, `DTM+171`) in the run's own write (APERAK AHB 1.1 § 2.2, § 2.4);
+  about thirty Strom workflows answered nothing. mako-engine adds
+  `RunOptions::acknowledgement` and `Workflow::APERAK_AFTER_RECEIPT`.
+- makod answers a message whose Prüfidentifikator no Marktrolle of the
+  deployment processes with a Verarbeitbarkeitsfehlermeldung `Z31` (APERAK AHB
+  1.1 Kap. 4.3), in both Sparten and on both doors, written with its dead letter
+  in one transaction (mako-engine `DeadLetterSink::reject_answered`).
+- makod answers a follow-up no process takes with `Z33` „Referenziertes
+  Geschäftsvorfall-Tupel nicht vorhanden" where the PID-Übersicht marks the
+  Zuordnungsprüfung `V` (APERAK AHB 1.1 § 2.1.3, Kap. 4.3). `import-pid-overview`
+  carries the „Zuordnung zu einem Geschäftsvorfall" and „Stelle der
+  Zuordnungsprüfung" columns into `pid-overview.json`; `check-pid-coverage`
+  refuses an inventory without them.
+- makod policy `[policy.ingest] unbekannter_vorgang`: `z33` (default, APERAK
+  AHB 1.1 Kap. 2.1.3) refuses an orphan follow-up with `Z33`; `zur_pruefung`
+  records it as a dead letter for a person and sends no APERAK — for a cutover
+  from another MaKo system or parallel operation (Kap. 1.3).
+- `mako_fristen::APERAK_STROM_ALLGEMEIN_LABEL`: the delivery window of a
+  Strom message that is not a UTILMD or ORDERS, the next Werktag 12 Uhr
+  (APERAK AHB 1.1 § 2.4.1). mako-engine's `RunOptions` carries `received_at`
+  and `delivery_windows`; an outbox entry its `occurred_at`.
+- agentd pins its skill catalog in `catalog.snapshot.json`, so a grant, model or
+  trigger added to a manifest changes the snapshot in the same commit;
+  `mako_service::mcp_snapshot::compare_json` pins any served JSON contract.
+
+### Changed
+
+- **Breaking:** makod derives every inbound message's APERAK window in one
+  place and registers it on spawn and resume — Strom always, Gas only beside a
+  Verarbeitbarkeitsfehlermeldung; the GPKE, GeLi Gas and WiM workflows no
+  longer register it themselves. `SupplierChangeCommand::ReceiveUtilmd` and
+  `NeuanlageCommand::ReceiveAnmeldung` lose `received_at`; the adapters and
+  `dispatch_dvgw` / the Redispatch entry points take the receipt instant.
+- **Breaking:** agentd's waiting proposal is keyed by kind:
+  `GET /api/v1/vorschlaege?freigabe=…&disput=…` answers per kind, admission is
+  `vorschlag:<kind>:<id>`; desk-assistant 1.2.0 reads invoicd `get_receipt` and
+  `get_check_result`.
+- **Breaking:** invoicd `list_disputes` adds `abgesendet`, `rechnungsnummer`
+  and `befunde` (each with `bezeichnung`, as in `get_check_result`);
+  `resolve-dispute` records the caller as `dispute_resolved_by`, required beside
+  `dispute_resolved_at`.
+- **Breaking:** edi-energy's `Abweichungsgrund` gains `erlaeuterung`
+  (`mit_erlaeuterung`), the Kopfebene's `SG7 FTX+ABO`.
+- **Breaking:** billingd's `POST /api/v1/billing/{id}/reviewed` (Cedar
+  `review-billing`) records the review of a REVIEW record.
+- **Breaking:** makod `list_dead_letters` answers typed `{dead_letters, gesamt}`;
+  `gesamt` is the total held, not the page.
+- processd's `get_stp_rate`, `get_process_stp_rate` and `get_kpi_report`
+  declare output schemas; the 95 % STP target is processd's operating target,
+  not a regulatory one.
+- rmcp 3.9: a tool output field that is always serialized is listed as
+  `required` (nullable where it can be empty); the MCP snapshots and the
+  Desk's generated types follow.
+
+### Fixed
+
+- The CloudEvent `time` of a notification an inbound message caused is its
+  receipt instant, not the enqueue instant, so processd counts the
+  Antwortfrist from the Übertragungstag (GPKE Teil 1 Kap. 7, S. 27).
+- A message failing its AHB check is answered by the door with `Z29` (a
+  missing Muss element) or `Z39` (a code not permitted) — every AHB-Fehler in
+  its own `SG4 ERC` group (§ 2.1.1) — with the segment's MIG name as
+  `FTX+Z02` Ortsangabe, instead of an Anerkennungsmeldung; in Gas the
+  Fehlermeldung opens its delivery window. edi-energy's AHB findings carry the
+  segment's MIG name (`segment_name`).
+- Every makod ingest arm but the GPKE supplier-change pair decides
+  resume-or-spawn on its workflow's published occupancy verdict, so a second
+  message for a settled process opens a new one instead of being dead-lettered
+  or silently dropped (`PRESENCE_ARMS` 27 → 2).
+- PARTIN, UTILTS and PRICAT messages were acknowledged on the wire and recorded
+  by no process; they are keyed — UTILTS on `LOC+172`, PARTIN and PRICAT on the
+  sender's `NAD+MS` — and recorded.
+- A dead letter's `rejected_at` is stored as RFC 3339.
+- A refusal's REMADV states why: makod writes the Ablehnungsgrund as the
+  Kopf-`AJT`'s `SG7 FTX+ABO` (REMADV AHB `[548]`) — it never reached the wire —
+  and every invoic-checker finding is German, written for the Rechnungssteller,
+  within one DE 4440 (`an..512`), ending on a whole finding. invoicd records
+  each answer before sending it, and `dispatch-answer` sends exactly that answer
+  again; it sent a placeholder sentence and no Antwortcode.
+- billingd's review queue lists only undecided records; a released or
+  reviewed one never left it.
+- The Desk's gateway routes invoicd, billingd, edmd and netzbilanzd, which
+  Heute reads; behind the gateway those sources answered 404.
+
 ## [0.26.0] — 2026-11-06
 
 ### Added

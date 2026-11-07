@@ -39,7 +39,8 @@ export interface BillingdTools {
  */
 export interface Pruefposten {
   /**
-   * The billing record — what `POST /api/v1/billing/{id}/release` addresses.
+   * The billing record — what `POST /api/v1/billing/{id}/release` (HELD) and
+   * `POST /api/v1/billing/{id}/reviewed` (REVIEW) address.
    */
   id: string;
   /**

@@ -350,6 +350,26 @@ pub enum BeendigungZuordnungState {
     },
 }
 
+/// Whether a Beendigung der Zuordnung still holds its Marktlokation against a new one.
+///
+/// Live while the answer is owed or the accepted Vorgang awaits its
+/// Beendigung; settled once refused or ended. A settled process must not
+/// take the next 55010 for the same Marktlokation — its receive command
+/// refuses anything but `New`.
+impl mako_engine::workflow::OccupiesBusinessKey for BeendigungZuordnungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            // NB side: the Anfrage is out, or the LFA's answer is being
+            // carried to the Anmeldung.
+            Self::AnfrageGesendet { .. } | Self::LfaAntwort { .. } => true,
+            Self::Eingegangen(_) | Self::ValidationPassed(_) | Self::AntwortGesendet { .. } => true,
+            Self::New | Self::Beendet(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl BeendigungZuordnungState {
     /// Stable string label for the current variant.
     #[must_use]

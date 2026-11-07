@@ -119,13 +119,14 @@ const TENANT: &str = "9910000000002";
 /// Every action the router enforces must be decidable by the policy. A typo in
 /// either place — a renamed action, a handler wired to a string no policy
 /// mentions — turns into an endpoint nobody can reach.
-const ALL_ACTIONS: [&str; 8] = [
+const ALL_ACTIONS: [&str; 9] = [
     "read-billing",
     "preview-billing",
     "run-billing",
     "settle-flexibility",
     "correct-billing",
     "release-billing",
+    "review-billing",
     "submit-b2g",
     "issue-billing",
 ];
@@ -151,7 +152,12 @@ fn a_foreign_market_role_reads_but_does_not_issue() {
     let nb = principal(TENANT, &["NB"]);
     assert!(e.check(&nb, "read-billing", TENANT).is_ok());
     assert!(e.check(&nb, "preview-billing", TENANT).is_ok());
-    for action in ["run-billing", "correct-billing", "release-billing"] {
+    for action in [
+        "run-billing",
+        "correct-billing",
+        "release-billing",
+        "review-billing",
+    ] {
         assert!(
             e.check(&nb, action, TENANT).is_err(),
             "NB must not be able to {action}"
@@ -171,6 +177,7 @@ fn a_roleless_token_cannot_issue_or_reverse_anything() {
         "settle-flexibility",
         "correct-billing",
         "release-billing",
+        "review-billing",
         "submit-b2g",
         "issue-billing",
     ] {

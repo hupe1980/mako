@@ -270,6 +270,23 @@ pub enum AnkuendigungZuordnungLfState {
     },
 }
 
+/// Whether a received Ankündigung der Zuordnung still holds its Marktlokation against a new one.
+///
+/// Live while the answer is owed or the accepted Vorgang awaits its
+/// Zuordnung; settled once refused or assigned. A settled process must not
+/// take the next 55607 for the same Marktlokation — its receive command
+/// refuses anything but `New`.
+impl mako_engine::workflow::OccupiesBusinessKey for AnkuendigungZuordnungLfState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::Eingegangen(_) | Self::ValidationPassed(_) | Self::AntwortGesendet { .. } => true,
+            Self::New | Self::Zugeordnet(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl AnkuendigungZuordnungLfState {
     /// Stable string label for the current variant.
     #[must_use]

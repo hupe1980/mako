@@ -34,6 +34,26 @@ upstreamConfig:
       path: ^/svc/vertragd/(.*)$
       rewriteTarget: /$1
       uri: http://vertragd:9780
+    - id: marktd
+      path: ^/svc/marktd/(.*)$
+      rewriteTarget: /$1
+      uri: http://marktd:8180
+    - id: invoicd
+      path: ^/svc/invoicd/(.*)$
+      rewriteTarget: /$1
+      uri: http://invoicd:8280
+    - id: edmd
+      path: ^/svc/edmd/(.*)$
+      rewriteTarget: /$1
+      uri: http://edmd:8380
+    - id: netzbilanzd
+      path: ^/svc/netzbilanzd/(.*)$
+      rewriteTarget: /$1
+      uri: http://netzbilanzd:8680
+    - id: billingd
+      path: ^/svc/billingd/(.*)$
+      rewriteTarget: /$1
+      uri: http://billingd:9280
     - id: agentd
       path: ^/svc/agentd/(.*)$
       rewriteTarget: /$1

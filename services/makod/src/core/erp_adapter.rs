@@ -561,7 +561,7 @@ where
                     pid: extract_pid(&msg.payload),
                     payload_schema: msg.payload_schema.as_deref().map(str::to_owned),
                     payload: msg.payload.clone(),
-                    occurred_at: msg.created_at,
+                    occurred_at: occurred_at(&msg),
                     workflow_name: msg.workflow_name.clone(),
                     trace_context: msg.trace_context.clone(),
                 };
@@ -760,6 +760,19 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
     })
 }
 
+/// The instant the notified occurrence happened — the CloudEvent `time`.
+///
+/// A message caused by an inbound Marktnachricht carries the door's receipt
+/// instant ([`OutboxMessage::occurred_at`]); `processd` counts an
+/// arrival-anchored Antwortfrist from it, and a dispatch after midnight must
+/// not move the Übertragungstag (GPKE Teil 1 Kap. 7 „Fristenberechnung",
+/// S. 27). Any other message happened when it was enqueued.
+///
+/// [`OutboxMessage::occurred_at`]: mako_engine::outbox::OutboxMessage::occurred_at
+fn occurred_at(msg: &mako_engine::outbox::OutboxMessage) -> time::OffsetDateTime {
+    msg.occurred_at.unwrap_or(msg.created_at)
+}
+
 /// Extract the `pid` field from a BO4E outbox payload, if present.
 fn extract_pid(payload: &serde_json::Value) -> u32 {
     payload
@@ -771,6 +784,31 @@ fn extract_pid(payload: &serde_json::Value) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    /// The CloudEvent `time` is when the occurrence happened: for a message
+    /// caused by an inbound Marktnachricht the receipt instant, which processd
+    /// counts the Antwortfrist from — not the instant the entry was enqueued.
+    #[test]
+    fn the_cloud_event_time_is_the_occurrence() {
+        use mako_engine::ids::{
+            ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId,
+        };
+        let mut msg = mako_engine::outbox::OutboxMessage::new(
+            StreamId::new("process/t/p"),
+            ProcessId::new(),
+            TenantId::new(),
+            CorrelationId::new(),
+            ConversationId::new(),
+            EventId::new(),
+            "ProcessInitiated",
+            "9900357000004",
+            serde_json::json!({}),
+        );
+        assert_eq!(super::occurred_at(&msg), msg.created_at);
+        let received = time::macros::datetime!(2026-07-07 10:00 UTC);
+        msg.occurred_at = Some(received);
+        assert_eq!(super::occurred_at(&msg), received);
+    }
+
     /// The outbox `message_type` is a bare string shared across crate
     /// boundaries: a workflow in `mako-gabi-gas` writes it and
     /// [`map_message_type_to_erp_event`] here reads it, with no type linking

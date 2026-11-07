@@ -586,6 +586,25 @@ pub enum WertebestellungState {
     },
 }
 
+/// Whether a Wertebestellung still holds its location: from the Anfrage
+/// through a confirmed, delivering Bestellung and any pending Storno or
+/// Abbestellung it is live; once storniert, ended or refused it is settled.
+impl mako_engine::workflow::OccupiesBusinessKey for WertebestellungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::AnfrageEingegangen(_)
+            | Self::AngebotAbgegeben { .. }
+            | Self::BestellungEingegangen(_)
+            | Self::BestellungBestaetigt { .. }
+            | Self::StornierungEingegangen(_)
+            | Self::AbbestellungEingegangen { .. } => true,
+            Self::New | Self::Storniert(_) | Self::Beendet { .. } | Self::Abgelehnt { .. } => false,
+        }
+    }
+}
+
 impl WertebestellungState {
     /// Stable string label for the current variant.
     #[must_use]

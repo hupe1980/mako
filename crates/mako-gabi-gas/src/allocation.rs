@@ -280,6 +280,18 @@ pub enum AllocationState {
     FinalOverdue(Box<AllocationData>),
 }
 
+/// An allocation process is the record of one Gastag on one key: every later
+/// ALOCAT version — the vorläufige, the endgültige, a correction — is booked
+/// into it, so once anything is recorded it holds the key for good.
+impl mako_engine::workflow::OccupiesBusinessKey for AllocationState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            Self::Recorded(_) | Self::FinalOverdue(_) => true,
+            Self::New => false,
+        }
+    }
+}
+
 impl AllocationState {
     /// Stable string label for the current variant.
     #[must_use]

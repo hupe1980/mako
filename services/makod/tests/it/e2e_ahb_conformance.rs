@@ -266,7 +266,6 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
         kunde_name: None,
         kunde_namensformat: None,
         message_ref: cmd_ref,
-        received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         fallgruppe: None,
@@ -401,7 +400,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
 
     // Step 3: Adapt to domain command using geli_gas_registry.
     let fv = FormatVersion::new(GAS_FV_2025);
-    let adapter_cmd = geli_gas_registry()
+    let adapter_cmd = geli_gas_registry(time::OffsetDateTime::now_utc())
         .dispatch(&msg as &dyn Any, &fv)
         .expect("geli_gas_registry must adapt PID 44001 UTILMD Gas to GasSupplierChangeCommand");
 
@@ -520,7 +519,7 @@ async fn ahb_44039_kuendigung_msb_gas_validates_and_dispatches() {
     );
 
     let fv = FormatVersion::new(GAS_FV_2025);
-    let adapter_cmd = wim_registry()
+    let adapter_cmd = wim_registry(time::OffsetDateTime::now_utc())
         .dispatch(&msg as &dyn Any, &fv)
         .expect("wim_registry must adapt PID 44039 UTILMD Gas to DeviceChangeCommand");
 
@@ -942,7 +941,7 @@ async fn assert_wim_device_change_dispatches(
     );
 
     let fv = FormatVersion::new(GAS_FV_2025);
-    let adapter_cmd = wim_registry()
+    let adapter_cmd = wim_registry(time::OffsetDateTime::now_utc())
         .dispatch(&msg as &dyn Any, &fv)
         .expect("wim_registry must adapt the WiM MSB-Wechsel UTILMD");
 

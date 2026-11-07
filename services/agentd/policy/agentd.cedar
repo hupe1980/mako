@@ -102,7 +102,7 @@ permit(principal, action == Action::"effect:perform", resource);
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing
 // at somebody else's endpoint is a configuration error this refuses rather than
 // calls. `context.args.server` is what makes this expressible without naming the
-// 155 granted tools one by one.
+// 157 granted tools one by one.
 //
 // **This list must cover every server the manifests grant.** A granted server
 // missing from it is not a narrower policy — it is a specialist that boots, runs

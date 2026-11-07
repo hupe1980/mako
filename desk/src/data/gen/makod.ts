@@ -42,6 +42,19 @@ export interface MakodTools {
       eintraege: HistoryEntry[];
     };
   };
+  list_dead_letters: {
+    input: {};
+    output: {
+      /**
+       * The most recent first, at most 20.
+       */
+      dead_letters: DeadLetter[];
+      /**
+       * Every dead letter the store holds — not the length of the page.
+       */
+      gesamt: number;
+    };
+  };
 }
 /**
  * One process under a business key, with the deadlines pending on it.
@@ -118,6 +131,24 @@ export interface HistoryEntry {
    */
   message_ref: string | null;
 }
+/**
+ * One message that permanently failed.
+ */
+export interface DeadLetter {
+  /**
+   * When it was rejected, RFC 3339 in UTC; `None` when the stored instant
+   * cannot be read as one.
+   */
+  rejected_at: Instant | null;
+  /**
+   * The rejection category.
+   */
+  reason_label: string;
+  /**
+   * What went wrong, in the engine's words.
+   */
+  reason_detail: string;
+}
 
 /** Tools makod serves without an output schema: no view may read them. */
-export const makodUntyped = ["get_format_version_coverage","get_health","get_malo","get_outbox_status","get_partner","list_active_processes","list_commands","list_dead_letters","list_overdue_deadlines","list_partners","submit_command"] as const;
+export const makodUntyped = ["get_format_version_coverage","get_health","get_malo","get_outbox_status","get_partner","list_active_processes","list_commands","list_overdue_deadlines","list_partners","submit_command"] as const;

@@ -1289,3 +1289,80 @@ async fn the_nr2_turnover_is_the_record_issuers_own() {
     );
     assert_eq!(code_for("NR2-NONE", None).await, "PAPIER_UNZULAESSIG");
 }
+
+/// The analyst work list holds what is still undecided: a reviewed REVIEW
+/// record and a released HELD record have left it, so a Heute fed by it does
+/// not keep offering a decision somebody already took. The review is the
+/// REVIEW band's alone and names its reviewer.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_decided_record_leaves_the_review_queue() {
+    let Some((pool, _pg)) = test_pool("review_queue_decided").await else {
+        return;
+    };
+    let json = body();
+    let review = pg::insert_billing_record(&pool, &draft(dec!(100), "BILL-R", &json))
+        .await
+        .expect("insert review");
+    let mut held_rec = draft(dec!(200), "BILL-H", &json);
+    held_rec.period_from = date!(2026 - 02 - 01);
+    held_rec.period_to = date!(2026 - 02 - 28);
+    let held = pg::insert_billing_record(&pool, &held_rec)
+        .await
+        .expect("insert held");
+    for (id, band) in [(review, "REVIEW"), (held, "HELD")] {
+        sqlx::query("UPDATE billing_records SET risk_band = $2, risk_score = 50 WHERE id = $1")
+            .bind(id)
+            .bind(band)
+            .execute(&pool)
+            .await
+            .expect("band");
+    }
+    let queued = |pool: PgPool| async move {
+        let mut ids: Vec<Uuid> = pg::list_review_queue(&pool, TENANT, None, 50)
+            .await
+            .expect("queue")
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        ids.sort();
+        ids
+    };
+    let mut both = vec![review, held];
+    both.sort();
+    assert_eq!(queued(pool.clone()).await, both);
+
+    // A HELD record is released, not reviewed.
+    assert_eq!(
+        pg::mark_reviewed(&pool, TENANT, held, "anna")
+            .await
+            .expect("review"),
+        None
+    );
+    assert_eq!(
+        pg::mark_reviewed(&pool, TENANT, review, "anna")
+            .await
+            .expect("review"),
+        Some(review)
+    );
+    assert_eq!(
+        pg::mark_reviewed(&pool, TENANT, review, "bert")
+            .await
+            .expect("again"),
+        None,
+        "a review is recorded once"
+    );
+    pg::release_held_record(&pool, TENANT, held, "carla")
+        .await
+        .expect("release")
+        .expect("held");
+    assert!(queued(pool.clone()).await.is_empty());
+
+    let by: Option<String> =
+        sqlx::query_scalar("SELECT reviewed_by FROM billing_records WHERE id = $1")
+            .bind(review)
+            .fetch_one(&pool)
+            .await
+            .expect("reviewer");
+    assert_eq!(by.as_deref(), Some("anna"));
+}

@@ -22,8 +22,9 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
-        received_at: OffsetDateTime,
+        inbound: Inbound<'_>,
     ) -> Result<IngestOutcome, EngineError> {
+        let received_at = inbound.received_at;
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
 
@@ -34,12 +35,13 @@ impl EdifactIngestDispatcher {
                 17115 | 17117 => {
                     let cmd = adapters::geli_gas_sperrung_nb_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK Frist: 10 Werktage (BK7-24-01-009 §5).
+                    // Antwortfrist: 10 Werktage (BK7-24-01-009 §5).
                     let due_at =
                         fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
                     // Index under the Sperrauftrag's Belegnummer so a later ORDCHG
                     // 39000 Stornierung (LOC-less) resumes it by RFF+ON order ref.
                     self.spawn_or_resume_keyed::<GeliGasSperrungNbWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-sperrung-nb",
                         cmd,
@@ -60,6 +62,7 @@ impl EdifactIngestDispatcher {
                         adapters::geli_gas_sperrung_nb_response_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GeliGasSperrungNbWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-sperrung-nb",
                         cmd,
@@ -73,6 +76,7 @@ impl EdifactIngestDispatcher {
                         adapters::geli_gas_sperrung_nb_stornierung_registry().dispatch(raw, &fv)?;
                     let order_ref = extract_order_ref_from_msg(msg);
                     self.resume_by_key::<GeliGasSperrungNbWorkflow>(
+                        inbound,
                         &order_ref,
                         "geli-gas-sperrung-nb",
                         cmd,
@@ -93,6 +97,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::geli_gas_sperrung_lf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GeliGasSperrungLfWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-sperrung-lf",
                         cmd,
@@ -108,7 +113,7 @@ impl EdifactIngestDispatcher {
             // PIDs 44001–44021: UTILMD G ANFRAGE (LFG → GNB) — spawn.
             "geli-gas-supplier-change" => match pid {
                 44001..=44021 => {
-                    let cmd = adapters::geli_gas_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::geli_gas_registry(received_at).dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // Business answer Frist, per PID, from the GeLi Gas 3.0
                     // table in `mako_geli_gas::antwortfrist` — Ablauf des
@@ -129,6 +134,7 @@ impl EdifactIngestDispatcher {
                     let received = received_at;
                     let due_at = antwort_due_at(pid, received);
                     self.spawn_or_resume_guarded::<GeliGasSupplierChangeWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-supplier-change",
                         cmd,
@@ -147,9 +153,10 @@ impl EdifactIngestDispatcher {
             // NB → LFN/LFA/LFZ, AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 2 / 6 / 7.
             //
             // **No deadline at all.** There is no Antwortnachricht to be late
-            // with, and Gas APERAK is silence-means-acceptance — only a
-            // Verarbeitbarkeitsfehler goes back, which the workflow enqueues
-            // itself. The Frist these carry belongs to the *sending* GNB.
+            // with, and a Gas APERAK reports a Verarbeitbarkeitsfehler only,
+            // which the workflow enqueues itself — the APERAK window
+            // `dispatch` derives opens beside it. The Frist these carry
+            // belongs to the *sending* GNB.
             "geli-gas-zuordnungsmeldung" => {
                 if mako_geli_gas::GAS_ZUORDNUNGSMELDUNG_PIDS.contains(&pid) {
                     let cmd = adapters::geli_gas_zuordnungsmeldung_registry().dispatch(raw, &fv)?;
@@ -157,6 +164,7 @@ impl EdifactIngestDispatcher {
                     // See the Strom twin: an always-`false` occupancy verdict,
                     // because three Meldungen ride one MaLo per Lieferbeginn.
                     self.spawn_or_resume_guarded::<mako_geli_gas::GeliGasZuordnungsmeldungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-zuordnungsmeldung",
                         cmd,
@@ -174,8 +182,8 @@ impl EdifactIngestDispatcher {
             }
             // ── GeLi Gas Stammdatenänderung (44109–44182) ─────────────────────
             // Änderung PIDs spawn a Berechtigter process; Antwort PIDs resume a
-            // change we initiated. The workflow registers the APERAK + 10-WT
-            // Antwort deadlines. Stammdatenanfrage PIDs (G8–G10) spawn the data
+            // change we initiated. The workflow registers the 10-WT Antwort
+            // deadline. Stammdatenanfrage PIDs (G8–G10) spawn the data
             // owner's `ReceiveAnfrage` process, which auto-answers with the
             // requested master data (data-return).
             "geli-gas-stammdatenaenderung" => {
@@ -183,21 +191,26 @@ impl EdifactIngestDispatcher {
                 if mako_geli_gas::stammdatenaenderung::is_antwort_pid(pid)
                     && !mako_geli_gas::stammdatenaenderung::is_aenderung_pid(pid)
                 {
-                    let cmd = adapters::geli_gas_stammdaten_registry().dispatch(raw, &fv)?;
+                    let cmd =
+                        adapters::geli_gas_stammdaten_registry(received_at).dispatch(raw, &fv)?;
                     self.resume_by_key::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-stammdatenaenderung",
                         cmd,
                     )
                     .await
                 } else {
-                    let cmd = adapters::geli_gas_stammdaten_registry().dispatch(raw, &fv)?;
-                    self.spawn_or_resume::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow>(
+                    let cmd =
+                        adapters::geli_gas_stammdaten_registry(received_at).dispatch(raw, &fv)?;
+                    self.spawn_or_resume_guarded::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-stammdatenaenderung",
                         cmd,
                         &fv,
                         &[],
+                        |s| !s.is_terminal(),
                     )
                     .await
                 }
@@ -208,13 +221,15 @@ impl EdifactIngestDispatcher {
                 13002 | 13007 | 13008 | 13009 => {
                     let cmd = adapters::geli_gas_mscons_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // Gas MSCONS data delivery — no APERAK Frist for pure data messages.
-                    self.spawn_or_resume::<GeliGasMsconsWorkflow>(
+                    // Gas MSCONS data delivery — no business answer is owed.
+                    self.spawn_or_resume_guarded::<GeliGasMsconsWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-mscons",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -234,15 +249,17 @@ impl EdifactIngestDispatcher {
                 44022..=44024 => {
                     let cmd = adapters::geli_gas_stornierung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK Frist: 10 Werktage (BK7-24-01-009).
+                    // Antwortfrist: 10 Werktage (BK7-24-01-009).
                     let due_at =
                         fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
-                    self.spawn_or_resume::<GeliGasStornierungWorkflow>(
+                    self.spawn_or_resume_guarded::<GeliGasStornierungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-stornierung",
                         cmd,
                         &fv,
                         &[(mako_geli_gas::STORNIERUNG_RESPONSE_WINDOW_LABEL, due_at)],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -262,6 +279,7 @@ impl EdifactIngestDispatcher {
                     let due_at =
                         fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
                     self.spawn_or_resume_guarded::<GeliGasSperrprozesseInvoicWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-sperrprozesse-invoic",
                         cmd,
@@ -280,13 +298,16 @@ impl EdifactIngestDispatcher {
             "geli-gas-partin" => {
                 if mako_geli_gas::partin::PARTIN_GAS_PIDS.contains(&pid) {
                     let cmd = adapters::geli_gas_partin_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_malo_from_msg(msg);
-                    self.spawn_or_resume::<GeliGasPartinWorkflow>(
+                    // Kommunikationsdaten describe the sending Marktpartner.
+                    let malo_id = extract_sender_key(msg);
+                    self.spawn_or_resume_guarded::<GeliGasPartinWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         "geli-gas-partin",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else {
@@ -304,6 +325,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::geli_gas_stornierung_lf_registry().dispatch(raw, &fv)?;
                     let vorgang_id = extract_melo_from_utilmd(msg);
                     self.resume_by_key::<GeliGasLfStornierungWorkflow>(
+                        inbound,
                         &vorgang_id,
                         "geli-gas-stornierung-lf",
                         cmd,
@@ -327,6 +349,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::geli_gas_lf_anmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GeliGasLfAnmeldungWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         mako_geli_gas::LF_ANMELDUNG_WORKFLOW_NAME,
                         cmd,
@@ -358,12 +381,14 @@ impl EdifactIngestDispatcher {
                     let malo_id = extract_malo_from_msg(msg);
                     let due_at =
                         fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
-                    self.spawn_or_resume::<GeliGasDatenabrufWorkflow>(
+                    self.spawn_or_resume_guarded::<GeliGasDatenabrufWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
                         cmd,
                         &fv,
                         &[(mako_geli_gas::datenabruf::ANTWORT_WINDOW_LABEL, due_at)],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -372,6 +397,7 @@ impl EdifactIngestDispatcher {
                         adapters::geli_gas_datenabruf_ablehnung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GeliGasDatenabrufWorkflow>(
+                        inbound,
                         malo_id.as_str(),
                         mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
                         cmd,

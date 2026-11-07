@@ -991,7 +991,8 @@ fn ahb_checks(
                                 )
                                 .with_rule_id(format!("AHB-{pid}-{nr}-{tag}-MISSING"))
                                 .with_segment(tag.clone())
-                                .with_context_entry("nr", nr.clone()),
+                                .with_context_entry("nr", nr.clone())
+                                .with_context_entry("segment_name", node.name.clone()),
                             )),
                             Requirement::Forbidden if count > 0 => issues.push(tag_issue(
                                 ValidationIssue::new(
@@ -1035,7 +1036,8 @@ fn ahb_checks(
                             )
                             .with_rule_id(format!("AHB-{pid}-{group}-{trigger_nr}-MISSING"))
                             .with_segment_group(group.clone())
-                            .with_context_entry("nr", trigger_nr.to_owned()),
+                            .with_context_entry("nr", trigger_nr.to_owned())
+                            .with_context_entry("segment_name", node.name.clone()),
                         )),
                         Requirement::Forbidden if count > 0 => issues.push(tag_issue(
                             ValidationIssue::new(
@@ -1236,6 +1238,9 @@ fn element_rules(
             issue
                 .with_context_entry("pid", pid.to_owned())
                 .with_context_entry("nr", nr.to_owned())
+                // The MIG's name for the segment — the obligatory Ortsangabe of
+                // an AHB-Fehler (APERAK AHB 1.1 § 2.1.2.1).
+                .with_context_entry("segment_name", layout.name.clone())
                 .with_context_entry("de", el.id.clone())
                 .with_segment(tag.clone())
                 .with_segment_position(index + 1)

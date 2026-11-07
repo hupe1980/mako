@@ -1205,7 +1205,33 @@ pub async fn release_held_record(
     Ok(row)
 }
 
-/// The analyst review queue: REVIEW + HELD records, highest risk first.
+/// An analyst's review of a REVIEW record: the invoice went out when it was
+/// banded, so the review records who looked at it and takes it off the work
+/// list — it issues, sends and changes nothing else. `None` when the record is
+/// not an unreviewed REVIEW record of this tenant.
+pub async fn mark_reviewed(
+    executor: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    record_id: Uuid,
+    reviewed_by: &str,
+) -> anyhow::Result<Option<Uuid>> {
+    let id: Option<Uuid> = sqlx::query_scalar(
+        r"UPDATE billing_records
+          SET reviewed_by = $3, reviewed_at = now()
+          WHERE id = $1 AND tenant = $2 AND risk_band = 'REVIEW' AND reviewed_at IS NULL
+          RETURNING id",
+    )
+    .bind(record_id)
+    .bind(tenant)
+    .bind(reviewed_by)
+    .fetch_optional(executor)
+    .await
+    .context("mark_reviewed")?;
+    Ok(id)
+}
+
+/// The analyst review queue: the undecided REVIEW + HELD records, highest
+/// risk first.
 pub async fn list_review_queue(
     pool: &PgPool,
     tenant: &str,
@@ -1214,11 +1240,15 @@ pub async fn list_review_queue(
 ) -> anyhow::Result<Vec<BillingRecordRow>> {
     // The band filter narrows the queue; it never widens it. Asking for
     // AUTO_RELEASED returns nothing, because such a record is by definition not
-    // on an analyst's work list.
+    // on an analyst's work list. A decided record leaves it: a released HELD
+    // and a reviewed REVIEW record would otherwise wait for a decision that
+    // was already taken, and a work list that never empties is not read.
     let rows: Vec<BillingRecordRow> = sqlx::query_as(
         r"SELECT * FROM billing_records
           WHERE tenant = $1
             AND risk_band IN ('REVIEW','HELD')
+            AND released_at IS NULL
+            AND reviewed_at IS NULL
             AND ($2::text IS NULL OR risk_band = $2)
           ORDER BY risk_score DESC NULLS LAST, created_at DESC
           LIMIT $3",

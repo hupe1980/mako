@@ -167,7 +167,6 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                     .and_then(|t| t.tranchengroesse())
                     .and_then(|t| t.prozent_wert().map(ToOwned::to_owned)),
                 message_ref: MessageRef::new(msg.message_ref()),
-                received_at: time::OffsetDateTime::now_utc(),
                 validation_passed,
                 validation_errors,
             })
@@ -603,7 +602,6 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
-                received_at: time::OffsetDateTime::now_utc(),
                 validation_passed,
                 validation_errors,
             })
@@ -2052,11 +2050,13 @@ pub fn gpke_allokationsliste_mscons_registry() -> AdapterRegistry<GpkeAllokation
 /// otherwise structural (MIG) validation applies and the vacuous AHB pass is
 /// accepted with a warning (like the Gas twin 44013).
 #[must_use]
-pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
+pub fn gpke_eog_registry(
+    received_at: time::OffsetDateTime,
+) -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization("expected AnyMessage for GPKE EoG adapter".into())
             })?;
@@ -2126,7 +2126,7 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
                         haushaltskunde: super::extract_haushaltskunde(u.segments()),
                         validation_passed,
                         validation_errors,
-                        received_at: time::OffsetDateTime::now_utc(),
+                        received_at,
                     })
                 }
                 55014 | 55015 => Ok(mako_gpke::EogCommand::ReceiveAntwort {
@@ -2166,11 +2166,13 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
 /// energierichtung / regelzone extraction awaits the AHB-profile import
 ///.
 #[must_use]
-pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenaenderungWorkflow> {
+pub fn gpke_stammdaten_registry(
+    received_at: time::OffsetDateTime,
+) -> AdapterRegistry<mako_gpke::GpkeStammdatenaenderungWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
                     "expected AnyMessage for GPKE Stammdaten adapter".into(),
@@ -2294,7 +2296,7 @@ pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenae
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
-                received_at: time::OffsetDateTime::now_utc(),
+                received_at,
             })
         },
     ));

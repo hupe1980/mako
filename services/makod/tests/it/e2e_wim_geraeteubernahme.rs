@@ -106,7 +106,7 @@ impl MockMsba {
         let unh_ref = raw.message_ref().to_owned();
         assert!(!unh_ref.is_empty(), "UNH message_ref must be non-empty");
 
-        let cmd = wim_geraeteubernahme_registry(self.sparte)
+        let cmd = wim_geraeteubernahme_registry(time::OffsetDateTime::now_utc(), self.sparte)
             .dispatch(&raw as &dyn Any, &self.fv)
             .expect("adapt ORDERS 17001 to GeraeteubernahmeCommand");
 

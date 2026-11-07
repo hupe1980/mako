@@ -542,6 +542,45 @@ mod tests {
         )
     }
 
+    /// **A refusal states why, in the counterparty's language.** The
+    /// Kopf-`AJT` carries its `SG7 FTX+ABO` explanation (REMADV AHB `[548]`:
+    /// „ergibt sich aus dem zugehörigen EBD") — invoicd's German
+    /// Ablehnungsgrund — so the issuer reads what to correct, not only a code.
+    #[test]
+    fn a_refusal_carries_its_german_explanation_beside_the_code() {
+        let msg = fake_msg(
+            "REMADV",
+            "9900357000004",
+            serde_json::json!({
+                "pid": 33_002,
+                "sender": "9905550000005",
+                "receiver": "9900357000004",
+                "message_ref": "REMADV000002",
+                "rechnungsbezug": {
+                    "dokumentenart": "380",
+                    "rechnungsnummer": "RE-2026-4712",
+                    "faelliger_betrag": "16.60",
+                    "ueberweisungsbetrag": "0",
+                    "rechnungsdatum": "2026-04-01",
+                },
+                "antwort_codeliste": "E_0406",
+                "antwort_code": "A70",
+                "ablehnungsgrund": "Position 1 (Arbeitspreis): Einzelpreis 0,31200 EUR/kWh, das Preisblatt nennt 0,29800 EUR/kWh + Toleranz.",
+            }),
+        );
+        let rendered =
+            render_to_wire_bytes(&msg, &test_registry("9905550000005")).expect("REMADV renders");
+        let wire = String::from_utf8_lossy(&rendered.bytes);
+        assert!(
+            wire.contains(
+                "AJT+A70+E_0406'FTX+ABO+++Position 1 (Arbeitspreis)?: Einzelpreis 0,31200 EUR/kWh"
+            ),
+            "{wire}"
+        );
+        // The release character escapes every separator inside the text.
+        assert!(wire.contains("0,29800 EUR/kWh ?+ Toleranz."), "{wire}");
+    }
+
     /// **A REMADV names its Prüfidentifikator and the invoice it answers.**
     ///
     /// `RFF+Z13` and the whole `SG5` block (`DOC`, `MOA+9`, `MOA+12`,

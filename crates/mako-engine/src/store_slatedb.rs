@@ -2495,47 +2495,99 @@ impl std::fmt::Debug for SlateDbDeadLetterSink {
     }
 }
 
+impl SlateDbDeadLetterSink {
+    /// The key and serialised record of a dead letter for `reason`, with its
+    /// metric and log emitted.
+    fn record(
+        reason: &crate::dead_letter::DeadLetterReason,
+    ) -> Result<(String, Vec<u8>), EngineError> {
+        let label = reason.label();
+        let detail = reason.to_string();
+
+        // Metrics (sync, no I/O). Per-PID label for unknown-PID alerts.
+        let metric_label: std::borrow::Cow<'static, str> = match reason {
+            crate::dead_letter::DeadLetterReason::UnknownPid { pid, .. } => {
+                format!("unknown_pid:{pid}").into()
+            }
+            _ => label.into(),
+        };
+        crate::metrics::EngineMetrics::global().dead_letter_recorded(&metric_label);
+
+        tracing::warn!(
+            reason = label,
+            detail = %detail,
+            "dead letter: persisting to the durable DLQ",
+        );
+
+        let now = OffsetDateTime::now_utc();
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let key = dr_key(now, &uuid);
+        let record = DeadLetterRecord {
+            // RFC 3339, the form every reader parses; `Display` is not it.
+            rejected_at: now
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|e| EngineError::dead_letter(format!("format instant: {e}")))?,
+            reason_label: label.to_owned(),
+            reason_detail: detail,
+        };
+        let bytes = serde_json::to_vec(&record)
+            .map_err(|e| EngineError::dead_letter(format!("serialise record: {e}")))?;
+        Ok((key, bytes))
+    }
+}
+
 impl crate::dead_letter::DeadLetterSink for SlateDbDeadLetterSink {
     fn reject<'a>(
         &'a self,
         reason: &'a crate::dead_letter::DeadLetterReason,
     ) -> crate::dead_letter::RejectFuture<'a> {
         Box::pin(async move {
-            let label = reason.label();
-            let detail = reason.to_string();
-
-            // Metrics (sync, no I/O). Per-PID label for unknown-PID alerts.
-            let metric_label: std::borrow::Cow<'static, str> = match reason {
-                crate::dead_letter::DeadLetterReason::UnknownPid { pid, .. } => {
-                    format!("unknown_pid:{pid}").into()
-                }
-                _ => label.into(),
-            };
-            crate::metrics::EngineMetrics::global().dead_letter_recorded(&metric_label);
-
-            tracing::warn!(
-                reason = label,
-                detail = %detail,
-                "dead letter: persisting to the durable DLQ",
-            );
-
-            let now = OffsetDateTime::now_utc();
-            let uuid = uuid::Uuid::new_v4().to_string();
-            let key = dr_key(now, &uuid);
-            let record = DeadLetterRecord {
-                rejected_at: now.to_string(),
-                reason_label: label.to_owned(),
-                reason_detail: detail,
-            };
-            let bytes = serde_json::to_vec(&record)
-                .map_err(|e| EngineError::dead_letter(format!("serialise record: {e}")))?;
+            let (key, bytes) = Self::record(reason)?;
             let mut batch = WriteBatch::new();
             batch.put(key.as_bytes(), &bytes);
             self.db.write(batch).await.map_err(|e| {
                 tracing::error!(
-                    reason = label,
+                    reason = reason.label(),
                     error = %e,
                     "dead letter: could not persist the record",
+                );
+                EngineError::dead_letter(slatedb_error_kind_str(&e))
+            })?;
+            Ok(())
+        })
+    }
+
+    fn reject_answered<'a>(
+        &'a self,
+        reason: &'a crate::dead_letter::DeadLetterReason,
+        answers: &'a [crate::outbox::OutboxMessage],
+    ) -> crate::dead_letter::RejectFuture<'a> {
+        Box::pin(async move {
+            if answers.is_empty() {
+                return self.reject(reason).await;
+            }
+            let (key, bytes) = Self::record(reason)?;
+            // One transaction: the dead letter and the outbox entries that
+            // answer it, with the outbox count they move.
+            let txn = self
+                .db
+                .begin(IsolationLevel::SerializableSnapshot)
+                .await
+                .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
+            txn.put(key.as_bytes(), &bytes)
+                .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
+            let count = read_om_count_txn(&txn).await?;
+            txn.put(
+                OM_COUNT_KEY,
+                (count + answers.len() as u64).to_le_bytes().as_slice(),
+            )
+            .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
+            write_outbox_entries_txn(&txn, answers)?;
+            txn.commit().await.map_err(|e| {
+                tracing::error!(
+                    reason = reason.label(),
+                    error = %e,
+                    "dead letter: could not persist the record and its answer",
                 );
                 EngineError::dead_letter(slatedb_error_kind_str(&e))
             })?;
@@ -2549,7 +2601,7 @@ impl crate::dead_letter::DeadLetterSink for SlateDbDeadLetterSink {
 /// Serialised as JSON and stored under `dr/{ts_nanos:016x}/{uuid}`.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DeadLetterRecord {
-    /// ISO 8601 timestamp of rejection (UTC).
+    /// When the message was rejected, RFC 3339 in UTC.
     pub rejected_at: String,
     /// Rejection category (maps to [`DeadLetterReason::label`]).
     ///
@@ -2860,6 +2912,66 @@ mod tests {
         );
     }
 
+    /// A recorded dead letter reads back its rejection instant as RFC 3339 —
+    /// the format every reader parses — never as `OffsetDateTime`'s
+    /// `Display`, which no reader does.
+    #[tokio::test]
+    async fn a_dead_letter_reads_back_an_rfc3339_instant() {
+        use crate::dead_letter::DeadLetterSink as _;
+        let store = make_store().await;
+        store
+            .as_dead_letter_sink()
+            .reject(&crate::dead_letter::DeadLetterReason::UnknownPid {
+                pid: crate::ids::Pid::new(55001),
+                context: crate::dead_letter::AuditContext::now(),
+            })
+            .await
+            .unwrap();
+        let records = store.list_dead_letters(10).await.unwrap();
+        assert_eq!(records.len(), 1);
+        let at = OffsetDateTime::parse(
+            &records[0].rejected_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap_or_else(|e| panic!("`{}` is not RFC 3339: {e}", records[0].rejected_at));
+        assert_eq!(at.offset(), time::UtcOffset::UTC);
+    }
+
+    /// A refusal and its answer land in one write: the dead letter and the
+    /// outbox entry are both there afterwards.
+    #[tokio::test]
+    async fn a_refusal_and_its_answer_are_written_together() {
+        use crate::dead_letter::DeadLetterSink as _;
+        use crate::outbox::OutboxStore as _;
+        let store = make_store().await;
+        let answer = crate::outbox::OutboxMessage::new(
+            make_stream("refusal"),
+            crate::ids::ProcessId::new(),
+            crate::ids::TenantId::new(),
+            crate::ids::CorrelationId::new(),
+            crate::ids::ConversationId::new(),
+            crate::ids::EventId::new(),
+            "APERAK",
+            "4012345000023",
+            serde_json::json!({}),
+        );
+        store
+            .as_dead_letter_sink()
+            .reject_answered(
+                &crate::dead_letter::DeadLetterReason::UnknownPid {
+                    pid: crate::ids::Pid::new(55001),
+                    context: crate::dead_letter::AuditContext::now(),
+                },
+                std::slice::from_ref(&answer),
+            )
+            .await
+            .unwrap();
+        assert_eq!(store.list_dead_letters(10).await.unwrap().len(), 1);
+        let queued = store.pending_now(10).await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].message_id, answer.message_id);
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────
     // These are all called from `#[tokio::test]` functions; Rust's dead-code
     // analysis doesn't cross the async-test boundary for helper fns.
@@ -2904,6 +3016,7 @@ mod tests {
             payload: serde_json::json!({ "type": "APERAK" }),
             payload_schema: None,
             created_at: now,
+            occurred_at: None,
             deliver_after: Some(now + deliver_in),
             attempt_count: 0,
             first_attempt_at: None,

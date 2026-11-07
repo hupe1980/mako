@@ -323,6 +323,22 @@ pub enum GpkeStornierungState {
     },
 }
 
+/// Whether an Anfrage Stornierung still holds its Vorgang against a new one.
+///
+/// Live while its answer is owed; settled once answered — accepted
+/// (`Completed`) or refused. A settled process must not take the next
+/// Anfrage, whose receive command refuses anything but `New`.
+impl mako_engine::workflow::OccupiesBusinessKey for GpkeStornierungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::Initiated(_) | Self::ValidationPassed(_) => true,
+            Self::New | Self::Completed(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl GpkeStornierungState {
     /// Stable status string for metrics and projections.
     #[must_use]

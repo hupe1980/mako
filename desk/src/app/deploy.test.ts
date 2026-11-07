@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -19,6 +19,18 @@ describe("the Desk image", () => {
     expect(nginx).toMatch(/style-src 'self' 'nonce-\$request_id'/);
     expect(nginx).toMatch(/script-src 'self';/);
     expect(nginx).not.toMatch(/unsafe-inline/);
+  });
+
+  // Every service the Desk reads or writes — each one `src/data/gen` holds a
+  // type file for, and the assistant — is a gateway route. One without is a
+  // view that works under `just desk` and answers 404 behind the gateway.
+  it("routes every service the Desk reaches through the gateway", () => {
+    const gateway = read("deploy/gateway.yaml");
+    const services = [
+      ...readdirSync(resolve(root, "src/data/gen")).map((f) => f.replace(/\.ts$/, "")),
+      "agentd",
+    ];
+    for (const s of services) expect(gateway).toContain(`path: ^/svc/${s}/(.*)$`);
   });
 
   // A deep link is the app: /freigaben must reach index.html, not a 404.

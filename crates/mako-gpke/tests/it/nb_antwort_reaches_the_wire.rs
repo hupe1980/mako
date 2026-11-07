@@ -55,7 +55,6 @@ fn answer_with(
         kunde_name: None,
         kunde_namensformat: None,
         message_ref: MessageRef::new("ANM-001"),
-        received_at: time::OffsetDateTime::now_utc(),
         validation_passed: true,
         validation_errors: vec![],
     };

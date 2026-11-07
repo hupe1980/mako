@@ -3,7 +3,6 @@
 //! Split out of the flat `adapters` module; shared helpers live in `super`.
 
 use mako_engine::types::Sparte;
-use time::OffsetDateTime;
 
 use super::*;
 // ── WiM INVOIC billing (PID 31009 MSB-Rechnung) ───────────────────────────────
@@ -247,11 +246,11 @@ pub fn wim_ersteinbau_registry() -> AdapterRegistry<mako_wim::ersteinbau::WimErs
 
 /// Build an [`AdapterRegistry`] for [`WimDeviceChangeWorkflow`].
 #[must_use]
-pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
+pub fn wim_registry(received_at: time::OffsetDateTime) -> AdapterRegistry<WimDeviceChangeWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization("expected AnyMessage for WiM adapter".into())
             })?;
@@ -260,7 +259,7 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                 // IFTSTA status messages (PIDs 21009–21018) are also routed to
                 // the wim-device-change workflow. Handle them here.
                 if let AnyMessage::Iftsta(_) = msg {
-                    return build_wim_iftsta_command(msg);
+                    return build_wim_iftsta_command(msg, received_at);
                 }
                 return Err(EngineError::Deserialization(
                     "WiM adapter: expected UTILMD or IFTSTA message".into(),
@@ -410,7 +409,7 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                     .map(|g| g.grund),
                 validation_passed,
                 validation_errors,
-                received_at: time::OffsetDateTime::now_utc(),
+                received_at,
             })
         },
     ));
@@ -444,6 +443,7 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
 /// the Gerätenummer from the first `RFF` segment's reference value.
 #[must_use]
 pub fn wim_geraeteubernahme_registry(
+    received_at: time::OffsetDateTime,
     sparte: mako_engine::types::Sparte,
 ) -> AdapterRegistry<WimGeraeteubernahmeWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -530,7 +530,7 @@ pub fn wim_geraeteubernahme_registry(
                 validation_passed,
                 validation_errors,
                 sparte,
-                received_at: time::OffsetDateTime::now_utc(),
+                received_at,
             })
         },
     ));
@@ -1152,6 +1152,7 @@ pub fn wim_preisliste_registry() -> AdapterRegistry<WimPreislisteWorkflow> {
 /// the fastest branch keeps an alert early rather than late.
 #[must_use]
 pub fn wim_insrpt_registry(
+    received_at: time::OffsetDateTime,
     sparte: Sparte,
     messtechnik: mako_fristen::antwort::Messtechnik,
 ) -> AdapterRegistry<WimInsrptWorkflow> {
@@ -1218,7 +1219,7 @@ pub fn wim_insrpt_registry(
                         .and_then(|d| d.value.clone())
                         .unwrap_or_default(),
                     message_ref,
-                    received_at: OffsetDateTime::now_utc(),
+                    received_at,
                     messtechnik,
                 }),
                 23_005 | 23_009 | 23_011 | 23_012 => {

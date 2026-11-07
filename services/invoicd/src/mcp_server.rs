@@ -62,6 +62,9 @@ pub struct Disput {
     pub pid: i16,
     /// MP-ID of the Rechnungssteller.
     pub sender_mp_id: String,
+    /// The Rechnungsnummer the Rechnungssteller gave the invoice, where the
+    /// INVOIC carried one.
+    pub rechnungsnummer: Option<String>,
     /// RFC 3339 in UTC.
     #[schemars(extend("format" = "date-time"))]
     pub received_at: String,
@@ -71,25 +74,103 @@ pub struct Disput {
     /// in UTC; `None` when the INVOIC carries no Zahlungsziel.
     #[schemars(extend("format" = "date-time"))]
     pub frist: Option<String>,
+    /// The refusal (REMADV) went out to the Rechnungssteller. When it did not,
+    /// `POST /api/v1/receipts/{id}/dispatch-answer` sends it — a market
+    /// message; when it did, what is left is closing the dispute
+    /// (`POST /api/v1/receipts/{id}/resolve-dispute`), which sends nothing.
+    pub abgesendet: bool,
+    /// The invoic-checker findings that disputed the invoice, in its words.
+    pub befunde: Vec<DisputBefund>,
 }
+
+/// One finding a dispute rests on.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DisputBefund {
+    /// The finding's kind, as `get_check_result` names it (`TariffDeviation`, …)
+    /// — an identifier, not for a reader.
+    pub art: String,
+    /// What the kind is called in German (`Preis weicht vom Preisblatt ab`).
+    pub bezeichnung: String,
+    /// The checker's sentence.
+    pub text: String,
+}
+
+/// A stored finding kind's German name, from the checker's one table.
+fn bezeichnung(kind: &serde_json::Value) -> &'static str {
+    serde_json::from_value::<invoic_checker::FindingKind>(kind.clone()).map_or(
+        "Befund der Rechnungsprüfung",
+        invoic_checker::FindingKind::bezeichnung,
+    )
+}
+
+/// The disputing findings of a stored `findings` array; anything else in it
+/// — a warning, a row the checker no longer writes — is not a ground.
+fn befunde(findings: &serde_json::Value) -> Vec<DisputBefund> {
+    findings
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|f| f["is_dispute"].as_bool() == Some(true))
+        .filter_map(|f| {
+            Some(DisputBefund {
+                art: f["kind"].as_str()?.to_owned(),
+                bezeichnung: bezeichnung(&f["kind"]).to_owned(),
+                text: f["message"].as_str().unwrap_or_default().to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Each stored finding with its kind's German name beside the kind.
+fn mit_bezeichnung(mut findings: serde_json::Value) -> serde_json::Value {
+    if let Some(items) = findings.as_array_mut() {
+        for f in items {
+            let name = bezeichnung(&f["kind"]);
+            if let Some(o) = f.as_object_mut() {
+                o.insert("bezeichnung".to_owned(), name.into());
+            }
+        }
+    }
+    findings
+}
+
+/// A `list_disputes` row: `(id, process_id, pid, sender_mp_id,
+/// rechnungsnummer, received_at, bo4e_version, pay_by, dispatched_at,
+/// findings)`.
+type DisputRow = (
+    uuid::Uuid,
+    uuid::Uuid,
+    i16,
+    String,
+    Option<String>,
+    time::OffsetDateTime,
+    String,
+    Option<time::OffsetDateTime>,
+    Option<time::OffsetDateTime>,
+    serde_json::Value,
+);
 
 impl Disput {
     fn from_row(
-        (id, process_id, pid, sender_mp_id, received_at, bo4e_version, pay_by): (
-            uuid::Uuid,
-            uuid::Uuid,
-            i16,
-            String,
-            time::OffsetDateTime,
-            String,
-            Option<time::OffsetDateTime>,
-        ),
+        (
+            id,
+            process_id,
+            pid,
+            sender_mp_id,
+            rechnungsnummer,
+            received_at,
+            bo4e_version,
+            pay_by,
+            dispatched_at,
+            findings,
+        ): DisputRow,
     ) -> Self {
         Self {
             id: id.to_string(),
             process_id: process_id.to_string(),
             pid,
             sender_mp_id,
+            rechnungsnummer,
             received_at: rfc3339(received_at),
             bo4e_version,
             frist: pay_by.map(|t| {
@@ -99,6 +180,8 @@ impl Disput {
                     .map(rfc3339)
                     .unwrap_or_default()
             }),
+            abgesendet: dispatched_at.is_some(),
+            befunde: befunde(&findings),
         }
     }
 }
@@ -260,26 +343,16 @@ impl InvoicdMcpHandler {
     /// Receipts with `outcome = 'Dispute'`, the most recent first. Disputes
     /// need manual review and are not auto-settled by `invoicd`.
     #[tool(
-        description = "Open INVOIC disputes (outcome=Dispute) of this tenant, the most recent first, at most 200. `frist` is the end of the Berlin day of the invoice's Zahlungsziel (SG8 DTM+265), when it carries one. `saturated` means at least 200 matched.",
+        description = "Open INVOIC disputes (outcome=Dispute) of this tenant, the most recent first, at most 200. `frist` is the end of the Berlin day of the invoice's Zahlungsziel (SG8 DTM+265), when it carries one. `abgesendet` says whether the refusal (REMADV) went out; `befunde` are the checker findings the dispute rests on, each with its `art` as `get_check_result` names it. `saturated` means at least 200 matched.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_output::<Disputes>()
     )]
     async fn list_disputes(&self) -> Result<CallToolResult, McpError> {
         const LIMIT: usize = 200;
-        let rows = sqlx::query_as::<
-            _,
-            (
-                uuid::Uuid,
-                uuid::Uuid,
-                i16,
-                String,
-                time::OffsetDateTime,
-                String,
-                Option<time::OffsetDateTime>,
-            ),
-        >(
+        let rows = sqlx::query_as::<_, DisputRow>(
             r#"
-            SELECT id, process_id, pid, sender_mp_id, received_at, bo4e_version, pay_by
+            SELECT id, process_id, pid, sender_mp_id, rechnungsnummer, received_at,
+                   bo4e_version, pay_by, dispatched_at, findings
             FROM invoic_receipts
             WHERE tenant = $1 AND outcome = 'Dispute'
             ORDER BY received_at DESC
@@ -310,7 +383,7 @@ impl InvoicdMcpHandler {
     ///
     /// Useful for understanding why a receipt was disputed or flagged.
     #[tool(
-        description = "Get invoic-checker plausibility findings for a receipt",
+        description = "Get invoic-checker plausibility findings for a receipt: each with its `kind` (the identifier to cite), its German `bezeichnung`, `is_dispute` and the checker's `message`.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_check_result(
@@ -339,7 +412,7 @@ impl InvoicdMcpHandler {
             Some((id, outcome, findings, checked_at)) => ContentBlock::json(serde_json::json!({
                 "id": id,
                 "outcome": outcome,
-                "findings": findings,
+                "findings": mit_bezeichnung(findings),
                 "checked_at": checked_at,
             }))
             .map(|b| CallToolResult::success(vec![b]))
@@ -806,7 +879,7 @@ impl ServerHandler for InvoicdMcpHandler {
              - `Ok`              — all checks passed; REMADV 33001 auto-dispatched\n\
              - `Warn`            — checks passed with warnings; auto-approved\n\
              - `Dispute`         — plausibility failure; REMADV 33002; requires review\n\
-             - `Resolved`        — dispute closed by operator (POST /resolve-dispute)\n\
+             - `Resolved`        — dispute closed by an operator, who is recorded (POST /resolve-dispute)\n\
              - `AcceptedPartial` — Stornorechnung (PID 31004, any Sparte) arithmetic-only check passed\n\
              \n\
              Payment is a separate axis: `payment_confirmed_at`, not an outcome. \n\
@@ -881,14 +954,58 @@ mod contract_tests {
                 uuid::Uuid::nil(),
                 31002,
                 "9900357000004".to_owned(),
+                Some("R-4711".to_owned()),
                 time::macros::datetime!(2026-03-20 10:00 UTC),
                 "v202607".to_owned(),
                 pay_by,
+                None,
+                serde_json::json!([]),
             ))
         };
         let d = row(Some(time::macros::datetime!(2026-03-30 22:00 UTC)));
         assert_eq!(d.frist.as_deref(), Some("2026-03-31T22:00:00Z"));
         assert_eq!(d.received_at, "2026-03-20T10:00:00Z");
         assert_eq!(row(None).frist, None);
+    }
+
+    /// Which decision a dispute admits is the receipt's to say: an unsent
+    /// refusal is still to be sent, a sent one leaves only the resolution. And
+    /// the grounds are the disputing findings, never a warning beside them.
+    #[test]
+    fn a_dispute_says_whether_its_refusal_went_out_and_on_what_grounds() {
+        let row = |dispatched_at, findings| {
+            Disput::from_row((
+                uuid::Uuid::nil(),
+                uuid::Uuid::nil(),
+                31002,
+                "9900357000004".to_owned(),
+                Some("R-4711".to_owned()),
+                time::macros::datetime!(2026-03-20 10:00 UTC),
+                "v202607".to_owned(),
+                None,
+                dispatched_at,
+                findings,
+            ))
+        };
+        let findings = serde_json::json!([
+            { "kind": "TariffDeviation", "is_dispute": true, "message": "Preis weicht ab" },
+            { "kind": "ZahlungszielExceeded", "is_dispute": false, "message": "nur Warnung" },
+        ]);
+        let offen = row(None, findings.clone());
+        assert!(!offen.abgesendet);
+        assert_eq!(offen.befunde.len(), 1);
+        assert_eq!(offen.befunde[0].art, "TariffDeviation");
+        assert_eq!(
+            offen.befunde[0].bezeichnung,
+            "Preis weicht vom Preisblatt ab"
+        );
+        assert_eq!(offen.rechnungsnummer.as_deref(), Some("R-4711"));
+        assert_eq!(offen.befunde[0].text, "Preis weicht ab");
+        let gesendet = row(
+            Some(time::macros::datetime!(2026-03-20 10:01 UTC)),
+            findings,
+        );
+        assert!(gesendet.abgesendet);
+        assert!(row(None, serde_json::Value::Null).befunde.is_empty());
     }
 }

@@ -87,7 +87,6 @@ use mako_engine::{
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
-use mako_fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
@@ -591,7 +590,7 @@ pub enum EogCommand {
         validation_passed: bool,
         /// Validation error strings.
         validation_errors: Vec<String>,
-        /// Receipt timestamp (drives the APERAK + answer deadlines).
+        /// Receipt instant — the ÜT the answer window counts from.
         received_at: time::OffsetDateTime,
     },
     /// LF/E-G (responder): send the outbound response (55014/55015).
@@ -984,15 +983,11 @@ impl Workflow for GpkeEogWorkflow {
                         )
                         .caused_by(1),
                     ];
-                    let deadlines: Vec<PendingDeadline> = core::iter::once(PendingDeadline::new(
-                        APERAK_STROM_WINDOW_LABEL,
-                        aperak_strom_due_at(received_at),
-                    ))
-                    .chain(
+                    let deadlines: Vec<PendingDeadline> =
                         eog_antwort_due_at(pid.as_u32(), received_at)
-                            .map(|due| PendingDeadline::new(EOG_RESPONSE_WINDOW_LABEL, due)),
-                    )
-                    .collect();
+                            .map(|due| PendingDeadline::new(EOG_RESPONSE_WINDOW_LABEL, due))
+                            .into_iter()
+                            .collect();
                     Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events, outbox, deadlines,
                     ))
@@ -1377,7 +1372,8 @@ mod tests {
     fn responder_happy_path_bestaetigung() {
         let out = GpkeEogWorkflow::handle(&EogState::New, receive_anmeldung_cmd(true)).unwrap();
         assert_eq!(out.events.len(), 2); // AnmeldungErhalten + ValidationPassed
-        assert_eq!(out.deadlines.len(), 2); // APERAK 45-min + answer window
+        // The answer window alone: the APERAK window is the ingest door's.
+        assert_eq!(out.deadlines.len(), 1);
         let state = apply_all(EogState::New, &out.events);
         assert!(matches!(state, EogState::ValidationPassed(_)));
 
@@ -1490,7 +1486,7 @@ mod tests {
             &state,
             EogCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: APERAK_STROM_WINDOW_LABEL.into(),
+                label: mako_fristen::APERAK_STROM_WINDOW_LABEL.into(),
             },
         )
         .unwrap();

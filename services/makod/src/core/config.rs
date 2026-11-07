@@ -146,6 +146,18 @@ pub struct MakodPolicy {
     /// `[policy.as4]`.
     #[serde(default)]
     pub as4: As4Policy,
+    /// `[policy.ingest]`.
+    #[serde(default)]
+    pub ingest: IngestPolicy,
+}
+
+/// `[policy.ingest]` — the ingest door's operator settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IngestPolicy {
+    /// What a follow-up no process takes is answered with.
+    #[serde(default)]
+    pub unbekannter_vorgang: mako_service::policy::Policy<UnbekannterVorgang>,
 }
 
 /// `[policy.as4]` — the AS4 inbox's operator settings.
@@ -161,7 +173,9 @@ impl MakodPolicy {
     /// The policy makod runs under — logged at startup and by `--check`.
     #[must_use]
     pub fn report(&self) -> mako_service::policy::PolicyReport {
-        mako_service::policy::PolicyReport::new().with(&self.as4.unbekannte_absender)
+        mako_service::policy::PolicyReport::new()
+            .with(&self.as4.unbekannte_absender)
+            .with(&self.ingest.unbekannter_vorgang)
     }
 }
 
@@ -183,6 +197,28 @@ mako_service::policy_choice! {
             /// Any sender whose verified SM-PKI certificate carries the claimed
             /// MP-ID in its OU.
             BdewOuZulassen = "bdew_ou_zulassen" => "BDEW AS4-Profil 1.2 Kap. 2.3.2 (S. 16): Nachrichten mit beliebigen Werten in eb:From/eb:PartyId werden akzeptiert, sofern sie mit den Betreff-Feldern im vorgelegten Zertifikat übereinstimmen; Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2 (S. 6): das OU des Subject enthält die MP-ID",
+        }
+    }
+}
+
+mako_service::policy_choice! {
+    /// What the ingest door answers a follow-up no process takes with.
+    ///
+    /// APERAK AHB 1.1 makes it a Zuordnungsfehler where the PID-Übersicht puts
+    /// the assignment into the Verarbeitbarkeitsprüfung — right whenever
+    /// makod's process store is the whole of the operator's Geschäftsvorfälle.
+    /// During a cutover from another MaKo system, or beside a system the
+    /// initiating messages leave through, the preceding Geschäftsvorfall exists
+    /// at the operator and only makod does not hold it.
+    pub enum UnbekannterVorgang {
+        key: "ingest.unbekannter_vorgang",
+        doc: "@/docs/services/makod.md#policy-ingest-unbekannter-vorgang",
+        default: tightening(Z33, "the document's rule: a follow-up whose Geschäftsvorfall the receiver does not hold is refused at once, so the sender learns within the APERAK window rather than from a silent Frist lapse"),
+        options: {
+            /// Refuse with the Verarbeitbarkeitsfehlermeldung `Z33`.
+            Z33 = "z33" => "APERAK AHB 1.1 Kap. 2.1.3 (S. 14): nur wenn die Zuordnung scheitert, kann und muss der Empfänger dies mit der APERAK / Zuordnungsfehler melden, wo die Stelle der Zuordnungsprüfung „V“ ist; Kap. 4.3 (S. 43): Z33 Referenziertes Geschäftsvorfall-Tupel nicht vorhanden",
+            /// Record it as a dead letter for a person and send no APERAK.
+            ZurPruefung = "zur_pruefung" => "APERAK AHB 1.1 Kap. 1.3 (S. 7): sofern die Ursache für das Misslingen auf Seiten des Empfängers liegt, hat dieser die ursprüngliche Übertragungsdatei in die fristgerechte Verarbeitung aufzunehmen",
         }
     }
 }

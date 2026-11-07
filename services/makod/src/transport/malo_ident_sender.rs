@@ -95,6 +95,7 @@ fn malo_identified_entry(
         payload: serde_json::to_value(&payload).expect("a MaloIdentified payload serialises"),
         payload_schema: None,
         created_at: OffsetDateTime::now_utc(),
+        occurred_at: None,
         deliver_after: None,
         attempt_count: 0,
         first_attempt_at: None,

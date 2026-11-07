@@ -406,6 +406,32 @@ pub fn is_stornierung(rechnung: &Rechnung) -> bool {
 }
 
 impl FindingKind {
+    /// What the finding is called in German, for a person reading a dispute.
+    ///
+    /// One table, exhaustive over the variants, so a new kind cannot reach a
+    /// screen under its Rust name. The variant name stays the identifier —
+    /// what `get_check_result` and a proposal cite.
+    #[must_use]
+    pub const fn bezeichnung(self) -> &'static str {
+        match self {
+            Self::PeriodInvalid => "Abrechnungszeitraum ungültig",
+            Self::ArithmeticError => "Rechenfehler in einer Position",
+            Self::TotalMismatch => "Summe der Positionen weicht ab",
+            Self::TariffDeviation => "Preis weicht vom Preisblatt ab",
+            Self::TariffNotFound => "Kein Preisblatt für den Zeitraum",
+            Self::StorniertWithoutReference => "Storno ohne Bezug auf die Ursprungsrechnung",
+            Self::ZahlungszielExceeded => "Zahlungsziel zu lang",
+            Self::ZahlungszielInvalid => "Zahlungsziel ungültig",
+            Self::RechnungZuSpaet => "Rechnung zu spät gestellt",
+            Self::SteuerMissing => "Umsatzsteuer fehlt",
+            Self::SteuerMismatch => "Brutto ist nicht Netto plus Steuer",
+            Self::WaehrungMismatch => "Währungen passen nicht zusammen",
+            Self::ReverseChargeStatesTax => "Steuer trotz Steuerschuldnerschaft des Empfängers",
+            Self::AngebotDeviation => "Preis weicht vom Angebot ab",
+            Self::AngebotPositionUnknown => "Position nicht im Angebot",
+        }
+    }
+
     /// Whether a `Warn` of this kind gets more serious as the invoice gets
     /// larger.
     ///
@@ -498,9 +524,7 @@ impl InvoicCheckEngine {
         {
             findings.push(Finding::dispute(
                 FindingKind::StorniertWithoutReference,
-                "Stornorechnung (ist_storno=true) does not reference the original invoice \
-                 (original_rechnungsnummer is missing). \
-                 Source: BK6-24-174 §5; Allgemeine Festlegungen §8.",
+                "Die Stornorechnung nennt die Nummer der stornierten Rechnung nicht.",
                 None,
                 None,
                 None,
@@ -574,9 +598,9 @@ impl InvoicCheckEngine {
             findings.push(Finding::dispute(
                 FindingKind::ZahlungszielInvalid,
                 format!(
-                    "Zahlungsziel {faellig} is before invoice date {rechnungs_datum}. \
-                     DTM+265 must not precede rechnungsdatum. \
-                     Source: §7 Allgemeine Festlegungen V6.1d.",
+                    "Das Zahlungsziel {} liegt vor dem Rechnungsdatum {}.",
+                    datum(faellig),
+                    datum(rechnungs_datum),
                 ),
                 None,
                 None,
@@ -592,9 +616,10 @@ impl InvoicCheckEngine {
                 kind: FindingKind::ZahlungszielExceeded,
                 is_dispute: false, // Warn, not Dispute — give the NB a chance to correct
                 message: format!(
-                    "Zahlungsziel is {days} days (from {rechnungs_datum} to {faellig}), \
-                     exceeding the {max}-day maximum per §7 Allgemeine Festlegungen V6.1d. \
-                     Review before payment.",
+                    "Das Zahlungsziel beträgt {days} Tage (Rechnungsdatum {}, fällig {}), \
+                     zulässig sind höchstens {max} Tage.",
+                    datum(rechnungs_datum),
+                    datum(faellig),
                 ),
                 line_number: None,
                 expected: None,
@@ -671,9 +696,12 @@ impl InvoicCheckEngine {
         findings.push(Finding::warn(
             FindingKind::RechnungZuSpaet,
             format!(
-                "Rechnungsdatum {rechnungs_datum} liegt {ueberschritten} Werktage nach dem \
-                 spätesten ÜT {spaetester} ({werktage} WT nach dem Ende des \
-                 Abrechnungszeitraums {period_end}) — WiM Teil 1 Kap. 3.7.2 Nr. 1",
+                "Das Rechnungsdatum {} liegt {ueberschritten} Werktage nach dem \
+                 spätesten Übermittlungstag {} ({werktage} Werktage nach dem Ende des \
+                 Abrechnungszeitraums am {}) — WiM Teil 1 Kap. 3.7.2 Nr. 1.",
+                datum(rechnungs_datum),
+                datum(spaetester),
+                datum(period_end),
             ),
             None,
             None,
@@ -701,7 +729,12 @@ impl InvoicCheckEngine {
             if start > end {
                 findings.push(Finding::dispute(
                     FindingKind::PeriodInvalid,
-                    format!("Message-level billing period invalid: start {start} > end {end}"),
+                    format!(
+                        "Der Abrechnungszeitraum der Rechnung beginnt am {} und endet \
+                         davor am {}.",
+                        datum(start),
+                        datum(end)
+                    ),
                     None,
                     None,
                     None,
@@ -718,7 +751,10 @@ impl InvoicCheckEngine {
                 findings.push(Finding::dispute(
                     FindingKind::PeriodInvalid,
                     format!(
-                        "Line {line_no} ({malo}) billing period invalid: start {start} ≥ end {end}"
+                        "Position {line_no} ({malo}): der Lieferzeitraum beginnt am {} und \
+                         endet nicht danach ({}).",
+                        datum(start),
+                        datum(end)
                     ),
                     Some(line_no),
                     None,
@@ -782,9 +818,8 @@ impl InvoicCheckEngine {
                     findings.push(Finding::dispute(
                         FindingKind::WaehrungMismatch,
                         format!(
-                            "{first_field} is denominated in {} but {field} in {} — \
-                             amounts in different currencies have no sum, and every \
-                             figure below is read as EUR.",
+                            "{first_field} lautet auf {}, {field} auf {} — Beträge in \
+                             verschiedenen Währungen lassen sich nicht summieren.",
                             first_code.as_wire(),
                             code.as_wire()
                         ),
@@ -827,9 +862,11 @@ impl InvoicCheckEngine {
                         kind: FindingKind::ArithmeticError,
                         is_dispute: true,
                         message: format!(
-                            "Line {line_no} ({malo}): {qty} × {price} EUR is not a \
-                             representable amount — the stated quantity or unit price is \
-                             out of range, so the position cannot be checked or paid",
+                            "Position {line_no} ({malo}): {} × {} EUR ergibt keinen \
+                             darstellbaren Betrag; Menge oder Einzelpreis liegen außerhalb \
+                             des zulässigen Bereichs.",
+                            de(qty),
+                            de(price),
                         ),
                         line_number: Some(line_no),
                         expected: None,
@@ -853,9 +890,12 @@ impl InvoicCheckEngine {
                         kind: FindingKind::ArithmeticError,
                         is_dispute: true,
                         message: format!(
-                            "Line {line_no} ({malo}): \
-                             {qty} kWh × {price} EUR/kWh = {computed} EUR, \
-                             but Rechnungsposition states {stated_net} EUR",
+                            "Position {line_no} ({malo}): {} kWh × {} EUR/kWh = {} EUR, \
+                             die Rechnung nennt {} EUR.",
+                            de(qty),
+                            de(price),
+                            de(computed),
+                            de(stated_net),
                         ),
                         line_number: Some(line_no),
                         expected: Some(computed),
@@ -912,12 +952,9 @@ impl InvoicCheckEngine {
         if steuer == Some(EuroAmount::ZERO) && breakdown.is_empty() {
             findings.push(Finding::warn(
                 FindingKind::SteuerMissing,
-                "The invoice states 0,00 EUR Umsatzsteuer with no Steuerbetrag \
-                 breakdown and no reverse-charge entry, so it names no ground for \
-                 the exemption. §14 Abs. 4 Nr. 8 UStG requires the rate and amount \
-                 or a note that the recipient owes the tax; if the ground is stated \
-                 only in free text, the document is complete but this check cannot \
-                 see it.",
+                "Die Rechnung weist 0,00 EUR Umsatzsteuer aus, ohne Steueraufschlüsselung \
+                 und ohne Hinweis auf die Steuerschuldnerschaft des Leistungsempfängers \
+                 (§ 14 Abs. 4 Nr. 8 UStG).",
                 None,
                 None,
                 None,
@@ -927,10 +964,9 @@ impl InvoicCheckEngine {
         if steuer.is_none() && breakdown.is_empty() {
             findings.push(Finding::dispute(
                 FindingKind::SteuerMissing,
-                "The invoice states no Umsatzsteuer and no Steuerbetrag breakdown. \
-                 §14 Abs. 4 Nr. 8 UStG requires the rate and the amount, or a note \
-                 that the recipient owes the tax — without either there is no \
-                 Vorsteuerabzug.",
+                "Die Rechnung weist weder Umsatzsteuer noch eine Steueraufschlüsselung \
+                 aus; § 14 Abs. 4 Nr. 8 UStG verlangt Steuersatz und Steuerbetrag oder \
+                 den Hinweis auf die Steuerschuldnerschaft des Leistungsempfängers.",
                 None,
                 None,
                 None,
@@ -945,9 +981,10 @@ impl InvoicCheckEngine {
             findings.push(Finding::dispute(
                 FindingKind::ReverseChargeStatesTax,
                 format!(
-                    "The invoice is reverse-charged (§13b UStG) and states {steuer} EUR of \
-                     Umsatzsteuer anyway. That tax is owed under §14c Abs. 1 UStG and is \
-                     still not deductible, because the recipient owes it too."
+                    "Die Rechnung unterliegt der Steuerschuldnerschaft des \
+                     Leistungsempfängers (§ 13b UStG) und weist dennoch {} EUR \
+                     Umsatzsteuer aus (§ 14c Abs. 1 UStG).",
+                    de(steuer)
                 ),
                 None,
                 Some(EuroAmount::ZERO),
@@ -961,8 +998,9 @@ impl InvoicCheckEngine {
             findings.push(Finding::dispute(
                 FindingKind::SteuerMismatch,
                 format!(
-                    "gesamtbrutto = {brutto} EUR, but gesamtnetto + gesamtsteuer = {} EUR",
-                    netto + steuer
+                    "Der Bruttobetrag {} EUR ist nicht Nettobetrag plus Steuer ({} EUR).",
+                    de(brutto),
+                    de(netto + steuer)
                 ),
                 None,
                 Some(netto + steuer),
@@ -998,11 +1036,11 @@ impl InvoicCheckEngine {
                 findings.push(Finding::dispute(
                     FindingKind::SteuerMismatch,
                     format!(
-                        "gesamtsteuer = {steuer} EUR, but the {} Steuerbetrag entries \
-                         sum to {summed} EUR. §14 Abs. 4 Nr. 8 UStG makes the per-rate \
-                         breakdown the basis of the recipient's Vorsteuerabzug, so it \
-                         must agree with the total it is a breakdown of.",
-                        breakdown.len()
+                        "Die Umsatzsteuer {} EUR stimmt nicht mit der Summe der {} \
+                         Steuerbeträge ({} EUR) überein (§ 14 Abs. 4 Nr. 8 UStG).",
+                        de(steuer),
+                        breakdown.len(),
+                        de(summed)
                     ),
                     None,
                     Some(summed),
@@ -1045,8 +1083,11 @@ impl InvoicCheckEngine {
                 findings.push(Finding::dispute(
                     FindingKind::SteuerMismatch,
                     format!(
-                        "Steuerbetrag {i}: {satz} % of {basis} EUR is not a representable \
-                         amount — the stated rate or base is out of range."
+                        "Steuerbetrag {i}: {} % von {} EUR ergibt keinen darstellbaren \
+                         Betrag; Steuersatz oder Bemessungsgrundlage liegen außerhalb des \
+                         zulässigen Bereichs.",
+                        de(satz),
+                        de(basis)
                     ),
                     None,
                     None,
@@ -1070,10 +1111,12 @@ impl InvoicCheckEngine {
                 findings.push(Finding::dispute(
                     FindingKind::SteuerMismatch,
                     format!(
-                        "Steuerbetrag {i}: {satz} % of a basiswert of {basis} EUR is \
-                         {computed} EUR, but the entry states {stated} EUR. §14 Abs. 4 Nr. 8 \
-                         UStG makes the rate and the amount it produces both mandatory, and \
-                         the recipient deducts the amount."
+                        "Steuerbetrag {i}: {} % von {} EUR sind {} EUR, die Rechnung \
+                         nennt {} EUR (§ 14 Abs. 4 Nr. 8 UStG).",
+                        de(satz),
+                        de(basis),
+                        de(computed),
+                        de(stated)
                     ),
                     None,
                     Some(computed),
@@ -1113,8 +1156,9 @@ impl InvoicCheckEngine {
             findings.push(Finding::warn(
                 FindingKind::TotalMismatch,
                 format!(
-                    "Total net mismatch: \u{03a3} gesamtpreis = {computed} EUR, \
-                     gesamtnetto = {stated} EUR",
+                    "Die Positionen ergeben netto {} EUR, die Rechnung nennt netto {} EUR.",
+                    de(computed),
+                    de(stated),
                 ),
                 None,
                 Some(computed),
@@ -1146,8 +1190,9 @@ impl InvoicCheckEngine {
                 kind: FindingKind::TariffNotFound,
                 is_dispute: config.require_tariff,
                 message: format!(
-                    "No PRICAT tariff found for sender GLN {sender_mp_id} on {billing_date}. \
-                     Tariff check skipped — seed the tariff store from PRICAT 27003.",
+                    "Für {sender_mp_id} liegt zum {} kein Preisblatt (PRICAT) vor; die \
+                     Preise wurden nicht geprüft.",
+                    datum(billing_date),
                 ),
                 line_number: None,
                 expected: None,
@@ -1170,8 +1215,9 @@ impl InvoicCheckEngine {
                 findings.push(Finding::warn(
                     FindingKind::TariffNotFound,
                     format!(
-                        "Line {line_no} ({malo}): no Preisblatt effective on {line_date} \
-                         for GLN {sender_mp_id}",
+                        "Position {line_no} ({malo}): für {sender_mp_id} gilt zum {} kein \
+                         Preisblatt.",
+                        datum(line_date),
                     ),
                     Some(line_no),
                     None,
@@ -1296,8 +1342,9 @@ impl InvoicCheckEngine {
                 findings.push(Finding::warn(
                     FindingKind::TariffNotFound,
                     format!(
-                        "Line {line_no} ({malo}): Preisblatt for GLN {sender_mp_id} \
-                         on {line_date} contains no Preisstaffeln — skipping price check",
+                        "Position {line_no} ({malo}): das Preisblatt von {sender_mp_id} zum \
+                         {} enthält keine Preisstaffeln; der Preis wurde nicht geprüft.",
+                        datum(line_date),
                     ),
                     Some(line_no),
                     None,
@@ -1322,10 +1369,12 @@ impl InvoicCheckEngine {
                 findings.push(Finding::dispute(
                     FindingKind::TariffDeviation,
                     format!(
-                        "Line {line_no} ({malo}): einzelpreis {invoic_price} EUR/kWh \
-                         does not match any published rate in Preisblatt for GLN {sender_mp_id} \
-                         on {line_date} (closest: {closest} EUR/kWh, tolerance {pct:.1}%)",
-                        pct = tol as f64 / 10_000.0,
+                        "Position {line_no} ({malo}): Einzelpreis {} EUR/kWh, das Preisblatt \
+                         von {sender_mp_id} zum {} nennt {} EUR/kWh (Toleranz {} %).",
+                        de(invoic_price),
+                        datum(line_date),
+                        de(closest),
+                        prozent(tol as f64 / 10_000.0),
                     ),
                     Some(line_no),
                     Some(closest),
@@ -1404,10 +1453,8 @@ impl InvoicCheckEngine {
                 // nothing about whether the MSB billed correctly.
                 is_dispute: false,
                 message: format!(
-                    "No accepted Angebot on record for MSB {sender_mp_id}. The ESA price basis \
-                     is the QUOTES 15003 the ESA ordered against (§35 MsbG — there is no \
-                     published Preisblatt for Kapitel-4.6 Messprodukte), so the price check is \
-                     skipped."
+                    "Von {sender_mp_id} liegt kein angenommenes Angebot (QUOTES 15003) vor; \
+                     die Preise wurden nicht geprüft."
                 ),
                 line_number: None,
                 expected: None,
@@ -1430,8 +1477,8 @@ impl InvoicCheckEngine {
                 findings.push(Finding::warn(
                     FindingKind::TariffNotFound,
                     format!(
-                        "Line {line_no} ({text}): no Artikel-ID, so the position cannot be \
-                         matched to the accepted Angebot — price check skipped for this line"
+                        "Position {line_no} ({text}): ohne Artikel-ID lässt sich die Position \
+                         keinem Angebot zuordnen; der Preis wurde nicht geprüft."
                     ),
                     Some(line_no),
                     None,
@@ -1444,9 +1491,8 @@ impl InvoicCheckEngine {
                 findings.push(Finding::dispute(
                     FindingKind::AngebotPositionUnknown,
                     format!(
-                        "Line {line_no} ({text}): Artikel-ID {artikel_id} was never priced in \
-                         the Angebot this subscription was ordered against — the ESA did not \
-                         agree to this charge"
+                        "Position {line_no} ({text}): die Artikel-ID {artikel_id} ist im \
+                         angenommenen Angebot nicht enthalten."
                     ),
                     Some(line_no),
                     None,
@@ -1459,10 +1505,12 @@ impl InvoicCheckEngine {
                 findings.push(Finding::dispute(
                     FindingKind::AngebotDeviation,
                     format!(
-                        "Line {line_no} ({text}): Artikel-ID {artikel_id} billed at {invoiced} \
-                         EUR, but the accepted Angebot from MSB {sender_mp_id} priced it at \
-                         {expected} EUR (tolerance {pct:.1}%)",
-                        pct = f64::from(tol) / 10_000.0,
+                        "Position {line_no} ({text}): Artikel-ID {artikel_id} berechnet mit {} \
+                         EUR, das angenommene Angebot von {sender_mp_id} nennt {} EUR \
+                         (Toleranz {} %).",
+                        de(invoiced),
+                        de(expected),
+                        prozent(f64::from(tol) / 10_000.0),
                     ),
                     Some(line_no),
                     Some(*expected),
@@ -1560,9 +1608,9 @@ impl InvoicCheckEngine {
                 kind: FindingKind::TariffNotFound,
                 is_dispute: config.require_tariff,
                 message: format!(
-                    "No PreisblattMessung found for MSB GLN {sender_mp_id} on {billing_date}. \
-                     Tariff check skipped — upload via \
-                     PUT /api/v1/preisblaetter-messung/{{msb_mp_id}}.",
+                    "Für {sender_mp_id} liegt zum {} kein Preisblatt Messung vor; die Preise \
+                     wurden nicht geprüft.",
+                    datum(billing_date),
                 ),
                 line_number: None,
                 expected: None,
@@ -1582,8 +1630,9 @@ impl InvoicCheckEngine {
                     findings.push(Finding::warn(
                         FindingKind::TariffNotFound,
                         format!(
-                            "Line {line_no} ({malo}): PreisblattMessung for GLN \
-                             {sender_mp_id} contains no Preisstaffeln — skipping price check",
+                            "Position {line_no} ({malo}): das Preisblatt Messung von \
+                             {sender_mp_id} enthält keine Preisstaffeln; der Preis wurde nicht \
+                             geprüft.",
                         ),
                         Some(line_no),
                         None,
@@ -1606,10 +1655,12 @@ impl InvoicCheckEngine {
                     findings.push(Finding::dispute(
                         FindingKind::TariffDeviation,
                         format!(
-                            "Line {line_no} ({malo}): einzelpreis {invoic_price} does not \
-                             match any MSB tariff in PreisblattMessung for GLN {sender_mp_id} \
-                             on {billing_date} (closest: {closest}, tolerance {pct:.1}%)",
-                            pct = tol as f64 / 10_000.0,
+                            "Position {line_no} ({malo}): Einzelpreis {} EUR, das Preisblatt \
+                             Messung von {sender_mp_id} zum {} nennt {} EUR (Toleranz {} %).",
+                            de(invoic_price),
+                            datum(billing_date),
+                            de(closest),
+                            prozent(tol as f64 / 10_000.0),
                         ),
                         Some(line_no),
                         Some(closest),
@@ -1650,9 +1701,8 @@ impl InvoicCheckEngine {
                     findings.push(Finding::dispute(
                         FindingKind::TariffNotFound,
                         format!(
-                            "Line {line_no} ({malo}): discount \"{}\" not backed by \
-                             any AufAbschlag in PreisblattMessung for GLN {sender_mp_id} \
-                             (check 6). Verify PRICAT 27001-27003.",
+                            "Position {line_no} ({malo}): der Abschlag „{}“ ist durch keinen \
+                             Auf-/Abschlag im Preisblatt Messung von {sender_mp_id} gedeckt.",
                             pos.positionstext.as_deref().unwrap_or("?"),
                         ),
                         Some(line_no),
@@ -1720,8 +1770,7 @@ impl InvoicCheckEngine {
         {
             findings.push(Finding::dispute(
                 FindingKind::StorniertWithoutReference,
-                "Stornorechnung does not reference the original invoice \
-                 (original_rechnungsnummer is missing). Source: BK6-24-174 §5.",
+                "Die Stornorechnung nennt die Nummer der stornierten Rechnung nicht.",
                 None,
                 None,
                 None,
@@ -1813,10 +1862,13 @@ impl InvoicCheckEngine {
                     kind: FindingKind::TariffDeviation,
                     is_dispute: config.require_tariff,
                     message: format!(
-                        "Line {line_no} ({malo}): MMM {kind_str} price {invoic_price} EUR/kWh \
-                         deviates {pct:.1}% from MMMA reference {ref_p} EUR/kWh \
-                         (tolerance {t:.1}%)",
-                        t = tol as f64 / 10_000.0,
+                        "Position {line_no} ({malo}): {kind_str}preis {} EUR/kWh weicht um {} % \
+                         vom Referenzpreis der Mehr-/Mindermengenabrechnung {} EUR/kWh ab \
+                         (Toleranz {} %).",
+                        de(invoic_price),
+                        prozent(pct),
+                        de(ref_p),
+                        prozent(tol as f64 / 10_000.0),
                     ),
                     line_number: Some(line_no),
                     expected: Some(ref_p),
@@ -1831,6 +1883,22 @@ impl InvoicCheckEngine {
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
+/// A number as German text writes it: decimal comma (`31,20`). A finding's
+/// message reaches the Rechnungssteller as the REMADV's Begründung.
+fn de(x: impl std::fmt::Display) -> String {
+    x.to_string().replace('.', ",")
+}
+
+/// A percentage with one decimal, decimal comma (`1,5`).
+fn prozent(p: f64) -> String {
+    de(format!("{p:.1}"))
+}
+
+/// A date as German text writes it: `31.03.2026`.
+fn datum(d: time::Date) -> String {
+    format!("{:02}.{:02}.{}", d.day(), u8::from(d.month()), d.year())
+}
+
 /// Extract a stable (line_number, malo_id) pair for error messages.
 fn pos_ident(pos: &Rechnungsposition) -> (u32, &str) {
     let line_no = pos.positionsnummer.unwrap_or(0) as u32;
@@ -1843,6 +1911,36 @@ fn pos_ident(pos: &Rechnungsposition) -> (u32, &str) {
 
 #[cfg(test)]
 mod tests {
+    /// Every kind has its own German label, never its identifier: a label
+    /// that repeated the variant name would put the Rust enum on a screen.
+    #[test]
+    fn every_finding_kind_has_its_own_german_label() {
+        use FindingKind as K;
+        let all = [
+            K::PeriodInvalid,
+            K::ArithmeticError,
+            K::TotalMismatch,
+            K::TariffDeviation,
+            K::TariffNotFound,
+            K::StorniertWithoutReference,
+            K::ZahlungszielExceeded,
+            K::ZahlungszielInvalid,
+            K::RechnungZuSpaet,
+            K::SteuerMissing,
+            K::SteuerMismatch,
+            K::WaehrungMismatch,
+            K::ReverseChargeStatesTax,
+            K::AngebotDeviation,
+            K::AngebotPositionUnknown,
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for k in all {
+            let code = serde_json::to_value(k).expect("serializes");
+            assert_ne!(code.as_str(), Some(k.bezeichnung()), "{k:?}");
+            assert!(seen.insert(k.bezeichnung()), "{k:?} shares its label");
+        }
+    }
+
     use rubo4e::current::{
         Betrag, Menge, Mengeneinheit, Preis, Rechnung, Rechnungsposition, Zeitraum,
     };
@@ -3018,6 +3116,144 @@ mod tests {
                 .iter()
                 .any(|f| f.kind == FindingKind::TariffDeviation)
         );
+    }
+
+    /// Words only an English sentence carries — a finding's message reaches
+    /// the Rechnungssteller as the REMADV's Begründung and must read German.
+    const ENGLISCH: &[&str] = &[
+        " the ", " is ", " but ", " does ", " not ", " of ", " for ", " no ", "Line ", "skipp",
+        "Review", "Source:", "Verify",
+    ];
+
+    fn deutsch(findings: &[Finding]) {
+        for f in findings {
+            let text = format!(" {} ", f.message);
+            for w in ENGLISCH {
+                assert!(
+                    !text.contains(w),
+                    "{:?} reads English ({w:?}): {}",
+                    f.kind,
+                    f.message
+                );
+            }
+        }
+    }
+
+    /// A price deviation names, in German, the price stated and the price the
+    /// Preisblatt gives — decimal comma, as the counterparty reads it.
+    #[test]
+    fn a_tariff_deviation_reads_german_with_both_prices() {
+        let pos = make_pos(
+            1,
+            "DE001",
+            Some("1000.0"),
+            Some(EuroAmount::from_raw(4_000)),
+            Some(EuroAmount::from_raw(4_000_000)),
+        );
+        let r = make_rechnung(vec![pos], None);
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &seeded_store(EuroAmount::from_raw(3_456)),
+            &CheckConfig::default(),
+        );
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.kind == FindingKind::TariffDeviation)
+            .expect("a deviation");
+        assert!(f.message.contains("0,04000"), "{}", f.message);
+        assert!(f.message.contains("0,03456"), "{}", f.message);
+        assert!(f.message.starts_with("Position 1"), "{}", f.message);
+        deutsch(&report.findings);
+    }
+
+    /// Every finding the checker's own paths raise reads German: an arithmetic
+    /// error and a total mismatch, a missing tax, an invalid and an overlong
+    /// Zahlungsziel, an inverted period, a Storno without reference, a missing
+    /// Preisblatt and a late WiM invoice.
+    #[test]
+    fn every_finding_message_reads_german() {
+        let mut gesehen = std::collections::BTreeSet::new();
+        let mut pruefe = |report: CheckReport| {
+            deutsch(&report.findings);
+            for f in &report.findings {
+                gesehen.insert(format!("{:?}", f.kind));
+            }
+        };
+        let cfg = CheckConfig::default();
+
+        // Arithmetic, total, Preisblatt missing.
+        let pos = make_pos(
+            1,
+            "DE001",
+            Some("1000.0"),
+            Some(EuroAmount::from_raw(3_456)),
+            Some(EuroAmount::from_raw(4_000_000)),
+        );
+        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(9_000_000)));
+        pruefe(InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            &cfg,
+        ));
+
+        // No tax at all; Zahlungsziel before the invoice date; inverted period.
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(100_000)));
+        r.gesamtsteuer = None;
+        r.steuerbetraege = None;
+        r.gesamtbrutto = None;
+        r.faelligkeitsdatum = Some(parse_dt("2025-01-01"));
+        r.rechnungsperiode = Some(periode("2024-12-31", "2024-12-01"));
+        pruefe(InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            &cfg,
+        ));
+
+        // Overlong Zahlungsziel; Storno without reference; late WiM invoice.
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(100_000)));
+        r.rechnungsdatum = Some(parse_dt("2026-07-01"));
+        r.faelligkeitsdatum = Some(parse_dt("2026-09-01"));
+        pruefe(InvoicCheckEngine::check_msb_rechnung(
+            31_009, SENDER, &r, None, &cfg,
+        ));
+        let mut r = wim_dienstleistung("2026-06-30", "2026-07-01");
+        r.ist_storno = Some(true);
+        r.original_rechnungsnummer = None;
+        pruefe(InvoicCheckEngine::check_msb_rechnung_with_aufabschlaege(
+            31_009,
+            SENDER,
+            &r,
+            None,
+            &[],
+            &cfg,
+        ));
+        pruefe(InvoicCheckEngine::check(
+            31003,
+            SENDER,
+            &wim_dienstleistung("2026-06-30", "2026-09-30"),
+            &empty_store(),
+            &cfg,
+        ));
+
+        for kind in [
+            "ArithmeticError",
+            "TotalMismatch",
+            "TariffNotFound",
+            "SteuerMissing",
+            "ZahlungszielInvalid",
+            "ZahlungszielExceeded",
+            "PeriodInvalid",
+            "StorniertWithoutReference",
+        ] {
+            assert!(gesehen.contains(kind), "no {kind} raised: {gesehen:?}");
+        }
     }
 
     #[test]

@@ -2448,5 +2448,2449 @@
       "strom": false,
       "gas": true
     }
+  },
+  "zuordnung": {
+    "13002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13003": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13005": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13006": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13007": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13008": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13009": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13010": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13011": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13012": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13013": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13014": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13015": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13016": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13017": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13018": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13019": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13020": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13021": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13022": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13023": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13025": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "13026": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13027": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "13028": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "15001": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "15002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "15003": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "15004": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "15005": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17001": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17002": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17004": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17005": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17006": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17007": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17008": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17009": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17011": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17101": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17102": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17103": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17104": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17110": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17113": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17115": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17116": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17117": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17118": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17120": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17121": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17122": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17123": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17126": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17128": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17129": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17130": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17131": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17132": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17133": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17134": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17135": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17201": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17202": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17203": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17204": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17205": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17206": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17207": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17208": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17209": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17210": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "17211": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "17301": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "19001": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19003": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19004": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19005": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19006": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19007": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19009": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19010": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19011": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19012": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19013": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19014": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19015": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19016": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19101": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19102": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19103": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19104": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19110": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19114": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19116": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19117": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19118": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19119": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19120": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19121": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19123": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19124": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19127": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19128": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19129": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19130": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19131": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19132": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19133": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19204": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19301": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "19302": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21000": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21001": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21003": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21004": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21005": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21007": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21009": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21010": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21011": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21012": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21013": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21018": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21025": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21027": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21028": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21029": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21030": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21031": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21032": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21033": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21035": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21036": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21037": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21038": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21039": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21040": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21042": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21043": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21044": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "21045": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "21047": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "23001": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "23003": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "23004": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "23005": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "23008": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "23009": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "23011": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "23012": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "25001": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "25004": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "25005": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "25006": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "25007": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "25008": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "25009": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "25010": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "27001": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "27002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "27003": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "29001": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "29002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "31001": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "31002": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "31003": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "31004": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "31005": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "31006": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "31007": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "31008": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "31009": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "31010": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "31011": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "33001": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "33002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "33003": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "33004": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "35001": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "35002": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "35003": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "35004": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "35005": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37000": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37001": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37002": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37003": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37004": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37005": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37006": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37008": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37009": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37010": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37011": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37012": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37013": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "37014": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "39000": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "39001": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "39002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44001": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44003": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44004": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44005": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44006": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44007": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44008": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44009": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44010": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44011": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44012": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44013": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44014": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44015": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44016": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44017": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44018": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44019": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44020": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44021": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44022": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44023": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44024": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44035": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44036": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44037": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44038": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44039": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44040": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44041": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44042": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44043": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44044": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44051": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44052": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44053": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44060": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44101": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44102": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44103": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44104": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44105": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44109": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44111": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44112": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44113": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44115": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44116": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44117": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44119": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44120": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44121": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44123": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44124": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44137": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44138": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44139": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44140": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44142": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44143": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44145": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44146": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44147": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44148": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44149": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44150": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44151": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44152": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44156": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44157": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44159": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44160": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44161": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44162": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44163": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44164": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44165": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44166": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44167": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44168": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44169": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44175": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44176": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44180": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "44181": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44182": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "44183": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55001": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55002": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55003": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55004": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55005": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55006": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55007": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55008": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55009": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55010": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55011": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55012": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55013": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55014": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55015": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55016": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55017": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55018": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55022": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55023": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55024": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55035": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55036": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55037": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55038": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55039": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55040": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55041": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55042": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55043": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55044": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55051": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55052": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55053": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55060": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55062": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55063": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55064": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55065": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55066": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55067": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55069": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55070": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55071": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55072": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55073": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55074": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55075": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55076": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55077": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55078": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55080": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55095": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55109": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55110": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55126": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55136": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55137": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55156": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55168": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55169": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55170": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55173": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55175": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55177": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55180": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55194": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55195": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55196": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55197": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55198": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55199": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55200": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55201": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55202": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55203": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55204": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55205": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55206": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55207": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55208": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55209": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55210": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55211": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55212": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55213": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55214": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55218": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55220": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55223": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55224": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55225": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55227": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55230": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55232": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55235": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55236": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55237": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55238": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55239": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55240": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55241": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55242": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55243": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55553": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55555": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55557": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55559": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55600": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55601": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55602": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55603": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55604": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55605": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55607": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55608": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55609": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55611": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55613": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55614": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55615": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55616": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55617": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55618": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55619": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55620": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55621": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55622": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55623": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55624": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55625": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55626": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55627": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55628": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55629": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55630": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55632": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55633": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55634": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55635": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55636": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55638": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55639": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55640": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55641": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55642": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55643": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55644": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55645": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55646": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55647": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55648": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55649": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55650": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55651": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55652": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55653": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55654": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55655": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55656": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55657": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55658": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55659": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55660": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55661": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55662": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55663": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55664": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55665": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55666": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55667": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55669": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55670": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55671": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55672": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55673": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55674": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55675": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55684": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55685": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55686": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55687": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55688": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55689": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55690": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55691": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55692": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "55693": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "55694": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
+    "70095": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    },
+    "70096": {
+      "geschaeftsvorfall": false,
+      "stelle": []
+    }
   }
 }

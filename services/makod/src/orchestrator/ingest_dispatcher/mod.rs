@@ -159,15 +159,257 @@ impl IngestOutcome {
 /// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
 ///
 /// A parameter rather than a `W::State: OccupiesBusinessKey` bound because only
-/// 24 of the 63 workflow names dispatched here supply a verdict at all — 16
-/// through that trait, 8 through an inherent terminal-state closure — and the
+/// 46 of the 63 workflow names dispatched here supply a verdict at all — 35
+/// through that trait, 11 through an inherent terminal-state closure — and the
 /// verdict is domain knowledge that belongs in the workflow's own crate — makod
 /// only *consumes* what a crate has already published (that trait, or an
-/// inherent `is_terminal()`). The four INVOIC families pass
-/// [`occupied_by_own_reference`]. An arm without a verdict decides on index
+/// inherent `is_terminal()`). The four INVOIC families and the Redispatch
+/// Aktivierung pass [`occupied_by_own_reference`]. An arm without a verdict decides on index
 /// presence alone; `cargo xtask check-occupancy` counts those arms and refuses
 /// an increase.
 type Occupancy<W> = fn(&<W as Workflow>::State) -> bool;
+
+/// What the door knows about one inbound message beyond its content: when it
+/// arrived, and the APERAK delivery window that arrival opened.
+///
+/// Built once per message in [`EdifactIngestDispatcher::dispatch`] and handed
+/// to every spawn and resume, so the window is registered whichever of the two
+/// the message drives, and every outbox entry the run enqueues reports the
+/// receipt instant as its occurrence ([`RunOptions::received_at`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Inbound<'a> {
+    /// The instant the door received the message — for AS4 the instant of its
+    /// Zustellquittung.
+    pub(crate) received_at: OffsetDateTime,
+    aperak: Option<AperakWindow>,
+    /// The APERAK the door owes the message ([`door_aperak`]) — its
+    /// Anerkennungs- or Verarbeitbarkeitsfehlermeldung — enqueued with the run
+    /// unless the workflow answers with its own.
+    anerkennung: Option<&'a mako_engine::outbox::PendingOutbox>,
+}
+
+impl<'a> Inbound<'a> {
+    /// A message that APERAK AHB 1.1 does not reach — a DVGW message, a
+    /// Redispatch XML document.
+    pub(crate) const fn without_aperak(received_at: OffsetDateTime) -> Self {
+        Self {
+            received_at,
+            aperak: None,
+            anerkennung: None,
+        }
+    }
+
+    /// The Anerkennungsmeldung to enqueue with a run of `W` — none when `W`
+    /// decides the message's APERAK on a later command.
+    fn anerkennung<W: Workflow>(&self) -> Option<&'a mako_engine::outbox::PendingOutbox> {
+        self.anerkennung.filter(|_| !W::APERAK_AFTER_RECEIPT)
+    }
+
+    /// The APERAK window as deadlines of `process`: those registered with the
+    /// run, and those registered only if the run enqueues an APERAK.
+    fn aperak_deadlines<W: Workflow, S: mako_engine::event_store::EventStore>(
+        &self,
+        process: &Process<W, S>,
+    ) -> (Vec<Deadline>, Vec<Deadline>) {
+        let Some(window) = self.aperak else {
+            return (Vec::new(), Vec::new());
+        };
+        let deadline = Deadline::new(
+            process.stream_id().clone(),
+            process.process_id(),
+            process.identity().tenant_id,
+            process.identity().workflow_id.clone(),
+            window.label,
+            window.due_at,
+        );
+        if window.only_with_aperak {
+            (Vec::new(), vec![deadline])
+        } else {
+            (vec![deadline], Vec::new())
+        }
+    }
+}
+
+/// The APERAK the door owes a message its workflow does not answer with one
+/// of its own.
+///
+/// An AHB-Fehler (§ 2.1.1, S. 10) is rejected with its Verarbeitbarkeitsfehler-
+/// meldung in both Sparten — in Gas it is the one result reported (§ 2.3,
+/// S. 21); a processable Strom message gets its Anerkennungsmeldung; a
+/// processable Gas message and a finding the APERAK has no code for get none.
+fn door_aperak(msg: &AnyMessage, gas: bool) -> Option<mako_engine::outbox::PendingOutbox> {
+    use crate::adapters::AhbBefund;
+    match crate::adapters::ahb_befund(msg) {
+        AhbBefund::Fehler(fehler) => {
+            let (own, sender) = (msg.nad_receiver()?, msg.nad_sender()?);
+            let mut fehler = fehler.into_iter();
+            let first = fehler.next()?;
+            let mut payload = mako_engine::payload::AperakPayload::fehler(
+                own,
+                sender,
+                msg.message_ref(),
+                first.code,
+                first.reason,
+            );
+            payload.ortsangabe = first.ortsangabe;
+            // Every further AHB-Fehler its own `SG4 ERC` group (§ 2.1.1).
+            payload.weitere_fehler = fehler
+                .map(|f| mako_engine::payload::AperakFehler {
+                    error_code: f.code.to_owned(),
+                    reason: Some(f.reason),
+                    ortsangabe: f.ortsangabe,
+                })
+                .collect();
+            Some(mako_engine::outbox::PendingOutbox::typed(sender, &payload))
+        }
+        AhbBefund::Verarbeitbar if !gas => anerkennung_of(msg),
+        AhbBefund::Verarbeitbar | AhbBefund::Ungeklaert => None,
+    }
+}
+
+/// The Anerkennungsmeldung (`BGM+312`, APERAK 29002) a processable Strom
+/// message is owed.
+///
+/// APERAK AHB 1.1 § 2.4, S. 23: „Ist der Geschäftsvorfall verarbeitbar, so wird
+/// diese Information über eine Anerkennungsmeldung mitgeteilt", within the
+/// window of § 2.4.1. It references the message by `UNH` DE 0062
+/// (`SG2 RFF+ACE`), `BGM` DE 1004 (`SG2 RFF+AGO`) and `DTM+137` (`SG2 DTM+171`)
+/// — Kap. 3, S. 26. It goes from the message's `NAD+MR` back to its `NAD+MS`;
+/// a message naming neither cannot be answered and gets none.
+fn anerkennung_of(msg: &AnyMessage) -> Option<mako_engine::outbox::PendingOutbox> {
+    let (own, sender) = (msg.nad_receiver()?, msg.nad_sender()?);
+    let segs = msg.segments();
+    let document_number = segs
+        .iter()
+        .find(|s| s.tag == "BGM")
+        .and_then(|s| s.component_str(1, 0))
+        .filter(|v| !v.is_empty());
+    let document_date = segs
+        .iter()
+        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("137"))
+        .and_then(|s| {
+            crate::adapters::parse_dtm_datetime(s.component_str(0, 1)?, s.component_str(0, 2))
+        })
+        .and_then(|at| {
+            at.format(time::macros::format_description!(
+                "[year][month][day][hour][minute]"
+            ))
+            .ok()
+        });
+    let mut payload =
+        mako_engine::payload::AperakPayload::anerkennung(own, sender, msg.message_ref());
+    if let Some(number) = document_number {
+        payload = payload.referencing(number, document_date);
+    }
+    Some(mako_engine::outbox::PendingOutbox::typed(sender, &payload))
+}
+
+/// Whether a follow-up with Prüfidentifikator `pid` that no process takes is
+/// answered `Z33`.
+///
+/// The PID-Übersicht names, per Prozessschritt, the tuple that assigns a
+/// Geschäftsvorfall to its predecessor („Zuordnung zu einem Geschäftsvorfall")
+/// and where that assignment is checked („Stelle der Zuordnungsprüfung":
+/// `V` the Verarbeitbarkeitsprüfung, `E` the Entscheidungsbaum). APERAK AHB 1.1
+/// § 2.1.3 (S. 14): only a `V` assignment „kann und muss" be refused with a
+/// Zuordnungsfehler. So `Z33` is owed when the PID names a Geschäftsvorfall
+/// tuple and every row that names one marks `V`. Read from the tracked
+/// `pid-overview.json` (`cargo xtask import-pid-overview`).
+#[must_use]
+pub fn z33_owed(pid: u32) -> bool {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::OnceLock;
+    #[derive(serde::Deserialize)]
+    struct Zuordnung {
+        geschaeftsvorfall: bool,
+        stelle: BTreeSet<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Overview {
+        zuordnung: BTreeMap<String, Zuordnung>,
+    }
+    static OWED: OnceLock<BTreeSet<u32>> = OnceLock::new();
+    OWED.get_or_init(|| {
+        let overview: Overview = serde_json::from_str(include_str!(
+            "../../../../../crates/edi-energy/profiles/pid-overview.json"
+        ))
+        .expect("the tracked pid-overview.json parses");
+        overview
+            .zuordnung
+            .into_iter()
+            .filter(|(_, z)| {
+                z.geschaeftsvorfall && z.stelle.iter().all(|s| s == "V") && !z.stelle.is_empty()
+            })
+            .filter_map(|(pid, _)| pid.parse().ok())
+            .collect()
+    })
+    .contains(&pid)
+}
+
+/// The APERAK delivery window one inbound message opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AperakWindow {
+    /// An `aperak-` label from `mako_fristen`.
+    pub(crate) label: &'static str,
+    /// When the APERAK must have gone out.
+    pub(crate) due_at: OffsetDateTime,
+    /// Owed only when the message is answered with an APERAK at all — a Gas
+    /// APERAK reports a Verarbeitbarkeitsfehler and nothing else.
+    pub(crate) only_with_aperak: bool,
+}
+
+/// The APERAK delivery window an inbound message opens, from its message type,
+/// Sparte and Prüfidentifikator.
+///
+/// * **Strom** (APERAK AHB 1.1 § 2.4.1, S. 24): the result of the
+///   Verarbeitbarkeitsprüfung of every Geschäftsvorfall is owed — an
+///   Anerkennungsmeldung or a Verarbeitbarkeitsfehlermeldung —
+///   „spätestens bis zum nächsten Werktag 12 Uhr"; a UTILMD or an ORDERS
+///   „spätestens 45 Minuten nach Eingang", on a Samstag „bis zum Sonntag,
+///   12 Uhr". Owed for every message, so the window opens unconditionally.
+/// * **Gas** (§ 2.3, S. 21; § 2.3.1, S. 22): only a Verarbeitbarkeitsfehler is
+///   reported, by the next Werktag 12 Uhr in a Folgeprozess and within
+///   3 Werktage in an Initialprozess, chosen by the PID
+///   ([`fristen::aperak_gas_due_at`]). The window opens only beside an APERAK
+///   the run enqueues: a processable Gas message is answered by silence.
+///
+/// An APERAK or a CONTRL is never answered with an APERAK, and a message whose
+/// type cannot be read opens no window.
+pub(crate) fn aperak_window(
+    message_type: Option<edi_energy::MessageType>,
+    sparte: mako_engine::types::Sparte,
+    pid: u32,
+    received_at: OffsetDateTime,
+) -> Option<AperakWindow> {
+    use edi_energy::MessageType;
+    use mako_engine::types::Sparte;
+    let message_type = message_type?;
+    if matches!(message_type, MessageType::Aperak | MessageType::Contrl) {
+        return None;
+    }
+    Some(match sparte {
+        Sparte::Strom if matches!(message_type, MessageType::Utilmd | MessageType::Orders) => {
+            AperakWindow {
+                label: fristen::APERAK_STROM_WINDOW_LABEL,
+                due_at: fristen::aperak_strom_due_at(received_at),
+                only_with_aperak: false,
+            }
+        }
+        Sparte::Strom => AperakWindow {
+            label: fristen::APERAK_STROM_ALLGEMEIN_LABEL,
+            due_at: fristen::aperak_strom_allgemein_due_at(received_at),
+            only_with_aperak: false,
+        },
+        Sparte::Gas => {
+            let (label, due_at) = fristen::aperak_gas_due_at(pid, received_at);
+            AperakWindow {
+                label,
+                due_at,
+                only_with_aperak: true,
+            }
+        }
+    })
+}
 
 /// The verdict for a family keyed on the message's own reference — an INVOIC
 /// on its `UNH` DE 0062.
@@ -220,6 +462,9 @@ pub struct EdifactIngestDispatcher {
     /// `None` leaves the Sparte at [`Sparte::Strom`], which is what a
     /// Strom-only deployment and every existing test are.
     mp_id_registry: Option<Arc<crate::core::party_registry::MpIdRegistry>>,
+    /// `[policy.ingest] unbekannter_vorgang` — what an orphan follow-up is
+    /// answered with ([`Self::answer_orphan`]).
+    unbekannter_vorgang: crate::core::config::UnbekannterVorgang,
 }
 
 /// Per-business-key mutexes guarding the lookup→spawn critical section.
@@ -365,6 +610,17 @@ impl EdifactIngestDispatcher {
         self
     }
 
+    /// Answer an orphan follow-up as `[policy.ingest] unbekannter_vorgang`
+    /// says — `Z33` unless the operator holds them for a person.
+    #[must_use]
+    pub fn with_unbekannter_vorgang(
+        mut self,
+        choice: crate::core::config::UnbekannterVorgang,
+    ) -> Self {
+        self.unbekannter_vorgang = choice;
+        self
+    }
+
     /// Wire the own-party registry that resolves an interchange's Sparte.
     ///
     /// Without it every interchange is treated as Strom — correct for a
@@ -397,6 +653,24 @@ impl EdifactIngestDispatcher {
             // for both commodities). Strom is the safe reading: it is the
             // stricter Frist on every window the two share.
             Some(RoleSparte::Strom | RoleSparte::Both) | None => Sparte::Strom,
+        }
+    }
+
+    /// The Sparte whose APERAK rules a message falls under.
+    ///
+    /// The GeLi Gas and GaBi Gas families are Gas by Festlegung; WiM and the
+    /// ESA Wertebestellung serve both Sparten, so their recipient decides
+    /// ([`Self::sparte_of`]); every other family is Strom.
+    fn aperak_sparte(&self, msg: &AnyMessage, workflow_name: &str) -> mako_engine::types::Sparte {
+        use mako_engine::types::Sparte;
+        if workflow_name.starts_with("geli-gas-") || workflow_name.starts_with("gabi-gas-") {
+            Sparte::Gas
+        } else if workflow_name.starts_with("wim-")
+            || workflow_name == mako_wim::esa_wertebestellung::WORKFLOW_NAME
+        {
+            self.sparte_of(msg)
+        } else {
+            Sparte::Strom
         }
     }
 
@@ -611,6 +885,7 @@ impl EdifactIngestDispatcher {
             marktd_client: None,
             key_locks: business_key_locks(),
             mp_id_registry: None,
+            unbekannter_vorgang: crate::core::config::UnbekannterVorgang::Z33,
         }
     }
 
@@ -649,9 +924,31 @@ impl EdifactIngestDispatcher {
         // stands — behaviour is unchanged for correctly-routed and orphan messages.
         let corrected = self.correlation_route(msg, workflow_name).await;
         let effective_name = corrected.as_deref().unwrap_or(workflow_name);
-        let outcome = self
-            .dispatch_inner(msg, effective_name, pid, received_at)
-            .await;
+        let aperak = aperak_window(
+            msg.try_message_type(),
+            self.aperak_sparte(msg, effective_name),
+            pid,
+            received_at,
+        );
+        let anerkennung = aperak.and_then(|w| door_aperak(msg, w.only_with_aperak));
+        let inbound = Inbound {
+            received_at,
+            aperak,
+            anerkennung: anerkennung.as_ref(),
+        };
+        let outcome = self.dispatch_inner(msg, effective_name, pid, inbound).await;
+        let outcome = match outcome {
+            Ok(
+                skipped @ IngestOutcome::Skipped {
+                    reason: "process_not_found",
+                    ..
+                },
+            ) => self
+                .answer_orphan(msg, effective_name, pid)
+                .await
+                .map(|()| skipped),
+            other => other,
+        };
         let result = match &outcome {
             Ok(IngestOutcome::Spawned { .. } | IngestOutcome::Dispatched { .. }) => "dispatched",
             Ok(IngestOutcome::Skipped { .. }) => "skipped",
@@ -678,6 +975,63 @@ impl EdifactIngestDispatcher {
         outcome
     }
 
+    /// Answer a follow-up no process takes with `Z33` „Referenziertes
+    /// Geschäftsvorfall-Tupel nicht vorhanden" (APERAK AHB 1.1 Kap. 4.3, S. 43)
+    /// — where the PID-Übersicht puts its assignment into the
+    /// Verarbeitbarkeitsprüfung ([`z33_owed`]). In both Sparten: a
+    /// Verarbeitbarkeitsfehler is the one result Gas reports too (§ 2.3).
+    ///
+    /// No process exists to carry it, so the answer is the one write the
+    /// door makes for the message.
+    ///
+    /// Under `[policy.ingest] unbekannter_vorgang = "zur_pruefung"` — a
+    /// cutover, or a second system the initiating messages leave through —
+    /// the message is recorded as a dead letter for a person instead, and no
+    /// APERAK goes out.
+    async fn answer_orphan(
+        &self,
+        msg: &AnyMessage,
+        workflow_name: &str,
+        pid: u32,
+    ) -> Result<(), EngineError> {
+        use mako_engine::dead_letter::DeadLetterSink as _;
+        use mako_engine::outbox::OutboxStore as _;
+        if !z33_owed(pid) {
+            return Ok(());
+        }
+        if self.unbekannter_vorgang == crate::core::config::UnbekannterVorgang::ZurPruefung {
+            let Some(p) = mako_engine::ids::Pid::from_u32(pid) else {
+                return Ok(());
+            };
+            return self
+                .store
+                .as_dead_letter_sink()
+                .reject(
+                    &mako_engine::dead_letter::DeadLetterReason::NotDispatchable {
+                        workflow_name: workflow_name.to_owned(),
+                        pid: p,
+                        reason: "process_not_found — held for review \
+                             ([policy.ingest] unbekannter_vorgang = zur_pruefung)"
+                            .to_owned(),
+                        context: mako_engine::dead_letter::AuditContext::now()
+                            .with_pid(p)
+                            .with_message_ref(msg.message_ref())
+                            .with_tenant_id(self.tenant_id.to_string()),
+                    },
+                )
+                .await;
+        }
+        let Some(answer) = crate::edifact_api::fehlermeldung_ohne_prozess(
+            msg,
+            mako_engine::erc::codes::Z33,
+            "der referenzierte Geschäftsvorfall liegt beim Empfänger nicht vor".to_owned(),
+            self.tenant_id,
+        ) else {
+            return Ok(());
+        };
+        self.store.enqueue(std::slice::from_ref(&answer)).await
+    }
+
     /// Execute a **DVGW** message against its workflow.
     ///
     /// The counterpart of [`dispatch`](Self::dispatch) for the gas transport
@@ -695,8 +1049,18 @@ impl EdifactIngestDispatcher {
         msg: &dvgw_edi::DvgwMessage,
         workflow_name: &str,
         pid: u32,
+        received_at: OffsetDateTime,
     ) -> Result<IngestOutcome, EngineError> {
-        let outcome = self.dispatch_gabi_gas_dvgw(msg, workflow_name, pid).await;
+        // A DVGW message is not a BDEW EDIFACT message: APERAK AHB 1.1 does not
+        // reach it, so no APERAK window opens.
+        let outcome = self
+            .dispatch_gabi_gas_dvgw(
+                msg,
+                workflow_name,
+                pid,
+                Inbound::without_aperak(received_at),
+            )
+            .await;
         let result = match &outcome {
             Ok(IngestOutcome::Spawned { .. } | IngestOutcome::Dispatched { .. }) => "dispatched",
             Ok(IngestOutcome::Skipped { .. }) => "skipped",
@@ -768,25 +1132,23 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
-        received_at: OffsetDateTime,
+        inbound: Inbound<'_>,
     ) -> Result<IngestOutcome, EngineError> {
         match workflow_name {
-            n if n.starts_with("geli-gas-") => {
-                self.dispatch_geli_gas(msg, n, pid, received_at).await
-            }
-            n if n.starts_with("gabi-gas-") => {
-                self.dispatch_gabi_gas(msg, n, pid, received_at).await
-            }
-            n if n.starts_with("gpke-") => self.dispatch_gpke(msg, n, pid, received_at).await,
+            n if n.starts_with("geli-gas-") => self.dispatch_geli_gas(msg, n, pid, inbound).await,
+            n if n.starts_with("gabi-gas-") => self.dispatch_gabi_gas(msg, n, pid, inbound).await,
+            n if n.starts_with("gpke-") => self.dispatch_gpke(msg, n, pid, inbound).await,
             // ESA-side Wertebestellung is WiM Strom Teil 2 — its arm lives in
             // the `wim` submodule next to the MSB-side half of the handshake.
             n if n == mako_wim::esa_wertebestellung::WORKFLOW_NAME => {
-                self.dispatch_wim(msg, n, pid, received_at).await
+                self.dispatch_wim(msg, n, pid, inbound).await
             }
-            n if n.starts_with("wim-") => self.dispatch_wim(msg, n, pid, received_at).await,
-            n if n.starts_with("mabis-") => self.dispatch_mabis(msg, n, pid).await,
-            n if n.starts_with("emob-") => self.dispatch_emob(msg, n, pid).await,
-            n if n.starts_with("redispatch-") => self.dispatch_redispatch(msg, n, pid).await,
+            n if n.starts_with("wim-") => self.dispatch_wim(msg, n, pid, inbound).await,
+            n if n.starts_with("mabis-") => self.dispatch_mabis(msg, n, pid, inbound).await,
+            n if n.starts_with("emob-") => self.dispatch_emob(msg, n, pid, inbound).await,
+            n if n.starts_with("redispatch-") => {
+                self.dispatch_redispatch(msg, n, pid, inbound).await
+            }
             // ── Any other workflow has no ingest arm ──────────────────────────
             wf_name => unknown_workflow_skip(wf_name, pid),
         }
@@ -802,6 +1164,7 @@ impl EdifactIngestDispatcher {
     /// `spawn_deadlines` are registered atomically with the first events.
     pub(crate) async fn spawn_or_resume_redispatch<W>(
         &self,
+        received_at: OffsetDateTime,
         key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
@@ -815,8 +1178,21 @@ impl EdifactIngestDispatcher {
     {
         // BDEW Redispatch 2.0 XSD release 1.1f (Fehlerkorrektur 2026-02-19).
         let fv = FormatVersion::new("FV2026-02-19");
-        self.spawn_or_resume::<W>(key, workflow_name_static, cmd, &fv, spawn_deadlines)
-            .await
+        // An XML document is acknowledged by an AcknowledgementDocument, not
+        // an APERAK, so no APERAK window opens.
+        let inbound = Inbound::without_aperak(received_at);
+        // Keyed on the document's own mRID: every process on the key is that
+        // document, so a repeat resumes it rather than opening a second one.
+        self.spawn_or_resume_guarded::<W>(
+            inbound,
+            key,
+            workflow_name_static,
+            cmd,
+            &fv,
+            spawn_deadlines,
+            occupied_by_own_reference,
+        )
+        .await
     }
 
     /// Resume an existing Redispatch process by business key (no spawn).
@@ -826,6 +1202,7 @@ impl EdifactIngestDispatcher {
     /// the target process was registered at spawn.
     pub(crate) async fn resume_redispatch<W>(
         &self,
+        received_at: OffsetDateTime,
         key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
@@ -835,8 +1212,13 @@ impl EdifactIngestDispatcher {
         W::Command: CommandPayload + Clone,
         W::State: serde::Serialize,
     {
-        self.resume_by_key::<W>(key, workflow_name_static, cmd)
-            .await
+        self.resume_by_key::<W>(
+            Inbound::without_aperak(received_at),
+            key,
+            workflow_name_static,
+            cmd,
+        )
+        .await
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -853,18 +1235,19 @@ impl EdifactIngestDispatcher {
     /// reference for INVOIC/REMADV, or an order reference for the LOC-less
     /// ORDRSP/ORDCHG answers. The correlation index is untyped by design.
     ///
-    /// `spawn_deadlines`: zero or more `(label, due_at)` pairs to register
-    /// atomically with the events in a single `WriteBatch` via
+    /// `spawn_deadlines`: zero or more business `(label, due_at)` pairs to
+    /// register atomically with the events in a single `WriteBatch` via
     /// [`Process::run`] with [`RunOptions::deadlines`].  Pass `&[]` for
     /// workflows that have no deadlines (e.g. pure continuation handlers).
-    /// Deadlines are only registered for freshly-spawned processes — resuming
-    /// an existing process must not re-register (deadlines were set at spawn).
+    /// They are only registered for freshly-spawned processes — resuming an
+    /// existing process must not re-register (they were set at spawn).
     ///
-    /// To satisfy APERAK AHB 1.1 §2.4.1 for Strom UTILMD/ORDERS, callers
-    /// should pass **two** deadlines: the process-response window and the
-    /// 45-minute APERAK sending window (`fristen::APERAK_STROM_WINDOW_LABEL`).
+    /// The APERAK delivery window is not one of them: `inbound` carries it
+    /// ([`aperak_window`]), and it is registered on a spawn and on a resume
+    /// alike, because the obligation belongs to each message.
     async fn spawn_or_resume<W>(
         &self,
+        inbound: Inbound<'_>,
         key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
@@ -878,6 +1261,7 @@ impl EdifactIngestDispatcher {
         Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
     {
         self.spawn_or_resume_keyed::<W>(
+            inbound,
             key,
             workflow_name_static,
             cmd,
@@ -896,8 +1280,13 @@ impl EdifactIngestDispatcher {
     /// [`mako_engine::workflow::OccupiesBusinessKey`] or an inherent
     /// `is_terminal()`. See [`Occupancy`] for why it is a parameter rather than
     /// a trait bound.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     async fn spawn_or_resume_guarded<W>(
         &self,
+        inbound: Inbound<'_>,
         key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
@@ -912,6 +1301,7 @@ impl EdifactIngestDispatcher {
         Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
     {
         self.spawn_or_resume_keyed::<W>(
+            inbound,
             key,
             workflow_name_static,
             cmd,
@@ -932,6 +1322,7 @@ impl EdifactIngestDispatcher {
     )]
     async fn spawn_or_resume_keyed<W>(
         &self,
+        inbound: Inbound<'_>,
         key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
@@ -990,10 +1381,15 @@ impl EdifactIngestDispatcher {
                 Process::<W, Arc<SlateDbStore>>::from_identity(Arc::clone(&self.store), identity);
             let process_id = process.process_id();
             let keys = correlation_entries(self.tenant_id, &process, extra_keys.iter().copied());
+            let (windows, owed_with_aperak) = inbound.aperak_deadlines(&process);
             process
                 .run(
                     cmd,
                     RunOptions::new()
+                        .received_at(inbound.received_at)
+                        .acknowledgement_opt(inbound.anerkennung::<W>())
+                        .deadlines(&windows)
+                        .delivery_windows(&owed_with_aperak)
                         .correlations(&keys)
                         .snapshot(&self.snap_store, self.snapshot_interval),
                 )
@@ -1025,6 +1421,7 @@ impl EdifactIngestDispatcher {
             std::iter::once(key).chain(extra_keys.iter().copied()),
         );
 
+        let (windows, owed_with_aperak) = inbound.aperak_deadlines(&process);
         let deadlines: Vec<Deadline> = spawn_deadlines
             .iter()
             .map(|&(label, due_at)| {
@@ -1037,12 +1434,16 @@ impl EdifactIngestDispatcher {
                     due_at,
                 )
             })
+            .chain(windows)
             .collect();
         process
             .run(
                 cmd,
                 RunOptions::new()
+                    .received_at(inbound.received_at)
+                    .acknowledgement_opt(inbound.anerkennung::<W>())
                     .deadlines(&deadlines)
+                    .delivery_windows(&owed_with_aperak)
                     .correlations(&correlations),
             )
             .await?;
@@ -1130,6 +1531,7 @@ impl EdifactIngestDispatcher {
     /// and no local LF-side process was ever spawned.
     async fn resume_by_key<W>(
         &self,
+        inbound: Inbound<'_>,
         key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
@@ -1180,10 +1582,16 @@ impl EdifactIngestDispatcher {
         let process =
             Process::<W, Arc<SlateDbStore>>::from_identity(Arc::clone(&self.store), identity);
         let process_id = process.process_id();
+        let (windows, owed_with_aperak) = inbound.aperak_deadlines(&process);
         process
             .run(
                 cmd,
-                RunOptions::new().snapshot(&self.snap_store, self.snapshot_interval),
+                RunOptions::new()
+                    .received_at(inbound.received_at)
+                    .acknowledgement_opt(inbound.anerkennung::<W>())
+                    .deadlines(&windows)
+                    .delivery_windows(&owed_with_aperak)
+                    .snapshot(&self.snap_store, self.snapshot_interval),
             )
             .await?;
 
@@ -1204,6 +1612,7 @@ impl EdifactIngestDispatcher {
     /// process.
     async fn resume_by_key_indexing<W>(
         &self,
+        inbound: Inbound<'_>,
         key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
@@ -1250,6 +1659,7 @@ impl EdifactIngestDispatcher {
         let process =
             Process::<W, Arc<SlateDbStore>>::from_identity(Arc::clone(&self.store), identity);
         let process_id = process.process_id();
+        let (windows, owed_with_aperak) = inbound.aperak_deadlines(&process);
         let pending: Vec<Deadline> = deadlines
             .iter()
             .map(|(label, due)| {
@@ -1262,12 +1672,18 @@ impl EdifactIngestDispatcher {
                     *due,
                 )
             })
+            .chain(windows)
             .collect();
         let keys = correlation_entries(self.tenant_id, &process, extra_keys.iter().copied());
         process
             .run(
                 cmd,
-                RunOptions::new().deadlines(&pending).correlations(&keys),
+                RunOptions::new()
+                    .received_at(inbound.received_at)
+                    .acknowledgement_opt(inbound.anerkennung::<W>())
+                    .deadlines(&pending)
+                    .delivery_windows(&owed_with_aperak)
+                    .correlations(&keys),
             )
             .await?;
 
@@ -1516,6 +1932,9 @@ pub fn extract_malo_from_msg(msg: &AnyMessage) -> MaLo {
         // per the IFTSTA AHB profile, which has one LOC segment. The status reply
         // resumes the process that was opened for that location.
         AnyMessage::Iftsta(i) => i.segments(),
+        // UTILTS names the location its Konfigurationsdaten describe in
+        // `LOC+172`.
+        AnyMessage::Utilts(u) => u.segments(),
         _ => return MaLo::new(""),
     };
     // The location travels in LOC where the profile has one; the GPKE/GeLi
@@ -1534,6 +1953,13 @@ pub fn extract_malo_from_msg(msg: &AnyMessage) -> MaLo {
             })
             .unwrap_or(""),
     )
+}
+
+/// The business key of a message that describes its sender rather than a
+/// location — PARTIN Kommunikationsdaten, a PRICAT Preisliste: the sending
+/// Marktpartner's `NAD+MS` MP-ID. Empty when the message names none.
+pub fn extract_sender_key(msg: &AnyMessage) -> String {
+    msg.nad_sender().unwrap_or_default().to_owned()
 }
 
 // ── marktd consent-gate adapter ───────────────────────────────────────────────
@@ -2019,5 +2445,73 @@ mod business_key_lock_tests {
             "the lock map must track in-flight spawns, not every key ever seen; \
              it holds {held} entries after 100 sequential acquisitions",
         );
+    }
+}
+
+#[cfg(test)]
+mod aperak_window_tests {
+    use super::{AperakWindow, aperak_window};
+    use edi_energy::MessageType;
+    use mako_engine::types::Sparte;
+    use mako_fristen as fristen;
+
+    /// Tue 2026-07-07 12:00 CEST.
+    const AT: time::OffsetDateTime = time::macros::datetime!(2026-07-07 10:00 UTC);
+
+    /// APERAK AHB 1.1 § 2.4.1 names UTILMD and ORDERS for the 45 minutes — an
+    /// ORDCHG is neither and falls to the next Werktag 12 Uhr.
+    #[test]
+    fn strom_utilmd_and_orders_take_45_minutes_and_the_rest_the_next_werktag() {
+        for mt in [MessageType::Utilmd, MessageType::Orders] {
+            assert_eq!(
+                aperak_window(Some(mt), Sparte::Strom, 55_001, AT),
+                Some(AperakWindow {
+                    label: fristen::APERAK_STROM_WINDOW_LABEL,
+                    due_at: fristen::aperak_strom_due_at(AT),
+                    only_with_aperak: false,
+                })
+            );
+        }
+        for mt in [
+            MessageType::Mscons,
+            MessageType::Ordchg,
+            MessageType::Invoic,
+        ] {
+            assert_eq!(
+                aperak_window(Some(mt), Sparte::Strom, 13_018, AT),
+                Some(AperakWindow {
+                    label: fristen::APERAK_STROM_ALLGEMEIN_LABEL,
+                    due_at: fristen::aperak_strom_allgemein_due_at(AT),
+                    only_with_aperak: false,
+                })
+            );
+        }
+    }
+
+    /// Gas: the PID decides Initial- vs. Folgeprozess (§ 2.3.1), and the window
+    /// exists only beside an APERAK (§ 2.3).
+    #[test]
+    fn gas_follows_the_pid_and_only_rides_an_aperak() {
+        let initial = aperak_window(Some(MessageType::Utilmd), Sparte::Gas, 44_001, AT)
+            .expect("a Gas UTILMD has a window");
+        assert_eq!(initial.label, fristen::APERAK_GAS_INITIALPROZESS_LABEL);
+        assert_eq!(
+            initial.due_at,
+            fristen::aperak_gas_initialprozess_due_at(AT)
+        );
+        assert!(initial.only_with_aperak);
+        let folge = aperak_window(Some(MessageType::Utilmd), Sparte::Gas, 44_002, AT)
+            .expect("a Gas UTILMD has a window");
+        assert_eq!(folge.label, fristen::APERAK_GAS_FOLGEPROZESS_LABEL);
+        assert!(folge.only_with_aperak);
+    }
+
+    /// An APERAK or a CONTRL is never answered with an APERAK.
+    #[test]
+    fn acknowledgements_open_no_window() {
+        for mt in [MessageType::Aperak, MessageType::Contrl] {
+            assert_eq!(aperak_window(Some(mt), Sparte::Strom, 0, AT), None);
+        }
+        assert_eq!(aperak_window(None, Sparte::Strom, 0, AT), None);
     }
 }

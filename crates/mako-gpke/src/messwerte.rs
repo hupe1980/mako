@@ -183,6 +183,21 @@ pub enum MesswerteLieferungState {
     },
 }
 
+/// A delivery is settled once it is validated: each MSCONS is its own
+/// process, so the next one for the same Marktlokation spawns rather than
+/// being fed into a finished delivery (whose `ReceiveMscons` refuses anything
+/// but `New`).
+impl mako_engine::workflow::OccupiesBusinessKey for MesswerteLieferungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Received, not yet validated — never left standing by one
+            // command, so read as live.
+            Self::DatenErhalten(_) => true,
+            Self::New | Self::ValidationPassed(_) | Self::ValidationFailed { .. } => false,
+        }
+    }
+}
+
 impl MesswerteLieferungState {
     /// Stable string label for the current variant.
     #[must_use]

@@ -130,7 +130,7 @@ impl MockGnb {
             "UNH message_ref must be non-empty; got: {unh_ref:?}",
         );
 
-        let cmd = geli_gas_registry()
+        let cmd = geli_gas_registry(time::OffsetDateTime::now_utc())
             .dispatch(&raw as &dyn Any, &self.fv)
             .expect("GNB: adapt UTILMD G 44001 to GasSupplierChangeCommand");
 

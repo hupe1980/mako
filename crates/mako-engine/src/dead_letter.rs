@@ -501,6 +501,32 @@ pub trait DeadLetterSink: Send + Sync + 'static {
     /// Returns [`EngineError::DeadLetter`] when the record could not be
     /// written. The caller must then not settle anything on it.
     fn reject<'a>(&'a self, reason: &'a DeadLetterReason) -> RejectFuture<'a>;
+
+    /// Record a rejected message **and** enqueue the messages that answer it
+    /// (a Verarbeitbarkeitsfehlermeldung) in one write — the refusal and its
+    /// answer are durable together or not at all.
+    ///
+    /// The default records the dead letter alone when there is nothing to
+    /// answer, and refuses otherwise: a sink without an outbox cannot carry
+    /// the answer, and writing the record without it would lose the answer
+    /// silently.
+    ///
+    /// # Errors
+    ///
+    /// As [`reject`](Self::reject); and [`EngineError::DeadLetter`] when the
+    /// sink cannot carry `answers`.
+    fn reject_answered<'a>(
+        &'a self,
+        reason: &'a DeadLetterReason,
+        answers: &'a [crate::outbox::OutboxMessage],
+    ) -> RejectFuture<'a> {
+        if answers.is_empty() {
+            return self.reject(reason);
+        }
+        Box::pin(std::future::ready(Err(EngineError::dead_letter(
+            "this dead-letter sink cannot enqueue the answer to a refused message",
+        ))))
+    }
 }
 
 // ── LogDeadLetterSink ─────────────────────────────────────────────────────────

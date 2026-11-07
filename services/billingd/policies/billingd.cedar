@@ -14,6 +14,8 @@
 //   "settle-flexibility" — POST /api/v1/billing/vpp/{vpp_id} — issues a §41e Gutschrift
 //   "correct-billing"    — POST /api/v1/billing/{id}/correction (§147 AO / GoBD Storno)
 //   "release-billing"    — POST /api/v1/billing/{id}/release — overrides the risk gate
+//   "review-billing"     — POST /api/v1/billing/{id}/reviewed — records that a REVIEW
+//                          record was looked at; issues and sends nothing
 //   "submit-b2g"         — POST /api/v1/billing/{id}/submit-b2g
 //   "issue-billing"      — POST /api/v1/billing/{id}/versenden — records the
 //                          rendered document for 8 years and sends it to the
@@ -58,6 +60,7 @@ permit(
         Action::"settle-flexibility",
         Action::"correct-billing",
         Action::"release-billing",
+        Action::"review-billing",
         Action::"submit-b2g",
         Action::"issue-billing"
     ],

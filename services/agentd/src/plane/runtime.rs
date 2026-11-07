@@ -412,18 +412,24 @@ pub struct Answer {
     pub hilfreich: Option<bool>,
 }
 
-/// A proposed decision: what to do, the code a refusal would carry, and the
-/// one sentence why — checked like any sentence of the answer.
+/// A proposed decision: what to do, the code a refusal would carry, the
+/// finding it rests on, and the one sentence why — checked like any sentence
+/// of the answer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Vorschlag {
-    /// `freigeben` or `ablehnen`.
+    /// For a Freigabe `freigeben` or `ablehnen`; for a Disput `beilegen` or
+    /// `aufrechterhalten`.
     pub aktion: String,
-    /// The Antwortcode a refusal carries; `None` for an approval.
+    /// The Antwortcode a refusal carries; `None` for an approval and a Disput.
     pub antwortcode: Option<String>,
+    /// For a Disput: the checker finding the proposal rests on, by its `art`
+    /// as invoicd names it (`TariffDeviation`, …).
+    pub befund: Option<String>,
     pub begruendung: String,
     /// The call the Begründung rests on, `server/tool`.
     pub quelle: Option<String>,
-    /// Every figure of the Begründung occurs in that call's output.
+    /// Every figure of the Begründung occurs in that call's output — and a
+    /// Disput's finding is one that output names.
     pub belegt: bool,
 }
 
@@ -1243,52 +1249,68 @@ impl Plane {
         Some(self.accept_one(route, event, payload).await)
     }
 
-    /// Admit the desk assistant's proposal for one open Freigabe — once.
+    /// Admit the desk assistant's proposal for one open entry of `art` — once.
     ///
     /// The event id is the entry's ([`super::vorschlag::ereignis`]), so the
     /// admission key makes a second tick, a restart or a second instance meet
     /// the original run. The payload names no MaLo, so the run's case is
     /// correlated on that id alone and [`vorschlag_of`](Self::vorschlag_of)
     /// finds it again. `None` when the desk assistant is not activated.
-    pub async fn vorschlag_zulassen(&self, freigabe: &str) -> Option<Accepted> {
-        let id = super::vorschlag::ereignis(freigabe);
+    pub async fn vorschlag_zulassen(
+        &self,
+        art: super::vorschlag::Art,
+        entry: &str,
+    ) -> Option<Accepted> {
+        let id = super::vorschlag::ereignis(art, entry);
         let source = mako_service::source("agentd", self.tenant.as_str());
         let envelope = Envelope {
             id: &id,
             source: &source,
             event_type: "manual",
         };
-        let input = serde_json::json!({ "frage": super::vorschlag::FRAGE, "freigabe": freigabe });
-        self.accept_named(super::vorschlag::SKILL, envelope, input)
+        let mut input = serde_json::Map::new();
+        input.insert("frage".to_owned(), super::vorschlag::FRAGE.into());
+        input.insert(art.key().to_owned(), entry.into());
+        self.accept_named(super::vorschlag::SKILL, envelope, Value::Object(input))
             .await
     }
 
-    /// The waiting proposal of one Freigabe, read from its run's journal:
-    /// `None` when no proposal run was admitted for it. Never starts a run.
+    /// The waiting proposal of one entry of `art`, read from its run's
+    /// journal: `None` when no proposal run was admitted for it. A proposal
+    /// naming another kind's action is dropped — a Disput is never offered
+    /// „freigeben". Never starts a run.
     ///
     /// # Errors
     ///
     /// The case store or the journal failing.
     pub async fn vorschlag_of(
         &self,
-        freigabe: &str,
+        art: super::vorschlag::Art,
+        entry: &str,
         reader: &str,
     ) -> Result<Option<Answer>, String> {
         let Some(cases) = self.runtime.cases() else {
             return Ok(None);
         };
         let key =
-            agentplane::core::CorrelationKey::new("event", super::vorschlag::ereignis(freigabe));
+            agentplane::core::CorrelationKey::new("event", super::vorschlag::ereignis(art, entry));
         let Some(case) = cases.correlate(&[key]).await.map_err(|e| e.to_string())? else {
             return Ok(None);
         };
         let Some(case) = cases.case(case).await.map_err(|e| e.to_string())? else {
             return Ok(None);
         };
-        match case.runs.last() {
-            Some(run) => self.answer(&run.to_string(), reader).await,
-            None => Ok(None),
+        let Some(run) = case.runs.last() else {
+            return Ok(None);
+        };
+        let mut answer = self.answer(&run.to_string(), reader).await?;
+        if let Some(a) = answer.as_mut() {
+            a.vorschlag = a
+                .vorschlag
+                .take()
+                .filter(|v| super::vorschlag::Art::von_aktion(&v.aktion) == Some(art));
         }
+        Ok(answer)
     }
 
     /// What to tell the emitter about a whole fan-out.
@@ -1980,33 +2002,56 @@ mod tests {
 }
 
 /// The model's proposal, if it made a well-formed one: an action the Desk
-/// offers (`freigeben`, `ablehnen`), the code it would state, and a
-/// Begründung checked against the call it cites. Anything else is dropped
-/// rather than shown — a proposal the Desk cannot prefill is no proposal.
+/// offers for one kind of decision, the code it would state, the finding it
+/// rests on, and a Begründung checked against the call it cites. Anything
+/// else is dropped rather than shown — a proposal the Desk cannot prefill is
+/// no proposal.
 fn vorschlag(
     raw: &Value,
     outputs: &std::collections::BTreeMap<String, &Value>,
 ) -> Option<Vorschlag> {
-    let aktion = raw["aktion"]
-        .as_str()
-        .filter(|a| matches!(*a, "freigeben" | "ablehnen"))?;
+    let aktion = raw["aktion"].as_str()?;
+    let art = super::vorschlag::Art::von_aktion(aktion)?;
     // Whether the action needs a code is the entry's to say — an escalation
     // is approved with one, a held answer without — and processd checks the
     // code against its tree when the person sends.
     let antwortcode = raw["antwortcode"].as_str().map(str::to_owned);
+    let befund = raw["befund"]
+        .as_str()
+        .filter(|b| !b.is_empty())
+        .map(str::to_owned);
     let satz = super::beleg::Satz {
         text: raw["begruendung"].as_str()?.to_owned(),
         cites: raw["quelle"].as_str().map(str::to_owned),
     };
     let step = satz.cites.as_ref().and_then(|q| outputs.get(q).copied());
-    let belegt = super::beleg::belegt(&satz, step);
+    // A Disput's proposal is belegt only on a finding the cited read names: a
+    // ground the checker never raised is the model's, not the invoice's.
+    let befund_belegt = match art {
+        super::vorschlag::Art::Freigabe => true,
+        super::vorschlag::Art::Disput => befund
+            .as_deref()
+            .is_some_and(|b| step.is_some_and(|o| nennt(o, b))),
+    };
+    let belegt = super::beleg::belegt(&satz, step) && befund_belegt;
     Some(Vorschlag {
         aktion: aktion.to_owned(),
         antwortcode,
+        befund,
         begruendung: satz.text,
         quelle: satz.cites,
         belegt,
     })
+}
+
+/// Whether `wert` is one of the strings a tool output carries, verbatim.
+fn nennt(output: &Value, wert: &str) -> bool {
+    match output {
+        Value::String(s) => s == wert,
+        Value::Array(items) => items.iter().any(|i| nennt(i, wert)),
+        Value::Object(map) => map.values().any(|i| nennt(i, wert)),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -2039,5 +2084,44 @@ mod vorschlag_tests {
         );
         assert!(v(json!({"aktion": "freigeben", "antwortcode": null})).is_none());
         assert!(v(json!(null)).is_none());
+        assert!(
+            v(json!({"aktion": "beilegen", "befund": "TariffDeviation", "begruendung": "x", "quelle": null}))
+                .is_some()
+        );
+    }
+
+    /// A Disput's proposal rests on a finding the cited read names. One
+    /// naming a finding the checker never raised, or none, is shown as
+    /// „nicht belegt" — the ground would be the model's, not the invoice's.
+    #[test]
+    fn a_dispute_proposal_is_belegt_only_on_a_finding_the_read_names() {
+        let check = json!({
+            "id": "r1",
+            "outcome": "Dispute",
+            "findings": [{ "kind": "TariffDeviation", "is_dispute": true, "message": "Preis weicht ab" }],
+        });
+        let outputs =
+            std::collections::BTreeMap::from([("invoicd/get_check_result".to_owned(), &check)]);
+        let v = |befund: Option<&str>| {
+            vorschlag(
+                &json!({
+                    "aktion": "aufrechterhalten",
+                    "antwortcode": null,
+                    "befund": befund,
+                    "begruendung": "Der Preis weicht vom Preisblatt ab.",
+                    "quelle": "invoicd/get_check_result",
+                }),
+                &outputs,
+            )
+            .expect("well-formed")
+        };
+        let gestuetzt = v(Some("TariffDeviation"));
+        assert!(gestuetzt.belegt);
+        assert_eq!(gestuetzt.befund.as_deref(), Some("TariffDeviation"));
+        assert!(
+            !v(Some("ArithmeticError")).belegt,
+            "a finding the read does not name"
+        );
+        assert!(!v(None).belegt, "no finding at all");
     }
 }

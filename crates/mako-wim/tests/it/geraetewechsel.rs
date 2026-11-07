@@ -943,18 +943,13 @@ fn the_inbound_antwort_deadline_is_sized_per_pid() {
             "PID {pid} must get {expected_wt} WT, not a flat window"
         );
 
-        // The APERAK acknowledgement is a separate, much shorter clock and must
-        // never be conflated with the business answer.
-        let aperak_dl = out
-            .deadlines
-            .iter()
-            .find(|d: &&mako_engine::workflow::PendingDeadline| {
-                d.label == mako_fristen::APERAK_STROM_WINDOW_LABEL
-            })
-            .unwrap_or_else(|| panic!("PID {pid}: no APERAK deadline registered"));
+        // The APERAK window is a separate clock the ingest door opens; the
+        // workflow registers only the business answer.
         assert!(
-            aperak_dl.due_at < answer_dl.due_at,
-            "PID {pid}: the 45-minute APERAK window must close before the business answer is due"
+            out.deadlines
+                .iter()
+                .all(|d| !mako_fristen::is_delivery_window(&d.label)),
+            "PID {pid}: the workflow registers no APERAK window"
         );
     }
 }

@@ -170,7 +170,110 @@
         }
       }
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "pid",
+        "period_from",
+        "period_to",
+        "total_initiated",
+        "total_completed",
+        "total_rejected",
+        "total_failed",
+        "antwortfrist_abgelaufen",
+        "frist_breached",
+        "with_published_frist",
+        "frist_compliance_rate",
+        "avg_cycle_time_hours",
+        "p95_cycle_time_hours",
+        "note"
+      ],
+      "properties": {
+        "pid": {
+          "description": "BDEW Prüfidentifikator.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "period_from": {
+          "description": "First day of the month, `YYYY-MM-DD`.",
+          "type": "string",
+          "format": "date"
+        },
+        "period_to": {
+          "description": "Last day of the month, `YYYY-MM-DD`.",
+          "type": "string",
+          "format": "date"
+        },
+        "total_initiated": {
+          "description": "Processes started in the month.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_completed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_rejected": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_failed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "antwortfrist_abgelaufen": {
+          "description": "The GPKE / GeLi Gas Lieferantenwechsel reporting its own Antwortfrist\nlapse — not an APERAK delivery window.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "frist_breached": {
+          "description": "Processes past their business Antwortfrist (`deadline_at`) without\nclosing, or closed after it.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "with_published_frist": {
+          "description": "The denominator of `frist_compliance_rate`: a small one means the\nmonth is mostly unmeasured, which a rate near 1.0 hides.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "frist_compliance_rate": {
+          "description": "`1 − frist_breached / with_published_frist`; `None` when nothing in\nthe month carries a published Frist — never 0.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "avg_cycle_time_hours": {
+          "description": "Mean hours from start to end; `None` when nothing has closed.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_cycle_time_hours": {
+          "description": "95th-percentile hours from start to end; `None` when nothing has closed.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
   },
   {
     "name": "get_parity_report",
@@ -237,7 +340,77 @@
       },
       "type": "object"
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "days",
+        "total_started",
+        "ended",
+        "completed",
+        "rejected",
+        "failed",
+        "in_flight",
+        "antwortfrist_abgelaufen",
+        "frist_breached",
+        "stp_rate",
+        "note"
+      ],
+      "properties": {
+        "days": {
+          "description": "The window, in days back from now.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "total_started": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "ended": {
+          "description": "`completed + rejected + failed` — the denominator.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "completed": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "rejected": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "failed": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "in_flight": {
+          "description": "Initiated or running.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "antwortfrist_abgelaufen": {
+          "description": "A lapsed Antwortfrist the workflow reported: not an ending, the\nanswer can still arrive.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "frist_breached": {
+          "description": "Past their business Antwortfrist without closing, or closed after it.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "stp_rate": {
+          "description": "`completed / ended`, rounded to four places; `None` when nothing\nended in the window — no rate, not a zero one.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
   },
   {
     "name": "get_queue_entry",
@@ -524,7 +697,41 @@
       },
       "type": "object"
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "stp_rate",
+        "window_days",
+        "target",
+        "compliant"
+      ],
+      "properties": {
+        "stp_rate": {
+          "description": "Accepted over accepted and refused decisions, 0.0–1.0; `None` when\nnone was decided in the window — no rate, not a zero one.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "window_days": {
+          "description": "The window, in days back from now.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "target": {
+          "description": "processd's operating target, 0.95.",
+          "type": "number",
+          "format": "double"
+        },
+        "compliant": {
+          "description": "`false` only when a rate exists and falls below `target`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
   },
   {
     "name": "list_affiliate_decisions",

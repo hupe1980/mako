@@ -390,6 +390,7 @@ describe("the Desk", () => {
 
   it("shows each Überblick number as its service returned it, linking to its list", async () => {
     localStorage.setItem("mako-desk.rolle", "lieferant");
+    const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit) => {
@@ -416,9 +417,14 @@ describe("the Desk", () => {
               limit: 500,
             },
           };
-        } else if (m.method === "tools/call") {
+        } else if (m.method === "tools/call" && url.includes("/svc/vertragd/")) {
           result = { structuredContent: { anmeldungen: [], gesamt: 1284 } };
+        } else if (m.method === "tools/call" && url.includes("/svc/billingd/")) {
+          result = { structuredContent: { records: [], count: 50, saturated: true } };
+        } else if (m.method === "tools/call" && url.includes("/svc/invoicd/")) {
+          result = { structuredContent: { disputes: [], count: 3, saturated: false } };
         }
+        if (m.method === "tools/call") calls.push(`${url.split("/")[2]}/${m.params.name}`);
         return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
           headers: { "content-type": "application/json", "mcp-session-id": "s" },
         });
@@ -431,7 +437,96 @@ describe("the Desk", () => {
     expect(fristen.getAttribute("href")).toBe("/fristen");
     const offen = await screen.findByRole("link", { name: "Anmeldungen offen: 1.284" });
     expect(offen.getAttribute("href")).toBe("/heute");
+    const pruefung = await screen.findByRole("link", { name: "Rechnungsprüfung: 50+" });
+    expect(pruefung.getAttribute("href")).toBe("/heute");
+    expect(
+      (await screen.findByRole("link", { name: "Rechnungsdispute: 3" })).getAttribute("href"),
+    ).toBe("/heute");
+    // One read per tile, and none of another Rolle's sources.
+    for (const tool of [
+      "billingd/list_review_queue",
+      "invoicd/list_disputes",
+      "processd/list_overdue_processes",
+      "vertragd/list_anmeldungen",
+    ])
+      expect(calls.filter((c) => c === tool)).toHaveLength(1);
+    expect(calls.filter((c) => c.startsWith("makod/") || c.startsWith("edmd/"))).toEqual([]);
     localStorage.removeItem("mako-desk.rolle");
+  });
+
+  it("counts every dead letter on the Netz Überblick, and one failed source fails only its tile", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.includes("/svc/processd/")) return new Response("down", { status: 503 });
+        const m = JSON.parse(String(init.body));
+        const result =
+          m.method === "tools/call"
+            ? {
+                structuredContent: {
+                  dead_letters: [
+                    {
+                      rejected_at: "2026-11-07T09:15:00Z",
+                      reason_label: "unknown_pid",
+                      reason_detail: "PID 99999 is not registered",
+                    },
+                  ],
+                  gesamt: 23,
+                },
+              }
+            : {};
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
+          headers: { "content-type": "application/json", "mcp-session-id": "s" },
+        });
+      }),
+    );
+    await open("/ueberblick");
+    // The total the service holds, not the one row of the page it sent.
+    const dead = await screen.findByRole("link", { name: "Dead Letters: 23" });
+    expect(dead.getAttribute("href")).toBe("/dead-letters");
+    expect(
+      await screen.findByRole("link", {
+        name: "Fristen überschritten: Prozessüberwachung nicht erreichbar",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("lists the dead letters the service returned and says the page is not all of them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const m = JSON.parse(String(init.body));
+        const result =
+          m.method === "tools/call"
+            ? {
+                structuredContent: {
+                  dead_letters: [
+                    {
+                      rejected_at: "2026-11-07T09:15:00Z",
+                      reason_label: "unknown_pid",
+                      reason_detail: "PID 99999 is not registered",
+                    },
+                    {
+                      rejected_at: null,
+                      reason_label: "outbox_exhausted",
+                      reason_detail: "delivery to 9900357000004 exhausted",
+                    },
+                  ],
+                  gesamt: 23,
+                },
+              }
+            : {};
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
+          headers: { "content-type": "application/json", "mcp-session-id": "s" },
+        });
+      }),
+    );
+    await open("/dead-letters");
+    expect(await screen.findByText("PID 99999 is not registered")).toBeTruthy();
+    // 09:15 UTC is 10:15 in Berlin (CET).
+    expect(screen.getByText("07.11.2026, 10:15")).toBeTruthy();
+    expect(screen.getByText("Zeitpunkt unlesbar")).toBeTruthy();
+    expect(screen.getByText(/Die jüngsten 2 von 23/)).toBeTruthy();
   });
 
   it("lists each overdue process with its Fundstelle and its process link", async () => {
@@ -837,7 +932,7 @@ describe("the Desk", () => {
         });
       }
       if (url.startsWith("/svc/agentd/api/v1/vorschlaege")) {
-        return Response.json({ "q-1": opts.wartend ?? null });
+        return Response.json({ freigabe: { "q-1": opts.wartend ?? null } });
       }
       if (url.startsWith("/svc/agentd/")) return Response.json([]);
       const m = JSON.parse(String(init?.body));
@@ -1111,6 +1206,256 @@ describe("the Desk", () => {
         { url: "/svc/agentd/api/v1/runs/r-9/bewertung", body: { vorschlag: "dismissed" } },
       ]),
     );
+  });
+
+  /**
+   * The Lieferant's Heute with one Rechnungsdisput and two Prüfposten — one
+   * HELD, one under REVIEW — and a fetch recording every write.
+   */
+  function rechnungFetch(opts: {
+    posts: { url: string; body: unknown }[];
+    abgesendet?: boolean;
+    /** The proposal agentd computed for the dispute unasked. */
+    wartend?: Record<string, unknown>;
+    /** A service's answer to a write, when it is not a plain 204. */
+    antwort?: (url: string) => Response | undefined;
+  }) {
+    const disput = {
+      id: "rc-1",
+      process_id: "p-inv",
+      pid: 31002,
+      sender_mp_id: "9900357000004",
+      rechnungsnummer: "NB-2031-0815",
+      received_at: "2031-01-01T08:00:00Z",
+      bo4e_version: "v202607",
+      frist: "2031-01-20T23:00:00Z",
+      abgesendet: opts.abgesendet ?? false,
+      befunde: [
+        {
+          art: "TariffDeviation",
+          bezeichnung: "Preis weicht vom Preisblatt ab",
+          text: "Position 1 (Arbeitspreis): Einzelpreis 0,31200 EUR/kWh, das Preisblatt nennt 0,29800 EUR/kWh.",
+        },
+      ],
+    };
+    const posten = (id: string, band: "HELD" | "REVIEW", code: string) => ({
+      id,
+      malo_id: "51238696012",
+      lf_mp_id: "9900357000004",
+      rechnungsnummer: `R-${id}`,
+      category: "STROM",
+      period_from: "2031-01-01",
+      period_to: "2031-01-31",
+      total_brutto_eur: "119.00",
+      risk_band: band,
+      risk_score: 60,
+      risk_findings: [{ code, weight: 40, message: `Befund ${code}` }],
+      created_at: "2031-02-01T08:00:00Z",
+    });
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith("/svc/invoicd/api/") || url.startsWith("/svc/billingd/api/")) {
+        opts.posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+        return opts.antwort?.(url) ?? new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/bewertung")) {
+        opts.posts.push({ url, body: JSON.parse(String(init?.body)) });
+        return new Response(null, { status: 204 });
+      }
+      if (url.startsWith("/svc/agentd/api/v1/vorschlaege")) {
+        return Response.json({ disput: { "rc-1": opts.wartend ?? null } });
+      }
+      if (url === "/svc/agentd/api/v1/agents/catalog") return Response.json({ faehigkeiten: [] });
+      if (url.startsWith("/svc/agentd/")) return Response.json([]);
+      const m = JSON.parse(String(init?.body));
+      const name = m.method === "tools/call" ? m.params.name : null;
+      const result =
+        name === "partner_namen"
+          ? {
+              structuredContent: {
+                partner: m.params.arguments.mp_ids.includes("9900357000004")
+                  ? [{ mp_id: "9900357000004", name: "Stadtwerke Musterstadt Netz" }]
+                  : [],
+              },
+            }
+          : name === "list_disputes"
+            ? { structuredContent: { disputes: [disput], count: 1, saturated: false } }
+            : name === "list_review_queue"
+              ? {
+                  structuredContent: {
+                    records: [
+                      posten("b-held", "HELD", "AMOUNT_SPIKE"),
+                      posten("b-rev", "REVIEW", "TAX_GAP"),
+                    ],
+                    count: 2,
+                    saturated: false,
+                  },
+                }
+              : name === "list_pending_approvals"
+                ? { structuredContent: { freigaben: [], count: 0, saturated: false } }
+                : name === "list_open_processes"
+                  ? { structuredContent: { prozesse: [], weiter: null } }
+                  : name === "list_overdue_processes"
+                    ? { structuredContent: { overdue: [], count: 0, saturated: false, limit: 500 } }
+                    : name === "list_anmeldungen"
+                      ? { structuredContent: { anmeldungen: [], gesamt: 0 } }
+                      : name === "kunden_zu_malos"
+                        ? { structuredContent: { kunden: [] } }
+                        : name
+                          ? { structuredContent: {} }
+                          : {};
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
+        headers: { "content-type": "application/json", "mcp-session-id": "s" },
+      });
+    });
+  }
+
+  it("settles a Disput in place: Beilegen is held for undo and sends no market message", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    const posts: { url: string; body: unknown }[] = [];
+    const fetch = rechnungFetch({ posts, abgesendet: true });
+    vi.stubGlobal("fetch", fetch);
+    await open("/heute");
+    // Titled by who sent it, named by the Marktstammdaten in one read; the
+    // Rechnungsnummer and the MP-ID beneath.
+    const zeile = await screen.findByRole("button", { name: /Stadtwerke Musterstadt Netz/ });
+    expect(zeile.textContent).toContain("Rechnung NB-2031-0815");
+    expect(
+      fetch.mock.calls.filter(([u, i]) => {
+        if (!u.startsWith("/svc/marktd/")) return false;
+        const m = JSON.parse(String(i?.body));
+        return m.method === "tools/call" && m.params.name === "partner_namen";
+      }),
+    ).toHaveLength(1);
+    fireEvent.click(zeile);
+    expect(zeile.getAttribute("aria-expanded")).toBe("true");
+    // The finding the dispute rests on, by its German name, and a refusal
+    // that already went out. The checker's identifier is never shown.
+    expect(
+      within(screen.getByRole("list", { name: "Befunde" })).getByText(
+        "Preis weicht vom Preisblatt ab",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/TariffDeviation/)).toBeNull();
+    expect(
+      (screen.getByRole("radio", { name: "Ablehnung senden" }) as HTMLInputElement).disabled,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: "Beilegen" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /Wie wurde er geklärt/ }), {
+      target: { value: "NB schickt eine korrigierte Rechnung" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Beilegen" }));
+    // Held, not sent, and no confirm: nothing goes to the market partner.
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByText("Disput beigelegt")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Rückgängig/ }));
+    expect(posts).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Beilegen" }));
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await waitFor(() =>
+      expect(posts).toEqual([
+        {
+          url: "/svc/invoicd/api/v1/receipts/rc-1/resolve-dispute",
+          body: { note: "NB schickt eine korrigierte Rechnung" },
+        },
+      ]),
+    );
+    localStorage.removeItem("mako-desk.rolle");
+  });
+
+  it("takes the proposal waiting on a Disput in, with its finding, and confirms the REMADV", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    const posts: { url: string; body: unknown }[] = [];
+    const fetch = rechnungFetch({
+      posts,
+      wartend: {
+        run: "r-d",
+        status: "succeeded",
+        disclosure: "AI-generated.",
+        saetze: [],
+        vorschlag: {
+          aktion: "aufrechterhalten",
+          antwortcode: null,
+          befund: "TariffDeviation",
+          begruendung: "Der Arbeitspreis weicht vom Preisblatt ab.",
+          quelle: "invoicd/get_check_result",
+          belegt: true,
+        },
+        schritte: [],
+        hilfreich: null,
+      },
+    });
+    vi.stubGlobal("fetch", fetch);
+    await open("/heute");
+    const zeile = await screen.findByRole("button", { name: /Stadtwerke Musterstadt Netz/ });
+    // Waiting under the row, the model's and marked so, with its finding by
+    // its German name — never the checker's identifier.
+    expect(await screen.findByText(/AI-generated\. Vorschlag: Aufrechterhalten/)).toBeTruthy();
+    expect(screen.getByText("wegen Preis weicht vom Preisblatt ab")).toBeTruthy();
+    expect(screen.queryByText(/TariffDeviation/)).toBeNull();
+    expect(fetch.mock.calls.some(([u]) => u === "/svc/agentd/api/v1/runs")).toBe(false);
+    zeile.focus();
+    fireEvent.keyDown(window, { key: "u" });
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("radio", { name: "Ablehnung senden" }) as HTMLInputElement).checked,
+      ).toBe(true),
+    );
+    expect(screen.getByText(/Vom Assistenten vorgeschlagen/)).toBeTruthy();
+    expect(screen.queryByText(/TariffDeviation/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnung senden …" }));
+    expect(posts).toEqual([]);
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    await waitFor(() =>
+      expect(posts).toEqual([
+        { url: "/svc/invoicd/api/v1/receipts/rc-1/dispatch-answer", body: null },
+        { url: "/svc/agentd/api/v1/runs/r-d/bewertung", body: { vorschlag: "sent" } },
+      ]),
+    );
+    localStorage.removeItem("mako-desk.rolle");
+  });
+
+  it("decides Prüfposten in place: a held invoice after the confirm, a reviewed one on a hold", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    const posts: { url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      rechnungFetch({
+        posts,
+        antwort: (url) =>
+          url.endsWith("/b-rev/reviewed")
+            ? Response.json(
+                { error: { code: "NOT_IN_REVIEW", message: "record is not awaiting review" } },
+                { status: 409 },
+              )
+            : undefined,
+      }),
+    );
+    await open("/heute");
+    fireEvent.click(await screen.findByRole("button", { name: /Befund AMOUNT_SPIKE/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Freigeben …" }));
+    expect(posts).toEqual([]);
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    await waitFor(() =>
+      expect(posts).toEqual([{ url: "/svc/billingd/api/v1/billing/b-held/release", body: null }]),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /Befund TAX_GAP/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Geprüft" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByText("Als geprüft vermerkt")).toBeTruthy();
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    // The Abrechnung's own sentence, read out of its nested refusal.
+    expect(await screen.findByText(/record is not awaiting review/)).toBeTruthy();
+    expect(screen.getByText("Schon erledigt")).toBeTruthy();
+    expect(posts.at(-1)).toEqual({
+      url: "/svc/billingd/api/v1/billing/b-rev/reviewed",
+      body: null,
+    });
+    localStorage.removeItem("mako-desk.rolle");
   });
 
   it("shows each skill's Beipackzettel from the catalog, the inactive ones on request", async () => {

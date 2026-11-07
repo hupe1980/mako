@@ -279,7 +279,6 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
             // Force validation_passed=true: this test exercises the bilateral state-machine
             // flow (routing, commands, outbox), not AHB profile conformance.  Profile
             // validation is exercised separately in crates/edi-energy/tests/it/conformance.rs.
-            received_at: time::OffsetDateTime::now_utc(),
             validation_passed: true,
             validation_errors: vec![],
             bilanzierungsgebiet: None,
@@ -523,7 +522,6 @@ async fn bilateral_lieferbeginn_rejection_path() {
             process_date: "20250301".to_owned(),
             message_ref: msg_ref,
             // Bypass AHB validation: bilateral test checks state-machine flow only.
-            received_at: time::OffsetDateTime::now_utc(),
             validation_passed: true,
             validation_errors: vec![],
             bilanzierungsgebiet: None,
@@ -641,7 +639,6 @@ async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
             process_date: "20250301".to_owned(),
             message_ref: msg_ref,
             // Bypass AHB validation: bilateral test checks state-machine flow only.
-            received_at: time::OffsetDateTime::now_utc(),
             validation_passed: true,
             validation_errors: vec![],
             bilanzierungsgebiet: None,

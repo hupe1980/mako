@@ -3,7 +3,7 @@ import { useRouter } from "@tanstack/react-router";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { NAECHSTE, UEBERNEHMEN, VORIGE } from "../app/keys";
 import { useRolle } from "../app/rollen";
-import type { Answer, Hinweis } from "../data/agent";
+import { AKTION, type Answer, type Hinweis } from "../data/agent";
 import { FristUhr } from "../design/FristUhr";
 import { Icon, type IconName } from "../design/Icon";
 import { EmptyState, Panel } from "../design/Panel";
@@ -16,6 +16,7 @@ import { Bewertung } from "./Bewertung";
 import { Fragen } from "./Fragen";
 import { Entscheiden } from "./Freigaben";
 import { Lage } from "./Lage";
+import { DisputEntscheiden, PruefpostenEntscheiden } from "./Rechnungen";
 
 /** What a row's glyph says about where it came from. */
 const GLYPH: Record<QuelleId, IconName> = {
@@ -73,10 +74,11 @@ function HinweisZeile({ h }: { h: Hinweis }) {
 }
 
 /**
- * The proposal waiting on a Freigabe, one line under its row: model-written,
- * so set apart and carrying the disclosure; `U` takes it into the decision.
+ * The proposal waiting on a Freigabe or a Disput, one line under its row:
+ * model-written, so set apart and carrying the disclosure; `U` takes it into
+ * the decision.
  */
-function VorschlagZeile({ a }: { a: Answer }) {
+function VorschlagZeile({ a, befund }: { a: Answer; befund?: string | undefined }) {
   const v = a.vorschlag;
   if (!v) {
     if (a.status !== "running") return null;
@@ -92,8 +94,9 @@ function VorschlagZeile({ a }: { a: Answer }) {
       <Icon name="sparkle" size={14} className="mt-0.5 shrink-0 text-ai" />
       <span className="min-w-0 flex-1">
         <span className="font-semibold text-ai">
-          {a.disclosure} Vorschlag: {v.aktion === "freigeben" ? "Freigeben" : "Ablehnen"}
+          {a.disclosure} Vorschlag: {AKTION[v.aktion]}
           {v.antwortcode && <span className="ml-1 font-mono">{v.antwortcode}</span>}
+          {befund && <span className="ml-1 font-normal">wegen {befund}</span>}
           {" — "}
         </span>
         <span className="italic">{v.begruendung}</span>
@@ -129,7 +132,7 @@ function Zeile({
 }: {
   e: Eintrag;
   hinweise: Hinweis[];
-  /** The proposal waiting on a Freigabe row. */
+  /** The proposal waiting on a Freigabe or Disput row. */
   vorschlag: Answer | undefined;
   /** `U` opened the decision: take the proposal into it. */
   sofort: boolean;
@@ -144,6 +147,7 @@ function Zeile({
 }) {
   const router = useRouter();
   const ai = e.quelle === "hinweise";
+  const entscheidbar = Boolean(e.freigabe || e.disput || e.pruefposten);
   return (
     <li className="border-b border-separator last:border-b-0">
       <button
@@ -152,11 +156,12 @@ function Zeile({
           zeilen.current[index] = el;
         }}
         tabIndex={aktiv ? 0 : -1}
-        aria-expanded={e.freigabe ? offen : undefined}
+        aria-expanded={entscheidbar ? offen : undefined}
         onFocus={() => onFocus(index)}
         onClick={() => {
-          // A Freigabe is decided here; everything else opens its view.
-          if (e.freigabe) onOeffnen(offen ? null : e.id);
+          // A Freigabe, a Disput and a Prüfposten are decided here;
+          // everything else opens its view.
+          if (entscheidbar) onOeffnen(offen ? null : e.id);
           else if (e.ziel) router.navigate(e.ziel);
         }}
         className={`focus-ring flex w-full cursor-default items-start gap-4 border-0 px-5 py-3 text-left outline-none data-[aktiv=true]:bg-fill hover:bg-fill ${ai ? "bg-ai-fill" : "bg-transparent"}`}
@@ -186,14 +191,19 @@ function Zeile({
           ) : (
             <span className="text-body text-text-2">keine Frist</span>
           )}
-          {e.freigabe && (
+          {entscheidbar && (
             <span className="text-caption text-accent">{offen ? "schließen" : "entscheiden"}</span>
           )}
         </span>
       </button>
       {vorschlag && !offen && (
         <div className="pr-5 pb-3 pl-[4.25rem]">
-          <VorschlagZeile a={vorschlag} />
+          <VorschlagZeile
+            a={vorschlag}
+            befund={
+              e.disput?.befunde.find((b) => b.art === vorschlag.vorschlag?.befund)?.bezeichnung
+            }
+          />
         </div>
       )}
       {hinweise.length > 0 && (
@@ -210,9 +220,11 @@ function Zeile({
           ))}
         </div>
       )}
-      {offen && e.freigabe && (
+      {offen && entscheidbar && (
         <div className="flex flex-col gap-3 border-t border-separator bg-fill/40 px-5 py-4">
-          <Entscheiden f={e.freigabe} onDone={onEntschieden} sofort={sofort} />
+          {e.freigabe && <Entscheiden f={e.freigabe} onDone={onEntschieden} sofort={sofort} />}
+          {e.disput && <DisputEntscheiden d={e.disput} onDone={onEntschieden} sofort={sofort} />}
+          {e.pruefposten && <PruefpostenEntscheiden r={e.pruefposten} onDone={onEntschieden} />}
         </div>
       )}
     </li>
@@ -261,9 +273,19 @@ export function HeuteView() {
   const zeilen = useRef<(HTMLButtonElement | null)[]>([]);
   const sichtbar = eintraege.slice(0, SICHTBAR);
   const laedt = staende.some((s) => s.laedt) && eintraege.length === 0;
-  const freigabeIds = sichtbar.flatMap((e) => (e.freigabe ? [e.freigabe.id] : []));
-  const vorschlaege = useVorschlaege(freigabeIds);
-  const bereit = [...vorschlaege.values()].filter((a) => a.vorschlag).length;
+  const vorschlaege = useVorschlaege({
+    freigabe: sichtbar.flatMap((e) => (e.freigabe ? [e.freigabe.id] : [])),
+    disput: sichtbar.flatMap((e) => (e.disput ? [e.disput.id] : [])),
+  });
+  const wartend = (e: Eintrag | undefined) =>
+    e?.freigabe
+      ? vorschlaege.freigabe.get(e.freigabe.id)
+      : e?.disput
+        ? vorschlaege.disput.get(e.disput.id)
+        : undefined;
+  const bereit = [...vorschlaege.freigabe.values(), ...vorschlaege.disput.values()].filter(
+    (a) => a.vorschlag,
+  ).length;
 
   const gruppen = BAENDER.map(({ band: b, titel }) => ({
     b,
@@ -278,11 +300,11 @@ export function HeuteView() {
       // The arrows move only from a row; J and K from anywhere but a field.
       const pfeil = ev.key === "ArrowDown" || ev.key === "ArrowUp";
       if (pfeil && !zeilen.current.some((z) => z === document.activeElement)) return;
-      // U on a Freigabe row opens its decision with the proposal taken in;
-      // once the decision is open, the form answers U itself.
+      // U on a Freigabe or Disput row opens its decision with the proposal
+      // taken in; once the decision is open, the form answers U itself.
       const fokussiert = sichtbar[aktiv];
-      if (UEBERNEHMEN.match?.(ev) && fokussiert?.freigabe && offen !== fokussiert.id) {
-        if (!vorschlaege.get(fokussiert.freigabe.id)?.vorschlag) return;
+      if (UEBERNEHMEN.match?.(ev) && fokussiert && offen !== fokussiert.id) {
+        if (!wartend(fokussiert)?.vorschlag) return;
         ev.preventDefault();
         setSofort(fokussiert.id);
         setOffen(fokussiert.id);
@@ -354,7 +376,7 @@ export function HeuteView() {
                   key={e.id}
                   e={e}
                   hinweise={zu.get(e.id) ?? []}
-                  vorschlag={e.freigabe ? vorschlaege.get(e.freigabe.id) : undefined}
+                  vorschlag={wartend(e)}
                   sofort={sofort === e.id}
                   aktiv={i === aktiv}
                   offen={offen === e.id}
@@ -394,8 +416,8 @@ export function HeuteView() {
 
       <Quellenzeile staende={staende} agent={agentFehler} />
       <p className="m-0 px-1 text-caption text-text-2">
-        J K oder ↑↓ wählen · ↵ öffnet, eine Freigabe wird hier entschieden (A / R, U übernimmt den
-        Vorschlag) · ⌘J fragt den Assistenten zum gewählten Eintrag
+        J K oder ↑↓ wählen · ↵ öffnet, Freigaben, Dispute und Prüfposten werden hier entschieden (A
+        / R, U übernimmt den Vorschlag) · ⌘J fragt den Assistenten zum gewählten Eintrag
       </p>
     </div>
   );

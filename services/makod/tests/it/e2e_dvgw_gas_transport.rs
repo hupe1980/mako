@@ -182,7 +182,7 @@ async fn dispatch(edi: &str, workflow: &str, pid: u32) -> IngestOutcome {
         .unwrap_or_else(|e| panic!("test interchange for {pid} does not parse: {e}"));
     dispatcher()
         .await
-        .dispatch_dvgw(&msg, workflow, pid)
+        .dispatch_dvgw(&msg, workflow, pid, time::OffsetDateTime::now_utc())
         .await
         .unwrap_or_else(|e| panic!("dispatch of {pid} failed: {e}"))
 }
@@ -237,14 +237,14 @@ async fn a_ssqnot_reaches_the_mehr_mindermengen_workflow() {
 
     let wf = "gabi-gas-mehr-mindermengen";
     assert!(matches!(
-        d.dispatch_dvgw(&january, wf, 70_095)
+        d.dispatch_dvgw(&january, wf, 70_095, time::OffsetDateTime::now_utc())
             .await
             .expect("january"),
         IngestOutcome::Spawned { .. }
     ));
     assert!(
         matches!(
-            d.dispatch_dvgw(&january_again, wf, 70_095)
+            d.dispatch_dvgw(&january_again, wf, 70_095, time::OffsetDateTime::now_utc())
                 .await
                 .expect("again"),
             IngestOutcome::Dispatched { .. }
@@ -252,7 +252,7 @@ async fn a_ssqnot_reaches_the_mehr_mindermengen_workflow() {
         "a later report for the same period resumes its process"
     );
     assert!(matches!(
-        d.dispatch_dvgw(&february, wf, 70_095)
+        d.dispatch_dvgw(&february, wf, 70_095, time::OffsetDateTime::now_utc())
             .await
             .expect("february"),
         IngestOutcome::Spawned { .. }
@@ -340,25 +340,40 @@ async fn each_gas_day_of_an_object_is_its_own_process() {
     assert_eq!(day_one.process_key(), day_one_correction.process_key());
 
     assert!(matches!(
-        d.dispatch_dvgw(&day_one, "gabi-gas-allocation", 70_001)
-            .await
-            .expect("day one"),
+        d.dispatch_dvgw(
+            &day_one,
+            "gabi-gas-allocation",
+            70_001,
+            time::OffsetDateTime::now_utc()
+        )
+        .await
+        .expect("day one"),
         IngestOutcome::Spawned { .. }
     ));
     assert!(
         matches!(
-            d.dispatch_dvgw(&day_two, "gabi-gas-allocation", 70_001)
-                .await
-                .expect("day two"),
+            d.dispatch_dvgw(
+                &day_two,
+                "gabi-gas-allocation",
+                70_001,
+                time::OffsetDateTime::now_utc()
+            )
+            .await
+            .expect("day two"),
             IngestOutcome::Spawned { .. }
         ),
         "a different gas day must not resume the first day's process"
     );
     assert!(
         matches!(
-            d.dispatch_dvgw(&day_one_correction, "gabi-gas-allocation", 70_006)
-                .await
-                .expect("correction"),
+            d.dispatch_dvgw(
+                &day_one_correction,
+                "gabi-gas-allocation",
+                70_006,
+                time::OffsetDateTime::now_utc()
+            )
+            .await
+            .expect("correction"),
             IngestOutcome::Dispatched { .. }
         ),
         "a correction must resume the gas day it corrects"
@@ -478,7 +493,12 @@ async fn a_message_without_a_usable_gas_day_is_refused() {
         .expect("parses — the defect is semantic, not syntactic");
     let err = dispatcher()
         .await
-        .dispatch_dvgw(&msg, "gabi-gas-allocation", 70_001)
+        .dispatch_dvgw(
+            &msg,
+            "gabi-gas-allocation",
+            70_001,
+            time::OffsetDateTime::now_utc(),
+        )
         .await
         .expect_err("a one-hour period is not a gas day");
     assert!(
@@ -537,7 +557,12 @@ async fn the_allocated_quantity_is_the_integral_of_the_rate() {
 
     let outcome = dispatcher()
         .await
-        .dispatch_dvgw(&msg, "gabi-gas-allocation", 70_001)
+        .dispatch_dvgw(
+            &msg,
+            "gabi-gas-allocation",
+            70_001,
+            time::OffsetDateTime::now_utc(),
+        )
         .await
         .expect("dispatch");
     assert!(matches!(outcome, IngestOutcome::Spawned { .. }));
@@ -784,9 +809,14 @@ async fn a_matching_notification_decides_nothing() {
         "ORDERS", "01G", 70_030, GAS_DAY, "100", None,
     ));
     assert!(matches!(
-        d.dispatch_dvgw(&nomint, "gabi-gas-nomination", 70_030)
-            .await
-            .expect("nomint"),
+        d.dispatch_dvgw(
+            &nomint,
+            "gabi-gas-nomination",
+            70_030,
+            time::OffsetDateTime::now_utc()
+        )
+        .await
+        .expect("nomint"),
         IngestOutcome::Spawned { .. }
     ));
 
@@ -803,9 +833,14 @@ async fn a_matching_notification_decides_nothing() {
         ));
         assert!(
             matches!(
-                d.dispatch_dvgw(&matching, "gabi-gas-nomination", pid)
-                    .await
-                    .expect("matching notification"),
+                d.dispatch_dvgw(
+                    &matching,
+                    "gabi-gas-nomination",
+                    pid,
+                    time::OffsetDateTime::now_utc()
+                )
+                .await
+                .expect("matching notification"),
                 IngestOutcome::Skipped {
                     reason: "matching_notification_states_no_acceptance",
                     ..

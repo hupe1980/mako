@@ -327,6 +327,17 @@ pub trait Workflow: Send + Sync + 'static {
     /// [`Process::run_timeout`]: crate::process::Process::run_timeout
     const DEADLINE_LABELS: &'static [&'static str] = &[];
 
+    /// Whether this workflow decides the APERAK of a received message on a
+    /// **later** command rather than on the run that receives it.
+    ///
+    /// A host that acknowledges every processable message it receives
+    /// ([`RunOptions::acknowledgement`]) must not add an Anerkennungsmeldung
+    /// for such a workflow: its APERAK — positive or negative — is still to
+    /// come, and a second one would contradict it. Defaults to `false`.
+    ///
+    /// [`RunOptions::acknowledgement`]: crate::process::RunOptions::acknowledgement
+    const APERAK_AFTER_RECEIPT: bool = false;
+
     /// Fold a domain event into the current state.
     ///
     /// This function must be total (no panics, no errors) and must produce a
@@ -677,13 +688,31 @@ impl EventEnvelope {
 /// [`Process::run`]: crate::process::Process::run
 /// [`Process::run_timeout`]: crate::process::Process::run_timeout
 /// [`AtomicAppend::append`]: crate::event_store::AtomicAppend::append
+/// What a caller of [`Process::run`] adds to the write beside the workflow's
+/// own output — the parts of `RunOptions` the append consumes.
+///
+/// [`Process::run`]: crate::process::Process::run
+#[derive(Clone, Copy)]
+pub(crate) struct AppendExtras<'a> {
+    /// Registered unconditionally.
+    pub deadlines: &'a [Deadline],
+    /// Registered when the output enqueues a message that discharges them.
+    pub delivery_windows: &'a [Deadline],
+    /// Written with the events.
+    pub correlations: &'a [crate::event_store::CorrelationEntry],
+    /// Stamped as the occurrence instant of every outbox entry that has none.
+    pub received_at: Option<time::OffsetDateTime>,
+    /// Enqueued when the output records events and enqueues no message of
+    /// its type.
+    pub acknowledgement: Option<&'a PendingOutbox>,
+}
+
 pub(crate) async fn decide_and_append<W, S>(
     store: &S,
     stream_id: &crate::ids::StreamId,
     ctx: &CommandContext,
     decide: &mut (impl FnMut(&W::State) -> Option<W::Command> + Send),
-    deadlines: &[Deadline],
-    correlations: &[crate::event_store::CorrelationEntry],
+    extras: AppendExtras<'_>,
 ) -> Result<Option<(AppendResult, Vec<Deadline>)>, EngineError>
 where
     W: Workflow,
@@ -709,7 +738,7 @@ where
     let Some(command) = decide(&state) else {
         return Ok(None);
     };
-    let output = W::handle(&state, command)?;
+    let mut output = W::handle(&state, command)?;
 
     if output.events.is_empty() {
         if !output.outbox.is_empty() || !output.deadlines.is_empty() {
@@ -732,7 +761,32 @@ where
         .iter()
         .map(|event| ctx.new_event(event))
         .collect::<Result<Vec<NewEvent>, EngineError>>()?;
-    let all_deadlines = materialise_deadlines::<W>(stream_id, ctx, deadlines, &output.deadlines)?;
+    if let Some(ack) = extras.acknowledgement
+        && !output
+            .outbox
+            .iter()
+            .any(|o| o.message_type == ack.message_type)
+    {
+        output.outbox.push(ack.clone());
+    }
+    if let Some(received_at) = extras.received_at {
+        for pending in &mut output.outbox {
+            pending.occurred_at.get_or_insert(received_at);
+        }
+    }
+    let mut supplied: Vec<Deadline> = extras.deadlines.to_vec();
+    supplied.extend(
+        extras
+            .delivery_windows
+            .iter()
+            .filter(|window| {
+                output.outbox.iter().any(|o| {
+                    mako_fristen::discharges_delivery_window(&o.message_type, window.label())
+                })
+            })
+            .cloned(),
+    );
+    let all_deadlines = materialise_deadlines::<W>(stream_id, ctx, &supplied, &output.deadlines)?;
 
     let result = store
         .append(
@@ -743,7 +797,7 @@ where
             )
             .outbox(&output.outbox)
             .deadlines(&all_deadlines)
-            .correlations(correlations),
+            .correlations(extras.correlations),
         )
         .await?;
     Ok(Some((result, all_deadlines)))

@@ -1,0 +1,510 @@
+[
+  {
+    "name": "get_correlation",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "process_id": {
+          "description": "UUID of the `makod` workflow process (from `de.mako.process.initiated` CloudEvents `process_id` extension).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "erp_order_id": {
+          "description": "ERP-side order reference (from `erp_order_id` CloudEvents extension).\nMatches the reference set by the ERP when submitting a command.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_malo",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string",
+          "examples": [
+            "\"51238696781\""
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_melo",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "melo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "melo_id": {
+          "description": "MeLo ID (DE + 31 alphanumeric characters).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_melo_standorteigenschaften",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "melo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "melo_id": {
+          "description": "MeLo-ID (DE + 31 alphanumeric characters).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_nb_contract",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string",
+          "examples": [
+            "\"51238696781\""
+          ]
+        },
+        "date": {
+          "description": "Reference date (ISO 8601, YYYY-MM-DD).  Defaults to today.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_nb_energiemix",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "nb_mp_id"
+      ],
+      "type": "object",
+      "properties": {
+        "nb_mp_id": {
+          "description": "13-digit NB MP-ID.",
+          "type": "string"
+        },
+        "year": {
+          "description": "Calendar year (defaults to most recent available).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int16",
+          "minimum": -32768,
+          "maximum": 32767
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_partner",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "mp_id"
+      ],
+      "type": "object",
+      "properties": {
+        "mp_id": {
+          "description": "13-digit BDEW/DVGW MP-ID (Marktpartner-ID).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_preisblatt",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "nb_mp_id"
+      ],
+      "type": "object",
+      "properties": {
+        "nb_mp_id": {
+          "description": "13-digit GLN of the Netzbetreiber.",
+          "type": "string",
+          "examples": [
+            "\"9904234560001\""
+          ]
+        },
+        "date": {
+          "description": "Billing date in ISO 8601 format (YYYY-MM-DD).  Defaults to today.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_rollenzuordnung",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo ID.",
+          "type": "string"
+        },
+        "date": {
+          "description": "Reference date (YYYY-MM-DD). Defaults to today.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_steuerbare_ressource",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "sr_id"
+      ],
+      "type": "object",
+      "properties": {
+        "sr_id": {
+          "description": "SteuerbareRessource ID.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_technische_ressource",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "tr_id"
+      ],
+      "type": "object",
+      "properties": {
+        "tr_id": {
+          "description": "TechnischeRessource ID (from `marktd` PUT endpoint).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_versorgung_at",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "at"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo ID.",
+          "type": "string"
+        },
+        "at": {
+          "description": "Reference date (YYYY-MM-DD).  Returns the supply status valid on that date.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_versorgungsstatus",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string",
+          "examples": [
+            "\"51238696781\""
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_versorgungsstatus_history",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo ID.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum results (default 20).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_malo",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "sparte": {
+          "description": "Filter by Sparte: `STROM` or `GAS`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bilanzierungsmethode": {
+          "description": "Filter by bilanzierungsmethode: `RLM`, `SLP`, `IMS`, `TLP_GEMEINSAM`, etc.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "netzebene": {
+          "description": "Filter by netzebene.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Maximum results (default 50, max 200).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_partners",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "description": "Maximum number of results (1–500, default 100).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "description": "Pagination cursor (opaque string from previous response).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_pricat_versions",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "nb_mp_id"
+      ],
+      "type": "object",
+      "properties": {
+        "nb_mp_id": {
+          "description": "NB GLN (BDEW-Codenummer, 13 digits, starts with 99).\nFor Gas: DVGW-Codenummer (starts with 98).",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "partner_namen",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "mp_ids"
+      ],
+      "properties": {
+        "mp_ids": {
+          "description": "The 13-digit MP-IDs to name, at most 200.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "PartnerName": {
+          "description": "One Marktpartner's name.",
+          "type": "object",
+          "properties": {
+            "mp_id": {
+              "type": "string"
+            },
+            "name": {
+              "description": "The registered display name, else the BO4E Geschäftspartner's `name1`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mp_id",
+            "name"
+          ]
+        }
+      },
+      "required": [
+        "partner"
+      ],
+      "type": "object",
+      "properties": {
+        "partner": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PartnerName"
+          }
+        }
+      }
+    }
+  }
+]

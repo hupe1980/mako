@@ -262,8 +262,8 @@ identify is re-checked **daily for 60 Werktage** and only then refused `A07` /
 The branches share no code (`A01`–`A09` verbrauchend, `A10`–`A19` erzeugend).
 The Vorlauffrist is measured against the Übertragungstag (GPKE Teil 1 Kap. 7
 „Fristenberechnung", S. 27) — processd reads it as the Berlin day of the
-CloudEvent `time`, which `makod` stamps when it records the process in the
-request that received the message — and never against the moment processd
+CloudEvent `time`, which `makod` sets to the instant its door received the
+message, however much later the dispatch ran — and never against the moment processd
 evaluates. An Anmeldung received at 23:40 and evaluated after
 midnight keeps its Werktag, the Abmeldung (`E_0607`) is judged the same way,
 and a re-evaluation on day 40 reaches the verdict of day one.
@@ -1062,7 +1062,7 @@ handler's `decide-queue` check runs as well.
 |------|------|-------------|
 | `list_decisions` | `read-decisions` | Last N Anmeldung decisions with ERC codes and affiliate flag |
 | `get_decision` | `read-decisions` | Single Anmeldung decision by `process_id`, its Antwortcode with tree and BDEW wording |
-| `get_stp_rate` | `read-decisions` | STP rate over last N days vs. 95 % target |
+| `get_stp_rate` | `read-decisions` | Typed `{ stp_rate, window_days, target, compliant }`: the Anmeldung STP rate over N days against processd's own 95 % operating target, `null` when nothing was decided |
 | `get_stp_breakdown_by_erc` | `read-decisions` | Refusals per Entscheidungsbaum and Antwortcode, each with the BDEW wording |
 | `list_affiliate_decisions` | `read-decisions` | Decisions involving affiliated suppliers (Gleichbehandlung evidence) |
 | `list_pending_approvals` | `read-queue` | Typed `{ freigaben, count, saturated }`, earliest `expires_at` first; filters `status`, `limit` (≤ 200), `marktrolle`. Each `Freigabe`: `art` (`gehalten` with its frozen `antwort`, or `eskaliert`) and per action the codes its tree allows (`codes_freigeben`, `codes_ablehnen`) |
@@ -1074,9 +1074,9 @@ handler's `decide-queue` check runs as well.
 | `list_open_processes` | `read-process` | Open processes with given PIDs, earliest Frist first, a keyset page at a time (`nach` / `weiter`) |
 | `count_open_processes` | `read-process` | The same filter counted: open in total, Fristen ending before the Berlin day does, and the earliest of them |
 | `list_overdue_processes` | `read-overdue` | Past the business Antwortfrist, most urgent first; reports `saturated` |
-| `get_kpi_report` | `read-kpi` | Per-PID KPIs for a `YYYY-MM` month, both clocks separately |
+| `get_kpi_report` | `read-kpi` | Typed per-PID KPIs for a `YYYY-MM` month, both clocks separately |
 | `get_parity_report` | `read-kpi` | § 7a Abs. 5 parity; `gap_pp` = affiliate − third_party |
-| `get_process_stp_rate` | `read-kpi` | Completions over the processes that **ended** in the window, `null` when none did |
+| `get_process_stp_rate` | `read-kpi` | Typed: completions over the processes that **ended** in the window, `null` when none did |
 | `list_sperr_orders` | `read-sperr-order` | The Sperrauftrag queue (NB build) |
 | `get_sperr_order` | `read-sperr-order` | One order, with ORDERS provenance and IFTSTA state |
 | `get_sperr_stats` | `read-sperr-order` | Counters, incl. `iftsta_outstanding` / `iftsta_stuck` |

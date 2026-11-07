@@ -260,7 +260,6 @@ impl MockNb {
                     document_date,
                     process_date,
                     message_ref,
-                    received_at: time::OffsetDateTime::now_utc(),
                     bilanzierungsgebiet: None,
                     bilanzierungsmethode: None,
                     fallgruppe: None,

@@ -233,6 +233,59 @@ pub struct ProcessesView {
     pub processes: Vec<ProcessView>,
 }
 
+/// What `list_dead_letters` returns: the most recent page and how many dead
+/// letters the store holds in all.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DeadLetters {
+    /// The most recent first, at most 20.
+    pub dead_letters: Vec<DeadLetter>,
+    /// Every dead letter the store holds — not the length of the page.
+    pub gesamt: usize,
+}
+
+/// One message that permanently failed.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DeadLetter {
+    /// When it was rejected, RFC 3339 in UTC; `None` when the stored instant
+    /// cannot be read as one.
+    #[schemars(extend("format" = "date-time"))]
+    pub rejected_at: Option<String>,
+    /// The rejection category.
+    pub reason_label: String,
+    /// What went wrong, in the engine's words.
+    pub reason_detail: String,
+}
+
+/// The stored instant when it is RFC 3339 — the form the engine records —
+/// and `None` rather than a fabricated instant when it is not.
+fn rfc3339(stored: String) -> Option<String> {
+    time::OffsetDateTime::parse(&stored, &time::format_description::well_known::Rfc3339)
+        .is_ok()
+        .then_some(stored)
+}
+
+/// Dead letters `list_dead_letters` returns per call.
+pub const DEAD_LETTER_PAGE: usize = 20;
+
+impl DeadLetters {
+    /// The page of `all` (most recent first) and the count of all of them.
+    fn of(all: Vec<mako_engine::store_slatedb::DeadLetterRecord>) -> Self {
+        let gesamt = all.len();
+        Self {
+            dead_letters: all
+                .into_iter()
+                .take(DEAD_LETTER_PAGE)
+                .map(|r| DeadLetter {
+                    rejected_at: rfc3339(r.rejected_at),
+                    reason_label: r.reason_label,
+                    reason_detail: r.reason_detail,
+                })
+                .collect(),
+            gesamt,
+        }
+    }
+}
+
 /// Which process's history to read.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetProcessHistoryParams {
@@ -1328,15 +1381,18 @@ Frist is its own outcome — processd `list_overdue_processes`.",
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Return the most recent permanently-failed (dead-lettered) messages.
+    /// The most recent permanently-failed (dead-lettered) messages, and how
+    /// many the store holds in all.
     ///
-    /// Dead-lettered messages have exhausted all delivery retries or were
-    /// rejected with a permanent error.  Each entry needs operator investigation.
-    /// Under § 147 AO / GoBD, dead-lettered EDIFACT messages must be resolved within
-    /// the regulatory deadline window.
+    /// A dead letter is an inbound message no workflow could take or an
+    /// outbound one whose delivery was exhausted; each needs an operator,
+    /// and `reason_label` says which. `gesamt` is
+    /// the count of every record, so a reader never takes the page for the
+    /// total.
     #[tool(
         annotations(read_only_hint = true, open_world_hint = false),
-        description = "Return the 20 most recent permanently dead-lettered messages (§ 147 AO / GoBD)."
+        description = "The 20 most recent permanently dead-lettered messages, the most recent first, and `gesamt`: how many dead letters the store holds in all.",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<DeadLetters>()
     )]
     async fn list_dead_letters(
         &self,
@@ -1345,34 +1401,17 @@ Frist is its own outcome — processd `list_overdue_processes`.",
         >,
     ) -> Result<CallToolResult, McpError> {
         self.require_any_process_read(&parts)?;
-        let records = self
+        // The store scans its whole `dr/` key space for any limit, so reading
+        // every record costs what a page did and yields the true total.
+        let all = self
             .state
             .process_store
-            .list_dead_letters(20)
+            .list_dead_letters(usize::MAX)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let items: Vec<serde_json::Value> = records
-            .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "rejected_at":   r.rejected_at,
-                    "reason_label":  r.reason_label,
-                    "reason_detail": r.reason_detail,
-                })
-            })
-            .collect();
-
-        ContentBlock::json(serde_json::json!({
-            "dead_letter_count": items.len(),
-            "alert": !items.is_empty(),
-            "items": items,
-            "note": "Dead-lettered messages have permanently failed delivery. \
-                     Investigate each entry and re-submit via POST /api/v1/commands \
-                     or the ERP command API. § 147 AO / GoBD requires timely resolution.",
-        }))
-        .map(|block| CallToolResult::success(vec![block]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+        serde_json::to_value(DeadLetters::of(all))
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 }
 
@@ -2401,6 +2440,39 @@ mod tool_inventory_tests {
         if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
             panic!("{e}");
         }
+    }
+
+    /// `gesamt` counts every dead letter, not the page: with 23 recorded the
+    /// page holds 20, the most recent first, and the total says 23.
+    #[test]
+    fn the_dead_letter_total_is_not_the_page() {
+        let all: Vec<_> = (0..23)
+            .rev()
+            .map(|i| mako_engine::store_slatedb::DeadLetterRecord {
+                rejected_at: format!("2026-11-07T10:{i:02}:00Z"),
+                reason_label: "permanent".to_owned(),
+                reason_detail: format!("record {i}"),
+            })
+            .collect();
+        let view = super::DeadLetters::of(all);
+        assert_eq!(view.gesamt, 23);
+        assert_eq!(view.dead_letters.len(), super::DEAD_LETTER_PAGE);
+        assert_eq!(view.dead_letters[0].reason_detail, "record 22");
+    }
+
+    /// The tool answers the RFC 3339 instant the engine stores, and nothing
+    /// for a string that is no RFC 3339 instant.
+    #[test]
+    fn a_dead_letter_instant_is_rfc3339() {
+        assert_eq!(
+            super::rfc3339("2026-11-07T09:15:30.25Z".to_owned()).as_deref(),
+            Some("2026-11-07T09:15:30.25Z")
+        );
+        assert_eq!(
+            super::rfc3339("2026-11-07 9:15:30.25 +00:00:00".to_owned()),
+            None
+        );
+        assert_eq!(super::rfc3339("gestern".to_owned()), None);
     }
 }
 

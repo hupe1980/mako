@@ -508,12 +508,28 @@ pub(crate) fn record_ahb_conformance(msg: &AnyMessage) -> bool {
 /// Shared by both ingest doors so a new unroutable status cannot be recorded
 /// under one reason on `POST /edifact` and another over AS4 — the drift that
 /// made the AS4 door accept PID-less messages the REST door dead-lettered.
+///
+/// The third value is the answer the refusal owes, to be written with the
+/// record ([`DeadLetterSink::reject_answered`]): a Prüfidentifikator no
+/// Marktrolle of this deployment processes is refused with `Z31`
+/// „Geschäftsvorfall wird vom Empfänger zurückgewiesen" — „Entsprechend seiner
+/// Marktrolle verarbeitet der Empfänger Geschäftsvorfälle mit dem angegebenen
+/// Prüfidentifikator nicht" (APERAK AHB 1.1 Kap. 4.3, S. 42), in both Sparten,
+/// since a Verarbeitbarkeitsfehler is the one result Gas reports too (§ 2.3,
+/// S. 21). A missing PID is a syntax fault the CONTRL answers (§ 2.1.2,
+/// footnote 3, S. 10–11), a missing party leaves nobody to answer, and an
+/// APERAK or a CONTRL is never answered with an APERAK (§ 2, S. 9).
 pub(crate) fn unroutable_rejection(
     status: MessageStatus,
     msg: &AnyMessage,
     pid: mako_engine::ids::Pid,
     context: AuditContext,
-) -> (DeadLetterReason, &'static str) {
+    tenant_id: TenantId,
+) -> (
+    DeadLetterReason,
+    &'static str,
+    Vec<mako_engine::outbox::OutboxMessage>,
+) {
     match status {
         MessageStatus::MissingParty => (
             DeadLetterReason::MissingInterchangeParty {
@@ -522,9 +538,70 @@ pub(crate) fn unroutable_rejection(
                 context,
             },
             "missing_interchange_party",
+            Vec::new(),
         ),
-        _ => (DeadLetterReason::UnknownPid { pid, context }, "unknown_pid"),
+        MessageStatus::UnknownPid => (
+            DeadLetterReason::UnknownPid { pid, context },
+            "unknown_pid",
+            z31_answer(msg, pid, tenant_id).into_iter().collect(),
+        ),
+        _ => (
+            DeadLetterReason::UnknownPid { pid, context },
+            "unknown_pid",
+            Vec::new(),
+        ),
     }
+}
+
+/// The `Z31` Verarbeitbarkeitsfehlermeldung for a message whose
+/// Prüfidentifikator this deployment does not process.
+fn z31_answer(
+    msg: &AnyMessage,
+    pid: mako_engine::ids::Pid,
+    tenant_id: TenantId,
+) -> Option<mako_engine::outbox::OutboxMessage> {
+    fehlermeldung_ohne_prozess(
+        msg,
+        mako_engine::erc::codes::Z31,
+        format!("Prüfidentifikator {pid} wird von diesem Empfänger nicht verarbeitet"),
+        tenant_id,
+    )
+}
+
+/// A Verarbeitbarkeitsfehlermeldung `code` answering `msg` as an outbox entry
+/// no process owns, like an interchange-level CONTRL.
+///
+/// `None` for an APERAK or a CONTRL, which no APERAK answers (APERAK AHB 1.1
+/// § 2, S. 9), and for a message naming no `NAD+MS` / `NAD+MR` to answer.
+pub(crate) fn fehlermeldung_ohne_prozess(
+    msg: &AnyMessage,
+    code: &str,
+    reason: String,
+    tenant_id: TenantId,
+) -> Option<mako_engine::outbox::OutboxMessage> {
+    use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
+    if matches!(
+        msg.try_message_type(),
+        Some(edi_energy::MessageType::Aperak | edi_energy::MessageType::Contrl) | None
+    ) {
+        return None;
+    }
+    let (own, sender) = (msg.nad_receiver()?, msg.nad_sender()?);
+    let payload =
+        mako_engine::payload::AperakPayload::fehler(own, sender, msg.message_ref(), code, reason);
+    let process_id = ProcessId::new();
+    let pending = mako_engine::outbox::PendingOutbox::typed(sender, &payload);
+    Some(mako_engine::outbox::OutboxMessage::new(
+        StreamId::for_process(tenant_id, &process_id),
+        process_id,
+        tenant_id,
+        CorrelationId::new(),
+        ConversationId::new(),
+        EventId::new(),
+        pending.message_type,
+        pending.recipient,
+        pending.payload,
+    ))
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -1031,12 +1108,17 @@ async fn ingest_report(
             };
             let ctx = ctx.with_tenant_id(state.tenant_id.to_string());
             let dead_pid = pid.unwrap_or(mako_engine::ids::Pid::new(1));
-            let (reason, result) = unroutable_rejection(status, &msg, dead_pid, ctx);
+            let (reason, result, answers) =
+                unroutable_rejection(status, &msg, dead_pid, ctx, state.tenant_id);
             // Track the per-PID refusal in the inbound_received metric so
             // Alertmanager can alert on `makod_inbound_messages_total{result=…}`.
             mako_engine::metrics::EngineMetrics::global()
                 .inbound_received(dead_pid.as_u32(), result);
-            record(state, &reason, unrecorded).await;
+            if let Err(e) = state.dl_sink.reject_answered(&reason, &answers).await
+                && unrecorded.is_none()
+            {
+                *unrecorded = Some(e);
+            }
         }
 
         // Auto-upsert PARTIN: when we receive a PARTIN message and a

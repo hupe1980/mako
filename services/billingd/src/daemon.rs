@@ -58,6 +58,7 @@
 //! | `POST` | `/api/v1/billing/{malo_id}/tarifwechsel` | Combined invoice across a mid-period price change |
 //! | `GET` | `/api/v1/billing/review-queue` | Analyst work list (REVIEW + HELD) |
 //! | `POST` | `/api/v1/billing/{id}/release` | Release a HELD record for dispatch |
+//! | `POST` | `/api/v1/billing/{id}/reviewed` | Record the review of a REVIEW record (sends nothing) |
 //! | `POST` | `/api/v1/webhooks/vpp-dispatch` | `de.vpp.dispatch.confirmed` auto-settlement |
 //! | `GET` | `/health/live` | Liveness |
 //! | `GET` | `/health/ready` | Readiness |
@@ -225,12 +226,16 @@ impl Daemon for Billingd {
                 post(handlers::post_calculate),
             )
             .route("/api/v1/billing", get(handlers::list_records))
-            // Risk gate: analyst work list + release of HELD records
+            // Risk gate: analyst work list, release of HELD and review of REVIEW records
             .route(
                 "/api/v1/billing/review-queue",
                 get(handlers::get_review_queue),
             )
             .route("/api/v1/billing/{id}/release", post(handlers::post_release))
+            .route(
+                "/api/v1/billing/{id}/reviewed",
+                post(handlers::post_reviewed),
+            )
             .route("/api/v1/billing/{id}", get(handlers::get_record))
             .route(
                 "/api/v1/billing/{id}/xrechnung",

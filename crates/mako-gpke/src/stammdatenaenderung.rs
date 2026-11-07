@@ -74,9 +74,7 @@ use mako_engine::{
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
-use mako_fristen::{
-    APERAK_STROM_WINDOW_LABEL, HolidayCalendar, aperak_strom_due_at, deadline_at_werktage,
-};
+use mako_fristen::{HolidayCalendar, deadline_at_werktage};
 
 // ── PID model ─────────────────────────────────────────────────────────────────
 
@@ -756,20 +754,14 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                     outbox.push(apply_outbox(&data, &patch).caused_by(1));
                 }
 
-                let deadlines = vec![
-                    PendingDeadline::new(
-                        APERAK_STROM_WINDOW_LABEL,
-                        aperak_strom_due_at(received_at),
+                let deadlines = vec![PendingDeadline::new(
+                    RUECKMELDUNG_WINDOW_LABEL,
+                    deadline_at_werktage(
+                        received_at,
+                        mako_fristen::antwort::STAMMDATEN_RUECKMELDUNG_WERKTAGE,
+                        HolidayCalendar::BdewMaKo,
                     ),
-                    PendingDeadline::new(
-                        RUECKMELDUNG_WINDOW_LABEL,
-                        deadline_at_werktage(
-                            received_at,
-                            mako_fristen::antwort::STAMMDATEN_RUECKMELDUNG_WERKTAGE,
-                            HolidayCalendar::BdewMaKo,
-                        ),
-                    ),
-                ];
+                )];
                 Ok(WorkflowOutput::with_outbox_and_deadlines(
                     events, outbox, deadlines,
                 ))
@@ -1052,7 +1044,8 @@ mod tests {
             out.outbox[1].payload["stammdaten_patch"]["bilanzierungsmethode"],
             "RLM"
         );
-        assert_eq!(out.deadlines.len(), 2); // APERAK + 2-WT Rückmeldung
+        // The 2-WT Rückmeldung alone: the APERAK window is the ingest door's.
+        assert_eq!(out.deadlines.len(), 1);
         let state = apply_all(StammdatenState::New, &out.events);
         assert!(matches!(state, StammdatenState::ValidationPassed(_)));
 

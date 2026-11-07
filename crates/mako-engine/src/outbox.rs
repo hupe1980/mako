@@ -122,6 +122,16 @@ pub struct PendingOutbox {
     ///
     /// [`EventEnvelope`]: crate::envelope::EventEnvelope
     pub caused_by_event_index: usize,
+    /// When the occurrence this message reports happened, when that is not the
+    /// instant it was enqueued.
+    ///
+    /// The engine sets it from [`RunOptions::received_at`]: a message caused
+    /// by an inbound Marktnachricht reports an occurrence that happened when
+    /// the door received it, however much later the dispatch ran. `None` means
+    /// the enqueue instant is the occurrence.
+    ///
+    /// [`RunOptions::received_at`]: crate::process::RunOptions::received_at
+    pub occurred_at: Option<OffsetDateTime>,
 }
 
 impl PendingOutbox {
@@ -144,6 +154,7 @@ impl PendingOutbox {
             deliver_after: None,
             payload_schema: None,
             caused_by_event_index: 0,
+            occurred_at: None,
         }
     }
 
@@ -275,6 +286,22 @@ pub struct OutboxMessage {
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 
+    /// When the occurrence this message reports happened, if not at
+    /// `created_at` — for a message caused by an inbound Marktnachricht, the
+    /// instant the door received it (carried over from
+    /// [`PendingOutbox::occurred_at`]).
+    ///
+    /// The ERP notification's CloudEvent `time` reads it, so a consumer that
+    /// counts a Frist from the occurrence counts from the receipt, not from
+    /// the dispatch. Never a scheduling key: delivery order and the age limit
+    /// stay on `created_at`.
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub occurred_at: Option<OffsetDateTime>,
+
     /// Do not deliver before this time.
     ///
     /// `None` means deliver immediately (as soon as the delivery worker runs).
@@ -352,6 +379,7 @@ pub(crate) fn materialise(
         payload: pending.payload.clone(),
         payload_schema: pending.payload_schema.clone(),
         created_at: now,
+        occurred_at: pending.occurred_at,
         deliver_after: pending.deliver_after,
         attempt_count: 0,
         first_attempt_at: None,
@@ -396,6 +424,7 @@ impl OutboxMessage {
             payload,
             payload_schema: None,
             created_at: OffsetDateTime::now_utc(),
+            occurred_at: None,
             deliver_after: None,
             attempt_count: 0,
             first_attempt_at: None,

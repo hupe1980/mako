@@ -1074,6 +1074,14 @@ async fn dispatch(
     command: &str,
     payload: serde_json::Value,
 ) -> bool {
+    // The payload is recorded before the attempt: a re-dispatch sends exactly
+    // it, and a market answer nobody could reproduce is not sent.
+    if let Err(err) =
+        pg::receipts::store_antwort(&state.pool, &state.tenant, process_id, &payload).await
+    {
+        warn!(%err, %process_id, "invoicd: answer not recorded — not sent; the receipt stays undispatched");
+        return false;
+    }
     let key = Uuid::new_v5(&process_id, route.salt).to_string();
     let cmd = ForwardCommand {
         marktrolle: None,
@@ -1496,7 +1504,21 @@ fn netznutzung_antwortcode(findings: &[invoic_checker::Finding]) -> &'static str
     }
 }
 
-/// A human-readable dispute reason from the findings.
+/// The most characters one REMADV Begründung element holds: `SG7 FTX+ABO`
+/// DE 4440 „Nähere Erläuterung des Abweichungsgrundes" is `an..512` (REMADV
+/// MIG, `remadv/fv20260401` `mig.json`). The MIG lets C108 repeat DE 4440 up
+/// to five times; the reason is sized for the first alone, so it fits however
+/// the answer is rendered.
+const BEGRUENDUNG_MAX: usize = 512;
+
+/// The Begründung of a refusal, in German, from the disputing findings: one
+/// finding after the other, each the checker's sentence, within one DE 4440.
+///
+/// Findings that no longer fit are not cut mid-sentence: the reason stops
+/// after the last whole finding and says how many more there are; every
+/// finding stays on the receipt (`get_check_result`). A single
+/// finding longer than the element is cut at its last word boundary and
+/// marked „…".
 ///
 /// Falls back to the monetary escalation when no individual finding disputed —
 /// that is the only other way `Dispute` is reached, and "no reason given" on a
@@ -1505,13 +1527,52 @@ fn dispute_reason(findings: &[invoic_checker::Finding]) -> String {
     let specific: Vec<&str> = findings
         .iter()
         .filter(|f| f.is_dispute)
-        .map(|f| f.message.as_str())
+        .map(|f| f.message.trim())
+        .filter(|m| !m.is_empty())
         .collect();
     if specific.is_empty() {
-        "Automatische Ablehnung: Rechnungsbetrag überschreitet Freigabegrenze".to_owned()
-    } else {
-        specific.join("; ")
+        return "Automatische Ablehnung: Rechnungsbetrag überschreitet Freigabegrenze".to_owned();
     }
+    let len = |t: &str| t.chars().count();
+    let weitere = |n: usize| {
+        if n == 1 {
+            " Ein weiterer Befund.".to_owned()
+        } else {
+            format!(" {n} weitere Befunde.")
+        }
+    };
+    let mut out = String::new();
+    for (i, m) in specific.iter().enumerate() {
+        let rest_danach = specific.len() - i - 1;
+        let sep = if out.is_empty() { "" } else { " " };
+        let reserve = if rest_danach > 0 {
+            len(&weitere(rest_danach))
+        } else {
+            0
+        };
+        if len(&out) + len(sep) + len(m) + reserve <= BEGRUENDUNG_MAX {
+            out.push_str(sep);
+            out.push_str(m);
+            continue;
+        }
+        if out.is_empty() {
+            // One finding alone is longer than the element: cut it at a word.
+            let tail = if rest_danach > 0 {
+                weitere(rest_danach)
+            } else {
+                String::new()
+            };
+            let budget = BEGRUENDUNG_MAX - len(&tail) - len(" …");
+            let mut cut: String = m.chars().take(budget).collect();
+            if let Some(at) = cut.rfind(' ') {
+                cut.truncate(at);
+            }
+            return format!("{cut} …{tail}");
+        }
+        out.push_str(&weitere(specific.len() - i));
+        return out;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -2175,6 +2236,110 @@ mod tests {
             !reason.contains("nur ein Hinweis"),
             "a non-disputing finding is not a rejection ground"
         );
+    }
+
+    /// A price dispute's Begründung, as the checker writes it, is German and
+    /// names the price stated and the price the Preisblatt gives.
+    #[test]
+    fn a_tariff_dispute_is_refused_in_german_with_both_prices() {
+        use rubo4e::current::{
+            Betrag, Menge, Mengeneinheit, Preis, PreisblattNetznutzung, Preisposition,
+            Preisstaffel, Rechnung, Rechnungsposition,
+        };
+        let d = |s: &str| rust_decimal::Decimal::from_str_exact(s).expect("decimal");
+        let mut store = invoic_checker::InMemoryPreisblattStore::new();
+        store.insert(
+            "9900357000004".to_owned(),
+            PreisblattNetznutzung {
+                preispositionen: Some(vec![Preisposition {
+                    preisstaffeln: Some(vec![Preisstaffel {
+                        preis: Some(d("0.29800")),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+        );
+        let r = Rechnung {
+            rechnungspositionen: Some(vec![Rechnungsposition {
+                positionsnummer: Some(1),
+                positionstext: Some("Arbeitspreis".to_owned()),
+                positions_menge: Some(Menge {
+                    wert: Some(d("100")),
+                    einheit: Some(Mengeneinheit::Kwh),
+                    ..Default::default()
+                }),
+                einzelpreis: Some(Preis {
+                    wert: Some(d("0.31200")),
+                    ..Default::default()
+                }),
+                gesamtpreis: Some(Betrag {
+                    wert: Some(d("31.20")),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let report = invoic_checker::InvoicCheckEngine::check(
+            31001,
+            "9900357000004",
+            &r,
+            &store,
+            &invoic_checker::CheckConfig::default(),
+        );
+        let reason = dispute_reason(&report.findings);
+        assert!(reason.contains("0,31200"), "{reason}");
+        assert!(reason.contains("0,29800"), "{reason}");
+        assert!(reason.contains("Einzelpreis"), "{reason}");
+        for english in [" the ", " but ", " does ", "Line ", "Review"] {
+            assert!(!reason.contains(english), "English in {reason}");
+        }
+    }
+
+    /// However many findings dispute an invoice, the Begründung fits one
+    /// REMADV DE 4440 (`an..512`), ends on a whole finding and says how many
+    /// more there are — never a word cut in half.
+    #[test]
+    fn many_findings_fit_one_begruendung_element() {
+        let f = |n: usize| Finding {
+            kind: FindingKind::ArithmeticError,
+            is_dispute: true,
+            message: format!(
+                "Position {n} (Arbeitspreis): 1000 kWh × 0,03456 EUR/kWh = 34,56 EUR, die \
+                 Rechnung nennt 40,00 EUR."
+            ),
+            line_number: Some(u32::try_from(n).expect("small")),
+            expected: None,
+            actual: None,
+            deviation_pct: None,
+        };
+        let findings: Vec<Finding> = (1..=40).map(f).collect();
+        let reason = dispute_reason(&findings);
+        assert!(
+            reason.chars().count() <= BEGRUENDUNG_MAX,
+            "{}",
+            reason.chars().count()
+        );
+        assert!(reason.starts_with("Position 1 "), "{reason}");
+        assert!(reason.ends_with(" weitere Befunde."), "{reason}");
+        // Every finding it states is whole.
+        let stated = reason.matches("die Rechnung nennt 40,00 EUR.").count();
+        assert_eq!(reason.matches("Position ").count(), stated, "{reason}");
+        assert!(
+            reason.contains(&format!("{} weitere Befunde.", 40 - stated)),
+            "{reason}"
+        );
+
+        // One finding longer than the element is cut at a word, and marked.
+        let lang = Finding {
+            message: "Wort ".repeat(200),
+            ..f(1)
+        };
+        let reason = dispute_reason(&[lang]);
+        assert!(reason.chars().count() <= BEGRUENDUNG_MAX);
+        assert!(reason.ends_with("Wort …"), "{reason}");
     }
 
     /// The outcome labels and the CloudEvent types must not drift apart: an

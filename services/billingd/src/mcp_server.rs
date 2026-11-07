@@ -195,7 +195,8 @@ pub struct ListReviewQueueParams {
 /// One billing record on the analyst review queue.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct Pruefposten {
-    /// The billing record — what `POST /api/v1/billing/{id}/release` addresses.
+    /// The billing record — what `POST /api/v1/billing/{id}/release` (HELD) and
+    /// `POST /api/v1/billing/{id}/reviewed` (REVIEW) address.
     pub id: String,
     /// 11-digit MaLo-ID.
     pub malo_id: String,
@@ -850,7 +851,7 @@ before billing.",
     }
 
     #[tool(
-        description = "The analyst review queue: billing records the risk gate banded REVIEW (dispatched, queued for review) or HELD (not dispatched until released through POST /api/v1/billing/{id}/release), the highest risk score first, each with the coded findings behind its score. `saturated` means at least `limit` records matched.",
+        description = "The analyst review queue: the undecided billing records the risk gate banded REVIEW (dispatched, queued until reviewed through POST /api/v1/billing/{id}/reviewed) or HELD (not dispatched until released through POST /api/v1/billing/{id}/release), the highest risk score first, each with the coded findings behind its score. A reviewed or released record has left the queue. `saturated` means at least `limit` records matched.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_output::<Pruefliste>()
     )]

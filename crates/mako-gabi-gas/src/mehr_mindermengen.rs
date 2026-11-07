@@ -194,6 +194,18 @@ pub enum MehrMindermengenState {
     Recorded(Box<MehrMindermengenData>),
 }
 
+/// A Mehr-/Mindermengen process is the record of one Netzkonto and Zeitraum:
+/// a later report for the same pair is booked into it (the format carries no
+/// correction marker), so once anything is recorded it holds the key.
+impl mako_engine::workflow::OccupiesBusinessKey for MehrMindermengenState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            Self::Recorded(_) => true,
+            Self::New => false,
+        }
+    }
+}
+
 impl MehrMindermengenState {
     /// Stable string label for the current variant.
     #[must_use]

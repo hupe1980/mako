@@ -219,6 +219,27 @@ pub async fn mark_dispatched(
     Ok(())
 }
 
+/// Record the answer payload a receipt's market answer carries, before it is
+/// sent — the one a re-dispatch sends again.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` on database failure.
+pub async fn store_antwort(
+    pool: &PgPool,
+    tenant: &str,
+    process_id: Uuid,
+    antwort: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE invoic_receipts SET antwort = $1 WHERE tenant = $2 AND process_id = $3")
+        .bind(antwort)
+        .bind(tenant)
+        .bind(process_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// What a re-dispatch needs: the answer's routing key and the outcome that
 /// decides which command to send.
 #[derive(Debug)]
@@ -229,6 +250,8 @@ pub struct DispatchTarget {
     /// The EDIFACT message reference. `None` means the answer cannot be routed.
     pub invoice_ref: Option<String>,
     pub already_dispatched: bool,
+    /// The answer payload recorded before the first attempt.
+    pub antwort: Option<serde_json::Value>,
 }
 
 /// Read what is needed to re-dispatch a receipt's answer.
@@ -241,10 +264,17 @@ pub async fn dispatch_target(
     id: Uuid,
     tenant: &str,
 ) -> Result<Option<DispatchTarget>, sqlx::Error> {
-    /// `(process_id, pid, outcome, invoice_ref, dispatched_at)`
-    type Row = (Uuid, i16, String, Option<String>, Option<OffsetDateTime>);
+    /// `(process_id, pid, outcome, invoice_ref, dispatched_at, antwort)`
+    type Row = (
+        Uuid,
+        i16,
+        String,
+        Option<String>,
+        Option<OffsetDateTime>,
+        Option<serde_json::Value>,
+    );
     let row: Option<Row> = sqlx::query_as(
-        r"SELECT process_id, pid, outcome, invoice_ref, dispatched_at
+        r"SELECT process_id, pid, outcome, invoice_ref, dispatched_at, antwort
           FROM invoic_receipts WHERE id = $1 AND tenant = $2",
     )
     .bind(id)
@@ -252,12 +282,13 @@ pub async fn dispatch_target(
     .fetch_optional(pool)
     .await?;
     Ok(row.map(
-        |(process_id, pid, outcome, invoice_ref, dispatched_at)| DispatchTarget {
+        |(process_id, pid, outcome, invoice_ref, dispatched_at, antwort)| DispatchTarget {
             process_id,
             pid,
             outcome,
             invoice_ref,
             already_dispatched: dispatched_at.is_some(),
+            antwort,
         },
     ))
 }
@@ -479,7 +510,10 @@ pub async fn claim_erp_pending(
         .collect())
 }
 
-/// Close a dispute after operator negotiation.
+/// Close a dispute after operator negotiation, recording who closed it.
+///
+/// `resolved_by` is the verified caller: a resolution settles what the
+/// Lieferant pays, and the § 147 AO record of it names the person.
 ///
 /// Returns `true` when a row moved; `false` when the receipt was absent or not
 /// in `Dispute`.
@@ -491,17 +525,20 @@ pub async fn resolve_dispute(
     pool: &PgPool,
     id: Uuid,
     tenant: &str,
+    resolved_by: &str,
     note: Option<&str>,
 ) -> Result<bool, sqlx::Error> {
     let result = sqlx::query(
         r"UPDATE invoic_receipts
           SET outcome = 'Resolved',
               dispute_resolved_at = now(),
-              dispute_resolution_note = $3
+              dispute_resolved_by = $3,
+              dispute_resolution_note = $4
           WHERE id = $1 AND tenant = $2 AND outcome = 'Dispute'",
     )
     .bind(id)
     .bind(tenant)
+    .bind(resolved_by)
     .bind(note)
     .execute(pool)
     .await?;

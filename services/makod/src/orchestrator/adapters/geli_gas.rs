@@ -173,11 +173,13 @@ pub fn geli_gas_sperrung_nb_stornierung_registry() -> AdapterRegistry<GeliGasSpe
 
 /// Build an [`AdapterRegistry`] for [`GeliGasSupplierChangeWorkflow`].
 #[must_use]
-pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
+pub fn geli_gas_registry(
+    received_at: time::OffsetDateTime,
+) -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization("expected AnyMessage for GeLi Gas adapter".into())
             })?;
@@ -236,7 +238,7 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
-                received_at: time::OffsetDateTime::now_utc(),
+                received_at,
                 // L1/N1: extract Bilanzierungsmethode (TM+EM) and Fallgruppe (TM+Z10)
                 bilanzierungsmethode: extract_bilanzierungsmethode(u.segments()),
                 fallgruppe: extract_fallgruppe(u.segments()),
@@ -929,12 +931,13 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
 /// **Antwort** PID → [`mako_geli_gas::GasStammdatenCommand::ReceiveAntwort`].
 /// Structural validation only (no AHB rulepack).
 #[must_use]
-pub fn geli_gas_stammdaten_registry()
--> AdapterRegistry<mako_geli_gas::GeliGasStammdatenaenderungWorkflow> {
+pub fn geli_gas_stammdaten_registry(
+    received_at: time::OffsetDateTime,
+) -> AdapterRegistry<mako_geli_gas::GeliGasStammdatenaenderungWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
                     "expected AnyMessage for GeLi Gas Stammdaten adapter".into(),
@@ -1024,7 +1027,7 @@ pub fn geli_gas_stammdaten_registry()
                     message_ref: MessageRef::new(msg.message_ref()),
                     validation_passed,
                     validation_errors,
-                    received_at: time::OffsetDateTime::now_utc(),
+                    received_at,
                 });
             }
 
@@ -1056,7 +1059,7 @@ pub fn geli_gas_stammdaten_registry()
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
-                received_at: time::OffsetDateTime::now_utc(),
+                received_at,
             })
         },
     ));

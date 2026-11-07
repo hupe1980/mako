@@ -550,8 +550,13 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
                 &self.stream_id,
                 &ctx,
                 decide,
-                opts.deadlines,
-                opts.correlations,
+                crate::workflow::AppendExtras {
+                    deadlines: opts.deadlines,
+                    delivery_windows: opts.delivery_windows,
+                    correlations: opts.correlations,
+                    received_at: opts.received_at,
+                    acknowledgement: opts.acknowledgement,
+                },
             )
             .await
             {
@@ -670,7 +675,10 @@ pub struct RunOptions<'a, Snap = NoSnapshot> {
     context: Option<CommandContext>,
     attempts: u32,
     deadlines: &'a [crate::deadline::Deadline],
+    delivery_windows: &'a [crate::deadline::Deadline],
     correlations: &'a [crate::event_store::CorrelationEntry],
+    received_at: Option<time::OffsetDateTime>,
+    acknowledgement: Option<&'a crate::outbox::PendingOutbox>,
     snapshot: Option<(&'a Snap, u64)>,
 }
 
@@ -686,7 +694,10 @@ impl RunOptions<'_, NoSnapshot> {
             context: None,
             attempts: DEFAULT_ATTEMPTS,
             deadlines: &[],
+            delivery_windows: &[],
             correlations: &[],
+            received_at: None,
+            acknowledgement: None,
             snapshot: None,
         }
     }
@@ -720,6 +731,51 @@ impl<'a, Snap> RunOptions<'a, Snap> {
         self
     }
 
+    /// Register each of `windows` in the same write **only when** the command
+    /// enqueues a message that discharges it
+    /// ([`mako_fristen::discharges_delivery_window`]).
+    ///
+    /// The shape of a delivery window owed only when its message is: a Gas
+    /// APERAK is sent for a Verarbeitbarkeitsfehler alone (APERAK AHB 1.1
+    /// § 2.3), so a window registered on a processable message would fire on
+    /// the healthy path and report a breach nobody is in. Each must be a
+    /// delivery window ([`mako_fristen::is_delivery_window`]).
+    pub fn delivery_windows(mut self, windows: &'a [crate::deadline::Deadline]) -> Self {
+        self.delivery_windows = windows;
+        self
+    }
+
+    /// The instant the door received the inbound message this command carries.
+    ///
+    /// Every outbox entry the command enqueues reports an occurrence of that
+    /// instant ([`PendingOutbox::occurred_at`]) — the CloudEvent `time` a
+    /// consumer counts an arrival-anchored Frist from — unless the workflow
+    /// set its own.
+    ///
+    /// [`PendingOutbox::occurred_at`]: crate::outbox::PendingOutbox::occurred_at
+    pub fn received_at(mut self, received_at: time::OffsetDateTime) -> Self {
+        self.received_at = Some(received_at);
+        self
+    }
+
+    /// Enqueue `ack` in the same write when the command records events and
+    /// enqueues no message of `ack`'s type itself — the acknowledgement a host
+    /// owes every processable message it receives, which a workflow that
+    /// answers with its own (an Ablehnung, a decided Anerkennung) supersedes.
+    ///
+    /// A command that records nothing writes nothing, so it acknowledges
+    /// nothing either.
+    pub fn acknowledgement(mut self, ack: &'a crate::outbox::PendingOutbox) -> Self {
+        self.acknowledgement = Some(ack);
+        self
+    }
+
+    /// [`acknowledgement`](Self::acknowledgement) when there is one.
+    pub fn acknowledgement_opt(mut self, ack: Option<&'a crate::outbox::PendingOutbox>) -> Self {
+        self.acknowledgement = ack;
+        self
+    }
+
     /// Index the process under `correlations` in the same write — the spawn
     /// shape: a process its counterparty's reply cannot find is not running.
     pub fn correlations(
@@ -737,7 +793,10 @@ impl<'a, Snap> RunOptions<'a, Snap> {
             context: self.context,
             attempts: self.attempts,
             deadlines: self.deadlines,
+            delivery_windows: self.delivery_windows,
             correlations: self.correlations,
+            received_at: self.received_at,
+            acknowledgement: self.acknowledgement,
             snapshot: Some((store, interval)),
         }
     }
@@ -1071,6 +1130,8 @@ mod tests {
     enum FullCommand {
         Spawn,
         Bare,
+        /// As `Spawn`, but the outbox entry is an APERAK.
+        Aperak,
     }
     impl CommandPayload for FullCommand {}
 
@@ -1089,14 +1150,15 @@ mod tests {
             _state: &CounterState,
             command: FullCommand,
         ) -> Result<crate::workflow::WorkflowOutput<CounterEvent>, WorkflowError> {
-            let events = match command {
-                FullCommand::Spawn => vec![CounterEvent::Incremented { by: 1 }],
-                FullCommand::Bare => Vec::new(),
+            let (events, message_type) = match command {
+                FullCommand::Spawn => (vec![CounterEvent::Incremented { by: 1 }], "UTILMD"),
+                FullCommand::Aperak => (vec![CounterEvent::Incremented { by: 1 }], "APERAK"),
+                FullCommand::Bare => (Vec::new(), "UTILMD"),
             };
             Ok(crate::workflow::WorkflowOutput::with_outbox_and_deadline(
                 events,
                 vec![crate::outbox::PendingOutbox::new(
-                    "UTILMD",
+                    message_type,
                     "9900000000001",
                     serde_json::json!({}),
                 )],
@@ -1153,6 +1215,79 @@ mod tests {
         assert_eq!(labels, ["spawn-frist", "antwort"], "both deadlines");
         assert_eq!(ran.deadlines.len(), 2);
         assert_eq!(store.correlations().await.len(), 1, "the business key");
+    }
+
+    /// A delivery window passed to `delivery_windows` is registered only beside
+    /// a message that discharges it, and `received_at` becomes the occurrence
+    /// instant of every entry the run enqueues.
+    #[tokio::test]
+    async fn a_delivery_window_rides_only_its_message() {
+        let received = time::macros::datetime!(2026-07-07 10:00 UTC);
+        for (command, registered) in [(FullCommand::Spawn, false), (FullCommand::Aperak, true)] {
+            let store = InMemoryEventStore::new();
+            let p = Process::<FullWorkflow, _>::new(
+                store.clone(),
+                TenantId::new(),
+                WorkflowId::new("full", "FV2025-10-01"),
+            );
+            let window = crate::deadline::Deadline::new(
+                p.stream_id().clone(),
+                p.process_id(),
+                p.tenant_id(),
+                p.workflow_id().clone(),
+                mako_fristen::APERAK_GAS_FOLGEPROZESS_LABEL,
+                received,
+            );
+            let ran = p
+                .run(
+                    command.clone(),
+                    RunOptions::new()
+                        .received_at(received)
+                        .delivery_windows(std::slice::from_ref(&window)),
+                )
+                .await
+                .unwrap();
+            let has_window = store
+                .deadlines_for(p.stream_id())
+                .await
+                .iter()
+                .any(|d| d.label() == mako_fristen::APERAK_GAS_FOLGEPROZESS_LABEL);
+            assert_eq!(has_window, registered, "{command:?}");
+            assert_eq!(ran.outbox[0].occurred_at, Some(received), "{command:?}");
+        }
+    }
+
+    /// The host's acknowledgement rides the write unless the workflow enqueues
+    /// a message of its type itself.
+    #[tokio::test]
+    async fn an_acknowledgement_yields_to_the_workflows_own() {
+        let ack = crate::outbox::PendingOutbox::new(
+            "APERAK",
+            "9900000000001",
+            serde_json::json!({"ack": true}),
+        );
+        for (command, aperaks, ours) in [
+            (FullCommand::Spawn, 1, true),
+            (FullCommand::Aperak, 1, false),
+        ] {
+            let store = InMemoryEventStore::new();
+            let p = Process::<FullWorkflow, _>::new(
+                store.clone(),
+                TenantId::new(),
+                WorkflowId::new("full", "FV2025-10-01"),
+            );
+            let ran = p
+                .run(command.clone(), RunOptions::new().acknowledgement(&ack))
+                .await
+                .unwrap();
+            let sent: Vec<_> = ran
+                .outbox
+                .iter()
+                .filter(|o| &*o.message_type == "APERAK")
+                .collect();
+            assert_eq!(sent.len(), aperaks, "{command:?}");
+            assert_eq!(sent[0].payload == ack.payload, ours, "{command:?}");
+        }
     }
 
     /// An outbox entry or deadline without an event is refused, not dropped.
