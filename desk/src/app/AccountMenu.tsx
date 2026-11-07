@@ -28,7 +28,7 @@ const APPEARANCES: [Appearance, string][] = [
 /**
  * The person at the foot of the sidebar: who they are and how the Desk looks
  * for them. The Rolle is not here — it changes what you work on, not who you
- * are, so it stays in the toolbar (FR-037).
+ * are, so it stays in the toolbar.
  */
 export function AccountMenu({ onShortcuts }: { onShortcuts: () => void }) {
   const identity = useIdentity();

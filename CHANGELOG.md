@@ -9,9 +9,20 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
-## [0.28.0] — unreleased
+## [0.28.0] — 2026-11-07
 
 ### Added
+
+- **Every answer explains itself**: an event that is a market answer
+  states its Antwortcode and Codeliste (`EventPayload::antwort`), stamped on
+  the envelope beside the `Verlauf`; makod's `get_process_history` returns
+  `antwortcode`, `codeliste` and the BDEW's `bedeutung`, resolved by
+  `mako_pruefung::codes::lies` through the tree the list belongs to (an `S_`/
+  `G_` Codeliste included) and never from another tree; the Desk's Verlauf
+  shows code and wording on the message line; desk-assistant 1.4.0 explains a
+  refusal from that wording. processd's `anmeldung_decisions` keeps the
+  `pruefschritt` a refusal stopped at. `check-event-verlauf` refuses a message
+  event in a file that keeps an answer code and states none.
 
 - accountingd books through **booking drafts**: every ledger entry is staged in
   `booking_drafts` in the transaction of the business change that causes it —
@@ -44,12 +55,19 @@ History before this file is in `git log`.
 
 ### Changed
 
-- **Breaking:** accountingd's ledger is doubleentry 0.8.1 in schema `ledger`
-  (0.7 used `doubleentry`; no migration — 0.8 cannot read a 0.7 ledger).
+- **Breaking:** `EventEnvelope`/`NewEvent` carry `antwort`; the LF Anmeldung
+  workflows' `HandleAntwort` and `AntwortReceived` (`gpke-lf-anmeldung`,
+  `geli-gas-lf-anmeldung`) carry the inbound `STS+E01` as `antwort`, and their
+  `ProcessCompleted` payload adds `antwortcode` and `codeliste` (Gas also
+  `reason`).
+- **Breaking:** accountingd's ledger is doubleentry 0.9 in schema `ledger`
+  (0.7 used `doubleentry`; no migration — 0.9 refuses an older ledger by
+  name).
   Periods are calendar months from 2015-01; `POST /api/v1/periods/{id}/seal`
   takes no body and seals every open month through `id`; `GET /periods/seals`
   reports `verified` (a full audit) instead of `chain_valid`; the proof routes
-  return doubleentry 0.8's proof shapes; a clearing is one matched pair,
+  return doubleentry 0.9's proof shapes; a clearing is one matched pair, a
+  Zahlungszuordnung's pairs are cleared in one transaction, and a clearing is
   reset by its position (`POST /api/v1/clearings/{position}/reset`). A ledger
   refusal answers `422` with code `ledger.<n>` (`409` for a reused key), an
   unavailable ledger `503`.
@@ -76,6 +94,8 @@ History before this file is in `git log`.
   as absorbed; every money amount in an event or MCP answer is formatted from
   integer cents.
 
+- `check-known-wrong` also refuses a spec requirement or success-criterion id
+  and a milestone named in parentheses or after „spec" in a tracked file.
 - **Breaking:** `mako_bo4e_decimal_from_json_number_total` is
   `mako_bo4e_fractional_json_number_total`, counted by the BO4E gate
   (`mako_markt::bo4e::decode`) instead of `rubo4e`: it counts the fractional
@@ -86,6 +106,14 @@ History before this file is in `git log`.
   parses them back) and `en16931` / `en16931-formats` 0.10: a missing required
   term in a received e-invoice is fatal, and sub-invoice lines, CII payment
   means and BT-89 are read and written in full.
+
+### Fixed
+
+- makod read a GeLi Gas answer to the LFN by the wrong PIDs: 44003 (Ablehnung
+  Anmeldung) counted as accepted and 44002 (Bestätigung) as refused, so a
+  refused gas Anmeldung activated supply; 44017 was refused as well. Acceptance
+  is `LF_ANMELDUNG_BESTAETIGUNG_PIDS` (44002, 44005, 44017), held by a test
+  that renders, parses and adapts both answers.
 
 ## [0.27.0] — 2026-11-07
 

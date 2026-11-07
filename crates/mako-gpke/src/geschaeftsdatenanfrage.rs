@@ -77,7 +77,7 @@
 //!   (S. 55).
 //! - **APERAK AHB 1.1 § 2.4.1** — 45 Minuten for a Strom ORDERS.
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 pub use mako_engine::payload::Stammdaten;
 use mako_engine::{
     deadline::Deadline,
@@ -315,6 +315,20 @@ impl EventPayload for GdaEvent {
                 pid, message_ref, ..
             } => stated(Richtung::Eingang, pid, message_ref),
             Self::AnfrageUngueltig { .. } | Self::DeadlineExpired { .. } => None,
+        }
+    }
+    /// The ORDRSP 19101's `SG2 AJT` code. Its tree is `E_0441` towards a LF and
+    /// `E_0443` towards a MSB, and the event does not say which party it went
+    /// to, so the Codeliste stays unnamed rather than guessed.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AblehnungGesendet { antwortcode, .. } => {
+                Some(Antwortcode::new(antwortcode.clone(), None::<String>))
+            }
+            Self::AblehnungErhalten { antwortcode, .. } => antwortcode
+                .as_ref()
+                .map(|c| Antwortcode::new(c.clone(), None::<String>)),
+            _ => None,
         }
     }
 }
@@ -1162,5 +1176,30 @@ mod tests {
             GdaEvent::AnfrageUngueltig { reason: "x".into() }.verlauf(),
             None
         );
+    }
+
+    #[test]
+    fn an_ablehnung_states_its_code_and_a_utilmd_answer_states_none() {
+        let gesendet = GdaEvent::AblehnungGesendet {
+            pid: pid(19101),
+            antwortcode: "A02".into(),
+            message_ref: MessageRef::new("ORDRSP-1"),
+        };
+        assert_eq!(
+            gesendet.antwort(),
+            Some(Antwortcode::new("A02", None::<String>)),
+            "the recipient decides between E_0441 and E_0443, and the event names neither"
+        );
+        let ohne_code = GdaEvent::AblehnungErhalten {
+            pid: pid(19101),
+            antwortcode: None,
+            message_ref: MessageRef::new("ORDRSP-2"),
+        };
+        assert_eq!(ohne_code.antwort(), None);
+        let utilmd = GdaEvent::AntwortErhalten {
+            antwort_pid: pid(55035),
+            message_ref: MessageRef::new("UTILMD-1"),
+        };
+        assert_eq!(utilmd.antwort(), None);
     }
 }

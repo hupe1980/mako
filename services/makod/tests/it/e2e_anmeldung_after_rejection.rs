@@ -97,6 +97,7 @@ async fn reject(
             accepted: false,
             reason: Some("Zaehlpunkt nicht zugeordnet".to_owned()),
             response_ref: mako_engine::types::MessageRef::new("NB-ANTWORT-1"),
+            antwort: None,
         },
         RunOptions::new(),
     )
@@ -179,6 +180,7 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
                     accepted: false,
                     reason: Some("Zaehlpunkt nicht zugeordnet".to_owned()),
                     response_ref: mako_engine::types::MessageRef::new("NB-ANTWORT-1"),
+                    antwort: None,
                 },
                 RunOptions::new(),
             )

@@ -44,7 +44,7 @@
 //!   Teil-2 Zuordnungsprozesse, and no 24-hour window anywhere.
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -182,6 +182,11 @@ pub enum LfAnmeldungEvent {
         reason: Option<String>,
         /// Message reference from the inbound response UTILMD.
         response_ref: MessageRef,
+        /// `SG4 STS+E01` — the answer's code and Codeliste (`A02` in
+        /// `E_0622`), which is what the refusal means; `None` where the
+        /// response carries none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// Accepted Lieferbeginn Anmeldung activated (supply now live).
     Activated,
@@ -223,6 +228,13 @@ impl EventPayload for LfAnmeldungEvent {
                 message_ref: Some(response_ref.as_str().to_owned()),
             }),
             Self::Activated | Self::DeadlineExpired { .. } => None,
+        }
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortReceived { antwort, .. } => antwort.clone(),
+            _ => None,
         }
     }
 }
@@ -375,6 +387,8 @@ pub enum LfAnmeldungCommand {
         reason: Option<String>,
         /// Message reference from the inbound response.
         response_ref: MessageRef,
+        /// `SG4 STS+E01` DE 9013 and DE 1131 of the response.
+        antwort: Option<Antwortcode>,
     },
     /// Mark the accepted Lieferbeginn supply relationship as active.
     ///
@@ -627,6 +641,7 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 accepted,
                 reason,
                 response_ref,
+                antwort,
             } => {
                 if !matches!(state, LfAnmeldungState::Pending(_)) {
                     return Err(WorkflowError::invalid_state("Pending", state.label()));
@@ -666,6 +681,8 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                         "accepted": accepted,
                         "outcome":  if accepted { "accepted" } else { "rejected" },
                         "reason":   reason,
+                        "antwortcode": antwort.as_ref().map(|a| a.code.as_str()),
+                        "codeliste":   antwort.as_ref().and_then(|a| a.codeliste.as_deref()),
                     }),
                 )];
 
@@ -675,6 +692,7 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                         accepted,
                         reason,
                         response_ref,
+                        antwort,
                     }],
                     outbox,
                 ))
@@ -845,6 +863,7 @@ mod tests {
             accepted: true,
             reason: None,
             response_ref: MessageRef::new("NB-RESP-001"),
+            antwort: None,
         };
         let out = GpkeLfAnmeldungWorkflow::handle(&state, cmd).unwrap();
         assert_eq!(out.events.len(), 1);
@@ -882,6 +901,7 @@ mod tests {
                     accepted,
                     reason: None,
                     response_ref: MessageRef::new("NB-RESP-001"),
+                    antwort: None,
                 },
             )
             .unwrap();
@@ -918,6 +938,7 @@ mod tests {
             accepted: false,
             reason: Some("MaLo nicht in Netzgebiet".to_owned()),
             response_ref: MessageRef::new("NB-RESP-002"),
+            antwort: None,
         };
         let out = GpkeLfAnmeldungWorkflow::handle(&state, cmd).unwrap();
         let final_state = GpkeLfAnmeldungWorkflow::apply(state, &out.events[0]);
@@ -978,6 +999,7 @@ mod tests {
             accepted: true,
             reason: None,
             response_ref: MessageRef::new("REF-002"),
+            antwort: None,
         };
         let state = GpkeLfAnmeldungWorkflow::apply(state, &accepted_event);
         assert!(matches!(state, LfAnmeldungState::Active(_)));

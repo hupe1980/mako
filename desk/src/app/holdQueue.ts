@@ -1,4 +1,4 @@
-// A routine decision waits in the browser before it leaves (FR-029): the
+// A routine decision waits in the browser before it leaves: the
 // person sees it take effect at once, has five seconds to take it back, and no
 // service needs a reverse action, because nothing was sent. An action that
 // emits a market message never goes through here — it asks for confirmation

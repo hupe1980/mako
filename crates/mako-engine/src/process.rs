@@ -1489,6 +1489,7 @@ mod tests {
             schema_version: 1, // ← schema_version 1 (old format)
             payload: v1_payload,
             verlauf: None,
+            antwort: None,
         };
         store
             .append(AppendBatch::new(

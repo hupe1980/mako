@@ -179,6 +179,7 @@ pub use invoic::{
 };
 pub use lf_anmeldung::{
     ANFRAGE_PIDS_LF as LF_ANMELDUNG_ANFRAGE_PIDS, ANTWORT_PIDS_LF as LF_ANMELDUNG_ANTWORT_PIDS,
+    BESTAETIGUNG_PIDS_LF as LF_ANMELDUNG_BESTAETIGUNG_PIDS,
     GNB_RESPONSE_WINDOW_LABEL as LF_ANMELDUNG_RESPONSE_WINDOW_LABEL, GeliGasLfAnmeldungCommand,
     GeliGasLfAnmeldungData, GeliGasLfAnmeldungEvent, GeliGasLfAnmeldungState,
     GeliGasLfAnmeldungWorkflow, WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW_NAME,

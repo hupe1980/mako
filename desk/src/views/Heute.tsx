@@ -36,7 +36,7 @@ const GLYPH: Record<QuelleId, IconName> = {
   hinweise: "sparkle",
 };
 
-/** At most this many rows in the DOM, however many items wait (SC-008). */
+/** At most this many rows in the DOM, however many items wait. */
 const SICHTBAR = 100;
 
 /**
@@ -298,7 +298,7 @@ function Quellenzeile({ staende, agent }: { staende: Stand[]; agent: string | nu
  * Heute: everything that waits on a person in the Rolle worn, one list in
  * Frist bands. The agent's Hinweise sit under the item they concern; `?`
  * asks the assistant why the selected item waits and answers beside it, `⌘J`
- * asks it anything about the item in focus (FR-006, FR-007, FR-031; M74 FR-004).
+ * asks it anything about the item in focus.
  */
 export function HeuteView() {
   const { rolle } = useRolle();

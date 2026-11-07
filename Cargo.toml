@@ -223,7 +223,7 @@ sepa             = { version = "0.9" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and
 # SKR mapping live in accountingd, never in the crate.
-doubleentry      = { version = "0.8.1" }
+doubleentry      = { version = "0.9.0" }
 # One sqlx for every service: PostgreSQL over rustls on aws-lc-rs, the provider
 # meterstore and doubleentry use, so the graph carries one TLS stack.
 sqlx             = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls-aws-lc-rs", "uuid", "time", "json", "macros", "migrate", "derive"] }

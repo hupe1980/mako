@@ -119,7 +119,7 @@ export function Lesen({ schritte }: { schritte: Answer["schritte"] }) {
  * checked like any other — with one line of how its proposals fared.
  * „Übernehmen" fills the decision form and sends nothing; „Verwerfen" hides it
  * and, once its hold ends, says so beside the run — a routine decision, taken
- * back with „Rückgängig" (FR-029).
+ * back with „Rückgängig".
  */
 export function VorschlagKarte({
   v,

@@ -16,7 +16,7 @@ type Stand = "offen" | "gehalten" | "gespeichert" | { fehler: string };
  * agentd beside the run so a skill's quality is read from the journal. After
  * „Nein", one optional line says what was missing; nothing else is asked.
  *
- * A verdict is a routine decision (FR-029): it shows at once and leaves the
+ * A verdict is a routine decision: it shows at once and leaves the
  * browser when its five-second hold ends, so „Rückgängig" sends nothing.
  */
 export function Bewertung({ run, initial }: { run: string; initial?: boolean | null }) {

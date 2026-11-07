@@ -92,7 +92,7 @@ async function reach(url: string, init?: RequestInit): Promise<Response> {
 
 /**
  * The error a failed answer is: agentd's own sentence either way, a 403 on an
- * action also recorded so the Desk stops offering it (FR-022).
+ * action also recorded so the Desk stops offering it.
  */
 async function failure(res: Response, handlung?: Handlung): Promise<Error> {
   const why = sentence(await problem(res));

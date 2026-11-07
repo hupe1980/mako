@@ -6,10 +6,12 @@ import type { DeadlineView, HistoryEntry } from "../data/gen/makod";
 import { call } from "../data/mcp";
 import { FristUhr } from "../design/FristUhr";
 import { Notice } from "../design/Panel";
+import { antwortTeile } from "../format/antwort";
 import { epochMs, formatInstant } from "../format/date";
 
 function Message({ entry }: { entry: HistoryEntry }) {
   const eingang = entry.richtung === "eingang";
+  const antwort = antwortTeile(entry);
   return (
     <div
       className={`rounded-[12px] border px-3 py-2 ${
@@ -24,6 +26,13 @@ function Message({ entry }: { entry: HistoryEntry }) {
         </span>
         {entry.pid && <span className="font-mono text-text">PID {entry.pid}</span>}
       </p>
+      {antwort && (
+        <p className="m-0 mt-1 text-body text-text">
+          <span className="font-mono font-semibold">{antwort.code}</span>
+          {" — "}
+          <span className={entry.bedeutung ? undefined : "text-text-2"}>{antwort.text}</span>
+        </p>
+      )}
       <p className="m-0 mt-0.5 text-caption text-text-2">
         {entry.recorded_at ? `${formatInstant(entry.recorded_at)} Uhr` : "ohne Zeitpunkt"}
         {entry.message_ref && (

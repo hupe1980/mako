@@ -29,7 +29,7 @@
 //! - BK6-24-174 GPKE Teil 2 Kap. 3.1.1 / 3.1.2 / 3.1.3
 //! - Entscheidungsbaum-Diagramme und Codelisten 4.3, Kap. 6.17.1 (`E_0595`)
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
@@ -134,6 +134,15 @@ impl EventPayload for AbrechnungsdatenEvent {
                 message_ref: None,
             }),
             Self::Abgebrochen { .. } | Self::DeadlineExpired { .. } => None,
+        }
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::BearbeitungsstandGesendet { antwort_code, .. } => {
+                Some(Antwortcode::new(antwort_code.clone(), Some(BESTELLUNG_EBD)))
+            }
+            _ => None,
         }
     }
 }
@@ -654,5 +663,26 @@ mod tests {
             .iter()
             .fold(state, GpkeAbrechnungsdatenWorkflow::apply);
         assert!(matches!(state, AbrechnungsdatenState::Beantwortet { .. }));
+    }
+
+    #[test]
+    fn the_bearbeitungsstand_states_its_e_0595_code_and_a_rueckmeldung_none() {
+        let gesendet = AbrechnungsdatenEvent::BearbeitungsstandGesendet {
+            pid: BEARBEITUNGSSTAND_PID,
+            antwort_code: "A01".into(),
+            sendet_stammdatenaenderung: true,
+            bemerkung: None,
+        };
+        assert_eq!(
+            gesendet.antwort(),
+            Some(Antwortcode::new("A01", Some(BESTELLUNG_EBD)))
+        );
+        assert_eq!(
+            AbrechnungsdatenEvent::Abgebrochen {
+                reason: "AHB".into()
+            }
+            .antwort(),
+            None
+        );
     }
 }

@@ -25,7 +25,7 @@
 //! - **EBD 4.3 Kap. 6.2.1** — `E_0614` „Kündigung Vertrag prüfen"
 //! - **APERAK AHB 1.1 § 2.4.1** — the separate 45-minute technical window
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -154,6 +154,13 @@ impl EventPayload for KuendigungEvent {
                 pid: None,
                 message_ref: None,
             }),
+        }
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet { antwort, .. } => Some(antwort.antwortcode()),
+            _ => None,
         }
     }
 }
@@ -776,5 +783,25 @@ mod tests {
             *p = pid(55001);
         }
         assert!(GpkeKuendigungWorkflow::handle(&KuendigungState::New, cmd).is_err());
+    }
+
+    #[test]
+    fn the_sent_answer_states_its_code_and_tree_and_a_state_change_none() {
+        let gesendet = KuendigungEvent::AntwortGesendet {
+            response_pid: Pruefidentifikator::new(55017).expect("valid PID"),
+            accepted: false,
+            antwort: crate::lf_antwort::LfAntwort::ablehnung("A36", "E_0624"),
+        };
+        assert_eq!(
+            gesendet.antwort(),
+            Some(Antwortcode::new("A36", Some("E_0624")))
+        );
+        assert_eq!(
+            KuendigungEvent::Rejected {
+                reason: "AHB".into()
+            }
+            .antwort(),
+            None
+        );
     }
 }

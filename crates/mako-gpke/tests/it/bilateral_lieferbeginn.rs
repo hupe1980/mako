@@ -451,6 +451,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
             accepted,
             reason: None,
             response_ref: MessageRef::new(antwort_ref),
+            antwort: None,
         },
         RunOptions::new(),
     )
@@ -578,6 +579,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
             accepted: false,
             reason: Some("MaLo hat laufenden Vertrag".to_owned()),
             response_ref: MessageRef::new("MSG-NB-REJ-001"),
+            antwort: None,
         },
         RunOptions::new(),
     )

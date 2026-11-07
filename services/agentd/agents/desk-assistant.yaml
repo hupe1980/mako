@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: desk-assistant
-  version: "1.3.0"
+  version: "1.4.0"
   annotations:
     mako.de/titel: "Assistent im Desk"
     mako.de/zweck: "Beantwortet eine Frage zum Kunden, zur Marktlokation, zum Prozess oder zur Entscheidung auf dem Bildschirm, jeden Satz mit seiner Quelle."
@@ -54,6 +54,16 @@ spec:
          `key`, then accountingd `list_ledger` with the booking's `malo_id`
          for what is already booked on that account.
       8. Answer in at most five sentences.
+
+      ## WHAT AN ANSWER SAID
+      A history entry that is an answer names its `antwortcode`, the
+      `codeliste` that defines it and, where the catalogue publishes it, the
+      BDEW's `bedeutung`. Why a counterparty refused, or what we answered,
+      is that `bedeutung`, quoted as the entry gives it, citing
+      `makod/get_process_history`. A code means something only in its list —
+      `A02` is a different refusal in `E_0607` and `E_0622` — so a code
+      whose entry carries no `bedeutung` is named with its list and left
+      unexplained; never gloss it from memory.
 
       ## A VORSCHLAG — only for a `freigabe`, and only when asked what to do
       Propose one decision in `vorschlag`: `aktion` `freigeben` or

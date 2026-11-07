@@ -65,7 +65,7 @@
 //!                      └─ (no defect found)   ─→ Erfasst          (terminal)
 //! ```
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -230,6 +230,8 @@ pub enum ProfilEvent {
         maengel: String,
         /// Reference of the dispatched ORDERS.
         message_ref: MessageRef,
+        /// The `E_0100` Reklamationsgrund the ORDERS carries.
+        antwortcode: String,
     },
     /// Inbound message failed AHB validation (terminal).
     ValidationFailed {
@@ -269,6 +271,15 @@ impl EventPayload for ProfilEvent {
                 message_ref: Some(message_ref.as_str().to_owned()),
             }),
             Self::Erfasst { .. } | Self::ValidationFailed { .. } => None,
+        }
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::ReklamationGesendet { antwortcode, .. } => {
+                Some(Antwortcode::new(antwortcode.clone(), Some(REKLAMATION_EBD)))
+            }
+            _ => None,
         }
     }
 }
@@ -548,6 +559,7 @@ impl Workflow for MabisProfilWorkflow {
                         pruefidentifikator: pid,
                         maengel,
                         message_ref,
+                        antwortcode: code.code.to_owned(),
                     }],
                     outbox: vec![outbox],
                     deadlines: vec![],
@@ -594,12 +606,31 @@ mod tests {
     }
 
     #[test]
+    fn a_reklamation_states_its_e_0100_code() {
+        let gesendet = ProfilEvent::ReklamationGesendet {
+            pruefidentifikator: Pruefidentifikator::const_new(17211),
+            maengel: "x".to_owned(),
+            message_ref: MessageRef::new("ORDERS-1"),
+            antwortcode: "A01".to_owned(),
+        };
+        assert_eq!(
+            gesendet.antwort(),
+            Some(Antwortcode::new("A01", Some(REKLAMATION_EBD)))
+        );
+        assert!(
+            mako_pruefung::codes::lies(REKLAMATION_EBD, "A01").is_some(),
+            "the history finds the Reklamationsgrund's wording"
+        );
+    }
+
+    #[test]
     fn verlauf_states_the_messages_and_nothing_else() {
         assert_eq!(
             ProfilEvent::ReklamationGesendet {
                 pruefidentifikator: Pruefidentifikator::const_new(17211),
                 maengel: "x".to_owned(),
                 message_ref: MessageRef::new("ORDERS-1"),
+                antwortcode: "A01".to_owned(),
             }
             .verlauf(),
             Some(Verlauf {

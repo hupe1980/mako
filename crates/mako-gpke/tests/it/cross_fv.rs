@@ -370,6 +370,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
             accepted,
             reason,
             response_ref: MessageRef::new(antwort_ref),
+            antwort: None,
         },
         RunOptions::new(),
     )
@@ -418,6 +419,7 @@ async fn cross_fv_rejection_also_terminates_cleanly() {
             accepted: false,
             reason: Some("Vertragsdaten unvollständig".to_owned()),
             response_ref: MessageRef::new("REJ-FV-001"),
+            antwort: None,
         },
         RunOptions::new(),
     )
@@ -600,6 +602,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
             accepted: true,
             reason,
             response_ref: MessageRef::new(antwort_ref),
+            antwort: None,
         },
         RunOptions::new(),
     )

@@ -270,6 +270,16 @@ pub trait EventPayload:
     fn verlauf(&self) -> Option<crate::envelope::Verlauf> {
         None
     }
+
+    /// The answer this event's message gives — its Antwortcode and the
+    /// Codeliste defining it — or `None` when it is no answer.
+    ///
+    /// Stamped on the envelope beside [`verlauf`](Self::verlauf), so a history
+    /// can say what an answer said, not only that it came. An event that keeps
+    /// a code states it; `cargo xtask check-event-verlauf` holds that.
+    fn antwort(&self) -> Option<crate::envelope::Antwortcode> {
+        None
+    }
 }
 
 // ── CommandPayload ────────────────────────────────────────────────────────────
@@ -613,6 +623,7 @@ impl CommandContext {
             schema_version: event.schema_version(),
             payload,
             verlauf: event.verlauf(),
+            antwort: event.antwort(),
         })
     }
 }
@@ -660,6 +671,7 @@ impl EventEnvelope {
             schema_version: event.schema_version(),
             payload,
             verlauf: event.verlauf(),
+            antwort: event.antwort(),
         })
     }
 }

@@ -64,23 +64,22 @@ impl Daemon for Accountingd {
 
         // The ledger is created by the role that owns the schema — its `create`
         // runs DDL and installs the triggers that refuse every change to the
-        // log — and the runtime role is then granted exactly what doubleentry's
-        // store names: read and append, update only the maintained
+        // log — and the runtime role is then granted what doubleentry generates
+        // from its schema: read and append, update only the maintained
         // projections, never `DELETE`, `TRUNCATE` or DDL.
         let db = &cfg.database;
         let owner_url =
             mako_service::config::resolve_env(db.migration_url.as_deref().unwrap_or(&db.url))
                 .context("resolve the ledger owner's database url")?;
-        crate::ledger::PgLedger::connect(&owner_url, &cfg.tenant, mako_fristen::heute())
-            .await
-            .context("create the ledger")?;
+        let ledger =
+            crate::ledger::PgLedger::connect(&owner_url, &cfg.tenant, mako_fristen::heute())
+                .await
+                .context("create the ledger")?;
         if let Some(role) = mako_service::config::runtime_role(db)? {
-            for grant in crate::ledger::runtime_grants(&role) {
-                sqlx::query(mako_service::sql::dynamic(grant))
-                    .execute(pool)
-                    .await
-                    .context("grant the runtime role its ledger privileges")?;
-            }
+            ledger
+                .grant_runtime(&role)
+                .await
+                .context("grant the runtime role its ledger privileges")?;
         }
         Ok(())
     }

@@ -1,4 +1,4 @@
-// One Desk, worn one Rolle at a time (FR-030). The Rolle decides the accent,
+// One Desk, worn one Rolle at a time. The Rolle decides the accent,
 // the sidebar and its Heute sources; switching clears every
 // cached read, so no row of one Rolle can render under another.
 

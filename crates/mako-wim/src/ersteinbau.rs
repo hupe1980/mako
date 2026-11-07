@@ -51,7 +51,7 @@
 
 use std::collections::HashMap;
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
@@ -220,6 +220,18 @@ impl EventPayload for ErsteinbauEvent {
                 message_ref: Some(message_ref.as_str().to_owned()),
             }),
             Self::Rejected { .. } | Self::DeadlineExpired { .. } => None,
+        }
+    }
+
+    /// Both answers carry an `E_0233` code; the workflow answers from that one
+    /// tree.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet { antwort_code, .. }
+            | Self::AntwortErhalten { antwort_code, .. } => {
+                Some(Antwortcode::new(antwort_code.clone(), Some(ERSTEINBAU_EBD)))
+            }
+            _ => None,
         }
     }
 }
@@ -1147,6 +1159,23 @@ mod verlauf_tests {
             pid,
             message_ref: message_ref.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn an_e_0233_answer_states_its_code_and_tree_and_a_vorabinformation_states_none() {
+        assert_eq!(
+            ErsteinbauEvent::AntwortErhalten {
+                pruefidentifikator: pid(21_031),
+                antwort_code: "A02".into(),
+                message_ref: MessageRef::new("IFT-2"),
+            }
+            .antwort(),
+            Some(Antwortcode::new("A02", Some(ERSTEINBAU_EBD)))
+        );
+        assert_eq!(
+            ErsteinbauEvent::ScheiternGemeldet { reason: "x".into() }.antwort(),
+            None
+        );
     }
 
     #[test]

@@ -19,9 +19,9 @@
 //! - a **general-ledger** contra account, one per `entry_type`
 //!   ([`Chart`]) — Erlöse, Bank, Mahnerlöse, EEG-Aufwand.
 //!
-//! The Kontokorrent posting carries three dimensions — `art` (the entry type),
-//! `korrelation` (the originating CloudEvent) and `akteur` (who booked it) — so
-//! a per-type sum is one `balance` query rather than a read per entry.
+//! The Kontokorrent posting carries two dimensions — `korrelation` (the
+//! originating CloudEvent) and `akteur` (who booked it); the entry type is the
+//! entry's kind, so a per-type sum is one `balance` query `of_kind`.
 //!
 //! ## Writes go through booking drafts
 //!
@@ -48,9 +48,9 @@ pub const P: u8 = 2;
 /// The PostgreSQL schema the ledger's tables live in, beside accountingd's own
 /// tables in `public`.
 ///
-/// Not doubleentry's default `doubleentry`: a 0.7 ledger left under that name
-/// would meet 0.8's DDL as an opaque "relation exists" failure. Under its own
-/// name a leftover 0.7 schema is simply never read.
+/// Not doubleentry's default `doubleentry`, the schema a 0.7 ledger used: a
+/// leftover one is never read, and doubleentry refuses any schema holding
+/// foreign tables by name before its DDL runs.
 pub const LEDGER_SCHEMA: &str = "ledger";
 
 /// The first day the ledger accepts a booking on.
@@ -351,8 +351,6 @@ pub const ENTRY_TYPES: &[&str] = &[
 
 /// The dimension axes on the Kontokorrent posting.
 pub mod axis {
-    /// The entry type (`RECHNUNG`, `ZAHLUNG`, …).
-    pub const ART: &str = "art";
     /// The originating CloudEvent id.
     pub const KORRELATION: &str = "korrelation";
     /// Who booked it (an operator's subject, a worker's name).
@@ -493,8 +491,7 @@ impl PostEntry {
         let mut customer = match customer_side {
             Side::Debit => Posting::debit(kontokorrent.as_str(), amount, EUR),
             Side::Credit => Posting::credit(kontokorrent.as_str(), amount, EUR),
-        }
-        .dimension(axis::ART, self.entry_type.as_str());
+        };
         if let Some(correlation) = &self.correlation {
             customer = customer.dimension(axis::KORRELATION, correlation.as_str());
         }
@@ -594,6 +591,17 @@ pub struct SealedPeriod {
     pub end: Date,
 }
 
+impl From<&doubleentry::SealReceipt<P>> for SealedPeriod {
+    fn from(r: &doubleentry::SealReceipt<P>) -> Self {
+        Self {
+            period: r.period.as_str().to_owned(),
+            position: r.position,
+            start: r.start(),
+            end: r.end(),
+        }
+    }
+}
+
 /// Minor units as `i64`, the width accountingd's tables carry.
 fn ct(amount: Eur) -> i64 {
     i64::try_from(amount.to_minor()).unwrap_or(if amount.is_negative() {
@@ -601,15 +609,6 @@ fn ct(amount: Eur) -> i64 {
     } else {
         i64::MAX
     })
-}
-
-/// The first and last day of a `YYYY-MM` period.
-fn month_bounds(period: &str) -> Option<(Date, Date)> {
-    let (y, m) = period.split_once('-')?;
-    let month = time::Month::try_from(m.parse::<u8>().ok()?).ok()?;
-    let start = Date::from_calendar_date(y.parse().ok()?, month, 1).ok()?;
-    let end = start.replace_day(start.month().length(start.year())).ok()?;
-    Some((start, end))
 }
 
 // ── The ledger ─────────────────────────────────────────────────────────────────
@@ -620,8 +619,8 @@ fn month_bounds(period: &str) -> Option<(Date, Date)> {
 /// production against PostgreSQL, both held to doubleentry's conformance suite.
 pub struct Ledger<S: Store<P>> {
     books: doubleentry::Ledger<S, P>,
-    /// A clone of the store (cheap, pool-sharing) for the one read the ledger
-    /// façade does not offer: the seal list.
+    /// A clone of the store (cheap, pool-sharing), for the grants an owner
+    /// hands the runtime role.
     store: S,
 }
 
@@ -687,9 +686,10 @@ impl<S: Store<P>> Ledger<S> {
     ///
     /// A key doubleentry refuses (empty, over 128 bytes, a control character).
     pub fn entry_id_for(&self, key: &str) -> LedgerResult<uuid::Uuid> {
-        let key = doubleentry::IdempotencyKey::new(key)
-            .map_err(|e| LedgerError::refused(format!("idempotency key {key:?}: {e}")))?;
-        Ok(entry_uuid(EntryId::derive(self.books.id(), &key)))
+        self.books
+            .entry_id(key)
+            .map(entry_uuid)
+            .map_err(|e| LedgerError::refused(format!("idempotency key {key:?}: {e}")))
     }
 
     /// The doubleentry ledger, for reads this façade does not wrap.
@@ -823,7 +823,8 @@ impl<S: Store<P>> Ledger<S> {
     /// a re-run is a safe no-op. Each pair's key carries the log size the run
     /// started from, so a run after a reset clears anew rather than replaying
     /// the reset clearing. This is the § 252 HGB per-receivable matching a
-    /// running balance alone cannot express.
+    /// running balance alone cannot express. The pairs are cleared in one
+    /// transaction.
     ///
     /// # Errors
     ///
@@ -853,7 +854,7 @@ impl<S: Store<P>> Ledger<S> {
             .map_err(LedgerError::from_ledger("head"))?
             .size;
 
-        let mut positions = Vec::new();
+        let mut pairs = Vec::new();
         let mut credits = credits.into_iter().map(|c| (c, c.residual.to_minor()));
         let mut current = credits.next();
         'debit: for debit in debits {
@@ -870,17 +871,28 @@ impl<S: Store<P>> Ledger<S> {
                 let key = format!("fifo:{}:{}:{head}", debit.position, credit.position);
                 let amount = Eur::from_minor(take)
                     .map_err(|e| LedgerError::refused(format!("clearing amount: {e}")))?;
-                let position = self
-                    .books
-                    .clear(&key, debit.posting_ref(), credit.posting_ref(), amount, on)
-                    .await
-                    .map_err(LedgerError::from_ledger(format!("clear {key}")))?;
-                positions.push(position);
+                pairs.push(doubleentry::Clearing::new(
+                    key,
+                    debit.posting_ref(),
+                    credit.posting_ref(),
+                    amount,
+                    on,
+                ));
                 need -= take;
                 *left -= take;
             }
         }
-        Ok(positions)
+        if pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+        // One transaction for the whole Zahlungszuordnung: a payment matched
+        // against three invoices is cleared against all three or none.
+        let cleared = self
+            .books
+            .clear_batch(pairs)
+            .await
+            .map_err(LedgerError::from_ledger("clear the Zahlungszuordnung"))?;
+        Ok(cleared.iter().map(|c| c.position).collect())
     }
 
     /// Releases one clearing (a mis-assigned Zahlungszuordnung) — its amount
@@ -1053,7 +1065,7 @@ impl<S: Store<P>> Ledger<S> {
     ///
     /// The value is the signed net on the Kontokorrent (debit positive, credit
     /// negative), so `RECHNUNG` sums positive and `ABSCHLAG` negative. One
-    /// `balance` per entry type, filtered by the `art` dimension and the year's
+    /// `balance` per entry type, filtered by the entry's kind and the year's
     /// booking dates; types with no movement are absent.
     ///
     /// # Errors
@@ -1073,7 +1085,7 @@ impl<S: Store<P>> Ledger<S> {
         };
         let mut sums = std::collections::HashMap::new();
         for kind in ENTRY_TYPES {
-            let query = BalanceQuery::between(from, to).matching(axis::ART, kind);
+            let query = BalanceQuery::between(from, to).of_kind(kind);
             let net = self.balance(lf_mp_id, malo_id, &query).await?;
             if net != 0 {
                 sums.insert((*kind).to_owned(), net);
@@ -1086,27 +1098,14 @@ impl<S: Store<P>> Ledger<S> {
     ///
     /// # Errors
     ///
-    /// A store failure, or a sealed period whose id is not a calendar month.
+    /// A store failure.
     pub async fn seals(&self) -> LedgerResult<Vec<SealedPeriod>> {
-        let rows = self
-            .store
-            .seals(None)
+        let receipts = self
+            .books
+            .seals()
             .await
-            .map_err(|e| LedgerError::from_ledger("read seals")(Error::from(e)))?;
-        rows.into_iter()
-            .map(|row| {
-                let period = row.period.as_str().to_owned();
-                let (start, end) = month_bounds(&period).ok_or_else(|| {
-                    LedgerError::Integrity(format!("sealed period {period} is not a month"))
-                })?;
-                Ok(SealedPeriod {
-                    period,
-                    position: row.position,
-                    start,
-                    end,
-                })
-            })
-            .collect()
+            .map_err(LedgerError::from_ledger("read seals"))?;
+        Ok(receipts.iter().map(SealedPeriod::from).collect())
     }
 
     /// The date the books are closed through — the last day of the latest
@@ -1116,7 +1115,10 @@ impl<S: Store<P>> Ledger<S> {
     ///
     /// A store failure.
     pub async fn sealed_through(&self) -> LedgerResult<Option<Date>> {
-        Ok(self.seals().await?.last().map(|s| s.end))
+        self.books
+            .watermark()
+            .await
+            .map_err(LedgerError::from_ledger("read watermark"))
     }
 
     /// Seals every open period through `period` (**Festschreibung** — GoBD /
@@ -1133,21 +1135,7 @@ impl<S: Store<P>> Ledger<S> {
             .seal_through(period)
             .await
             .map_err(LedgerError::from_ledger(format!("seal through {period}")))?;
-        receipts
-            .into_iter()
-            .map(|r| {
-                let period = r.period.as_str().to_owned();
-                let (start, end) = month_bounds(&period).ok_or_else(|| {
-                    LedgerError::Integrity(format!("sealed period {period} is not a month"))
-                })?;
-                Ok(SealedPeriod {
-                    period,
-                    position: r.position,
-                    start,
-                    end,
-                })
-            })
-            .collect()
+        Ok(receipts.iter().map(SealedPeriod::from).collect())
     }
 
     /// Replays the whole log and compares every derived table with it: the
@@ -1282,24 +1270,22 @@ impl Ledger<SqlStore<Postgres, P>> {
         .map_err(|e| LedgerError::from_ledger("connect ledger store")(Error::from(e)))?;
         Self::open(store, tenant, today).await
     }
-}
 
-/// The grants a runtime role needs on a created ledger — exactly the list
-/// doubleentry's PostgreSQL store names: read and append everywhere, update
-/// only the maintained projections and three named columns, never `DELETE`,
-/// `TRUNCATE` or DDL.
-#[must_use]
-pub fn runtime_grants(role: &str) -> Vec<String> {
-    let s = LEDGER_SCHEMA;
-    let r = format!("\"{}\"", role.replace('"', "\"\""));
-    vec![
-        format!("GRANT USAGE ON SCHEMA {s} TO {r}"),
-        format!("GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA {s} TO {r}"),
-        format!("GRANT UPDATE ON {s}.balances, {s}.cleared, {s}.outstanding, {s}.slices TO {r}"),
-        format!("GRANT UPDATE (resolved_by, how) ON {s}.holds TO {r}"),
-        format!("GRANT UPDATE (salt, text) ON {s}.memos TO {r}"),
-        format!("GRANT UPDATE (fingerprint) ON {s}.entries TO {r}"),
-    ]
+    /// Grants `role` exactly what doubleentry's store generates from its
+    /// schema for a runtime role — read and append everywhere, update only the
+    /// maintained projections and the columns the write path changes, never
+    /// `DELETE`, `TRUNCATE` or DDL — in one transaction. Run as the owner.
+    ///
+    /// # Errors
+    ///
+    /// An invalid role name, an unknown role, or a connection without the
+    /// owner's rights; then nothing was granted.
+    pub async fn grant_runtime(&self, role: &str) -> LedgerResult<()> {
+        self.store
+            .grant_runtime(role)
+            .await
+            .map_err(|e| LedgerError::from_ledger("grant the runtime role")(Error::from(e)))
+    }
 }
 
 #[cfg(test)]
@@ -1563,19 +1549,5 @@ mod tests {
         assert_eq!(ct(proven.balance.net()), 1000);
         let (consistency, then, now) = ledger.prove_append_only(1).await.unwrap();
         consistency.verify(&then, &now).expect("append-only");
-    }
-
-    #[test]
-    fn grants_are_the_stores_list() {
-        let grants = runtime_grants("accountingd_app");
-        assert!(
-            grants
-                .iter()
-                .all(|g| !g.contains("DELETE") && !g.contains("TRUNCATE"))
-        );
-        assert!(
-            grants[1]
-                .contains("SELECT, INSERT ON ALL TABLES IN SCHEMA ledger TO \"accountingd_app\"")
-        );
     }
 }

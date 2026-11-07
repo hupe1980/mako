@@ -6,7 +6,7 @@
 // Two of them send a message: the Ablehnung of a disputed INVOIC (a REMADV to
 // the Rechnungssteller) and the Freigabe of a held invoice (issued to the
 // customer). They are confirmed and sent at once. Beilegen and Geprüft send
-// nothing and are held for undo (FR-029).
+// nothing and are held for undo.
 
 import { problem, sentence } from "./problem";
 import { type Handlung, verweigern } from "./verweigert";

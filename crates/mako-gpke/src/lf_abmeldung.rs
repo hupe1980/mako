@@ -40,7 +40,7 @@
 //!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
 //!   dem ÜT.
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -164,6 +164,13 @@ impl EventPayload for LfAbmeldungEvent {
                 pid: None,
                 message_ref: None,
             }),
+        }
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet { antwort, .. } => Some(antwort.antwortcode()),
+            _ => None,
         }
     }
 }
@@ -805,5 +812,25 @@ mod tests {
         )
         .unwrap();
         assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn the_sent_answer_states_its_code_and_tree_and_a_state_change_none() {
+        let gesendet = LfAbmeldungEvent::AntwortGesendet {
+            response_pid: Pruefidentifikator::new(55008).expect("valid PID"),
+            accepted: false,
+            antwort: crate::lf_antwort::LfAntwort::ablehnung("A10", "E_0609"),
+        };
+        assert_eq!(
+            gesendet.antwort(),
+            Some(Antwortcode::new("A10", Some("E_0609")))
+        );
+        assert_eq!(
+            LfAbmeldungEvent::Rejected {
+                reason: "AHB".into()
+            }
+            .antwort(),
+            None
+        );
     }
 }

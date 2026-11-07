@@ -96,7 +96,7 @@
 //! So a whole-list Ablehnung renders as a single Vorgang and a Korrekturliste
 //! as a list, which is the same split the two commands make.
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -324,6 +324,19 @@ impl EventPayload for ListenabgleichEvent {
                 message_ref: None,
             }),
             Self::ValidationFailed { .. } => None,
+        }
+    }
+
+    /// The whole-list refusal states its code. The event does not name the
+    /// tree: one answer PID is drawn from a different tree per sender role, so
+    /// the list stays `None` rather than a guess. A Korrekturliste carries its
+    /// codes per position, not as one answer.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::GesamtAblehnungGesendet { antwortcode, .. } => {
+                Some(Antwortcode::new(antwortcode.clone(), None::<String>))
+            }
+            _ => None,
         }
     }
 }
@@ -831,6 +844,27 @@ mod tests {
         events.iter().fold(ListenabgleichState::default(), |s, e| {
             MabisListenabgleichWorkflow::apply(s, e)
         })
+    }
+
+    #[test]
+    fn a_whole_list_refusal_states_its_code_and_a_korrekturliste_states_none() {
+        assert_eq!(
+            ListenabgleichEvent::GesamtAblehnungGesendet {
+                antwort_pid: Pruefidentifikator::const_new(55066),
+                antwortcode: "A01".to_owned(),
+                pruefschritt: 1,
+            }
+            .antwort(),
+            Some(Antwortcode::new("A01", None::<String>))
+        );
+        assert_eq!(
+            ListenabgleichEvent::KorrekturGesendet {
+                antwort_pid: Pruefidentifikator::const_new(55066),
+                korrekturen: 0,
+            }
+            .antwort(),
+            None
+        );
     }
 
     #[test]

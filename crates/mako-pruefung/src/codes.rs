@@ -5848,6 +5848,48 @@ pub fn lookup(ebd: &str, code: &str) -> Option<&'static AntwortCode> {
         .and_then(|(_, codes)| codes.iter().find(|c| c.code == code))
 }
 
+/// Read a code off the wire: `codeliste` is what DE 1131 / DE 1082 carried.
+///
+/// An `E_` number is the tree itself, as for every GPKE and GeLi Gas answer —
+/// the MaBiS trees included, where the `role-mabis` catalogue is built. An
+/// `S_`/`G_` Codeliste is resolved back through [`WIRE_CODELISTEN`] to the tree
+/// that publishes through it and the cluster it stands for — a WiM answer
+/// carries `S_0090`, which no tree is named, so [`lookup`] alone finds nothing.
+///
+/// `None` when the list is unknown, when the code is not published in it, or
+/// when one list serves two trees that word the code differently: a reader is
+/// never handed another tree's meaning.
+#[must_use]
+pub fn lies(codeliste: &str, code: &str) -> Option<&'static AntwortCode> {
+    if let Some(direct) = lookup(codeliste, code) {
+        return Some(direct);
+    }
+    #[cfg(feature = "role-mabis")]
+    if let Some(mabis) = crate::mabis::codes::lookup(codeliste, code) {
+        return Some(mabis);
+    }
+    let mut found: Option<&'static AntwortCode> = None;
+    for (ebd, zustimmung, ablehnung) in WIRE_CODELISTEN {
+        let cluster = if *zustimmung == codeliste && *ablehnung == codeliste {
+            None
+        } else if *zustimmung == codeliste {
+            Some(Cluster::Zustimmung)
+        } else if *ablehnung == codeliste {
+            Some(Cluster::Ablehnung)
+        } else {
+            continue;
+        };
+        let Some(hit) = lookup(ebd, code).filter(|c| cluster.is_none_or(|k| c.cluster == k)) else {
+            continue;
+        };
+        match found {
+            Some(earlier) if earlier.bedeutung != hit.bedeutung => return None,
+            _ => found = Some(hit),
+        }
+    }
+    found
+}
+
 /// Every code `ebd` publishes in `cluster`, in the catalogue's order.
 ///
 /// What an operator may answer with: a refusal draws from the tree's
@@ -5869,6 +5911,34 @@ pub fn codes_im_cluster(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_wire_codeliste_reads_through_the_tree_that_publishes_it() {
+        // An `E_` number is the tree.
+        let a02 = lies(EBD_ANMELDUNG_DIREKT_ABLEHNBAR, "A02").expect("E_0622 publishes A02");
+        assert_eq!(a02.ebd, Some(EBD_ANMELDUNG_DIREKT_ABLEHNBAR));
+        // A WiM answer names the Codeliste, which no tree is called.
+        let (ebd, _, ablehnung) = WIRE_CODELISTEN
+            .iter()
+            .find(|(e, _, _)| *e == EBD_KUENDIGUNG_MSB)
+            .expect("the Kündigung MSB tree rides on S_ lists");
+        let code = codes_im_cluster(ebd, Cluster::Ablehnung)
+            .next()
+            .expect("the tree publishes an Ablehnung")
+            .code;
+        let read = lies(ablehnung, code).expect("the Ablehnungs-Codeliste resolves");
+        assert_eq!(read.ebd, Some(*ebd));
+        assert_eq!(read.cluster, Cluster::Ablehnung);
+        // The Zustimmungs-Codeliste does not lend the Ablehnung its wording.
+        let (_, zustimmung, _) = WIRE_CODELISTEN
+            .iter()
+            .find(|(e, _, _)| *e == EBD_KUENDIGUNG_MSB)
+            .expect("listed");
+        assert!(lies(zustimmung, code).is_none_or(|c| c.cluster == Cluster::Zustimmung));
+        // An unknown list and an unpublished code read nothing.
+        assert!(lies("S_9999", "A01").is_none());
+        assert!(lies(EBD_ANMELDUNG_DIREKT_ABLEHNBAR, "Z99").is_none());
+    }
     use super::*;
 
     /// `codes_im_cluster` answers exactly the tree's codes of that cluster,

@@ -35,7 +35,7 @@
 //!   a decision, not an echo — it arrives through the ERP command API, exactly
 //!   like a Sperrung confirmation.
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -231,6 +231,20 @@ impl EventPayload for RechnungsabwicklungEvent {
             pid: pid.map(|p| p.as_u32()),
             message_ref: Some(message_ref.as_str().to_owned()),
         })
+    }
+
+    /// The LF's Ablehnung of the Angebot states its code with the tree its
+    /// Herkunft names — `None` for the tree where the Herkunft was not
+    /// established, because `E_0205` and `E_0208` word `A01`–`A03` differently.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AngebotAbgelehnt {
+                antwort_code: Some(code),
+                ebd,
+                ..
+            } => Some(Antwortcode::new(code.clone(), ebd.clone())),
+            _ => None,
+        }
     }
 }
 
@@ -735,6 +749,33 @@ mod tests {
         events
             .iter()
             .fold(init, WimRechnungsabwicklungWorkflow::apply)
+    }
+
+    #[test]
+    fn the_lf_ablehnung_states_its_code_and_a_bestellung_states_none() {
+        let abgelehnt = |ebd: Option<&str>| RechnungsabwicklungEvent::AngebotAbgelehnt {
+            sender: mcod("9900000000004"),
+            receiver: mcod("9900357000004"),
+            ebd: ebd.map(str::to_owned),
+            antwort_code: Some("A01".into()),
+            message_ref: mref("IFTSTA-1"),
+        };
+        assert_eq!(
+            abgelehnt(Some("E_0205")).antwort(),
+            Some(Antwortcode::new("A01", Some("E_0205")))
+        );
+        assert_eq!(
+            abgelehnt(None).antwort(),
+            Some(Antwortcode::new("A01", None::<String>)),
+            "an unknown Herkunft names no tree"
+        );
+        assert_eq!(
+            RechnungsabwicklungEvent::BeendigungGesendet {
+                message_ref: mref("ORDERS-2")
+            }
+            .antwort(),
+            None
+        );
     }
 
     /// A Bestellung is terminal on the wire: nothing answers a 17005, so the

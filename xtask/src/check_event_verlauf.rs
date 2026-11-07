@@ -15,6 +15,13 @@
 //! one that is a message under a name the rule does not read (`Initiated`) is
 //! the author's to state, and the tests beside each impl pin it.
 //!
+//! An answer states what it said as well. A file that keeps an answer code in
+//! its types — a field `antwort_code`/`antwortcode` of type `String`, an
+//! embedded `LfAntwort`, or an `Antwortcode` — and has an `impl EventPayload`
+//! defining `fn verlauf` defines `fn antwort` in that impl too: otherwise the
+//! code is kept in the workflow's event and the Verlauf shows an answer without
+//! saying what it was.
+//!
 //! [`EventPayload::verlauf`]: https://docs.rs/mako-engine
 
 use std::path::Path;
@@ -34,8 +41,28 @@ const MESSAGE_SUFFIXES: &[&str] = &[
     "Gemeldet",
 ];
 
-/// `(type, names a message, defines verlauf)` for each `impl EventPayload`.
-fn impls(src: &str) -> Vec<(String, bool, bool)> {
+/// Field shapes that keep an answer code.
+const CODE_FIELDS: &[&str] = &[
+    "antwort_code: String",
+    "antwort_code: Option<String>",
+    "antwortcode: String",
+    "antwortcode: Option<String>",
+    ": LfAntwort",
+    ": Option<LfAntwort>",
+    ": Box<LfAntwort>",
+    ": Option<Antwortcode>",
+    ": Antwortcode",
+];
+
+/// Whether the non-test part of `src` declares a field keeping an answer code.
+fn holds_code(src: &str) -> bool {
+    let body = src.split("#[cfg(test)]").next().unwrap_or(src);
+    CODE_FIELDS.iter().any(|f| body.contains(f))
+}
+
+/// `(type, names a message, defines verlauf, defines antwort)` for each
+/// `impl EventPayload`.
+fn impls(src: &str) -> Vec<(String, bool, bool, bool)> {
     let mut out = Vec::new();
     let mut rest = src;
     while let Some(at) = rest.find("EventPayload for ") {
@@ -72,7 +99,12 @@ fn impls(src: &str) -> Vec<(String, bool, bool)> {
             lit.chars().next().is_some_and(char::is_uppercase)
                 && MESSAGE_SUFFIXES.iter().any(|s| lit.ends_with(s))
         });
-        out.push((name, names_message, block.contains("fn verlauf")));
+        out.push((
+            name,
+            names_message,
+            block.contains("fn verlauf"),
+            block.contains("fn antwort"),
+        ));
         rest = &after[end..];
     }
     out
@@ -107,7 +139,14 @@ fn findings(files: &[(String, String)]) -> (usize, Vec<String>) {
         if !rel.contains("/src/") {
             continue;
         }
-        for (ty, names_message, has) in impls(src) {
+        let code = holds_code(src);
+        for (ty, names_message, has, antwort) in impls(src) {
+            if has && code && !antwort {
+                out.push(format!(
+                    "{rel}  {ty}: the file keeps an answer code and `antwort` states none — \
+                     give it `fn antwort` (the code and its Codeliste)"
+                ));
+            }
             if has {
                 stating += 1;
             } else if names_message {
@@ -177,6 +216,24 @@ mod tests {
             fn event_type(&self) -> &'static str { match self { Self::A => "AnweisungErhalten" } }
         }"#;
         assert_eq!(findings(&file(src)).1.len(), 1);
+    }
+
+    #[test]
+    fn an_answer_that_keeps_its_code_and_states_none_is_refused() {
+        let src = format!("enum E {{ A {{ antwort_code: String }} }}\n{STATING}");
+        assert_eq!(findings(&file(&src)).1.len(), 1);
+        let stated = src.replace(
+            "fn verlauf(&self) -> Option<Verlauf> { None }",
+            "fn verlauf(&self) -> Option<Verlauf> { None }\n fn antwort(&self) -> Option<Antwortcode> { None }",
+        );
+        assert!(findings(&file(&stated)).1.is_empty());
+    }
+
+    #[test]
+    fn a_code_only_in_the_tests_needs_nothing() {
+        let src =
+            format!("{STATING}\n#[cfg(test)]\nmod tests {{ struct T {{ antwortcode: String }} }}");
+        assert!(findings(&file(&src)).1.is_empty());
     }
 
     #[test]

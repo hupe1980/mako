@@ -595,6 +595,7 @@ mod tests {
             schema_version: 1,
             payload: json!({}),
             verlauf: None,
+            antwort: None,
         }
     }
 

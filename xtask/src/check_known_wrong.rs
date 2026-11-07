@@ -39,7 +39,8 @@
 //!
 //! The roadmap and the feature specifications live in `concepts/` and `specs/`,
 //! both gitignored. A tracked file that names `ROADMAP.md`, `concepts/` or
-//! `specs/`, or a milestone or task id (`M66 T016`, `T001`), points a reader at
+//! `specs/`, or a milestone, task or requirement id (`M66 T016`, `T001`,
+//! `(M74)`, `FR-006`, `SC-003`), points a reader at
 //! text the checkout does not have. Refused in
 //! every tracked or not-ignored file, except [`POINTER_SITES`]: `.gitignore`
 //! and the code that opens those paths, each with its reason.
@@ -465,9 +466,11 @@ const TEXT_EXTENSIONS: &[&str] = &[
 /// The strings rule 2 refuses.
 const POINTERS: &[&str] = &["ROADMAP.md", "concepts/", "specs/"];
 
-/// A milestone or task id — `M66 T016`, `T001` — which names a row of the
-/// untracked roadmap or a task of an untracked `tasks.md` as surely as a path does.
-const TASK_ID: &str = r"\b(M\d{1,3} )?T\d{3}\b";
+/// A milestone, task or requirement id — `M66 T016`, `T001`, `(M74)`,
+/// `spec M74`, `FR-006`, `SC-003` — which names a row of the untracked roadmap
+/// or a line of an untracked spec as surely as a path does. A bare `M74` is
+/// not one: SVG path data (`M10 3a7`) and units read the same.
+const TASK_ID: &str = r"\b(M\d{1,3} )?(T\d{3}|(FR|SC)-\d{3})\b|\(M\d{1,3}\)|\bspec M\d{1,3}\b";
 
 /// One offending line: path, 1-based line, message.
 type Finding = (String, usize, String);
@@ -1067,7 +1070,22 @@ mod tests {
         );
         assert!(pointer_findings("xtask/src/check_specs.rs", "- [ ] **T001** do it").is_empty());
         assert!(pointer_findings("crates/x/src/lib.rs", "DTM+163:202601010000T001").is_empty());
+        for pointer in [
+            "/// the ledger read itself (M74).",
+            "// enough verdicts for one to mean something (spec M74 FR-006).",
+            "/// FR-006: a split that divides evenly is exact.",
+            "it(\"offers „Warum?“ on every source (SC-002)\", async () => {",
+        ] {
+            assert_eq!(
+                pointer_findings("crates/x/src/lib.rs", pointer).len(),
+                1,
+                "{pointer}"
+            );
+        }
         assert!(pointer_findings("crates/x/src/lib.rs", "/// unit = M3").is_empty());
+        assert!(
+            pointer_findings("desk/src/design/Icon.tsx", "clock: \"M10 3a7 7 0 1 0\"").is_empty()
+        );
     }
 
     /// The live table: every rule names a row, every row is decided.

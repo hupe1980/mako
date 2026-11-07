@@ -1,6 +1,6 @@
 // The Frist-Uhr's text. The deadline instant is the service's; this only says
 // how far away it is on the wall clock. Werktage are never counted here — a
-// Werktag count is shown only when a service returns one (FR-010).
+// Werktag count is shown only when a service returns one.
 
 import { useEffect, useState } from "react";
 import type { Instant } from "./brands";

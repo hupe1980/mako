@@ -680,6 +680,7 @@ pub async fn evaluate_and_decide(
         decision,
         antwortcode: antwortcode.clone(),
         antwortcode_ebd,
+        pruefschritt: pruefschritt(&result),
         detail: detail.clone(),
         initiator_is_affiliate,
         decided_at: now,
@@ -1222,6 +1223,7 @@ pub async fn resume_after_lfa_antwort(
         decision,
         antwortcode: code,
         antwortcode_ebd: ebd,
+        pruefschritt: pruefschritt(&result),
         detail,
         // Phase one already wrote the § 20 parity row for this process, and
         // `insert` is ON CONFLICT DO NOTHING on `(process_id, tenant)` — so
@@ -1902,6 +1904,7 @@ async fn decide_abmeldung(
         decision,
         antwortcode,
         antwortcode_ebd,
+        pruefschritt: pruefschritt(&result),
         detail,
         initiator_is_affiliate,
         decided_at: now,
@@ -2117,6 +2120,14 @@ fn classify(
             None,
             Some(reason.clone()),
         ),
+    }
+}
+
+/// The Prüfschritt a refusal stopped at, for the decision log.
+fn pruefschritt(result: &NbEntscheidung) -> Option<i32> {
+    match result {
+        NbEntscheidung::Reject(r) => Some(i32::from(r.pruefschritt)),
+        _ => None,
     }
 }
 
@@ -2453,6 +2464,11 @@ mod tests {
         a.abmeldeanfrage = Abmeldeanfrage::Gestellt { antwort: None };
         let out = mako_pruefung::evaluate_lieferbeginn(&a, None);
         assert_eq!(out.antwortcode(), Some("A51"));
+        assert_eq!(
+            pruefschritt(&out),
+            None,
+            "an acceptance stops at no Prüfschritt"
+        );
     }
 
     /// Phase two, refusal: the outcome the NB could not reach at all before it
@@ -2477,13 +2493,16 @@ mod tests {
         // to carry the tree or the code cannot be read back: `A02` alone means
         // three unrelated things across `E_0607`, `E_0622` and `E_0609`.
         assert_eq!(ebd.as_deref(), Some("E_0623"));
+        // The refusal keeps where in the tree it stopped.
+        assert!(
+            pruefschritt(&out).is_some_and(|p| p > 0),
+            "a Reject names its Prüfschritt"
+        );
     }
 
-    /// Every decision that publishes a code names the tree it came from.
-    ///
-    /// The column existed and nothing wrote it, so `anmeldung_decisions` held
-    /// bare Antwortcodes: `A02` with no tree is not a finding an auditor
-    /// holding the published EBDs can locate.
+    /// Every decision that publishes a code names the tree it came from:
+    /// `A02` with no tree is not a finding an auditor holding the published
+    /// EBDs can locate.
     #[test]
     fn a_published_code_always_names_its_tree() {
         // `E_0623` Zustimmung (silence from the LFA), `E_0623` Ablehnung, and

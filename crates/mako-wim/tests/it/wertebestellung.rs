@@ -454,6 +454,16 @@ fn an_antwortcode_outside_the_tree_is_refused() {
         "the code's Cluster puts the answer on the Ablehnungs-PID"
     );
     assert_eq!(ob.payload["antwort_codeliste"].as_str(), Some("E_0256"));
+    // The refusal event states the same code and tree, so the Verlauf shows
+    // what the ORDRSP said.
+    use mako_engine::workflow::EventPayload as _;
+    assert_eq!(
+        out.events[0].antwort(),
+        Some(mako_engine::envelope::Antwortcode::new(
+            "A09",
+            Some("E_0256")
+        ))
+    );
 }
 
 /// `E_0254` publishes four refusals, so a Beendigung is not always

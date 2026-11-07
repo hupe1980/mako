@@ -487,13 +487,17 @@ pub fn geli_gas_datenabruf_ablehnung_registry()
     registry
 }
 
-/// Acceptance is determined by PID alone: 44023 = accepted, 44024 = rejected.
-/// The rejection reason is extracted from the first transaction's FTX segment.
+/// Acceptance is determined by PID alone: the Bestätigungen 44002, 44005 and
+/// 44017 accept, the Ablehnungen 44003, 44006 and 44018 refuse
+/// (`LF_ANMELDUNG_BESTAETIGUNG_PIDS`). The rejection reason is extracted from the
+/// first transaction's FTX segment, the answer code from its `STS+E01`.
 /// Regulatory basis: BK7-24-01-009, GeLi Gas (Lf-only deployment role).
 #[must_use]
 pub fn geli_gas_lf_anmeldung_registry() -> AdapterRegistry<mako_geli_gas::GeliGasLfAnmeldungWorkflow>
 {
-    use mako_geli_gas::{GeliGasLfAnmeldungCommand, LF_ANMELDUNG_ANTWORT_PIDS};
+    use mako_geli_gas::{
+        GeliGasLfAnmeldungCommand, LF_ANMELDUNG_ANTWORT_PIDS, LF_ANMELDUNG_BESTAETIGUNG_PIDS,
+    };
 
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
@@ -507,7 +511,7 @@ pub fn geli_gas_lf_anmeldung_registry() -> AdapterRegistry<mako_geli_gas::GeliGa
 
             let AnyMessage::Utilmd(u) = msg else {
                 return Err(EngineError::Deserialization(
-                    "GeLi Gas LF-Anmeldung adapter: expected UTILMD G message (PIDs 44003–44006)"
+                    "GeLi Gas LF-Anmeldung adapter: expected UTILMD G message (PIDs 44002/44003, 44005/44006, 44017/44018)"
                         .into(),
                 ));
             };
@@ -523,23 +527,31 @@ pub fn geli_gas_lf_anmeldung_registry() -> AdapterRegistry<mako_geli_gas::GeliGa
 
             if !LF_ANMELDUNG_ANTWORT_PIDS.contains(&pid.as_u32()) {
                 return Err(EngineError::Deserialization(format!(
-                    "GeLi Gas LF-Anmeldung adapter: unexpected PID {pid} (expected 44003–44006)"
+                    "GeLi Gas LF-Anmeldung adapter: unexpected PID {pid} (expected 44002/44003, 44005/44006, 44017/44018)"
                 )));
             }
 
-            // PID 44003/44005 = Bestätigung (accepted), 44004/44006 = Ablehnung (rejected).
-            let accepted = matches!(pid.as_u32(), 44003 | 44005);
+            let accepted = LF_ANMELDUNG_BESTAETIGUNG_PIDS.contains(&pid.as_u32());
             let reason = u
                 .transactions()
                 .first()
                 .and_then(|tx| tx.ftx.first())
                 .and_then(|f| f.text.clone());
 
+            // `SG4 STS+E01`: the code is what the answer means, the
+            // Codeliste which tree defines it.
+            let antwort = u
+                .transactions()
+                .first()
+                .and_then(|tx| tx.antwort())
+                .map(|a| mako_engine::envelope::Antwortcode::new(a.code.clone(), a.codeliste.clone()));
+
             Ok(GeliGasLfAnmeldungCommand::HandleAntwort {
                 response_pid: pid,
                 accepted,
                 reason,
                 response_ref: MessageRef::new(msg.message_ref()),
+                antwort,
             })
         },
     ));

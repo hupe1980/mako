@@ -130,6 +130,21 @@ export interface HistoryEntry {
    * The message's document number (`BGM` C106).
    */
   message_ref: string | null;
+  /**
+   * DE 9013 — the code the answer gives (`A02`, `E15`, `Z12`, …).
+   */
+  antwortcode: string | null;
+  /**
+   * DE 1131 — the Codeliste or Entscheidungsbaum that defines the code
+   * (`E_0622`, `S_0090`).
+   */
+  codeliste: string | null;
+  /**
+   * The BDEW's wording for the code in that list, from the catalogue.
+   * `None` when the list does not publish the code — never another tree's
+   * meaning.
+   */
+  bedeutung: string | null;
 }
 /**
  * One message that permanently failed.

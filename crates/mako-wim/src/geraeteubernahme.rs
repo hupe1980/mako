@@ -59,7 +59,7 @@
 
 use std::collections::HashMap;
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::payload::AperakPayload;
 use mako_engine::{
     envelope::EventEnvelope,
@@ -295,6 +295,22 @@ impl EventPayload for GeraeteubernahmeEvent {
             | Self::Abgeschlossen { .. }
             | Self::Abgelehnt { .. }
             | Self::DeadlineExpired { .. } => None,
+        }
+    }
+
+    /// The ORDRSP states its `AJT` code and the tree it was resolved against;
+    /// the wire Codeliste (`S_`/`G_`) is resolved from it on read.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet {
+                antwort_code,
+                antwort_ebd,
+                ..
+            } => Some(Antwortcode::new(
+                antwort_code.clone(),
+                Some(antwort_ebd.clone()),
+            )),
+            _ => None,
         }
     }
 }
@@ -1367,6 +1383,24 @@ mod verlauf_tests {
             pid,
             message_ref: message_ref.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn the_ordrsp_states_its_code_and_tree_and_a_completion_states_none() {
+        let antwort = GeraeteubernahmeEvent::AntwortGesendet {
+            pruefidentifikator: pid(19_001),
+            antwort_code: "A01".into(),
+            antwort_ebd: "E_0247".into(),
+            zustimmung: true,
+        };
+        assert_eq!(
+            antwort.antwort(),
+            Some(Antwortcode::new("A01", Some("E_0247")))
+        );
+        assert_eq!(
+            GeraeteubernahmeEvent::Abgelehnt { reason: "x".into() }.antwort(),
+            None
+        );
     }
 
     #[test]

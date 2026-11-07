@@ -1,6 +1,6 @@
 // The inbox's one shape. Every source maps its service's typed answer into
 // `Eintrag`s; nothing here computes a Frist — `frist` is the instant the
-// service returned, or none (FR-006, FR-007, FR-010).
+// service returned, or none.
 
 import type { Anker } from "../data/agent";
 import type { GeparkteBuchung } from "../data/gen/accountingd";

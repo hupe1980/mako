@@ -46,7 +46,7 @@
 //! | Antwort auf Stornierung | 2 WT nach ÜT der Stornierung |
 //! | Antwort auf Beendigung | 2 WT nach ÜT der Beendigung |
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -286,11 +286,17 @@ pub enum WertebestellungEvent {
     BestellungBestaetigt {
         /// Reference of the outbound ORDRSP 19011.
         message_ref: MessageRef,
+        /// The `AJT` code the ORDRSP carries and the tree that publishes it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// UC 4.1 Nr. 4 — Bestellung rejected; the process ends.
     BestellungAbgelehnt {
         /// Reason communicated to the ESA.
         reason: String,
+        /// The `AJT` code the ORDRSP carries and the tree that publishes it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// UC 4.1 Nr. 5 — ORDCHG Stornierung received before delivery began.
     StornierungEingegangen {
@@ -303,11 +309,17 @@ pub enum WertebestellungEvent {
     StornierungBestaetigt {
         /// Reference of the outbound ORDRSP 19013.
         message_ref: MessageRef,
+        /// The `AJT` code the ORDRSP carries and the tree that publishes it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// UC 4.1 Nr. 6 — Stornierung refused; the Bestellung stands.
     StornierungAbgelehnt {
         /// Reason communicated to the ESA.
         reason: String,
+        /// The `AJT` code the ORDRSP carries and the tree that publishes it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// UC 4.3 Nr. 1 — ORDERS Abbestellung received while delivery is running.
     AbbestellungEingegangen {
@@ -323,6 +335,9 @@ pub enum WertebestellungEvent {
     AbbestellungBestaetigt {
         /// Reference of the outbound ORDRSP 19011.
         message_ref: MessageRef,
+        /// The `AJT` code the ORDRSP carries and the tree that publishes it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// UC 4.3 Nr. 2 — Abbestellung refused (ORDRSP 19012); the running
     /// delivery stands.
@@ -335,6 +350,9 @@ pub enum WertebestellungEvent {
         /// Reason communicated to the ESA — the code's Bedeutung, or the
         /// operator's own Erläuterung.
         reason: String,
+        /// The `AJT` code the ORDRSP carries and the tree that publishes it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// UC 4.4 Nr. 1 — the MSB itself ends delivery.
     BeendetDurchMsb {
@@ -401,6 +419,18 @@ impl EventPayload for WertebestellungEvent {
         }
     }
 
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::BestellungBestaetigt { antwort, .. }
+            | Self::BestellungAbgelehnt { antwort, .. }
+            | Self::StornierungBestaetigt { antwort, .. }
+            | Self::StornierungAbgelehnt { antwort, .. }
+            | Self::AbbestellungBestaetigt { antwort, .. }
+            | Self::AbbestellungAbgelehnt { antwort, .. } => antwort.clone(),
+            _ => None,
+        }
+    }
+
     fn verlauf(&self) -> Option<Verlauf> {
         let (richtung, message_ref) = match self {
             Self::AnfrageEingegangen { message_ref, .. }
@@ -410,9 +440,9 @@ impl EventPayload for WertebestellungEvent {
                 (Richtung::Eingang, Some(message_ref))
             }
             Self::AngebotAbgegeben { message_ref, .. }
-            | Self::BestellungBestaetigt { message_ref }
-            | Self::StornierungBestaetigt { message_ref }
-            | Self::AbbestellungBestaetigt { message_ref }
+            | Self::BestellungBestaetigt { message_ref, .. }
+            | Self::StornierungBestaetigt { message_ref, .. }
+            | Self::AbbestellungBestaetigt { message_ref, .. }
             | Self::BeendetDurchMsb { message_ref, .. }
             | Self::WerteUebermittelt { message_ref, .. } => (Richtung::Ausgang, Some(message_ref)),
             // Each refusal enqueues the QUOTES / ORDRSP answer to the ESA; the
@@ -981,9 +1011,11 @@ impl Workflow for WimWertebestellungWorkflow {
                 }
                 other => other,
             },
-            E::AnfrageAbgelehnt { reason } | E::BestellungAbgelehnt { reason } => S::Abgelehnt {
-                reason: reason.clone(),
-            },
+            E::AnfrageAbgelehnt { reason } | E::BestellungAbgelehnt { reason, .. } => {
+                S::Abgelehnt {
+                    reason: reason.clone(),
+                }
+            }
             E::BestellungEingegangen {
                 message_ref,
                 abonnement,
@@ -1623,7 +1655,10 @@ impl Workflow for WimWertebestellungWorkflow {
                         Some(reason.as_str()),
                     );
                     return Ok(WorkflowOutput::with_outbox(
-                        vec![E::BestellungAbgelehnt { reason }],
+                        vec![E::BestellungAbgelehnt {
+                            reason,
+                            antwort: Some(Antwortcode::new(code.code, Some(tree))),
+                        }],
                         vec![outbox],
                     ));
                 }
@@ -1686,10 +1721,14 @@ impl Workflow for WimWertebestellungWorkflow {
                     reason.as_deref(),
                 );
                 let event = if zustimmung {
-                    E::BestellungBestaetigt { message_ref }
+                    E::BestellungBestaetigt {
+                        message_ref,
+                        antwort: Some(Antwortcode::new(code.code, Some(tree))),
+                    }
                 } else {
                     E::BestellungAbgelehnt {
                         reason: reason.unwrap_or_else(|| code.bedeutung.to_owned()),
+                        antwort: Some(Antwortcode::new(code.code, Some(tree))),
                     }
                 };
                 Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))
@@ -1769,10 +1808,14 @@ impl Workflow for WimWertebestellungWorkflow {
                     reason.as_deref(),
                 );
                 let event = if zustimmung {
-                    E::StornierungBestaetigt { message_ref }
+                    E::StornierungBestaetigt {
+                        message_ref,
+                        antwort: Some(Antwortcode::new(code.code, Some(tree))),
+                    }
                 } else {
                     E::StornierungAbgelehnt {
                         reason: reason.unwrap_or_else(|| code.bedeutung.to_owned()),
+                        antwort: Some(Antwortcode::new(code.code, Some(tree))),
                     }
                 };
                 Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))
@@ -1840,12 +1883,16 @@ impl Workflow for WimWertebestellungWorkflow {
                     reason.as_deref(),
                 );
                 let event = if zustimmung {
-                    E::AbbestellungBestaetigt { message_ref }
+                    E::AbbestellungBestaetigt {
+                        message_ref,
+                        antwort: Some(Antwortcode::new(code.code, Some(tree))),
+                    }
                 } else {
                     // A refused Abbestellung leaves the delivery running — the
                     // ESA must act on the code (storniere, or re-date).
                     E::AbbestellungAbgelehnt {
                         reason: reason.unwrap_or_else(|| code.bedeutung.to_owned()),
+                        antwort: Some(Antwortcode::new(code.code, Some(tree))),
                     }
                 };
                 Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))
@@ -2006,12 +2053,16 @@ mod verlauf_tests {
     fn verlauf_states_the_messages_and_only_the_messages() {
         let bestaetigt = WertebestellungEvent::BestellungBestaetigt {
             message_ref: MessageRef::new("RSP-1"),
+            antwort: None,
         };
         assert_eq!(
             bestaetigt.verlauf(),
             Some(stated(Richtung::Ausgang, None, Some("RSP-1")))
         );
-        let abgelehnt = WertebestellungEvent::BestellungAbgelehnt { reason: "x".into() };
+        let abgelehnt = WertebestellungEvent::BestellungAbgelehnt {
+            reason: "x".into(),
+            antwort: None,
+        };
         assert_eq!(
             abgelehnt.verlauf(),
             Some(stated(Richtung::Ausgang, None, None))

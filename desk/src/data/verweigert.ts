@@ -1,5 +1,5 @@
-// Who may do what is each service's Cedar policy's answer, never the Desk's
-// (FR-022): no role is mapped to an action in desk/src. The Desk shows every
+// Who may do what is each service's Cedar policy's answer, never the Desk's:
+// no role is mapped to an action in desk/src. The Desk shows every
 // action, and when a service answers one with a 403 it shows the service's
 // reason where the action was and offers that action of that service no more
 // this session — the tab's sessionStorage, so a reload keeps it and a new

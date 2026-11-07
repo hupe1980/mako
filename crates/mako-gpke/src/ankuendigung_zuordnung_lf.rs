@@ -66,7 +66,7 @@
 //! - **APERAK AHB 1.1 § 2.4.1** — the separate technical acknowledgement,
 //!   45 minutes on every day but Samstag (Sonntag 12:00 for a Saturday arrival)
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -192,6 +192,13 @@ impl EventPayload for AnkuendigungZuordnungLfEvent {
                 pid: None,
                 message_ref: None,
             }),
+        }
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet { antwort, .. } => Some(antwort.antwortcode()),
+            _ => None,
         }
     }
 }
@@ -1060,6 +1067,26 @@ mod tests {
         assert!(
             out.events.is_empty(),
             "deadline in terminal Zugeordnet state must emit no events"
+        );
+    }
+
+    #[test]
+    fn the_sent_answer_states_its_code_and_tree_and_a_state_change_none() {
+        let gesendet = AnkuendigungZuordnungLfEvent::AntwortGesendet {
+            response_pid: Pruefidentifikator::new(55609).expect("valid PID"),
+            accepted: false,
+            antwort: crate::lf_antwort::LfAntwort::ablehnung("A99", "E_0603"),
+        };
+        assert_eq!(
+            gesendet.antwort(),
+            Some(Antwortcode::new("A99", Some("E_0603")))
+        );
+        assert_eq!(
+            AnkuendigungZuordnungLfEvent::Rejected {
+                reason: "AHB".into()
+            }
+            .antwort(),
+            None
         );
     }
 }

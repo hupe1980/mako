@@ -54,7 +54,7 @@
 //!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
 //!   dem ÜT.
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -69,6 +69,10 @@ use mako_engine::{
 
 /// Workflow name used for PID routing and `WorkflowId` construction.
 pub const WORKFLOW_NAME: &str = "gpke-beendigung-zuordnung";
+
+/// The Entscheidungsbaum the LFA answers from — `mako_pruefung::codes`
+/// publishes its codes, and the tests hold the two in step.
+pub const BEENDIGUNG_EBD: &str = "E_0624";
 
 /// Inbound PIDs handled by [`GpkeBeendigungZuordnungWorkflow`].
 ///
@@ -255,6 +259,21 @@ impl EventPayload for BeendigungZuordnungEvent {
                 pid: None,
                 message_ref: None,
             }),
+        }
+    }
+
+    /// The LFA answers from `E_0624` alone, so its code is stated with that
+    /// tree. A lapsed window carries no message and states no answer, though
+    /// the Festlegung counts it as a Zustimmung.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet { antwort, .. } => Some(antwort.antwortcode()),
+            Self::LfaAntwortErhalten {
+                response_pid: Some(_),
+                antwortcode: Some(code),
+                ..
+            } => Some(Antwortcode::new(code.clone(), Some(BEENDIGUNG_EBD))),
+            _ => None,
         }
     }
 }
@@ -1471,5 +1490,43 @@ mod nb_initiator_tests {
         )
         .expect_err("55010 must name a Zuordnungsende");
         assert!(format!("{err}").contains("Zuordnungsende"), "{err}");
+    }
+
+    #[test]
+    fn an_lfa_answer_states_its_e_0624_code_and_a_lapsed_window_none() {
+        assert_eq!(
+            BEENDIGUNG_EBD,
+            mako_pruefung::codes::EBD_BEENDIGUNG_ZUORDNUNG
+        );
+        let erhalten = BeendigungZuordnungEvent::LfaAntwortErhalten {
+            response_pid: Some(Pruefidentifikator::new(55012).expect("valid PID")),
+            antwortcode: Some("A35".into()),
+            zustimmung: false,
+            grund: None,
+            zuordnungsende: None,
+            fristablauf: false,
+        };
+        assert_eq!(
+            erhalten.antwort(),
+            Some(Antwortcode::new("A35", Some("E_0624")))
+        );
+        let gesendet = BeendigungZuordnungEvent::AntwortGesendet {
+            response_pid: Pruefidentifikator::new(55011).expect("valid PID"),
+            accepted: true,
+            antwort: crate::lf_antwort::LfAntwort::zustimmung("A36", "E_0624"),
+        };
+        assert_eq!(
+            gesendet.antwort(),
+            Some(Antwortcode::new("A36", Some("E_0624")))
+        );
+        let lapsed = BeendigungZuordnungEvent::LfaAntwortErhalten {
+            response_pid: None,
+            antwortcode: None,
+            zustimmung: true,
+            grund: None,
+            zuordnungsende: None,
+            fristablauf: true,
+        };
+        assert_eq!(lapsed.antwort(), None, "no message arrived");
     }
 }

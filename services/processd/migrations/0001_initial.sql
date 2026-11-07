@@ -93,6 +93,9 @@ CREATE TABLE anmeldung_decisions (
     -- LF's E_0609, so the code alone does not identify the finding.
     antwortcode            TEXT,
     antwortcode_ebd        TEXT,
+    -- The Prüfschritt of the Entscheidungsbaum a Reject stopped at, so the
+    -- audit log says where in the tree the request failed, not only how.
+    pruefschritt           INTEGER CHECK (pruefschritt IS NULL OR (decision = 'Reject' AND pruefschritt > 0)),
     detail                 TEXT,
     -- Gleichbehandlung: TRUE when lf_mp_id = operator's own GLN
     initiator_is_affiliate BOOLEAN     NOT NULL DEFAULT false,

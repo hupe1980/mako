@@ -319,7 +319,7 @@ CREATE INDEX nb_contracts_selbstzahler
 -- ── VersorgungsStatus per MaLo ────────────────────────────────────────────────
 --
 -- One row per (malo_id, tenant). Derived from de.mako.process.completed events
--- by the event_ingest handler. Used by processd (M17) to drive automated LFA
+-- by the event_ingest handler. Used by processd to drive automated LFA
 -- E_0624 responses without ERP involvement.
 --
 -- Optimistic concurrency via version: UPDATE ... WHERE malo_id=$1 AND tenant=$2

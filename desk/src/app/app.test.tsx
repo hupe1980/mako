@@ -1856,7 +1856,7 @@ describe("the Desk", () => {
     localStorage.removeItem("mako-desk.rolle");
   });
 
-  it("offers „Warum?“ on every Heute source, or names why a source does not (SC-002)", async () => {
+  it("offers „Warum?“ on every Heute source, or names why a source does not", async () => {
     // One item from every source, read by the Rolle that reads it.
     const zeilen = {
       list_pending_approvals: {

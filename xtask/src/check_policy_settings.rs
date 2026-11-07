@@ -423,7 +423,7 @@ mod tests {
         parse_source("x", "services/x/src/config.rs", src).remove(0)
     }
 
-    /// SC-003: an option without a source is refused.
+    /// An option without a source is refused.
     #[test]
     fn an_option_without_a_source_is_refused() {
         let d = decl(
@@ -489,7 +489,7 @@ mod tests {
         assert!(!declaration_findings(&d).is_empty());
     }
 
-    /// SC-003: a bare defaulted enum in a service config is refused, a policy
+    /// A bare defaulted enum in a service config is refused, a policy
     /// field and an allow-listed one are not.
     #[test]
     fn a_bare_defaulted_enum_is_refused_and_a_policy_is_not() {

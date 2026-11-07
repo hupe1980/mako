@@ -34,7 +34,7 @@
 
 use std::collections::HashMap;
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
@@ -142,6 +142,18 @@ impl EventPayload for WeiterverpflichtungEvent {
                 message_ref: None,
             }),
             Self::Rejected { .. } | Self::DeadlineExpired { .. } => None,
+        }
+    }
+
+    /// The ORDRSP states its `AJT` code. The tree follows the Sparte of the
+    /// order (`E_0203` Strom, `E_2004` Gas), which this event does not carry,
+    /// so the list stays `None` rather than a guess.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet { antwort_code, .. } => {
+                Some(Antwortcode::new(antwort_code.clone(), None::<String>))
+            }
+            _ => None,
         }
     }
 }
@@ -696,6 +708,23 @@ mod verlauf_tests {
             pid,
             message_ref: message_ref.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn the_ordrsp_states_its_code_and_a_refused_order_states_none() {
+        assert_eq!(
+            WeiterverpflichtungEvent::AntwortGesendet {
+                pruefidentifikator: pid(19_003),
+                antwort_code: "Z13".into(),
+                abweichender_termin: None,
+            }
+            .antwort(),
+            Some(Antwortcode::new("Z13", None::<String>))
+        );
+        assert_eq!(
+            WeiterverpflichtungEvent::Rejected { reason: "x".into() }.antwort(),
+            None
+        );
     }
 
     #[test]

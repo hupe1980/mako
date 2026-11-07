@@ -533,7 +533,7 @@ mod tests {
         assert!(r.proof.haelt());
     }
 
-    /// FR-006: a split that divides evenly is exact. Three claims of 4 kWh
+    /// A split that divides evenly is exact. Three claims of 4 kWh
     /// against 9 kWh are 3 kWh each; dividing before multiplying would give
     /// 2.999997 and push 0.000009 kWh into the Deltamenge.
     #[test]

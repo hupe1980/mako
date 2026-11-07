@@ -2988,6 +2988,7 @@ mod tests {
             schema_version: 1,
             payload: serde_json::json!({ "n": seq_hint }),
             verlauf: None,
+            antwort: None,
         }
     }
 

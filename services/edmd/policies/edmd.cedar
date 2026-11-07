@@ -8,7 +8,7 @@
 // Actions:
 //   "read-timeseries"     — GET /api/v1/deliveries/:malo_id
 //   "read-imbalance"      — GET /api/v1/imbalance/:malo_id/:year/:month
-//   "read-billing-period" — GET /api/v1/billing-period/:malo_id (M15)
+//   "read-billing-period" — GET /api/v1/billing-period/:malo_id
 //   "write-meter-reads"   — POST /api/v1/meter-reads/rlm/:malo_id (direct push)
 //   "write-esa-typ2"      — POST /api/v1/esa/typ2/:malo_id (Kapitel 4.6.2 SMGW push)
 //   "read-corrections"    — GET /api/v1/corrections/:malo_id

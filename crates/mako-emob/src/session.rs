@@ -387,7 +387,7 @@ mod tests {
         );
         let split = s.in_viertelstunden().unwrap();
         let sum: Decimal = split.slots.iter().map(|s| s.kwh).sum();
-        // FR-006: the slots alone sum to the session energy; nothing is cut.
+        // The slots alone sum to the session energy; nothing is cut.
         assert_eq!(sum, dec!(10));
         assert_eq!(split.nicht_zugeordnet_kwh, Decimal::ZERO);
         assert_eq!(split.slots[0].kwh, dec!(3.333333));

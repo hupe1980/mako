@@ -520,11 +520,22 @@ pub fn gpke_lf_anmeldung_registry() -> AdapterRegistry<GpkeLfAnmeldungWorkflow> 
                 .and_then(|tx| tx.ftx.first())
                 .and_then(|f| f.text.clone());
 
+            // `SG4 STS+E01`: the code is what the answer means, the
+            // Codeliste which tree defines it.
+            let antwort = u
+                .transactions()
+                .first()
+                .and_then(|tx| tx.antwort())
+                .map(|a| {
+                    mako_engine::envelope::Antwortcode::new(a.code.clone(), a.codeliste.clone())
+                });
+
             Ok(LfAnmeldungCommand::HandleAntwort {
                 response_pid: pid,
                 accepted,
                 reason,
                 response_ref: MessageRef::new(msg.message_ref()),
+                antwort,
             })
         },
     ));

@@ -4,7 +4,7 @@
 the retail stack: open items, Abschläge, dunning and the §§ 41f/41g EnWG
 Sperr-Sequenz, SEPA collections and payouts, bank-statement import and the
 Jahresabschluss. Every money movement is one balanced entry in the
-[`doubleentry`](https://github.com/hupe1980/doubleentry) 0.8 ledger — append-only,
+[`doubleentry`](https://github.com/hupe1980/doubleentry) 0.9 ledger — append-only,
 Merkle-logged and sealable per month (GoBD / § 146 AO) — committed with the
 business change that causes it through a booking draft.
 

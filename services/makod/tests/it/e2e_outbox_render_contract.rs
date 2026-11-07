@@ -116,6 +116,40 @@ fn gnb_ablehnung_renders_to_parseable_utilmd() {
     assert_eq!(pid_of(&rendered.bytes), 44003);
 }
 
+/// The LFN reads a rendered GNB answer the way it was meant: a Bestätigung
+/// accepts and an Ablehnung refuses. A refusal read as acceptance activates
+/// supply on a Marktlokation the GNB turned down.
+#[test]
+fn the_lfn_reads_a_gnb_answer_as_what_it_says() {
+    for (pid, accepted) in [(44002, true), (44003, false)] {
+        let msg = outbox(
+            "UTILMD",
+            LFN,
+            serde_json::json!({
+                "pid":           pid,
+                "anfrage_pid":   44001,
+                "accepted":      accepted,
+                "malo":          MALO,
+                "sender":        GNB,
+                "receiver":      LFN,
+                "document_date": "20261101",
+                "process_date":  "20261101",
+            }),
+        );
+        let rendered = render_to_wire_bytes(&msg, &registry()).expect("renders");
+        let parsed = edi_energy::parse(&rendered.bytes).expect("parses");
+        let fv = mako_engine::version::FormatVersion::new("FV2025-10-01");
+        let cmd = makod::orchestrator::adapters::geli_gas_lf_anmeldung_registry()
+            .dispatch(&parsed as &dyn std::any::Any, &fv)
+            .expect("the LFN adapter reads the answer");
+        let mako_geli_gas::GeliGasLfAnmeldungCommand::HandleAntwort { accepted: read, .. } = cmd
+        else {
+            panic!("{pid} is an answer");
+        };
+        assert_eq!(read, accepted, "PID {pid}");
+    }
+}
+
 /// A GNB-initiated Anfrage (44007 Abmeldung NN vom NB) must render.
 #[test]
 fn gnb_initiated_anfrage_renders_to_parseable_utilmd() {

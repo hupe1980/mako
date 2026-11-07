@@ -51,7 +51,7 @@ use mako_engine::lf_vorgang::LfVorgangsdaten;
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
-    envelope::{EventEnvelope, Richtung, Verlauf},
+    envelope::{Antwortcode, EventEnvelope, Richtung, Verlauf},
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
@@ -284,6 +284,10 @@ pub enum GasSupplierChangeEvent {
         accepted: bool,
         /// Rejection reason (only set when `accepted = false`).
         reason: Option<String>,
+        /// `SG4 STS+E01` DE 9013 the answer carried. The Gas Codelisten name no
+        /// DE 1131, so no list rides with it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort_code: Option<String>,
     },
     /// GNB initiated a process by sending the Anfrage via outbox.
     GnbProcessInitiated {
@@ -404,6 +408,16 @@ impl EventPayload for GasSupplierChangeEvent {
                 pid: None,
                 message_ref: None,
             }),
+        }
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet {
+                antwort_code: Some(code),
+                ..
+            } => Some(Antwortcode::new(code.clone(), None::<String>)),
+            _ => None,
         }
     }
 }
@@ -1055,7 +1069,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     "variant":       format!("{:?}", data.variant),
                     // `SG4 STS+E01` — Muss on every Antwortnachricht. The Gas
                     // Codelisten carry no DE 1131, so there is no `antwort_codeliste`.
-                    "antwort_code":  antwort_code,
+                    "antwort_code":  &antwort_code,
                 });
                 if let Some(ref r) = bemerkung {
                     outbox_payload["bemerkung"] = serde_json::Value::String(r.clone());
@@ -1082,6 +1096,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     response_pid,
                     accepted,
                     reason: bemerkung,
+                    antwort_code: Some(antwort_code),
                 };
                 Ok(WorkflowOutput::with_outbox(vec![event], all_outbox))
             }
@@ -1460,6 +1475,7 @@ mod tests {
             response_pid: Some(pid(44002)),
             accepted: true,
             reason: None,
+            antwort_code: None,
         };
         assert_eq!(
             antwort.verlauf(),
@@ -1476,6 +1492,7 @@ mod tests {
             response_pid: None,
             accepted: true,
             reason: None,
+            antwort_code: None,
         };
         assert_eq!(einweg.verlauf().and_then(|v| v.pid), Some(44019));
         // The APERAK 313 queued beside a validation failure.

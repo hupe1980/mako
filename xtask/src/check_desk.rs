@@ -7,7 +7,7 @@
 //! when one side is allowed, `A AND B` only when both are, and a package with no
 //! licence field fails.
 //!
-//! **The Desk computes nothing that decides** (spec FR-010). A Frist, an amount,
+//! **The Desk computes nothing that decides**. A Frist, an amount,
 //! a Werktag or a verdict is the service's; the browser renders it. So outside
 //! `desk/src/format/` — the one layer that turns an instant or an amount into
 //! text — no source builds or parses a date or a number. A second

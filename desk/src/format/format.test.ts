@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { antwortTeile } from "./antwort";
 import {
   formatAnteil,
   hilfreichText,
@@ -96,7 +97,7 @@ describe("the Frist band", () => {
   });
 });
 
-describe("a skill's record (M74 FR-006: a share only from five verdicts)", () => {
+describe("a skill's record: a share only from five verdicts", () => {
   it("sets the threshold at five", () => {
     expect(MINDEST_URTEILE).toBe(5);
   });
@@ -128,5 +129,26 @@ describe("a skill's record (M74 FR-006: a share only from five verdicts)", () =>
   it("rounds a share to a whole percent in German", () => {
     expect(formatAnteil(1, 3)).toMatch(/^33\s%$/);
     expect(formatAnteil(2, 3)).toMatch(/^67\s%$/);
+  });
+});
+
+describe("antwortTeile", () => {
+  it("states the code with the catalogue's wording", () => {
+    expect(
+      antwortTeile({
+        antwortcode: "A02",
+        codeliste: "E_0622",
+        bedeutung: "Marktlokation nimmt nicht teil",
+      }),
+    ).toEqual({ code: "A02", text: "Marktlokation nimmt nicht teil" });
+  });
+  it("names the list, not a meaning, when the catalogue has none", () => {
+    expect(antwortTeile({ antwortcode: "Z99", codeliste: "E_0622", bedeutung: null })).toEqual({
+      code: "Z99",
+      text: "aus E_0622, ohne Wortlaut im Katalog",
+    });
+  });
+  it("is nothing on a message that gives no answer", () => {
+    expect(antwortTeile({ antwortcode: null })).toBeNull();
   });
 });

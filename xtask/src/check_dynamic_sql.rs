@@ -24,9 +24,7 @@ const GRANT: &str = "a GRANT naming the configured runtime role, quoted as an id
 /// Every file that builds SQL at runtime: `(path, calls, why)`.
 const SITES: &[(&str, usize, &str)] = &[
     ("crates/mako-service/src/service.rs", 1, GRANT),
-    ("services/accountingd/src/daemon.rs", 1, GRANT),
     ("services/accountingd/src/pg.rs", 3, SPLICE),
-    ("services/accountingd/tests/it/db_scenarios.rs", 1, GRANT),
     ("services/einsd/src/pg_einspeiser.rs", 3, SPLICE),
     (
         "services/einsd/tests/it/settlement_integration.rs",

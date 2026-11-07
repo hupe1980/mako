@@ -50,6 +50,35 @@ pub enum Richtung {
     Ausgang,
 }
 
+/// The answer a market message gives: its code and the list that defines it.
+///
+/// A code means something only in the Entscheidungsbaum or Codeliste that
+/// publishes it — `A02` is four unrelated refusals across `E_0607`, `E_0622`,
+/// `E_0249` and `E_0250` — so the two travel together. Stated by
+/// [`EventPayload::antwort`](crate::workflow::EventPayload::antwort) and
+/// stamped on the envelope beside the [`Verlauf`], so a history read can resolve
+/// the meaning without any workflow's types.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Antwortcode {
+    /// DE 9013 — the code (`A02`, `E15`, `Z12`, …).
+    pub code: String,
+    /// DE 1131 / DE 1082 — the Codeliste on the wire (`E_0622`, `S_0090`,
+    /// `G_0051`), or the tree the workflow answers from; `None` where the
+    /// message names neither.
+    pub codeliste: Option<String>,
+}
+
+impl Antwortcode {
+    /// A code and the list it is drawn from.
+    #[must_use]
+    pub fn new(code: impl Into<String>, codeliste: Option<impl Into<String>>) -> Self {
+        Self {
+            code: code.into(),
+            codeliste: codeliste.map(Into::into),
+        }
+    }
+}
+
 /// A pending event ready to be appended to a stream.
 ///
 /// The caller constructs a `NewEvent` for each domain event produced by a
@@ -98,6 +127,8 @@ pub struct NewEvent {
     pub payload: Value,
     /// The market message this event is, if it is one.
     pub verlauf: Option<Verlauf>,
+    /// The answer the message gives, if it is an answer carrying a code.
+    pub antwort: Option<Antwortcode>,
 }
 
 impl NewEvent {
@@ -135,6 +166,7 @@ impl NewEvent {
             schema_version,
             payload,
             verlauf: None,
+            antwort: None,
         }
     }
 
@@ -142,6 +174,13 @@ impl NewEvent {
     #[must_use]
     pub fn with_verlauf(mut self, verlauf: Verlauf) -> Self {
         self.verlauf = Some(verlauf);
+        self
+    }
+
+    /// The answer the message gives.
+    #[must_use]
+    pub fn with_antwort(mut self, antwort: Antwortcode) -> Self {
+        self.antwort = Some(antwort);
         self
     }
 }
@@ -220,6 +259,11 @@ pub struct EventEnvelope {
     /// shows. Absent on an event that is no message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verlauf: Option<Verlauf>,
+
+    /// The answer the message gives — its code and Codeliste. Absent on an
+    /// event that is no answer, or one whose message carries no code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort: Option<Antwortcode>,
 }
 
 impl EventEnvelope {
@@ -277,6 +321,7 @@ impl EventEnvelope {
             schema_version: new.schema_version,
             payload: new.payload,
             verlauf: new.verlauf,
+            antwort: new.antwort,
         }
     }
 }

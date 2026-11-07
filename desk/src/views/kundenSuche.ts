@@ -1,6 +1,6 @@
 // The Lieferant's Anker search, shared by the Kunden page and ⌘K: what a
 // person types goes to vertragd's `search_kunden` after a short pause — the
-// Desk keeps no index of customers (FR-032).
+// Desk keeps no index of customers.
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";

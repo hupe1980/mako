@@ -153,7 +153,7 @@ de.mako.process.initiated
   Accept   → anmeldung_decisions(Accept, Zustimmungscode)
              [if auto_accept] → makod …bestaetigen (antwort_code, antwort_ebd)
              else             → approval_queue
-  Reject   → anmeldung_decisions(Reject, Antwortcode)
+  Reject   → anmeldung_decisions(Reject, Antwortcode, Prüfschritt)
              → makod …ablehnen (antwort_code, antwort_ebd, bemerkung)
   Escalate → anmeldung_decisions(Escalate) → approval_queue
   AnfrageErforderlich

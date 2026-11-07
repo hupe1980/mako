@@ -1,6 +1,6 @@
 // A skill's record as text. The counts are agentd's (agentplane's track
 // record over its window); this layer only says them, and says a share only
-// where there are enough verdicts for one to mean something (spec M74 FR-006).
+// where there are enough verdicts for one to mean something.
 
 import { formatCount } from "./count";
 

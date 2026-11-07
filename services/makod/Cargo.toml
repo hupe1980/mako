@@ -26,11 +26,12 @@ mako-invoic      = { path = "../../crates/mako-invoic" }
 # The Antwortcode catalogue: a code is validated against the Entscheidungsbaum
 # that publishes it before the answer can reach the wire.
 # `role-msb` implies `role-esa`, and both are used directly here (the WiM
-# adapters resolve Antwortcodes, the ESA ones the Wertebestellung trees).
+# adapters resolve Antwortcodes, the ESA ones the Wertebestellung trees);
+# `role-mabis` lets `get_process_history` word a MaBiS tree's code.
 # Naming them is the point: inherited through `mako-wim` they would leave makod
 # depending on another crate's feature choice, and dropping it there would break
 # this crate with an error pointing somewhere else entirely.
-mako-pruefung      = { workspace = true, features = ["role-msb", "role-emob"] }
+mako-pruefung      = { workspace = true, features = ["role-msb", "role-emob", "role-mabis"] }
 mako-wim         = { path = "../../crates/mako-wim" }
 mako-geli-gas    = { path = "../../crates/mako-geli-gas" }
 dvgw-edi         = { path = "../../crates/dvgw-edi" }

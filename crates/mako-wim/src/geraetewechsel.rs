@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::payload::AperakPayload;
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -788,6 +788,22 @@ impl EventPayload for DeviceChangeEvent {
             | Self::Completed { .. }
             | Self::Rejected { .. }
             | Self::DeadlineExpired { .. } => None,
+        }
+    }
+
+    /// The answer this party sent states its `STS+E01` code and the EBD it is
+    /// drawn from; the wire Codeliste (`S_`/`G_`) is resolved from it on read.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet {
+                antwort_code,
+                antwort_ebd,
+                ..
+            } => Some(Antwortcode::new(
+                antwort_code.clone(),
+                Some(antwort_ebd.clone()),
+            )),
+            _ => None,
         }
     }
     // schema_version defaults to 1; increment and add an upcast arm on next
@@ -3151,6 +3167,34 @@ mod verlauf_tests {
             pid,
             message_ref: message_ref.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn the_sent_answer_states_its_code_and_ebd_and_an_order_states_none() {
+        let gesendet = DeviceChangeEvent::AntwortGesendet {
+            pruefidentifikator: pid(55_041),
+            bestaetigt: false,
+            antwort_code: "A01".into(),
+            antwort_ebd: mako_pruefung::codes::EBD_KUENDIGUNG_MSB.into(),
+            bemerkung: None,
+            abweichender_termin: None,
+        };
+        assert_eq!(
+            gesendet.antwort(),
+            Some(Antwortcode::new(
+                "A01",
+                Some(mako_pruefung::codes::EBD_KUENDIGUNG_MSB)
+            ))
+        );
+        let auftrag = DeviceChangeEvent::AuftragGesendet {
+            melo_id: MeLo::new("DE0000000001234567890000000000001"),
+            sender: MarktpartnerCode::new("9900000000001"),
+            receiver: MarktpartnerCode::new("9900000000002"),
+            process_date: "20270101".into(),
+            message_ref: MessageRef::new("UTILMD-2"),
+            pruefidentifikator: pid(55_039),
+        };
+        assert_eq!(auftrag.antwort(), None);
     }
 
     #[test]

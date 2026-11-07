@@ -249,6 +249,27 @@
                 "string",
                 "null"
               ]
+            },
+            "antwortcode": {
+              "description": "DE 9013 — the code the answer gives (`A02`, `E15`, `Z12`, …).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "codeliste": {
+              "description": "DE 1131 — the Codeliste or Entscheidungsbaum that defines the code\n(`E_0622`, `S_0090`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bedeutung": {
+              "description": "The BDEW's wording for the code in that list, from the catalogue.\n`None` when the list does not publish the code — never another tree's\nmeaning.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -257,7 +278,10 @@
             "event_type",
             "richtung",
             "pid",
-            "message_ref"
+            "message_ref",
+            "antwortcode",
+            "codeliste",
+            "bedeutung"
           ]
         }
       },

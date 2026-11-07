@@ -263,8 +263,12 @@ impl MockLfn {
             .bytes
     }
 
-    /// ERP notification: receive NB's UTILMD response (55002/55003) and execute on `nb_leg`.
-    async fn receive_antwort_von_nb(&self, wire: &[u8]) {
+    /// ERP notification: receive NB's UTILMD response (55002/55003) and execute
+    /// on `nb_leg`; returns the envelopes the answer appended.
+    async fn receive_antwort_von_nb(
+        &self,
+        wire: &[u8],
+    ) -> Vec<mako_engine::envelope::EventEnvelope> {
         let raw = self
             .platform
             .parse(wire)
@@ -275,7 +279,8 @@ impl MockLfn {
         self.nb_leg
             .run(cmd, RunOptions::new())
             .await
-            .expect("LFN: execute HandleAntwort (nb_leg)");
+            .expect("LFN: execute HandleAntwort (nb_leg)")
+            .events
     }
 
     /// ERP notification: receive LFA's UTILMD 55017 and execute on `lfa_leg`.
@@ -764,8 +769,19 @@ async fn e2e_lieferantenwechsel_strom_nb_rejects() {
     );
 
     // ── LFN: receive both responses ───────────────────────────────────────────
-    lfn.receive_antwort_von_nb(&wire_55003).await;
+    let angekommen = lfn.receive_antwort_von_nb(&wire_55003).await;
     lfn.receive_antwort_von_lfa(&wire_55017).await;
+
+    // The refusal states what it said: the NB's `STS+E01` code and the tree it
+    // is drawn from reach the stored envelope, where the Verlauf reads them.
+    let antwort = angekommen
+        .iter()
+        .find_map(|e| e.antwort.clone())
+        .expect("the 55003's answer code reaches the envelope");
+    assert_eq!(
+        (antwort.code.as_str(), antwort.codeliste.as_deref()),
+        ("A07", Some("E_0622"))
+    );
 
     // ── Final state assertions ────────────────────────────────────────────────
     let nb_leg_final = lfn.nb_leg_state().await;

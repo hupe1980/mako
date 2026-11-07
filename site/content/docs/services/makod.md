@@ -692,7 +692,7 @@ Cedar `UseMcp` action; unauthenticated requests are `401`.
 | `get_partner` | `read_only` | Partner by 13-digit MP-ID |
 | `get_health` | `read_only` | Version, tenant, Marktrollen, MaLo cache stats |
 | `get_process` | `read_only` | Business key (`malo_id`/`melo_id`/`vorgang`) or process id → every process indexed under it, each with its pending deadlines (`outputSchema` declared) |
-| `get_process_history` | `read_only` | A process's events, oldest first; a market message carries `richtung`, `pid` and `message_ref` as its workflow states them (`EventPayload::verlauf`), never parsed from the event type (`outputSchema` declared) |
+| `get_process_history` | `read_only` | A process's events, oldest first; a market message carries `richtung`, `pid` and `message_ref` as its workflow states them (`EventPayload::verlauf`), never parsed from the event type; an answer adds `antwortcode`, `codeliste` (`EventPayload::antwort`) and the BDEW's `bedeutung`, resolved through `mako_pruefung::codes::lies` in that list only (`outputSchema` declared) |
 | `list_overdue_deadlines` | `read_only` | Deadlines past due and not yet fired — the deadline worker's backlog, not missed Fristen (those are processd `list_overdue_processes`) |
 | `list_active_processes` | `read_only` | Processes started for the tenant, finished ones included — one event stream each |
 | `get_outbox_status` | `read_only` | Pending outbox count and oldest age — alert when stuck > 5 min |

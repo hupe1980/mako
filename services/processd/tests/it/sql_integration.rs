@@ -298,6 +298,7 @@ async fn anmeldung_decisions_insert_and_list() {
         decision: AnmeldungDecision::Accept,
         antwortcode: Some("A51".to_owned()),
         antwortcode_ebd: Some("E_0623".to_owned()),
+        pruefschritt: None,
         detail: None,
         initiator_is_affiliate: false,
         decided_at: now,

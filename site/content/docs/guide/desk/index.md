@@ -52,8 +52,11 @@ Each card is titled the way an operator says it — „Lieferantenwechsel · Str
 
 Its **Verlauf** threads the market messages: received on the left, sent on the
 right, each with PID, Berlin time and document number, as the workflow
-recorded them. Steps between two messages fold into one quiet row („2 interne
-Schritte"). Pending Fristen close the thread, each named for what it is — an
+recorded them. An answer also states its code and the BDEW's wording from the
+list that defines it („A02 — Marktlokation … nimmt nicht an der
+Marktkommunikation teil"); where that list publishes no wording for the code,
+the line names the list alone. Steps between two messages fold into one quiet
+row („2 interne Schritte"). Pending Fristen close the thread, each named for what it is — an
 „Eingangsbestätigung (APERAK)", a „Syntaxquittung (CONTRL)" or a „Frist des
 Prozesses".
 
@@ -166,8 +169,9 @@ the Prozessüberwachung has it, each with the Festlegung its deadline came from.
 
 **Dead Letters** (Netz) counts every message the Marktkommunikation could not
 take or deliver and lists the most recent. The Lieferant also sees
-**Rechnungsprüfung**, **Rechnungsdispute** and **Geparkte Buchungen**, the Messstelle **Ableseaufträge
-überfällig** — each the same read as its row in Heute, which a click opens.
+**Rechnungsprüfung**, **Rechnungsdispute** and **Geparkte Buchungen**, the
+Messstelle **Ableseaufträge überfällig** — each the same read as its row in
+Heute, which a click opens.
 
 Every Rolle sees **Assistent**: the share of the desk-assistant's answers
 people found „hilfreich" over the last 30 days — the ratio of agentd's two
@@ -203,8 +207,9 @@ stays on screen. The assistant's proposal waits under the row;
 
 A disputed invoice is decided there too. Its row names the Rechnungssteller
 as the Marktstammdaten register it, with the Rechnungsnummer beneath, and the
-decision lists the checker's findings by their German names. **Beilegen** closes the dispute with your Bemerkung and sends nothing, so
-it is held for five seconds behind „Rückgängig"; while the refusal (REMADV) has
+decision lists the checker's findings by their German names. **Beilegen**
+closes the dispute with your Bemerkung and sends nothing, so it is held for
+five seconds behind „Rückgängig"; while the refusal (REMADV) has
 not gone out, **Ablehnung senden** sends it after the confirm. The assistant
 proposes one of the two with the finding it rests on, „nicht belegt" when the
 findings it read do not name it.
@@ -223,21 +228,14 @@ where the ledger names one; **Verwerfen** drops it with the Grund you give.
 Both are final and recorded under your name, so each asks once more first; a
 refusal is shown in the ledger's words.
 
-The assistant proposes one of the two for every geparkte Buchung, once, as it
-is parked: **Verwerfen** when the customer's account already carries a
-movement with the same Beleg and amount — the Grund names that Beleg and its
-booking date — otherwise **Neu buchen** on the first open day the
-Kundenkonten name. The proposal waits under the row; opening the decision
-takes it in at once — the action chosen, the date or the Grund filled in and
-marked as the assistant's, its one sentence why beside it with the read it
-rests on and „nicht belegt" where that read does not carry it. Nothing is
-booked until you confirm, and a Grund you keep is recorded as yours. While the
-proposal is still being prepared the decision says so quietly; where the
-reads do not settle it, none is shown and the service's own first open day
-stays filled in.
+The assistant proposes one of the two, with the read it rests on:
+**Verwerfen** when the customer's account already carries the same Beleg and
+amount — the Grund names that booking — otherwise **Neu buchen** on the first
+open day. Opening the decision takes the proposal in, marked as the
+assistant's; nothing is booked until you confirm. Where the reads do not settle
+it, no proposal is shown.
 
-A Korrekturbedarf opens nothing yet: the
-Desk has no Netzentgelte view.
+A Korrekturbedarf opens nothing: the Desk has no Netzentgelte view.
 
 [![A disputed invoice decided in Heute: its finding, the assistant's proposal resting on it, Beilegen and Ablehnung senden](heute-disput-light.png)](heute-disput-light.png)
 [![A disputed invoice decided in Heute: its finding, the assistant's proposal resting on it, Beilegen and Ablehnung senden](heute-disput-dark.png)](heute-disput-dark.png)

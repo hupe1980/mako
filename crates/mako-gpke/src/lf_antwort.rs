@@ -245,6 +245,12 @@ pub struct AntwortMesslokation {
 }
 
 impl LfAntwort {
+    /// The code and the tree it is drawn from, as the Verlauf states them.
+    #[must_use]
+    pub fn antwortcode(&self) -> mako_engine::envelope::Antwortcode {
+        mako_engine::envelope::Antwortcode::new(self.antwort_code.clone(), self.ebd.clone())
+    }
+
     /// A Zustimmung drawn from a named EBD.
     #[must_use]
     pub fn zustimmung(antwort_code: impl Into<String>, ebd: impl Into<String>) -> Self {

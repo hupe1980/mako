@@ -51,7 +51,7 @@
 //! - EDI@Energy Anwendungsübersicht der Prüfidentifikatoren 4.0, Lfd. Nr.
 //!   19000 / 19010 / 19020 / 19030 / 19050 / 19060
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
@@ -415,6 +415,20 @@ impl EventPayload for ModellwechselEvent {
                 message_ref: None,
             }),
             Self::FristAbgelaufen { .. } | Self::Abgewiesen { .. } => None,
+        }
+    }
+
+    /// Both answer variants carry `SG4 STS+E01`: the code and the tree that
+    /// produced it.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet { antwort } | Self::AntwortErhalten { antwort } => {
+                Some(Antwortcode::new(
+                    antwort.antwort_code.clone(),
+                    Some(antwort.codeliste.clone()),
+                ))
+            }
+            _ => None,
         }
     }
 }
@@ -842,6 +856,24 @@ mod tests {
         )
         .expect("accepted");
         out.events.iter().fold(ModellwechselState::New, apply)
+    }
+
+    #[test]
+    fn an_answer_states_its_code_and_tree_and_a_request_states_none() {
+        assert_eq!(
+            ModellwechselEvent::AntwortErhalten {
+                antwort: Box::new(EmobAntwort::ablehnung("A01", "E_0510")),
+            }
+            .antwort(),
+            Some(Antwortcode::new("A01", Some("E_0510")))
+        );
+        assert_eq!(
+            ModellwechselEvent::AnfrageGesendet {
+                data: Box::new(daten(55242)),
+            }
+            .antwort(),
+            None
+        );
     }
 
     #[test]

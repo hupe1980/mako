@@ -4203,7 +4203,7 @@ async fn the_payout_filters_narrow_instead_of_failing() {
     );
 }
 
-// ── Booking drafts (M73) ──────────────────────────────────────────────────────
+// ── Booking drafts ───────────────────────────────────────────────────────────
 
 /// A draft committed with its business change and never booked — the process
 /// died between the two commits — is booked exactly once by the recovery
@@ -4433,13 +4433,10 @@ async fn the_runtime_role_cannot_change_the_journal() {
     // The owner creates the ledger and grants the runtime role its list.
     PgLedger::connect(&url, TENANT, date!(2026 - 03 - 01))
         .await
+        .unwrap()
+        .grant_runtime("accountingd_app")
+        .await
         .unwrap();
-    for grant in accountingd::ledger::runtime_grants("accountingd_app") {
-        sqlx::query(mako_service::sql::dynamic(grant))
-            .execute(&owner)
-            .await
-            .unwrap();
-    }
 
     let app_url = url.replace("postgres:postgres@", "accountingd_app:app@");
     let app = PgLedger::connect(&app_url, TENANT, date!(2026 - 03 - 01))
@@ -4483,7 +4480,7 @@ async fn the_runtime_role_cannot_change_the_journal() {
 }
 
 /// A ledger line names the Beleg its booking cites, so a duplicate shows from
-/// the ledger read itself (M74).
+/// the ledger read itself.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_ledger_line_carries_its_beleg() {

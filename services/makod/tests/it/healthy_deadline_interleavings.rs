@@ -390,6 +390,7 @@ fn lf_anmeldung_survives_every_interleaving() {
                 accepted: true,
                 reason: None,
                 response_ref: MessageRef::new("NB-1"),
+                antwort: None,
             },
         ],
         external: &[(ANTWORT, 0)],

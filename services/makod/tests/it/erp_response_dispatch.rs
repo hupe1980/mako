@@ -257,6 +257,7 @@ async fn handle_antwort_accepted_transitions_to_active() {
                 accepted: true,
                 reason: None,
                 response_ref: mako_engine::types::MessageRef::new("REF-001"),
+                antwort: None,
             },
             RunOptions::new(),
         )
@@ -309,6 +310,7 @@ async fn handle_antwort_rejected_transitions_to_rejected() {
                 accepted: false,
                 reason: Some("Ablehnungsgrund: ungültige Marktlokation".into()),
                 response_ref: mako_engine::types::MessageRef::new("REF-002"),
+                antwort: None,
             },
             RunOptions::new(),
         )

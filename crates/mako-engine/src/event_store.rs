@@ -861,6 +861,7 @@ mod tests {
             schema_version: 1,
             payload: serde_json::json!({"test": true}),
             verlauf: None,
+            antwort: None,
         }
     }
 

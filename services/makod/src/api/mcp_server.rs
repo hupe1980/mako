@@ -321,6 +321,15 @@ pub struct HistoryEntry {
     pub pid: Option<u32>,
     /// The message's document number (`BGM` C106).
     pub message_ref: Option<String>,
+    /// DE 9013 — the code the answer gives (`A02`, `E15`, `Z12`, …).
+    pub antwortcode: Option<String>,
+    /// DE 1131 — the Codeliste or Entscheidungsbaum that defines the code
+    /// (`E_0622`, `S_0090`).
+    pub codeliste: Option<String>,
+    /// The BDEW's wording for the code in that list, from the catalogue.
+    /// `None` when the list does not publish the code — never another tree's
+    /// meaning.
+    pub bedeutung: Option<String>,
 }
 
 /// What kind of deadline a label is: a delivery window `mako_fristen` owns
@@ -360,6 +369,12 @@ fn history(process_id: &str, events: &[mako_engine::envelope::EventEnvelope]) ->
                 }),
                 pid: e.verlauf.as_ref().and_then(|v| v.pid),
                 message_ref: e.verlauf.as_ref().and_then(|v| v.message_ref.clone()),
+                antwortcode: e.antwort.as_ref().map(|a| a.code.clone()),
+                codeliste: e.antwort.as_ref().and_then(|a| a.codeliste.clone()),
+                bedeutung: e.antwort.as_ref().and_then(|a| {
+                    let liste = a.codeliste.as_deref()?;
+                    mako_pruefung::codes::lies(liste, &a.code).map(|c| c.bedeutung.to_owned())
+                }),
             })
             .collect(),
     }
@@ -2401,6 +2416,68 @@ mod tool_inventory_tests {
             ]
         );
         assert_eq!(h.eintraege[0].message_ref.as_deref(), Some("UTILMD-1"));
+    }
+
+    /// An answer's entry names its code, the list that defines it and the
+    /// BDEW's wording from that list — resolved through an `S_` Codeliste as
+    /// well as an `E_` tree — and carries no wording for a code the list does
+    /// not publish.
+    #[test]
+    fn an_answer_entry_reads_its_code_in_the_list_that_defines_it() {
+        use mako_engine::envelope::{Antwortcode, EventEnvelope, NewEvent};
+        use mako_engine::ids::{ConversationId, CorrelationId, ProcessId, StreamId, TenantId};
+        use mako_engine::version::WorkflowId;
+
+        let tenant = TenantId::new();
+        let process = ProcessId::new();
+        let (ebd, _, ablehnung) = mako_pruefung::codes::WIRE_CODELISTEN[0];
+        let wim =
+            mako_pruefung::codes::codes_im_cluster(ebd, mako_pruefung::codes::Cluster::Ablehnung)
+                .next()
+                .expect("the tree publishes an Ablehnung");
+        let envelope = |antwort: Antwortcode| {
+            EventEnvelope::from_new(
+                NewEvent::new(
+                    CorrelationId::new(),
+                    None,
+                    ConversationId::new(),
+                    process,
+                    tenant,
+                    WorkflowId::new("gpke-lf-anmeldung", "FV2026-04-01"),
+                    "LfAnmeldungAntwortReceived",
+                    1,
+                    serde_json::Value::Null,
+                )
+                .with_antwort(antwort),
+                StreamId::for_process(tenant, &process),
+                1,
+                time::OffsetDateTime::UNIX_EPOCH,
+            )
+        };
+        let h = super::history(
+            &process.to_string(),
+            &[
+                envelope(Antwortcode::new("A02", Some("E_0622"))),
+                envelope(Antwortcode::new(wim.code, Some(ablehnung))),
+                envelope(Antwortcode::new("Z99", Some("E_0622"))),
+            ],
+        );
+        let a02 = &h.eintraege[0];
+        assert_eq!(
+            (a02.antwortcode.as_deref(), a02.codeliste.as_deref()),
+            (Some("A02"), Some("E_0622"))
+        );
+        assert_eq!(
+            a02.bedeutung.as_deref(),
+            mako_pruefung::codes::lookup("E_0622", "A02").map(|c| c.bedeutung)
+        );
+        assert!(a02.bedeutung.is_some(), "E_0622 publishes A02");
+        assert_eq!(h.eintraege[1].bedeutung.as_deref(), Some(wim.bedeutung));
+        assert_eq!(h.eintraege[2].antwortcode.as_deref(), Some("Z99"));
+        assert_eq!(
+            h.eintraege[2].bedeutung, None,
+            "never another tree's wording"
+        );
     }
 
     /// A deadline's kind comes from the labels `mako_fristen` owns, never from

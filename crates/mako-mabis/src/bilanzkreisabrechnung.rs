@@ -78,7 +78,7 @@
 
 use std::collections::HashMap;
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     envelope::EventEnvelope,
@@ -633,6 +633,21 @@ impl EventPayload for BillingEvent {
                 message_ref: Some(message_ref.as_str().to_owned()),
             }),
             Self::ClearingGeschlossen { .. } => None,
+        }
+    }
+
+    /// A Prüfmitteilung states its code with the EBD that publishes it (DE
+    /// 1131), else the tree it was resolved in.
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::PruefmitteilungSent { ergebnis, .. } => {
+                let a = ergebnis.antwort();
+                Some(Antwortcode::new(
+                    a.code.clone(),
+                    Some(a.ebd.clone().unwrap_or_else(|| a.tree.clone())),
+                ))
+            }
+            _ => None,
         }
     }
 }
@@ -1273,6 +1288,28 @@ mod tests {
 
     fn zp() -> MabisZaehlpunktId {
         MabisZaehlpunktId::new("DE0001111222233334444555566667777").expect("33 chars")
+    }
+
+    #[test]
+    fn a_pruefmitteilung_states_its_code_and_a_series_states_none() {
+        let ergebnis = Pruefergebnis::positiv(bg()).expect("the series has a tree");
+        let expected = ergebnis.antwort().clone();
+        let sent = BillingEvent::PruefmitteilungSent {
+            version: v(1),
+            pid: Pruefidentifikator::new(21_000).expect("valid"),
+            ergebnis,
+            message_ref: MessageRef::new("IFTSTA-1"),
+        };
+        let antwort = sent.antwort().expect("a Prüfmitteilung is an answer");
+        assert_eq!(antwort.code, expected.code);
+        assert_eq!(
+            antwort.codeliste,
+            Some(expected.ebd.unwrap_or(expected.tree)),
+            "the code travels with the list that publishes it"
+        );
+        let empfangen = MabisBillingWorkflow::handle(&BillingState::New, receive(1, true))
+            .expect("command accepted");
+        assert_eq!(empfangen.events[0].antwort(), None);
     }
 
     #[test]

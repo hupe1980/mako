@@ -52,7 +52,7 @@ graph TB
 
 ## Ledger
 
-The ledger is the [`doubleentry`](https://github.com/hupe1980/doubleentry) 0.8
+The ledger is the [`doubleentry`](https://github.com/hupe1980/doubleentry) 0.9
 crate in the `ledger` schema of accountingd's database: balanced by
 construction, an append-only RFC 6962 SHA-256 Merkle log with `O(log n)`
 proofs, monthly periods from 2015-01 sealed in order, open-item clearing, and
@@ -63,8 +63,8 @@ doubleentry owns the invariants.
 
 Every booking carries an idempotency key; the entry id is derived from it, an
 identical replay returns the original entry, and the same key with other
-content is refused (`ledger.200`). The Kontokorrent posting carries the
-dimensions `art`, `korrelation` and `akteur`.
+content is refused (`ledger.200`). The entry's kind is its Buchungsart; the
+Kontokorrent posting carries the dimensions `korrelation` and `akteur`.
 
 ### Booking drafts
 
@@ -258,7 +258,8 @@ This sets `abschlag_ct = 7500` in the same write. Without a stored object the
 ## Offene Posten and balance integrity
 
 Every booking records a FIFO **Zahlungszuordnung** in doubleentry's clearing
-register, one clearing per matched pair: open credits (payments, Abschläge,
+register — one clearing per matched pair, the whole run in one transaction:
+open credits (payments, Abschläge,
 Gutschriften) against the oldest open debits (Einzelbewertung, § 252 Abs. 1
 Nr. 4 HGB). `open-items` lists the
 debits with a residual above zero, oldest first:

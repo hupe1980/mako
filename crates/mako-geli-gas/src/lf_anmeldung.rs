@@ -40,7 +40,7 @@
 //!
 //! Both emit a `ProcessInitiated` CloudEvent on spawn.
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -88,6 +88,10 @@ pub const ANMELDUNG_PID_MIT_BILANZKREIS: u32 = 44001;
 /// | 44018 | Ablehnung Kündigung (✗)          |
 pub const ANTWORT_PIDS_LF: &[u32] = &[44002, 44003, 44005, 44006, 44017, 44018];
 
+/// The Bestätigungen among [`ANTWORT_PIDS_LF`] — the answers that accept the
+/// LFN's request. Every other answer PID is the matching Ablehnung.
+pub const BESTAETIGUNG_PIDS_LF: &[u32] = &[44002, 44005, 44017];
+
 /// Deadline label for the counterparty's published answer window.
 ///
 /// The window itself comes from `mako_fristen::antwort` — 4 / 3 / 3 Werktage by
@@ -127,6 +131,10 @@ pub enum GeliGasLfAnmeldungEvent {
         reason: Option<String>,
         /// EDIFACT message reference of the response.
         response_ref: MessageRef,
+        /// `SG4 STS+E01` — the answer's code and Codeliste, which is what the
+        /// refusal means; `None` where the response carries none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// Accepted Lieferbeginn Gas supply activated (44001 only).
     Activated,
@@ -168,6 +176,13 @@ impl EventPayload for GeliGasLfAnmeldungEvent {
                 message_ref: Some(response_ref.as_str().to_owned()),
             }),
             Self::Activated | Self::DeadlineExpired { .. } => None,
+        }
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortReceived { antwort, .. } => antwort.clone(),
+            _ => None,
         }
     }
 }
@@ -317,6 +332,8 @@ pub enum GeliGasLfAnmeldungCommand {
         reason: Option<String>,
         /// Message reference of the inbound response.
         response_ref: MessageRef,
+        /// `SG4 STS+E01` DE 9013 and DE 1131 of the response.
+        antwort: Option<Antwortcode>,
     },
     /// Mark the accepted Lieferbeginn Gas supply as active.
     ///
@@ -519,6 +536,7 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                 accepted,
                 reason,
                 response_ref,
+                antwort,
             } => {
                 if !matches!(state, GeliGasLfAnmeldungState::Pending(_)) {
                     return Err(WorkflowError::invalid_state("Pending", state.label()));
@@ -544,6 +562,9 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                         "malo_id":  malo_id_str,
                         "accepted": accepted,
                         "outcome":  if accepted { "accepted" } else { "rejected" },
+                        "reason":   reason,
+                        "antwortcode": antwort.as_ref().map(|a| a.code.as_str()),
+                        "codeliste":   antwort.as_ref().and_then(|a| a.codeliste.as_deref()),
                     }),
                 )];
 
@@ -553,6 +574,7 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                         accepted,
                         reason,
                         response_ref,
+                        antwort,
                     }],
                     outbox,
                 ))
@@ -645,6 +667,7 @@ mod tests {
             accepted: true,
             reason: None,
             response_ref: mref("BESTMSG001"),
+            antwort: None,
         };
         let output = GeliGasLfAnmeldungWorkflow::handle(&state, cmd).unwrap();
         assert!(matches!(
@@ -676,6 +699,7 @@ mod tests {
             accepted: false,
             reason: Some("Z29".to_owned()),
             response_ref: mref("ABLMSG001"),
+            antwort: None,
         };
         let output = GeliGasLfAnmeldungWorkflow::handle(&state, cmd).unwrap();
         let state2 = output
