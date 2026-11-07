@@ -1,9 +1,5 @@
 //! Gasbeschaffenheitsdaten endpoint (PID 13007).
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 // ── Gas quality endpoint ────────────────────────────────────────────────

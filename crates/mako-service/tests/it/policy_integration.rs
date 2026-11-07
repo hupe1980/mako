@@ -9,11 +9,16 @@
 
 use mako_service::policy::{self, PolicyClass, PolicyEntry, PolicyReport};
 use sqlx::postgres::PgPoolOptions;
+use testcontainers::ImageExt as _;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
 async fn boot() -> sqlx::PgPool {
-    let container = Postgres::default().start().await.expect("start postgres");
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .expect("start postgres");
     let port = container
         .get_host_port_ipv4(5432)
         .await

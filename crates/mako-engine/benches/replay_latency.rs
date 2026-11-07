@@ -213,5 +213,12 @@ fn bench_payload_parse_value(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_replay_latency, bench_payload_parse_value);
-criterion_main!(benches);
+// `criterion_group!` (criterion 0.5) expands to an undocumented `pub fn`; a private
+// module keeps the group functions out of the crate's exported items.
+mod groups {
+    use super::*;
+
+    criterion_group!(benches, bench_replay_latency, bench_payload_parse_value);
+}
+
+criterion_main!(groups::benches);

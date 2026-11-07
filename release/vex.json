@@ -105,25 +105,21 @@
     },
     {
       "vulnerability": {
-        "name": "RUSTSEC-2025-0111",
-        "aliases": [
-          "CVE-2025-62518",
-          "GHSA-j5gw-2vrg-8fgx"
-        ]
+        "name": "RUSTSEC-2026-0440"
       },
       "products": [
         {
           "@id": "pkg:github/hupe1980/mako",
           "subcomponents": [
             {
-              "@id": "pkg:cargo/tokio-tar@0.3.1"
+              "@id": "pkg:cargo/astral-tokio-tar@0.6.4"
             }
           ]
         }
       ],
       "status": "not_affected",
       "justification": "component_not_present",
-      "impact_statement": "tokio-tar is a dev-dependency only, through testcontainers, and is linked into no release binary."
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. astral-tokio-tar is a dev-dependency only, through testcontainers, and is linked into no release binary."
     },
     {
       "vulnerability": {
@@ -160,24 +156,6 @@
       "status": "not_affected",
       "justification": "vulnerable_code_not_present",
       "impact_statement": "Informational advisory (unmaintained), no vulnerability. rustybuzz is Typst's text shaper on outputd's render path, fed only the bundled fonts, mako's own invoice model and the operator's template."
-    },
-    {
-      "vulnerability": {
-        "name": "RUSTSEC-2025-0134"
-      },
-      "products": [
-        {
-          "@id": "pkg:github/hupe1980/mako",
-          "subcomponents": [
-            {
-              "@id": "pkg:cargo/rustls-pemfile@2.2.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "component_not_present",
-      "impact_statement": "Informational advisory (unmaintained), no vulnerability. rustls-pemfile is a dev-dependency only, through testcontainers and bollard, and is linked into no release binary."
     },
     {
       "vulnerability": {

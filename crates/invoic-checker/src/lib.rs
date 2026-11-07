@@ -82,7 +82,6 @@
 
 pub mod amount;
 pub mod check;
-pub mod error;
 pub mod rechnung;
 pub mod tariff;
 
@@ -92,7 +91,6 @@ pub use amount::EuroAmount;
 pub use check::{
     CheckConfig, CheckOutcome, CheckReport, Finding, FindingKind, InvoicCheckEngine, is_stornierung,
 };
-pub use error::CheckError;
 pub use rechnung::{
     EmpfaengerFakten, StornoEmpfaengerFakten, antwort_auf_erneute_rechnung, antwort_auf_rechnung,
     antwort_auf_stornorechnung,

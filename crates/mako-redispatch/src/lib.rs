@@ -98,7 +98,6 @@
 //! | [`ack_forward::kostenblatt`] | `redispatch-kostenblatt` | `Kostenblatt` |
 
 #![deny(unsafe_code)]
-#![deny(missing_docs)]
 #![warn(clippy::pedantic)]
 
 pub mod ack_forward;

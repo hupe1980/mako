@@ -1,4 +1,12 @@
-//! Guard: every crate root denies `unsafe_code`.
+//! Guard: every crate root denies `unsafe_code`, and `missing_docs` has one
+//! policy.
+//!
+//! `missing_docs` is set once, `warn` in `[workspace.lints.rust]` — a deny
+//! under the gate's `-D warnings`. A crate root that states its own
+//! `deny`/`warn(missing_docs)` is a second answer to the same question and is
+//! refused. A `publish = false` member may opt out — a daemon's library target
+//! exists for its binary and its tests, not as an API — and a published crate
+//! may not, because its documentation is what crates.io readers get.
 //!
 //! The workspace holds exactly one `unsafe` block — `makod`'s `main` clearing an
 //! empty `MAKOD_DATA_DIR` before clap reads it — and it carries its own
@@ -10,10 +18,9 @@
 //! crate attribute, and a service with both a `lib.rs` and a `main.rs` is two
 //! crates, each of which states the lint for itself or is outside it.
 //!
-//! `[workspace.lints]` would carry it in one place, but only for lints Cargo
-//! propagates — and every crate here also states its own `missing_docs`,
-//! `pedantic` and per-crate `allow`s, so the roots are the place the rules
-//! already live.
+//! `[workspace.lints]` would carry it in one place, but the crates also state
+//! their own `pedantic` and per-crate `allow`s, so the roots are the place the
+//! rule already lives.
 //!
 //! The scan covers the trees in [`CRATE_TREES`] (one crate per subdirectory),
 //! the roots in [`DIRECT_ROOTS`] and every target in [`TARGET_DIRS`], and the
@@ -57,10 +64,147 @@ fn denies_unsafe(src: &str) -> bool {
     })
 }
 
+/// The inner attributes of `src` (`#![…]`), each joined onto one line.
+fn inner_attributes(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current: Option<String> = None;
+    for line in src.lines() {
+        let t = line.trim();
+        if let Some(buf) = current.as_mut() {
+            buf.push(' ');
+            buf.push_str(t);
+        } else if t.starts_with("#![") {
+            current = Some(t.to_owned());
+        } else {
+            continue;
+        }
+        let buf = current.as_ref().map_or("", String::as_str);
+        if buf.matches('[').count() <= buf.matches(']').count() {
+            out.extend(current.take());
+        }
+    }
+    out
+}
+
+/// What is wrong with a crate root's `missing_docs` attributes, if anything.
+///
+/// `published` is whether the crate's manifest admits crates.io (it carries no
+/// `publish = false`).
+fn docs_policy_finding(src: &str, published: bool) -> Option<&'static str> {
+    for attr in inner_attributes(src) {
+        if !attr.contains("missing_docs") {
+            continue;
+        }
+        let compact: String = attr.chars().filter(|c| !c.is_whitespace()).collect();
+        if compact.contains("deny(missing_docs")
+            || compact.contains("warn(missing_docs")
+            || compact.contains("forbid(missing_docs")
+        {
+            return Some(
+                "states its own `missing_docs` level — `[workspace.lints.rust]` holds the one policy",
+            );
+        }
+        if published {
+            return Some(
+                "opts a published crate out of `missing_docs` — only a `publish = false` member may",
+            );
+        }
+    }
+    None
+}
+
+/// Whether the manifest beside `root` (`<crate>/src/<file>.rs`) lets the crate
+/// reach crates.io.
+fn is_published(root: &Path) -> bool {
+    let Some(manifest) = root
+        .parent()
+        .and_then(Path::parent)
+        .map(|d| d.join("Cargo.toml"))
+    else {
+        return true;
+    };
+    !std::fs::read_to_string(manifest)
+        .unwrap_or_default()
+        .lines()
+        .any(|l| {
+            let l: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+            l == "publish=false"
+        })
+}
+
+/// Whether the workspace manifest sets `missing_docs` once, as a warning the
+/// gate's `-D warnings` turns into a deny.
+fn workspace_sets_missing_docs(manifest: &str) -> bool {
+    let mut in_rust = false;
+    for line in manifest.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_rust = t == "[workspace.lints.rust]";
+            continue;
+        }
+        let compact: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+        if in_rust && compact == "missing_docs=\"warn\"" {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check every crate root in the workspace.
 ///
-/// Returns `true` when each one denies `unsafe_code`.
+/// Returns `true` when each one denies `unsafe_code` and none departs from the
+/// workspace's `missing_docs` policy.
 pub fn run(workspace_root: &Path) -> bool {
+    let docs_ok = check_docs_policy(workspace_root);
+    check_unsafe(workspace_root) && docs_ok
+}
+
+/// The `missing_docs` half: the workspace sets it, no crate root restates it,
+/// no published crate opts out.
+fn check_docs_policy(workspace_root: &Path) -> bool {
+    let manifest = std::fs::read_to_string(workspace_root.join("Cargo.toml")).unwrap_or_default();
+    let mut ok = true;
+    if !workspace_sets_missing_docs(&manifest) {
+        eprintln!(
+            "check-crate-lints: `[workspace.lints.rust]` does not set `missing_docs = \"warn\"`"
+        );
+        ok = false;
+    }
+    let mut roots = Vec::new();
+    for dir in CRATE_TREES {
+        collect(&workspace_root.join(dir), &mut roots);
+    }
+    for dir in DIRECT_ROOTS {
+        for name in ["lib.rs", "main.rs"] {
+            let root = workspace_root.join(dir).join(name);
+            if root.is_file() {
+                roots.push(root);
+            }
+        }
+    }
+    roots.sort();
+    for root in &roots {
+        let src = std::fs::read_to_string(root).unwrap_or_default();
+        if let Some(why) = docs_policy_finding(&src, is_published(root)) {
+            eprintln!(
+                "check-crate-lints: {} {why}",
+                root.strip_prefix(workspace_root).unwrap_or(root).display()
+            );
+            ok = false;
+        }
+    }
+    if ok {
+        println!(
+            "check-crate-lints: `missing_docs` is set once in `[workspace.lints.rust]`; \
+             none of {} crate root(s) restates it, and only `publish = false` ones opt out",
+            roots.len()
+        );
+    }
+    ok
+}
+
+/// The `unsafe_code` half.
+fn check_unsafe(workspace_root: &Path) -> bool {
     let mut roots = Vec::new();
     for dir in CRATE_TREES {
         collect(&workspace_root.join(dir), &mut roots);
@@ -165,6 +309,32 @@ mod tests {
             "//! Every crate root denies `unsafe_code`"
         ));
         assert!(!super::denies_unsafe("#[allow(unsafe_code)]\nunsafe { }"));
+    }
+
+    /// A crate root restating the level is refused in any crate; an opt-out is
+    /// refused in a published crate and admitted in a `publish = false` one.
+    #[test]
+    fn missing_docs_has_one_policy() {
+        use super::docs_policy_finding as f;
+        assert!(f("#![deny(missing_docs)]\n", true).is_some());
+        assert!(f("#![warn(missing_docs)]\n", false).is_some());
+        assert!(f("#![deny(unsafe_code)]\n", true).is_none());
+        let opt_out = "#![expect(missing_docs, reason = \"x\")]\n";
+        assert!(f(opt_out, true).is_some());
+        assert!(f(opt_out, false).is_none());
+        assert!(
+            f(
+                "//! a crate without #![deny(missing_docs)] in prose\n",
+                true
+            )
+            .is_none()
+        );
+        assert!(super::workspace_sets_missing_docs(
+            "[workspace.lints.rust]\nmissing_docs = \"warn\"\n\n[workspace.lints.clippy]\n"
+        ));
+        assert!(!super::workspace_sets_missing_docs(
+            "[workspace.lints.clippy]\nmissing_docs = \"warn\"\n"
+        ));
     }
 
     /// A scan that reaches no file has checked nothing, and must say so rather

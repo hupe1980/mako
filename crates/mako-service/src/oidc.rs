@@ -108,36 +108,61 @@ impl JwtClaims {
 /// Errors produced by [`OidcVerifier`].
 #[derive(Debug, thiserror::Error)]
 pub enum OidcError {
+    /// The issuer's discovery document could not be fetched or read.
     #[error("OIDC discovery failed (url={url}): {reason}")]
-    Discovery { url: String, reason: String },
+    Discovery {
+        /// The discovery URL asked.
+        url: String,
+        /// Why the fetch or the parse failed.
+        reason: String,
+    },
 
+    /// The JWKS could not be fetched or read.
     #[error("JWKS fetch failed (url={url}): {reason}")]
-    JwksFetch { url: String, reason: String },
+    JwksFetch {
+        /// The `jwks_uri` asked.
+        url: String,
+        /// Why the fetch or the parse failed.
+        reason: String,
+    },
 
+    /// The token failed signature, expiry, issuer or audience validation.
     #[error("JWT invalid: {0}")]
     TokenInvalid(#[from] jsonwebtoken::errors::Error),
 
+    /// The discovery document names an issuer other than the configured one.
     #[error("OIDC issuer mismatch: configured {expected:?}, discovery returned {actual:?}")]
-    IssuerMismatch { expected: String, actual: String },
+    IssuerMismatch {
+        /// The configured issuer.
+        expected: String,
+        /// The issuer the discovery document names.
+        actual: String,
+    },
 
+    /// The token header carries no `kid`, so no key can be selected.
     #[error("JWT `kid` is missing")]
     MissingKid,
 
+    /// The token's `kid` is not in the cached JWKS.
     #[error("JWT `kid` {0:?} is not in the current JWKS (key rotation in progress?)")]
     UnknownKid(String),
 
+    /// The token names an algorithm outside the accepted asymmetric set.
     #[error("JWT algorithm {0:?} is not permitted; only asymmetric algorithms are accepted")]
     AlgorithmDenied(String),
 
+    /// The token carries no `mako_tenant` claim.
     #[error("JWT is missing the required `mako_tenant` claim")]
     MissingTenant,
 
+    /// The request carries more than one `Authorization` header.
     #[error(
         "the Authorization header appears more than once — the identity a request \
          carries must not depend on which occurrence a reader picks"
     )]
     RepeatedAuthorization,
 
+    /// The token's `mako_tenant` is not the tenant this deployment serves.
     #[error(
         "JWT `mako_tenant` {actual:?} does not match this deployment's tenant {expected:?} — \
          a validly signed token from another operator must not read this tenant's data"
@@ -407,6 +432,8 @@ impl OidcVerifier {
         })
     }
 
+    /// A verifier over a fixed `jwks` for `issuer` and `audience`, with no
+    /// discovery or JWKS fetch.
     #[cfg(test)]
     pub fn from_jwks_for_testing(
         issuer: impl Into<String>,

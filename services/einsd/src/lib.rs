@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
+)]
 //! `einsd` — Einspeiser Registry + EEG/KWKG Settlement daemon.
 //!
 //! Port: `:9180`

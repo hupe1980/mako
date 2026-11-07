@@ -537,12 +537,16 @@ pub struct HemsMeterInput {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmobilityMeterInput {
+    /// Months the Servicegebühr is billed for; one when `None`.
     #[serde(default)]
     pub months: Option<Decimal>,
+    /// Energy charged in the period (kWh), measured at the charge point.
     #[serde(default)]
     pub kwh_charged: Option<Decimal>,
+    /// Charging sessions in the period.
     #[serde(default)]
     pub sessions: Option<u32>,
+    /// Roaming sessions in the period.
     #[serde(default)]
     pub roaming_sessions: Option<u32>,
 }
@@ -551,10 +555,13 @@ pub struct EmobilityMeterInput {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceMeterInput {
+    /// Months the service fee is billed for; one when `None`.
     #[serde(default)]
     pub months: Option<Decimal>,
+    /// Billable events in the period.
     #[serde(default)]
     pub event_count: Option<u32>,
+    /// Per-event price for this run (EUR); takes precedence over the product's `service_event_price_eur`.
     #[serde(default)]
     pub event_price_eur: Option<Decimal>,
 }
@@ -641,21 +648,29 @@ impl Sect41aAnnualComparison {
 #[serde(deny_unknown_fields)]
 pub struct GridInput {
     // ── Strom ─────────────────────────────────────────────────────────────────
+    /// Strom NNE Grundpreis in EUR/year, billed per active contract day at the period year's daily rate.
     #[serde(default)]
     pub nne_grundpreis_eur_per_year: Option<Decimal>,
+    /// Strom NNE Arbeitspreis (ct/kWh) on the billed kWh.
     #[serde(default)]
     pub nne_arbeitspreis_ct_per_kwh: Option<Decimal>,
+    /// Strom NNE Leistungspreis in EUR/kW/year on the Spitzenleistung, scaled by the billed years.
     #[serde(default)]
     pub nne_leistungspreis_eur_per_kw_year: Option<Decimal>,
+    /// Strom Konzessionsabgabe (ct/kWh) on the billed kWh.
     #[serde(default)]
     pub ka_ct_per_kwh: Option<Decimal>,
     // ── Gas ───────────────────────────────────────────────────────────────────
+    /// Gas NNE Grundpreis in EUR/year, billed per active contract day at the period year's daily rate.
     #[serde(default)]
     pub gas_nne_grundpreis_eur_per_year: Option<Decimal>,
+    /// Gas NNE Arbeitspreis (ct/kWh_Hs) on the billed kWh_Hs.
     #[serde(default)]
     pub gas_nne_arbeitspreis_ct_per_kwh: Option<Decimal>,
+    /// Gas Konzessionsabgabe (ct/kWh_Hs) on the billed kWh_Hs.
     #[serde(default)]
     pub gas_ka_ct_per_kwh: Option<Decimal>,
+    /// Gas Bilanzierungsumlage (ct/kWh_Hs) on the billed kWh_Hs.
     #[serde(default)]
     pub gas_bilanzierungsumlage_ct_per_kwh: Option<Decimal>,
 }

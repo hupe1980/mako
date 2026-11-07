@@ -370,14 +370,14 @@ pub struct GetGasQualityParams {
 #[derive(Clone)]
 pub struct EdmdMcpHandler {
     state: Arc<EdmdMcpState>,
-    #[allow(
+    #[expect(
         dead_code,
-        reason = "reached only in some feature or target combinations"
+        reason = "rmcp's `#[tool_handler]` / `#[prompt_handler]` call `Self::tool_router()` / `Self::prompt_router()` per request; the stored router is never read"
     )]
     tool_router: ToolRouter<EdmdMcpHandler>,
-    #[allow(
+    #[expect(
         dead_code,
-        reason = "reached only in some feature or target combinations"
+        reason = "rmcp's `#[tool_handler]` / `#[prompt_handler]` call `Self::tool_router()` / `Self::prompt_router()` per request; the stored router is never read"
     )]
     prompt_router: PromptRouter<EdmdMcpHandler>,
 }
@@ -907,10 +907,6 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
 
     /// `get_quality_warnings` — the quality verdict for a MaLo over a window,
     /// recomputed from the version-resolved series.
-    #[allow(
-        dead_code,
-        reason = "reached only in some feature or target combinations"
-    )]
     #[tool(
         description = "Query quality warnings for a MaLo in a time range. \
 Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverage %.",

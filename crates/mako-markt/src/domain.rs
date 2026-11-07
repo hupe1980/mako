@@ -60,7 +60,9 @@ pub fn nad_agency_code(id: &MarktpartnerId) -> &'static str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Sparte {
+    /// Electricity — `"STROM"` on the wire.
     Strom,
+    /// Gas — `"GAS"` on the wire.
     Gas,
 }
 
@@ -185,8 +187,11 @@ impl std::str::FromStr for Lokationstyp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProcessStatus {
+    /// The process has started and not yet ended.
     Running,
+    /// The process ended successfully.
     Completed,
+    /// The process ended in failure.
     Failed,
 }
 

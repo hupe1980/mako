@@ -86,7 +86,6 @@
 //! assert_eq!(out.settlement_eur, Some(d("8.51")));
 //! ```
 #![deny(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod aw_reductions;
 pub mod biomasse;

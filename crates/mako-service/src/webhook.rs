@@ -79,6 +79,7 @@ pub const TOLERANCE: std::time::Duration = std::time::Duration::from_secs(300);
 pub struct WebhookId(pub String);
 
 impl WebhookId {
+    /// The `webhook-id` header value.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -98,16 +99,20 @@ impl std::fmt::Display for WebhookId {
 /// are different operational problems with the same HTTP code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum WebhookError {
+    /// A required header (named) is absent or not readable.
     #[error("missing or malformed `{0}` header")]
     MissingHeader(&'static str),
+    /// The `webhook-timestamp` is outside the tolerance window.
     #[error(
         "`webhook-timestamp` is outside the {} s tolerance — a replayed or badly \
          clocked request",
         TOLERANCE.as_secs()
     )]
     StaleTimestamp,
+    /// No `v1` signature in `webhook-signature` matches the body.
     #[error("no `v1` signature matched")]
     SignatureMismatch,
+    /// The configured secret is empty.
     #[error(
         "the configured webhook secret is empty — an empty key verifies against \
          a value anyone can reproduce; unset the field for the dev bypass or set \

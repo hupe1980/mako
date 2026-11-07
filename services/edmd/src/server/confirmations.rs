@@ -1,9 +1,5 @@
 //! § 60 Abs. 1 MsbG estimated-reading confirmation obligations.
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 // ── § 60 Abs. 1 MsbG confirmations ────────────────────────────────────────────

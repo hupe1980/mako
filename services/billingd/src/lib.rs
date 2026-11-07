@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
+)]
 // The large serde_json::json!{} macro in clients.rs needs a higher recursion limit.
 #![recursion_limit = "256"]
 //! `billingd` — Multi-product Energy Billing Engine (LF role).

@@ -77,7 +77,6 @@
 //! | [`driver`] | `WorkflowDriver` — a workflow registered once, by type, under its name |
 
 #![deny(unsafe_code)]
-#![deny(missing_docs)]
 #![warn(clippy::pedantic)]
 #![expect(
     clippy::module_name_repetitions,

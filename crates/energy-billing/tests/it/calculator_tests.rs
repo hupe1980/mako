@@ -4848,6 +4848,45 @@ fn preisgarantie_bis_produces_info_position_when_in_future() {
     );
 }
 
+/// A gas contract's price guarantee is stated on its invoice and warned about
+/// before it ends, as an electricity one is (§ 41 Abs. 1 Nr. 4 EnWG).
+#[test]
+fn a_gas_price_guarantee_is_stated_and_its_end_warned() {
+    let gas = |bis: &str| {
+        j(&format!(
+            r#"{{"category":"GAS","gas_grundpreis_ct_per_day":"0","gas_arbeitspreis_ct_per_kwh_hs":"10","preisgarantie_bis":"{bis}"}}"#
+        ))
+    };
+    let q = || Quantities {
+        gas: Some(GasMeterInput {
+            kwh_hs: Some(dec!(500)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let running = bill(&gas("2027-12-31"), q());
+    let pg: Vec<_> = running.positions_by_tag("preisgarantie").collect();
+    assert_eq!(pg.len(), 1, "the guarantee is stated");
+    assert!(pg[0].description.contains("2027-12-31"));
+    assert!(
+        !running
+            .warnings
+            .iter()
+            .any(|w| w.code == "PREISGARANTIE_ENDET")
+    );
+
+    let ending = bill(&gas("2026-02-10"), q());
+    assert!(
+        ending
+            .warnings
+            .iter()
+            .any(|w| w.code == "PREISGARANTIE_ENDET"),
+        "{:?}",
+        ending.warnings
+    );
+}
+
 #[cfg(feature = "bo4e")]
 #[test]
 fn billing_run_id_propagated_to_invoice_and_json() {

@@ -23,7 +23,6 @@
 
 #![deny(unsafe_code)]
 #![deny(clippy::undocumented_unsafe_blocks)]
-#![deny(missing_docs)]
 #![warn(clippy::pedantic)]
 #![expect(
     clippy::module_name_repetitions,

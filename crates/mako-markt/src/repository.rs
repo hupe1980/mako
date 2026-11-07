@@ -110,10 +110,14 @@ fn default_bo4e_version() -> String {
 /// [`LokationszuordnungEdge`] (table `lokationszuordnungen`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rollenzuordnung {
+    /// Role code the assignment is for (e.g. `NB`, `GNB`, `MSB`, `LF`).
     pub zuordnungstyp: String,
+    /// 13-digit MP-ID of the Marktpartner holding the role.
     pub rollencodenummer: String,
+    /// First day the assignment holds (inclusive).
     #[serde(with = "date_iso")]
     pub valid_from: Date,
+    /// Day the assignment ends (exclusive); `None` = open-ended.
     #[serde(default, with = "date_iso::opt")]
     pub valid_to: Option<Date>,
 }
@@ -124,7 +128,9 @@ pub struct Rollenzuordnung {
 /// `at` date passed to `PgMaloRepository::find` / `PgMaloRepository::list`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaloRecord {
+    /// 11-digit MaLo-ID the record is keyed on.
     pub malo_id: MaloId,
+    /// Whether the Marktlokation is Strom or Gas.
     pub sparte: Sparte,
     /// Voltage/pressure level — BO4E `Netzebene` wire value (`NSP`/`MSP`/`HSP`/`HSS`
     /// and their `*_UMSP` transformation levels for Strom; `HD`/`MD`/`ND` for Gas).
@@ -201,10 +207,13 @@ pub struct MaloRecord {
     /// Klassentyp is „Quartalsweise" in the same AHB.
     #[serde(default)]
     pub abwicklungsmodell: Option<String>,
+    /// Optimistic-concurrency version, incremented on every write. The ETag is derived from it.
     pub version: i64,
+    /// Full BO4E `Marktlokation` payload.
     pub data: MaloPayload,
     /// Role assignments valid at the requested reference date.
     pub rollenzuordnung: Vec<Rollenzuordnung>,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
     /// BO4E schema version of the `data` payload (e.g. `"202607.1.0"`).
@@ -215,7 +224,9 @@ pub struct MaloRecord {
 /// Stored MeLo record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeloRecord {
+    /// MeLo-ID (`DE` + 31 alphanumeric characters) the record is keyed on.
     pub melo_id: MeloId,
+    /// MaLo this Messlokation belongs to; `None` when none is linked.
     pub malo_id: Option<MaloId>,
     /// Voltage/pressure level at the metering point, extracted from `Messlokation.netzebene_messung`.
     pub netzebene_messung: Option<String>,
@@ -239,8 +250,11 @@ pub struct MeloRecord {
     /// `Messlokation.lokationsbuendelObjektcode` (UTILMD Lokationsbündelstruktur).
     #[serde(default)]
     pub lokationsbuendel_objektcode: Option<String>,
+    /// Optimistic-concurrency version, incremented on every write.
     pub version: i64,
+    /// Full BO4E `Messlokation` payload.
     pub data: MeloPayload,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
     /// BO4E schema version of the `data` payload.
@@ -251,9 +265,12 @@ pub struct MeloRecord {
 /// Stored webhook subscription.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Subscription {
+    /// Key the subscription is stored and addressed under.
     pub subscriber_id: String,
+    /// Endpoint the fan-out worker POSTs each matching [`crate::cloudevents::MarktEvent`] to.
     pub webhook_url: String,
-    /// Stored encrypted at rest by the repository implementation.
+    /// The Standard Webhooks signing key, stored as plaintext — protect it with
+    /// database least-privilege and storage encryption (marktd README).
     pub webhook_secret: Option<String>,
     /// Empty = all roles.
     pub roles: Vec<String>,
@@ -261,7 +278,9 @@ pub struct Subscription {
     pub event_types: Vec<String>,
     /// Empty = all Sparten.
     pub sparten: Vec<String>,
+    /// Whether events are delivered to this subscriber.
     pub active: bool,
+    /// Optimistic-concurrency version, incremented on every write.
     pub version: i64,
 }
 
@@ -273,9 +292,11 @@ pub struct Subscription {
 pub struct PartnerRecord {
     /// 13-digit Marktpartner-ID.
     pub mp_id: MarktpartnerId,
+    /// Human-readable partner name; served as `geschaeftspartner.organisationsname` by [`Self::to_marktteilnehmer`].
     pub display_name: Option<String>,
     /// BO4E market role (serialises as the BDEW code, e.g. `"LF"`, `"NB"`, `"MSB"`).
     pub marktrolle: Option<rubo4e::current::Marktrolle>,
+    /// Sparte the MP-ID is registered for; `None` when not recorded.
     pub sparte: Option<Sparte>,
     /// Coding authority: `BDEW` | `DVGW` | `GLN` (BO4E `Rollencodetyp`).
     /// Derived from the MP-ID prefix; stored for fast AS4 routing lookups.
@@ -306,6 +327,7 @@ pub struct PartnerRecord {
     /// Optimistic-concurrency version.
     #[serde(default)]
     pub version: i64,
+    /// Time of the last write (UTC).
     #[serde(default = "unix_epoch", with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -345,20 +367,34 @@ impl PartnerRecord {
 /// Process correlation entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorrelationEntry {
+    /// `makod` process ID (WorkflowId) this entry correlates.
     pub process_id: Uuid,
+    /// Workflow family name (e.g. `"gpke-supplier-change"`).
     pub workflow_name: Option<String>,
+    /// Prüfidentifikator of the process.
     pub pid: Option<i32>,
+    /// MaLo the process concerns, when known.
     pub malo_id: Option<MaloId>,
+    /// MeLo the process concerns, when known.
     pub melo_id: Option<MeloId>,
+    /// Contract the process concerns, when known.
     pub contract_id: Option<String>,
+    /// The ERP's own reference for that contract, when supplied.
     pub erp_contract_id: Option<String>,
+    /// The ERP's order reference for the command that started the process, when supplied.
     pub erp_order_id: Option<String>,
+    /// EDIFACT conversation ID, from the `makoconvid` CloudEvents extension.
     pub edifact_conv_id: Option<Uuid>,
+    /// Role the operator holds in the process (`NB`, `LF`, `MSB`, `UNB`, …).
     pub marktrolle: Option<String>,
+    /// Format version the process runs under (e.g. `"FV2026-10-01"`).
     pub format_version: Option<String>,
+    /// Lifecycle state of the process.
     pub status: ProcessStatus,
+    /// When the process started (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub initiated_at: time::OffsetDateTime,
+    /// When the process completed or failed (UTC); `None` while it runs.
     #[serde(with = "time::serde::rfc3339::option")]
     pub completed_at: Option<time::OffsetDateTime>,
 }
@@ -368,6 +404,7 @@ pub struct CorrelationEntry {
 /// A paged collection returned by list operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageResult<T> {
+    /// Rows of the requested page.
     pub items: Vec<T>,
     /// Total matching rows (without pagination).
     pub total: u64,
@@ -382,6 +419,7 @@ pub struct PageResult<T> {
 /// Filters for `GET /api/v1/malos` listing.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct MaloFilter {
+    /// Only MaLos of this Sparte.
     pub sparte: Option<Sparte>,
     /// Filter by `zuordnungstyp` in active `rollenzuordnung` (e.g. `"NB"`, `"LF"`).
     pub zuordnungstyp: Option<String>,
@@ -395,25 +433,26 @@ pub struct MaloFilter {
     /// Filter by `regelzone` EIC code (e.g. `"10YDE-EON------1"`).
     /// Maps to the controlling ÜNB for MABIS IFTSTA and Redispatch 2.0.
     pub regelzone: Option<String>,
+    /// Zero-based page index.
     pub page: u32,
+    /// Page size.
     pub size: u32,
 }
 
 /// Filters for `GET /api/v1/correlations`.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CorrelationFilter {
+    /// Only entries with this ERP order reference.
     pub erp_order_id: Option<String>,
+    /// Only entries concerning this MaLo.
     pub malo_id: Option<MaloId>,
+    /// Only entries in this lifecycle state.
     pub status: Option<ProcessStatus>,
 }
 
 // ── Traits ────────────────────────────────────────────────────────────────────
 
 /// Read/write access to `MARKTLOKATION` records.
-#[allow(
-    async_fn_in_trait,
-    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
-)]
 /// Lightweight read model returned by `MarktdClient::get_malo`.
 ///
 /// Contains only the typed fields extracted from the `Marktlokation` JSONB — not
@@ -421,6 +460,7 @@ pub struct CorrelationFilter {
 /// primary source before falling back to the `malo_grid` side table.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct MaloTypedFields {
+    /// 11-digit MaLo-ID.
     pub malo_id: String,
     /// Voltage/pressure level (e.g. `"NS"`, `"MS"`, `"HS"`).
     pub netzebene: Option<String>,
@@ -580,8 +620,10 @@ pub struct PreisblattRecord {
     pub bo4e_version: String,
     /// How this record entered the system: `api` (operator upload) or `mako` (engine ingest).
     pub source: PreisblattSource,
+    /// When the record was first stored (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -611,8 +653,10 @@ pub struct PreisblattMessungRecord {
     /// whether a discount position in INVOIC 31009 is contractually authorised.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auf_abschlaege: Vec<serde_json::Value>,
+    /// When the record was first stored (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -634,12 +678,15 @@ pub struct PreisblattKaRecord {
     pub kundengruppe_ka: Option<String>,
     /// The full BO4E `PreisblattKonzessionsabgabe` payload.
     pub data: serde_json::Value,
+    /// BO4E schema version of `data`.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
     /// How this record entered the system.
     pub source: PreisblattSource,
+    /// When the record was first stored (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -649,13 +696,19 @@ pub struct PreisblattKaRecord {
 /// A stored `PreisblattDienstleistung` record.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PreisblattDienstleistungRecord {
+    /// MP-ID of the Messstellenbetreiber that published this sheet.
     pub msb_mp_id: String,
+    /// Full BO4E `PreisblattDienstleistung` payload (stored as JSONB).
     pub data: serde_json::Value,
+    /// BO4E schema version of `data`.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
+    /// How this record entered the system: `api` (operator upload) or `mako` (engine ingest).
     pub source: PreisblattSource,
+    /// When the record was first stored (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -665,13 +718,19 @@ pub struct PreisblattDienstleistungRecord {
 /// A stored `PreisblattHardware` record.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PreisblattHardwareRecord {
+    /// MP-ID of the Messstellenbetreiber that published this sheet.
     pub msb_mp_id: String,
+    /// Full BO4E `PreisblattHardware` payload (stored as JSONB).
     pub data: serde_json::Value,
+    /// BO4E schema version of `data`.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
+    /// How this record entered the system: `api` (operator upload) or `mako` (engine ingest).
     pub source: PreisblattSource,
+    /// When the record was first stored (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -727,8 +786,10 @@ pub struct PriCatVersion {
     pub dispatch_state: PriCatDispatchState,
     /// Last dispatch error message, if any.
     pub dispatch_error: Option<String>,
+    /// When the record was first stored (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -736,16 +797,24 @@ pub struct PriCatVersion {
 /// One row in the PRICAT dispatch audit log.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PriCatDispatchEntry {
+    /// Surrogate primary key (UUID v4).
     pub id: uuid::Uuid,
+    /// The [`PriCatVersion`] that was sent.
     pub pricat_version_id: uuid::Uuid,
+    /// MP-ID of the NB whose price sheet was sent.
     pub nb_mp_id: String,
+    /// MP-ID of the Lieferant it was sent to.
     pub lf_mp_id: String,
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
     /// `makod` process ID returned by `MakodClient`, or `None` if dispatch failed.
     pub process_id: Option<uuid::Uuid>,
+    /// When the dispatch was attempted (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub dispatched_at: time::OffsetDateTime,
+    /// `ok` or `error`.
     pub outcome: String,
+    /// Error message when `outcome` is `error`.
     pub error_detail: Option<String>,
 }
 
@@ -1236,8 +1305,11 @@ impl VersorgungsStatusRecord {
 pub struct VersorgungsStatusHistoryRecord {
     /// Auto-incremented surrogate key (`BIGSERIAL`).
     pub id: i64,
+    /// 11-digit MaLo-ID.
     pub malo_id: MaloId,
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
+    /// Supply state at this snapshot.
     pub lieferstatus: LieferStatus,
     /// The assignment list as it stood, snapshotted whole.
     ///
@@ -1247,10 +1319,14 @@ pub struct VersorgungsStatusHistoryRecord {
     /// validity would be a second temporal model for the same fact.
     #[serde(default)]
     pub zuordnungen: Vec<LfZuordnung>,
+    /// Agreed Lieferende date at this snapshot, if one was set.
     #[serde(default, with = "date_iso::opt")]
     pub lieferende: Option<Date>,
+    /// MP-ID of the active Messstellenbetreiber at this snapshot.
     pub msb_mp_id: Option<String>,
+    /// MP-ID of the Netzbetreiber responsible for the MaLo.
     pub nb_mp_id: String,
+    /// `makod` process whose outcome produced this state.
     pub last_process_id: Option<Uuid>,
     /// Version of the `versorgungsstatus` row that this snapshot captures.
     pub version: i64,
@@ -1482,9 +1558,11 @@ impl BilanzierungRecord {
 pub struct NeLoRecord {
     /// EIC or BDEW Codenummer.
     pub nelo_id: String,
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
     /// Human-readable Bezeichnung.
     pub name: Option<String>,
+    /// Whether the NeLo is in a Strom or a Gas grid.
     pub sparte: Sparte,
     /// Voltage / pressure level — a BO4E `Netzebene` wire value
     /// (`NSP`/`MSP`/`HSP`/`HSS`, their `*_UMSP` transformation levels, or
@@ -1506,7 +1584,9 @@ pub struct NeLoRecord {
     pub grundzustaendiger_msb_codenr: Option<String>,
     /// Additional Redispatch 2.0 attributes (open-ended JSONB).
     pub data: serde_json::Value,
+    /// Optimistic-concurrency version, incremented on every write.
     pub version: i64,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -1553,6 +1633,7 @@ impl NeloStammdatenPatch {
 pub struct TrancheRecord {
     /// Tranche identifier (e.g. `<MaLo>-T01`).
     pub tranche_id: String,
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
     /// Parent Marktlokation this Tranche belongs to.
     pub malo_id: Option<String>,
@@ -1564,7 +1645,9 @@ pub struct TrancheRecord {
     pub energierichtung: Option<String>,
     /// mako's own open-ended Tranche payload. **Not** BO4E — see the type docs.
     pub data: serde_json::Value,
+    /// Optimistic-concurrency version, incremented on every write.
     pub version: i64,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -1664,6 +1747,7 @@ pub struct SteuerbareRessourceRecord {
     pub bo4e_version: String,
     /// Monotonic version counter (incremented on update).
     pub version: i64,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -1702,6 +1786,7 @@ impl SteuerbareRessourceStammdatenPatch {
 pub struct TechnischeRessourceRecord {
     /// `TrId` — Technische-Ressource identifier.
     pub tr_id: String,
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
     /// Linked `MaLo` (`zugeordnete_marktlokation_id`).
     pub malo_id: Option<String>,
@@ -1717,9 +1802,12 @@ pub struct TechnischeRessourceRecord {
     pub ist_fernschaltbar: Option<bool>,
     /// Full BO4E `TechnischeRessource` payload.
     pub data: serde_json::Value,
+    /// BO4E schema version of `data`.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
+    /// Optimistic-concurrency version, incremented on every write.
     pub version: i64,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -1764,7 +1852,9 @@ impl TechnischeRessourceStammdatenPatch {
 /// `valid_to IS NULL` means "open-ended (currently active)".
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LokationszuordnungEdge {
+    /// Edge ID (UUID).
     pub id: uuid::Uuid,
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
     /// Source node ID (e.g. MaLo-ID, MeLo-ID).
     pub von_id: String,
@@ -1774,6 +1864,7 @@ pub struct LokationszuordnungEdge {
     pub nach_id: String,
     /// Target node type ([`Lokationstyp`]).
     pub nach_typ: Lokationstyp,
+    /// First day the edge holds; `None` = from the beginning of time.
     pub valid_from: Option<time::Date>,
     /// `None` = open-ended (currently active).
     pub valid_to: Option<time::Date>,
@@ -1797,13 +1888,21 @@ pub enum BuendelError {
         "Lokationsbündel for MaLo {malo_id} has no Messlokation \
          (a consuming MaLo must bundle at least one MeLo)"
     )]
-    NoMesslokation { malo_id: String },
+    NoMesslokation {
+        /// MaLo-ID the bundle is rooted at.
+        malo_id: String,
+    },
     /// The bundle's Messlokationen are operated by more than one MSB.
     #[error(
         "Lokationsbündel for MaLo {malo_id} spans divergent MSB assignments {msbs:?} \
          (all MeLos of a MaLo must share one Messstellenbetreiber)"
     )]
-    DivergentMsb { malo_id: String, msbs: Vec<String> },
+    DivergentMsb {
+        /// MaLo-ID the bundle is rooted at.
+        malo_id: String,
+        /// MP-IDs of the distinct MSBs found across the bundle's Messlokationen.
+        msbs: Vec<String>,
+    },
 }
 
 /// One way a bundle departs from the BDEW structure it declares.
@@ -2143,9 +2242,12 @@ pub struct ZaehlerRecord {
     pub eichung_bis: Option<time::Date>,
     /// Full BO4E `Zaehler` payload.
     pub data: serde_json::Value,
+    /// BO4E schema version of `data`.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
+    /// Optimistic-concurrency version, incremented on every write.
     pub version: i64,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -2249,9 +2351,12 @@ pub struct GeraetRecord {
     /// so they can be updated without rewriting the full BO4E payload.  GIN-indexed
     /// for fast queries such as "all devices with `SMGW_CERT_ABLAUFDATUM ≤ 30 days"`.
     pub konfigurationen: Vec<GeraetKonfiguration>,
+    /// BO4E schema version of `data`.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
+    /// Optimistic-concurrency version, incremented on every write.
     pub version: i64,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -2292,6 +2397,7 @@ pub struct ZaehlzeitRegisterRecord {
     pub valid_from: time::Date,
     /// End of validity — `None` = currently valid.
     pub valid_to: Option<time::Date>,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -2339,6 +2445,7 @@ pub struct ZaehlzeitSaisonRecord {
     /// only worked while every writer happened to zero-pad.
     #[serde(with = "wall_clock")]
     pub zeit_bis: time::Time,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -2664,6 +2771,7 @@ pub struct MmmaPreisGasRecord {
     pub minder_ct_kwh: rust_decimal::Decimal,
     /// How this record entered the system: `"manual"` | `"the-api"` | `"csv-import"`.
     pub source: String,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -2691,7 +2799,9 @@ pub struct MmmPreisStromRecord {
     pub mehr_ct_kwh: rust_decimal::Decimal,
     /// Deficit price (Mindermengen) in ct/kWh.
     pub minder_ct_kwh: rust_decimal::Decimal,
+    /// How the prices entered the system: `manual`, `bdew-csv` or `csv-import`.
     pub source: String,
+    /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -2730,8 +2840,10 @@ pub struct NbEnergiemixRecord {
 /// from the BDEW template).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EinwilligungRecord {
+    /// Consent ID (UUID), assigned by the database on insert.
     #[serde(default)]
     pub id: Uuid,
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     #[serde(default)]
     pub tenant: String,
     /// Opaque reference to the Anschlussnutzer (no PII stored here).
@@ -2740,12 +2852,16 @@ pub struct EinwilligungRecord {
     pub esa_mp_id: String,
     /// Locations (MaLo/MeLo/NeLo/ZPB) the consent covers.
     pub location_ids: Vec<String>,
+    /// Free-form scope of the consent (e.g. `lastgang`, `zaehlerstaende`); `werte` when not given.
     #[serde(default = "default_scope")]
     pub scope: String,
+    /// When the consent was recorded (UTC).
     #[serde(default = "unix_epoch", with = "time::serde::rfc3339")]
     pub granted_at: time::OffsetDateTime,
+    /// First day the consent is effective.
     #[serde(with = "date_iso")]
     pub valid_from: Date,
+    /// Last day of the consent window; `None` = open-ended until revoked.
     #[serde(default, with = "date_iso::opt")]
     pub valid_to: Option<Date>,
     /// GDPR Art. 7(3): non-`None` once revoked.
@@ -2754,6 +2870,7 @@ pub struct EinwilligungRecord {
     /// Opaque evidence pointer/hash — stored verbatim, never form-validated.
     #[serde(default)]
     pub evidence_uri: Option<String>,
+    /// Hash of the Einwilligungserklärung, stored verbatim.
     #[serde(default)]
     pub evidence_hash: Option<String>,
 }
@@ -2765,14 +2882,20 @@ fn default_scope() -> String {
 /// Bilateral EDI@Energy framework agreement + AS4 cert state (MSB ↔ ESA).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EsaFrameworkAgreement {
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     #[serde(default)]
     pub tenant: String,
+    /// MP-ID of the Messstellenbetreiber.
     pub msb_mp_id: String,
+    /// MP-ID of the ESA.
     pub esa_mp_id: String,
+    /// When the agreement was signed; `None` when not recorded.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub signed_at: Option<time::OffsetDateTime>,
+    /// Whether the EDI@Energy framework agreement is in place.
     #[serde(default)]
     pub edi_agreement: bool,
+    /// AS4 certificate exchange state (e.g. `pending`, `active`, `expired`); `rejected`, `revoked` and `suspended` count as not established.
     #[serde(default = "default_cert_state")]
     pub cert_state: String,
 }
@@ -2791,6 +2914,7 @@ fn default_cert_state() -> String {
 /// catalogue never refuses a mandated Zusatzleistung.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EsaMessproduktAngebot {
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     #[serde(default)]
     pub tenant: String,
     /// The MSB whose catalogue this belongs to.
@@ -2814,6 +2938,7 @@ pub struct EsaMessproduktAngebot {
     /// are wanted for.
     #[serde(default)]
     pub valid_from: Option<time::Date>,
+    /// Exclusive end of the window; `None` = open-ended.
     #[serde(default)]
     pub valid_to: Option<time::Date>,
 }
@@ -2837,15 +2962,18 @@ pub const fn default_true() -> bool {
 /// names the same Artikel-IDs back (`SG26 LIN` DE 7143 `Z09`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EsaMessproduktPreis {
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     #[serde(default)]
     pub tenant: String,
     /// The two parties to the offer. An ESA holds a separate agreement with
     /// every MSB it reaches, and prices do not carry across them.
     pub esa_mp_id: String,
+    /// MP-ID of the Messstellenbetreiber that made the offer.
     pub msb_mp_id: String,
     /// Which subscription was ordered at this price — a subscription is the
     /// (Meldepunkt, Messprodukt) pair, so both are named.
     pub lokations_id: String,
+    /// Messprodukt-Code of the subscription (13 digits, as in [`EsaMessproduktAngebot::messprodukt`]).
     pub messprodukt: String,
     /// `SG27 PIA+Z02` DE 7140.
     pub artikel_id: String,
@@ -2866,6 +2994,7 @@ pub struct EsaMessproduktPreis {
     /// Half-open validity; `valid_to` closes when the subscription ends.
     #[serde(default)]
     pub valid_from: Option<time::Date>,
+    /// Exclusive end of the validity; `None` while the subscription runs.
     #[serde(default)]
     pub valid_to: Option<time::Date>,
 }
@@ -3069,8 +3198,10 @@ impl NetzzugangStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetzzugangAntrag {
+    /// Request ID (UUID).
     #[serde(default)]
     pub id: Uuid,
+    /// Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     #[serde(default)]
     pub tenant: String,
     /// §20b use case.
@@ -3093,8 +3224,10 @@ pub struct NetzzugangAntrag {
     /// Reference assigned by the platform, once known.
     #[serde(default)]
     pub platform_ref: Option<String>,
+    /// When the request was recorded (UTC).
     #[serde(default = "unix_epoch", with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    /// When the request was first marked `uebermittelt`; `None` before that.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub submitted_at: Option<time::OffsetDateTime>,
 }

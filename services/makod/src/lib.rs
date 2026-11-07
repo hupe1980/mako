@@ -39,6 +39,10 @@
 //! ```
 
 #![deny(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
+)]
 
 pub mod api;
 pub mod core;
@@ -70,10 +74,10 @@ pub use crate::transport::{
 
 // startup symbols (MakodCtx, WorkersConfig, spawn_workers, validate_adapter_coverage)
 // are pub(crate) and called only from main.rs. The lib target sees them as dead code
-// because main.rs is a separate compilation unit. Allow dead_code here; the binary
-// target's own dead-code check (via the bin unit) correctly skips these.
-#[allow(
+// because main.rs is a separate compilation unit, in every build — so the
+// suppression is an expectation.
+#[expect(
     dead_code,
-    reason = "reached only in some feature or target combinations"
+    reason = "the startup phases are called only from main.rs, a separate crate; the library target never calls them"
 )]
 pub mod startup;

@@ -1,9 +1,5 @@
 //! §42c EnWG energy sharing: VZW allocation and readiness report.
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 // ── §42b / §42c community allocation ──────────────────────────────────────────

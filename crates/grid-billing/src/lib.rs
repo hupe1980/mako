@@ -111,7 +111,6 @@
 //! # Ok::<(), grid_billing::BillingError>(())
 //! ```
 #![deny(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod billing;
 /// BO4E bridge (feature `bo4e`): [`crate::InvoiceDocument`] → `rubo4e` Rechnung.

@@ -48,10 +48,6 @@
 //! It cannot be a validation rule over intervals: an interval value is not
 //! cumulative and has nothing to roll over.
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 use metering::series::reading::{LastgangConfig, MeterReading as Zaehlerstand, to_lastgang};

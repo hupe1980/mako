@@ -1,9 +1,5 @@
 //! Deliveries, imbalance and billing-period read endpoints.
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 /// Mehr-/Mindermengen are a GPKE / GaBi Gas process, not a StromNZV one.

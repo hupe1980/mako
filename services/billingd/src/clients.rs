@@ -1564,10 +1564,6 @@ pub struct RahmenvertragSites {
 #[derive(Debug, serde::Deserialize)]
 pub struct RahmenvertragMaloEntry {
     pub malo_id: String,
-    #[allow(
-        dead_code,
-        reason = "reached only in some feature or target combinations"
-    )]
     pub product_code: Option<String>,
 }
 
@@ -2014,7 +2010,7 @@ mod vertragsart_tests {
         };
         assert_eq!(
             solar.stromsteuer_tarif,
-            energy_billing::StromsteuerTarif::Regel
+            energy_billing::StromsteuerTarif::Regel {}
         );
     }
 

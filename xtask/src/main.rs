@@ -1,3 +1,5 @@
+//! `cargo xtask`: the repository's guards, profile pipeline and release tooling (see `HELP`).
+
 // Suppress lints that are impractical to fix in build-tool code.
 #![deny(unsafe_code)]
 #![expect(
@@ -26,7 +28,7 @@ Commands:
                         band would let types appear or vanish unnoticed.
   check-release-coverage  Fail when no profile covers the current (or --date) date
   check-prompt-tools  Refuse a procedure step naming a tool the agent cannot reach
-  check-crate-lints   Every crate root denies `unsafe_code`
+  check-crate-lints   Every crate root denies `unsafe_code`; `missing_docs` has one policy
   check-db-suites     Every real-PostgreSQL suite is ignored and run by a recipe
   check-expected-tenant  A service reading `Claims` pins the tenant it expects
   check-vorlauf-consulted  Every catalogued Mindestvorlaufzeit is read by something

@@ -20,23 +20,36 @@ use uuid::Uuid;
 /// `makod` POSTs this to `POST /api/v1/mako/events` (the marktd ingest endpoint).
 #[derive(Debug, Clone, Deserialize)]
 pub struct InboundMakoEvent {
+    /// CloudEvents `specversion` — `makod` sends `"1.0"`.
     pub specversion: String,
+    /// Event ID — `makod` sets the ERP event's idempotency key, so a redelivery
+    /// carries the same value.
     pub id: String,
+    /// CloudEvents source — `"urn:mako:makod:tenant:{tenant}"`.
     pub source: String,
+    /// CloudEvents type, e.g. `"de.mako.gpke.lieferbeginn.completed"`.
     #[serde(rename = "type")]
     pub ce_type: String,
+    /// When the event occurred in `makod` (RFC 3339 on the wire).
     #[serde(with = "time::serde::rfc3339")]
     pub time: OffsetDateTime,
+    /// `makod` process ID (UUID) the event belongs to; see [`Self::process_id`].
     pub subject: Option<String>,
+    /// URI of the JSON schema `data` conforms to (e.g. a BO4E schema), when `makod` names one.
     pub dataschema: Option<String>,
+    /// Media type of `data` — `makod` sends `"application/json"`.
     pub datacontenttype: Option<String>,
     // mako extension attributes
+    /// Prüfidentifikator of the originating EDIFACT process.
     #[serde(default)]
     pub makopid: Option<u32>,
+    /// Conversation ID (UUID) of the originating process; see [`Self::conv_id`].
     #[serde(default)]
     pub makoconvid: Option<String>,
+    /// ID (UUID) of the `makod` domain event that caused this notification.
     #[serde(default)]
     pub makocausationid: Option<String>,
+    /// Failure reason text; present only on a process-failed event.
     #[serde(default)]
     pub makofailreason: Option<String>,
     /// Workflow family name from the originating `makod` process
@@ -67,6 +80,7 @@ pub struct InboundMakoEvent {
     /// Vendor-specific trace state bag forwarded unchanged through the pipeline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracestate: Option<String>,
+    /// Event payload as `makod` produced it.
     pub data: serde_json::Value,
 }
 
@@ -121,14 +135,18 @@ pub struct MarktEvent {
     /// CloudEvents type, e.g. `"de.markt.malo.updated"`.
     #[serde(rename = "type")]
     pub ce_type: String,
+    /// Emission time, set by [`MarktEvent::new`] (RFC 3339 on the wire).
     #[serde(with = "time::serde::rfc3339")]
     pub time: OffsetDateTime,
     /// Business subject (e.g. MaLo-ID or process ID).
     pub subject: String,
+    /// Media type of `data` — always `"application/json"`.
     pub datacontenttype: String,
     // markt extension attributes (CloudEvents §3.3: lowercase alphanumeric)
+    /// Marktlokations-ID the event resolves to; absent when it concerns no MaLo.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marktmaloid: Option<String>,
+    /// Messlokations-ID the event resolves to; absent when it concerns no MeLo.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marktmeloid: Option<String>,
     /// Canonical `marktrole` value (e.g. `"NB"`, `"LF"`, `"MSB"`, `"BIKO"`, `"UNB"`).
@@ -242,11 +260,15 @@ impl MarktEvent {
 /// `markt*` + forwarded `mako*` CloudEvents extension attributes for ergonomic construction.
 #[derive(Debug, Default, Clone)]
 pub struct EventExtensions {
+    /// Sets [`MarktEvent::marktmaloid`].
     pub marktmaloid: Option<String>,
+    /// Sets [`MarktEvent::marktmeloid`].
     pub marktmeloid: Option<String>,
+    /// Sets [`MarktEvent::marktrole`] (`"NB"`, `"LF"`, `"MSB"`, `"BIKO"`, `"UNB"`).
     pub marktrole: Option<String>,
     /// `"STROM"` / `"GAS"` — the subscriber `sparten` filter matches on this.
     pub marktsparte: Option<String>,
+    /// Sets [`MarktEvent::markterpref`] — the ERP's `Idempotency-Key`.
     pub markterpref: Option<String>,
     /// Forwarded `makoconvid` from originating `InboundMakoEvent`.
     pub makoconvid: Option<String>,

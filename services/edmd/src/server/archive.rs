@@ -3,10 +3,6 @@
 //! meterstore across the hot + cold tiers. External Iceberg clients use
 //! meterstore's own catalog facade, not an edmd-hosted REST catalog.
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 use crate::store::TENANT_COL;
 

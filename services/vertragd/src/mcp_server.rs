@@ -157,14 +157,14 @@ pub struct ListKuendigungenParams {
 #[derive(Clone)]
 pub struct VertragdMcpHandler {
     state: Arc<VertragdMcpState>,
-    #[allow(
+    #[expect(
         dead_code,
-        reason = "reached only in some feature or target combinations"
+        reason = "rmcp's `#[tool_handler]` / `#[prompt_handler]` call `Self::tool_router()` / `Self::prompt_router()` per request; the stored router is never read"
     )]
     tool_router: ToolRouter<VertragdMcpHandler>,
-    #[allow(
+    #[expect(
         dead_code,
-        reason = "reached only in some feature or target combinations"
+        reason = "rmcp's `#[tool_handler]` / `#[prompt_handler]` call `Self::tool_router()` / `Self::prompt_router()` per request; the stored router is never read"
     )]
     prompt_router: rmcp::handler::server::router::prompt::PromptRouter<VertragdMcpHandler>,
 }

@@ -1,10 +1,6 @@
 //! Virtual meter endpoints — derived time series from a stored
 //! [`VirtualMeterRule`](crate::domain::virtual_meter::VirtualMeterRule).
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 use crate::domain::virtual_meter::VirtualMeterRule;

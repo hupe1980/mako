@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
+)]
 //! `outputd` — Customer-Communications daemon.
 //!
 //! Port: `:9880`

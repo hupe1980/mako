@@ -76,18 +76,24 @@ mod date_option_serde {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct EnergieQuellen {
+    /// Renewable share of the supply mix, in percent (`100` = 100 %).
     #[serde(default)]
     pub erneuerbar_pct: Decimal,
+    /// Nuclear share of the supply mix, in percent; `None` when not stated.
     #[serde(default)]
     pub nuclear_pct: Option<Decimal>,
+    /// Fossil share of the supply mix, in percent; `None` when not stated.
     #[serde(default)]
     pub fossil_pct: Option<Decimal>,
     /// Specific CO₂ emissions g/kWh — mandatory on electricity invoices (§42 Abs. 2 Nr. 2 EnWG).
     pub co2_g_per_kwh: Decimal,
+    /// `true` when the renewable share is backed by Herkunftsnachweise.
     #[serde(default)]
     pub hkn_certified: bool,
+    /// Country the Herkunftsnachweise were issued in, as free text.
     #[serde(default)]
     pub hkn_country: Option<String>,
+    /// Free-text disclosure prose, carried inside the structured record.
     #[serde(default)]
     pub beschreibung: Option<String>,
 }
@@ -98,17 +104,26 @@ pub struct EnergieQuellen {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeasonalPriceOverride {
+    /// First month of the band, 1–12, inclusive.
     pub from_month: u8,
+    /// Last month of the band, 1–12, inclusive; below `from_month` the band wraps over the year end.
     pub to_month: u8,
+    /// Electricity Arbeitspreis for the band (ct/kWh); replaces `arbeitspreis_ct_per_kwh`.
     #[serde(default)]
     pub arbeitspreis_ct_per_kwh: Option<Decimal>,
+    /// Gas Arbeitspreis for the band (ct/kWh_Hs); replaces `gas_arbeitspreis_ct_per_kwh_hs`.
     #[serde(default)]
     pub gas_arbeitspreis_ct_per_kwh_hs: Option<Decimal>,
+    /// Band name in the Arbeitspreis line, `Arbeitspreis Strom (<label>)` / `Arbeitspreis Gas (<label>)`;
+    /// `Saisontarif` when `None`.
     #[serde(default)]
     pub label: Option<String>,
 }
 
 impl SeasonalPriceOverride {
+    /// Whether `month` (1–12) falls inside the band, both ends inclusive.
+    ///
+    /// The providers look the band up by the month of the billing period's first day.
     #[must_use]
     pub fn contains_month(&self, month: u8) -> bool {
         if self.from_month <= self.to_month {
@@ -127,6 +142,7 @@ impl SeasonalPriceOverride {
 pub struct BlockTierInput {
     /// Upper bound (kWh). None = open-ended last tier.
     pub bis_kwh: Option<Decimal>,
+    /// Price for the kWh inside this tier (ct/kWh).
     pub preis_ct_per_kwh: Decimal,
 }
 
@@ -138,20 +154,29 @@ pub struct BlockTierInput {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IndexedPriceConfig {
+    /// Fixed base component of the effective price (ct/kWh).
     pub base_ct_per_kwh: Decimal,
+    /// Supplier spread added to the base (ct/kWh).
     pub spread_ct_per_kwh: Decimal,
+    /// Index name printed in the Arbeitspreis line (e.g. a Phelix Base or TTF series).
     pub index_name: String,
+    /// Index value for the billed period, in the index's own unit; `None` until it has arrived.
     pub index_value: Option<Decimal>,
+    /// ct/kWh added per unit of `index_value`.
     pub factor_ct_per_unit: Decimal,
 }
 
 impl IndexedPriceConfig {
+    /// The effective Arbeitspreis in ct/kWh: `base + spread + index_value × factor`.
+    ///
+    /// `None` while `index_value` is unset — no price can be formed then.
     #[must_use]
     pub fn effective_ct_per_kwh(&self) -> Option<Decimal> {
         let idx = self.index_value?;
         Some(self.base_ct_per_kwh + self.spread_ct_per_kwh + idx * self.factor_ct_per_unit)
     }
 
+    /// Arbeitspreis line text, stating the formula with its figures, or that the index value is missing.
     #[must_use]
     pub fn position_description(&self) -> String {
         match self.index_value {
@@ -181,14 +206,20 @@ impl IndexedPriceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ElectricityProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
+    /// Grundpreis in ct per day, billed for the contract's active days in the period.
     #[serde(default)]
     pub grundpreis_ct_per_day: Option<Decimal>,
+    /// Eintarif Arbeitspreis (ct/kWh); used when no tier, HT/NT, indexed or seasonal price applies.
     #[serde(default)]
     pub arbeitspreis_ct_per_kwh: Option<Decimal>,
+    /// Zweitarif Hochtarif Arbeitspreis (ct/kWh). Billed only together with
+    /// `arbeitspreis_nt_ct_per_kwh` and both meter registers; one band priced alone is refused.
     #[serde(default)]
     pub arbeitspreis_ht_ct_per_kwh: Option<Decimal>,
+    /// Zweitarif Niedertarif Arbeitspreis (ct/kWh). See `arbeitspreis_ht_ct_per_kwh`.
     #[serde(default)]
     pub arbeitspreis_nt_ct_per_kwh: Option<Decimal>,
     /// Tariff register annotation (e.g. "Eintarif", "Zweitarif").
@@ -203,6 +234,7 @@ pub struct ElectricityProduct {
     /// B2B indexed price (Phelix Base, EEX etc.) — §41 EnWG Sonderkundenvertrag.
     #[serde(default)]
     pub indexed_price: Option<IndexedPriceConfig>,
+    /// Saisontarif bands; the band containing the period's first month replaces the Eintarif Arbeitspreis.
     #[serde(default)]
     pub seasonal_prices: Option<Vec<SeasonalPriceOverride>>,
     /// true → §41a EPEX Spot per-interval billing. Requires iMSys (§41a Abs. 1 EnWG).
@@ -226,8 +258,10 @@ pub struct ElectricityProduct {
     /// (e.g. `"EPEX Spot Day-Ahead"`). Defaults to EPEX day-ahead.
     #[serde(default)]
     pub dynamic_price_source: Option<String>,
+    /// Per-kWh Rabatt (negative) or Aufschlag (positive) in ct/kWh, on the billed kWh.
     #[serde(default)]
     pub auf_abschlag_ct_per_kwh: Option<Decimal>,
+    /// Monthly Rabatt (negative) or Aufschlag (positive) in EUR/month, scaled by the billed months.
     #[serde(default)]
     pub auf_abschlag_eur_per_month: Option<Decimal>,
     /// One-time Neukunden-/Sofortbonus (EUR, gross of the customer's credit).
@@ -253,13 +287,18 @@ pub struct ElectricityProduct {
     /// informational note so the customer knows what it carried.
     #[serde(default)]
     pub steuerentlastungen: Vec<crate::steuer::Steuerentlastung>,
+    /// MwSt rate as a fraction (e.g. `0.19`) replacing the default rate on this product's positions.
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
+    /// Stromsteuer rate in ct/kWh replacing the period's statutory rate.
     #[serde(default)]
     pub stromsteuer_ct_per_kwh_override: Option<Decimal>,
     /// Price guarantee end date — invoice display only (§41 Abs. 1 Nr. 4 EnWG).
     #[serde(default, with = "date_option_serde")]
     pub preisgarantie_bis: Option<time::Date>,
+    /// Mindestbetrag in EUR brutto per billing period. Copied onto
+    /// `BillingContext::minimum_invoice_eur_brutto`, it makes the engine top a
+    /// lower invoice up to it; read through [`Product::minimum_invoice_eur_brutto`].
     #[serde(default)]
     pub minimum_invoice_eur_brutto: Option<Decimal>,
     /// Plant capacity (kWp) — informational (prosumer plant size / MaStR). Does
@@ -353,10 +392,13 @@ pub struct ControllableLoadProduct {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct GasProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
+    /// Grundpreis in ct per day, billed for the contract's active days in the period.
     #[serde(default)]
     pub gas_grundpreis_ct_per_day: Option<Decimal>,
+    /// Arbeitspreis in ct per kWh_Hs (Brennwert basis); used when no indexed or seasonal price applies.
     #[serde(default)]
     pub gas_arbeitspreis_ct_per_kwh_hs: Option<Decimal>,
     /// RLM demand charge (ct/kW/month) for large gas customers. §41 EnWG.
@@ -365,6 +407,7 @@ pub struct GasProduct {
     /// B2B indexed gas price (TTF, NCG, GASPOOL) — §41 EnWG Sonderkundenvertrag.
     #[serde(default)]
     pub gas_indexed_price: Option<IndexedPriceConfig>,
+    /// Saisontarif bands; the band containing the period's first month replaces `gas_arbeitspreis_ct_per_kwh_hs`.
     #[serde(default)]
     pub seasonal_prices: Option<Vec<SeasonalPriceOverride>>,
     /// How the Energiesteuer applies: Regelsatz, or steuerfreie Verwendung
@@ -379,18 +422,28 @@ pub struct GasProduct {
     /// as notes; they change no amount on this invoice.
     #[serde(default)]
     pub steuerentlastungen: Vec<crate::steuer::Steuerentlastung>,
+    /// Per-kWh Rabatt (negative) or Aufschlag (positive) in ct/kWh_Hs, on the billed kWh_Hs.
     #[serde(default)]
     pub auf_abschlag_ct_per_kwh: Option<Decimal>,
+    /// Monthly Rabatt (negative) or Aufschlag (positive) in EUR/month, scaled by the billed months.
     #[serde(default)]
     pub auf_abschlag_eur_per_month: Option<Decimal>,
+    /// MwSt rate as a fraction (e.g. `0.19`) replacing the default rate on this product's positions.
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
+    /// Energiesteuer rate in ct/kWh_Hs replacing the period's statutory rate.
     #[serde(default)]
     pub energiesteuer_gas_ct_per_kwh_override: Option<Decimal>,
+    /// BEHG CO₂ rate in ct/kWh_Hs; replaces the statutory rate only where the period has one.
     #[serde(default)]
     pub behg_gas_ct_per_kwh_override: Option<Decimal>,
+    /// Price-guarantee end date (`YYYY-MM-DD`). `GasProvider` does not read it: unlike
+    /// `ElectricityProduct::preisgarantie_bis`, it renders no notice and raises no warning.
     #[serde(default, with = "date_option_serde")]
     pub preisgarantie_bis: Option<time::Date>,
+    /// Mindestbetrag in EUR brutto per billing period. Copied onto
+    /// `BillingContext::minimum_invoice_eur_brutto`, it makes the engine top a
+    /// lower invoice up to it; read through [`Product::minimum_invoice_eur_brutto`].
     #[serde(default)]
     pub minimum_invoice_eur_brutto: Option<Decimal>,
 }
@@ -399,8 +452,10 @@ pub struct GasProduct {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct HeatProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
+    /// Grundpreis in EUR/month, times the meter input's months or else the billed months.
     #[serde(default)]
     pub waerme_grundpreis_eur_per_month: Option<Decimal>,
     /// Annual capacity charge (EUR/kW/year). Pro-rated per billing period.
@@ -409,6 +464,7 @@ pub struct HeatProduct {
     /// Monthly capacity charge alternative (EUR/kW/month).
     #[serde(default)]
     pub waerme_leistungspreis_eur_per_kw_month: Option<Decimal>,
+    /// Arbeitspreis in ct/kWh; `waerme_indexed_price`, once its index value is known, takes precedence.
     #[serde(default)]
     pub waerme_arbeitspreis_ct_per_kwh: Option<Decimal>,
     /// AVBFernwärmeV §24 Abs. 4 Preisänderungsklausel — the Arbeitspreis is
@@ -441,8 +497,12 @@ pub struct HeatProduct {
     /// Disclosure only.
     #[serde(default)]
     pub waerme_co2_emission_g_per_kwh: Option<Decimal>,
+    /// MwSt rate as a fraction (e.g. `0.19`) replacing the default rate on this product's positions.
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
+    /// Mindestbetrag in EUR brutto per billing period. Copied onto
+    /// `BillingContext::minimum_invoice_eur_brutto`, it makes the engine top a
+    /// lower invoice up to it; read through [`Product::minimum_invoice_eur_brutto`].
     #[serde(default)]
     pub minimum_invoice_eur_brutto: Option<Decimal>,
 }
@@ -479,6 +539,7 @@ pub enum AbwasserRegime {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WaterProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
     /// Trinkwasser Grundpreis (Systempreis, typically by meter size) in EUR/month.
@@ -505,8 +566,10 @@ pub struct WaterProduct {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SolarProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
+    /// Arbeitspreis for the PV supply (ct/kWh) — the Eigenverbrauch kWh, or the PV portion under GGV.
     #[serde(default)]
     pub solar_arbeitspreis_ct_per_kwh: Option<Decimal>,
     /// Grid remainder rate for §42b EnWG GGV hybrid billing (ct/kWh).
@@ -551,8 +614,12 @@ pub struct SolarProduct {
     /// Gutschrift carries 0 % USt. An election, not a function of plant size.
     #[serde(default)]
     pub kleinunternehmer_19_ustg: bool,
+    /// MwSt rate as a fraction (e.g. `0.19`) replacing the default rate on this product's positions.
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
+    /// Mindestbetrag in EUR brutto per billing period. Copied onto
+    /// `BillingContext::minimum_invoice_eur_brutto`, it makes the engine top a
+    /// lower invoice up to it; read through [`Product::minimum_invoice_eur_brutto`].
     #[serde(default)]
     pub minimum_invoice_eur_brutto: Option<Decimal>,
 }
@@ -561,14 +628,20 @@ pub struct SolarProduct {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct EegProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
+    /// Einspeisevergütung (ct/kWh), credited on the fed-in kWh outside the negative-price hours.
     #[serde(default)]
     pub eeg_verguetungssatz_ct_per_kwh: Option<Decimal>,
+    /// Marktprämie (ct/kWh), credited on the fed-in kWh outside the negative-price hours.
     #[serde(default)]
     pub eeg_marktpraemie_ct_per_kwh: Option<Decimal>,
+    /// Contractual Direktvermarktung management fee (ct/kWh), credited on every fed-in kWh,
+    /// negative-price hours included.
     #[serde(default)]
     pub eeg_managementpraemie_ct_per_kwh: Option<Decimal>,
+    /// KWKG-Zuschlag (ct/kWh), credited on every fed-in kWh.
     #[serde(default)]
     pub kwkg_zuschlag_ct_per_kwh: Option<Decimal>,
     /// Plant capacity (kWp) — informational (MaStR / §48 EEG size class).
@@ -578,6 +651,7 @@ pub struct EegProduct {
     /// the feed-in Gutschrift. An election, not a function of plant size.
     #[serde(default)]
     pub kleinunternehmer_19_ustg: bool,
+    /// MwSt rate as a fraction (e.g. `0.19`) replacing the default rate on this product's positions.
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
 }
@@ -586,16 +660,20 @@ pub struct EegProduct {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct EinspeisungProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
+    /// Marktwert (ct/kWh) credited to the operator on the fed-in kWh.
     #[serde(default)]
     pub marktwert_ct_per_kwh: Option<Decimal>,
+    /// Vermarktungsgebühr (ct/kWh, positive), deducted from the settlement on the fed-in kWh.
     #[serde(default)]
     pub vermarktungsgebuehr_ct_per_kwh: Option<Decimal>,
     /// Operator has elected the Kleinunternehmerregelung (§19 UStG) → 0 % USt on
     /// the feed-in Gutschrift. An election, not a function of plant size.
     #[serde(default)]
     pub kleinunternehmer_19_ustg: bool,
+    /// MwSt rate as a fraction (e.g. `0.19`) replacing the default rate on this product's positions.
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
 }
@@ -604,14 +682,19 @@ pub struct EinspeisungProduct {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct HemsProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
+    /// Subscription fee in EUR/month, times the usage's months (one when unstated).
     #[serde(default)]
     pub hems_subscription_eur_per_month: Option<Decimal>,
+    /// Price per optimisation event (EUR); `0.0` when events are included in the fee.
     #[serde(default)]
     pub hems_optimization_event_eur: Option<Decimal>,
+    /// Price per smart-meter readout (EUR); `0.0` when readouts are included in the fee.
     #[serde(default)]
     pub hems_readout_event_eur: Option<Decimal>,
+    /// MwSt rate as a fraction (e.g. `0.19`) replacing the default rate on this product's positions.
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
 }
@@ -620,16 +703,22 @@ pub struct HemsProduct {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct EmobilityProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
+    /// Servicegebühr in EUR/month, times the usage's months (one when unstated).
     #[serde(default)]
     pub emobility_service_fee_eur: Option<Decimal>,
+    /// Charging-energy price (ct/kWh); `0.0` when charging is bundled into the fee.
     #[serde(default)]
     pub emobility_kwh_price_ct: Option<Decimal>,
+    /// Fee per charging session (EUR).
     #[serde(default)]
     pub emobility_session_fee_eur: Option<Decimal>,
+    /// Fee per roaming session (EUR).
     #[serde(default)]
     pub emobility_roaming_fee_eur: Option<Decimal>,
+    /// MwSt rate as a fraction (e.g. `0.19`) replacing the default rate on this product's positions.
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
 }
@@ -638,12 +727,16 @@ pub struct EmobilityProduct {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceProduct {
+    /// `productd` product code, carried for ERP routing and the audit trail ([`Product::product_code`]).
     #[serde(default)]
     pub product_code: Option<String>,
+    /// Service fee in EUR/month, times the usage's months (one when unstated).
     #[serde(default)]
     pub service_fee_eur: Option<Decimal>,
+    /// Price per billable event (EUR); a price on the usage input takes precedence.
     #[serde(default)]
     pub service_event_price_eur: Option<Decimal>,
+    /// MwSt rate as a fraction (e.g. `0.19`) replacing the default rate on this product's positions.
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
 }
@@ -661,6 +754,7 @@ pub struct SharingProduct {
     /// Community sharing credit rate (ct/kWh) applied to allocated community kWh.
     #[serde(default)]
     pub sharing_credit_ct_per_kwh: Option<Decimal>,
+    /// Text of the sharing credit line; defaults to „Energiegemeinschaft Gutschrift (§42c EnWG)".
     #[serde(default)]
     pub sharing_description: Option<String>,
 }
@@ -680,30 +774,43 @@ pub struct SharingProduct {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "category")]
 pub enum Product {
+    /// `STROM` — electricity supply.
     #[serde(rename = "STROM")]
     Strom(ElectricityProduct),
+    /// `WAERMEPUMPE` — heat-pump supply with the § 14a positions.
     #[serde(rename = "WAERMEPUMPE")]
     Waermepumpe(ControllableLoadProduct),
+    /// `WALLBOX` — wallbox supply with the § 14a positions.
     #[serde(rename = "WALLBOX")]
     Wallbox(ControllableLoadProduct),
+    /// `GAS` — natural-gas supply.
     #[serde(rename = "GAS")]
     Gas(GasProduct),
+    /// `WAERME` — Fernwärme supply.
     #[serde(rename = "WAERME")]
     Waerme(HeatProduct),
+    /// `WASSER` — Trinkwasser and Abwasser.
     #[serde(rename = "WASSER")]
     Wasser(WaterProduct),
+    /// `SOLAR` — PV Eigenverbrauch, Mieterstrom or GGV supply.
     #[serde(rename = "SOLAR")]
     Solar(SolarProduct),
+    /// `EEG` — EEG feed-in Gutschrift.
     #[serde(rename = "EEG")]
     Eeg(EegProduct),
+    /// `EINSPEISUNG` — Direktvermarktung feed-in settlement.
     #[serde(rename = "EINSPEISUNG")]
     Einspeisung(EinspeisungProduct),
+    /// `HEMS` — Home Energy Management subscription.
     #[serde(rename = "HEMS")]
     Hems(HemsProduct),
+    /// `EMOBILITY` — EV charging.
     #[serde(rename = "EMOBILITY")]
     Emobility(EmobilityProduct),
+    /// `ENERGIEDIENSTLEISTUNG` — energy-service subscription.
     #[serde(rename = "ENERGIEDIENSTLEISTUNG")]
     Energiedienstleistung(ServiceProduct),
+    /// `SHARING` — electricity supply with a community sharing credit.
     #[serde(rename = "SHARING")]
     Sharing(SharingProduct),
 }

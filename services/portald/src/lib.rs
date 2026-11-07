@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
+)]
 //! `portald` — Customer Portal read-model gateway (LF role), port `:9480`.
 //!
 //! Aggregates Lastgang (`edmd`), invoices (`billingd`), the document inbox

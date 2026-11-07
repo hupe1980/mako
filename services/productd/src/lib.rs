@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
+)]
 //! `productd` — Product and Tariff Catalog daemon (LF role).
 //!
 //! Port: `:9080`

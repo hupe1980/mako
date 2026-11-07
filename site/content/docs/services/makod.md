@@ -1865,25 +1865,26 @@ outcomes.
 | An owned label whose window is open | The Festlegung's outcome for the silence, or `FristAbgelaufen` where it gives none | `WARN Frist lapsed with its window still open`; the workflow's `de.mako.antwortfrist.abgelaufen` where it carries one |
 
 The ingest dispatcher opens every inbound message's APERAK window itself, on a
-spawn and on a resume, from the message type, the Sparte and the PID (APERAK
-AHB 1.1 §2.4.1, §2.3.1): a Strom UTILMD or ORDERS 45 minutes (Samstag: Sonntag
-12 Uhr, `aperak-strom-45min-window`), every other Strom message the next Werktag
-12 Uhr (`aperak-strom-naechster-wt-1200`), and a Gas message the Folge- or
-Initialprozess window — only when the run enqueues an APERAK, because a
-processable Gas message is answered by silence. A processed Strom message whose
-workflow enqueues no APERAK of its own is answered by the dispatcher with the
-Anerkennungsmeldung (`BGM+312`, APERAK 29002, naming the message's `UNH`, `BGM`
-and `DTM+137` in `SG2`), in the same write as the run; the WiM Gerätewechsel,
-whose operator decides the APERAK later (`wim.geraetewechsel.aperak`), gets
-none. A message failing its AHB check is answered with the
-Verarbeitbarkeitsfehlermeldung instead — `Z29` for a missing Muss element,
-`Z39` for a code outside the permitted ones, the segment's MIG name as
-`FTX+Z02`, one `ERC` group per finding — in both Sparten; a message whose
-Prüfidentifikator no Marktrolle of the deployment processes with `Z31`,
-written in the same transaction as its dead letter; and a follow-up no process
-takes with `Z33`, where the PID-Übersicht's „Stelle der Zuordnungsprüfung" is
-`V` (read from `pid-overview.json`). Every notification a dispatched message causes carries the receipt
-instant as its CloudEvent `time`.
+spawn and on a resume (APERAK AHB 1.1 §2.4.1, §2.3.1):
+
+| Message | Window | Label |
+|---|---|---|
+| Strom UTILMD, ORDERS | 45 minutes; Samstag: Sonntag 12 Uhr | `aperak-strom-45min-window` |
+| every other Strom message | next Werktag 12 Uhr | `aperak-strom-naechster-wt-1200` |
+| Gas | Folge- or Initialprozess window, only when the run enqueues an APERAK — a processable Gas message is answered by silence | `aperak-gas-*` |
+
+It also answers what the workflow does not, in the same write as the run (or
+as the dead letter):
+
+| Inbound | Answer |
+|---|---|
+| processed Strom message, no APERAK from its workflow | Anerkennungsmeldung `BGM+312` (29002), naming the message's `UNH`, `BGM` and `DTM+137` in `SG2` — not for the WiM Gerätewechsel, whose operator decides it later (`wim.geraetewechsel.aperak`) |
+| failed AHB check, either Sparte | `Z29` (missing Muss element) or `Z39` (code not permitted), one `ERC` group per finding with the MIG segment name as `FTX+Z02` |
+| Prüfidentifikator no Marktrolle here processes | `Z31` |
+| follow-up no process takes, where the PID-Übersicht's „Stelle der Zuordnungsprüfung" is `V` | `Z33`, or a dead letter under [`unbekannter_vorgang`](#policy-ingest-unbekannter-vorgang) |
+
+Every notification a dispatched message causes carries the receipt instant as
+its CloudEvent `time`.
 
 `FristAbgelaufen` is a breach to act on, not an outcome: the process keeps
 waiting, and a late answer still goes out or still lands.

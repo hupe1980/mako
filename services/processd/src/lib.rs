@@ -89,6 +89,10 @@
 //!   `initiator_is_affiliate` recorded for every decision
 #![deny(unsafe_code)]
 #![expect(
+    missing_docs,
+    reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
+)]
+#![expect(
     clippy::doc_markdown,
     reason = "a pedantic style lint this crate does not adopt"
 )]

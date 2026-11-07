@@ -148,23 +148,38 @@ impl StromsteuerErmaessigung {
 ///
 /// The default is [`Self::Regel`] — a supply is taxed unless a ground says
 /// otherwise, which is the direction the statute runs in.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(tag = "art", rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "art", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
 pub enum StromsteuerTarif {
     /// Regelsteuersatz nach § 3 StromStG (2,05 ct/kWh since 01.04.2003).
     ///
     /// On a supply that would qualify for § 9 Abs. 1 Nr. 1–3, this is the
     /// operator's Verzicht nach § 9 Abs. 1b StromStG — irrevocable, by taxing
     /// the quantity under § 3.
-    #[default]
-    Regel,
+    ///
+    /// An empty struct variant rather than a unit one: serde's
+    /// `deny_unknown_fields` holds only for struct variants of an internally
+    /// tagged enum, and the default treatment is the one a typo would hit.
+    Regel {},
     /// Steuerbefreiung nach § 9 Abs. 1 StromStG.
-    Befreiung { grund: StromsteuerBefreiung },
+    Befreiung {
+        /// The Nr. of § 9 Abs. 1 the exemption rests on.
+        grund: StromsteuerBefreiung,
+    },
     /// Steuerbefreiung nach § 9 Abs. 1 Nr. 3 StromStG, with the facts it rests
     /// on; [`Kleinanlage::pruefen`] holds them to the statute.
     Kleinanlage(Kleinanlage),
     /// Ermäßigter Steuersatz nach § 9 Abs. 2 / Abs. 3 StromStG.
-    Ermaessigung { grund: StromsteuerErmaessigung },
+    Ermaessigung {
+        /// The reduction claimed, which fixes the rate invoiced.
+        grund: StromsteuerErmaessigung,
+    },
+}
+
+impl Default for StromsteuerTarif {
+    fn default() -> Self {
+        Self::Regel {}
+    }
 }
 
 impl StromsteuerTarif {
@@ -172,7 +187,7 @@ impl StromsteuerTarif {
     #[must_use]
     pub fn rate_ct_per_kwh(&self, regelsatz_ct_per_kwh: Decimal) -> Decimal {
         match self {
-            Self::Regel => regelsatz_ct_per_kwh,
+            Self::Regel {} => regelsatz_ct_per_kwh,
             Self::Befreiung { .. } | Self::Kleinanlage(_) => Decimal::ZERO,
             Self::Ermaessigung { grund } => grund.rate_ct_per_kwh(),
         }
@@ -191,11 +206,13 @@ impl StromsteuerTarif {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Kleinanlage {
+    /// The Energieträger the Anlage generates from.
     pub energietraeger: KleinanlageEnergietraeger,
     /// Elektrische Nennleistung of the Anlage in kW: every Stromerzeugungs-
     /// einheit of the same operator at the site with the same Energieträger
     /// (§ 12b Abs. 1 StromStV), not one module string.
     pub nennleistung_kw: Decimal,
+    /// Who draws the electricity.
     pub entnahme: KleinanlageEntnahme,
     /// The farthest Entnahmestelle from its Stromerzeugungseinheit, in km —
     /// the räumliche Zusammenhang reaches 4,5 km (§ 12b Abs. 3 StromStV).
@@ -213,9 +230,13 @@ pub struct Kleinanlage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum KleinanlageEnergietraeger {
+    /// Windkraft.
     Windkraft,
+    /// Sonnenenergie.
     Sonnenenergie,
+    /// Erdwärme.
     Erdwaerme,
+    /// Wasserkraft.
     Wasserkraft,
     /// Hocheffiziente KWK-Anlage. Its allgemeine Erlaubnis also needs the
     /// Marktstammdatenregister entry (§ 10 Abs. 2 Satz 1 Nr. 2 StromStV).
@@ -369,15 +390,24 @@ impl EnergiesteuerBefreiung {
 }
 
 /// How the Energiesteuer applies to one gas supply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(tag = "art", rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "art", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
 pub enum EnergiesteuerTarif {
     /// Regelsteuersatz für Erdgas als Heizstoff (§ 2 Abs. 3 Satz 1 Nr. 4
-    /// EnergieStG — 5,50 EUR/MWh).
-    #[default]
-    Regel,
+    /// EnergieStG — 5,50 EUR/MWh). An empty struct variant so an unknown key
+    /// is refused (see [`StromsteuerTarif::Regel`]).
+    Regel {},
     /// Steuerfreie Verwendung gegen Erlaubnisschein (§ 24 Abs. 2 EnergieStG).
-    Befreiung { grund: EnergiesteuerBefreiung },
+    Befreiung {
+        /// The ground of the steuerfreie Verwendung, which also fixes the invoice note.
+        grund: EnergiesteuerBefreiung,
+    },
+}
+
+impl Default for EnergiesteuerTarif {
+    fn default() -> Self {
+        Self::Regel {}
+    }
 }
 
 impl EnergiesteuerTarif {
@@ -385,7 +415,7 @@ impl EnergiesteuerTarif {
     #[must_use]
     pub fn rate_ct_per_kwh(self, regelsatz_ct_per_kwh: Decimal) -> Decimal {
         match self {
-            Self::Regel => regelsatz_ct_per_kwh,
+            Self::Regel {} => regelsatz_ct_per_kwh,
             Self::Befreiung { .. } => Decimal::ZERO,
         }
     }
@@ -489,10 +519,27 @@ mod tests {
     /// The distinction this module exists for: an Entlastung never moves an
     /// amount, an Ermäßigung moves it to the statutory rate, and only a
     /// Befreiung removes the levy.
+    /// A mistyped key in a tax treatment is refused, never ignored: the
+    /// treatment decides the levy, and a silently dropped field reads as the
+    /// operator's statement.
+    #[test]
+    fn a_tax_treatment_with_an_unknown_key_is_refused() {
+        let strom = |v: serde_json::Value| serde_json::from_value::<StromsteuerTarif>(v);
+        assert!(strom(serde_json::json!({ "art": "REGEL" })).is_ok());
+        assert!(strom(serde_json::json!({ "art": "BEFREIUNG", "grund": "NOTSTROM" })).is_ok());
+        assert!(strom(serde_json::json!({ "art": "REGEL", "grnd": "x" })).is_err());
+        assert!(
+            strom(serde_json::json!({ "art": "BEFREIUNG", "grund": "NOTSTROM", "nr": 3 })).is_err()
+        );
+        let gas = |v: serde_json::Value| serde_json::from_value::<EnergiesteuerTarif>(v);
+        assert!(gas(serde_json::json!({ "art": "REGEL" })).is_ok());
+        assert!(gas(serde_json::json!({ "art": "REGEL", "satz": "0" })).is_err());
+    }
+
     #[test]
     fn only_a_befreiung_zeroes_the_levy() {
         let regel = dec!(2.05);
-        assert_eq!(StromsteuerTarif::Regel.rate_ct_per_kwh(regel), regel);
+        assert_eq!(StromsteuerTarif::Regel {}.rate_ct_per_kwh(regel), regel);
         assert_eq!(
             StromsteuerTarif::Befreiung {
                 grund: StromsteuerBefreiung::Notstrom
@@ -543,8 +590,8 @@ mod tests {
     /// gets the standard rate, never a silent exemption.
     #[test]
     fn the_default_is_taxed() {
-        assert_eq!(StromsteuerTarif::default(), StromsteuerTarif::Regel);
-        assert_eq!(EnergiesteuerTarif::default(), EnergiesteuerTarif::Regel);
+        assert_eq!(StromsteuerTarif::default(), StromsteuerTarif::Regel {});
+        assert_eq!(EnergiesteuerTarif::default(), EnergiesteuerTarif::Regel {});
         assert!(!StromsteuerTarif::default().is_befreit());
         assert!(!EnergiesteuerTarif::default().is_befreit());
     }

@@ -222,16 +222,6 @@ fn pr_key(tenant_id: TenantId, key: &RegistryKey) -> String {
     format!("pr/{tenant_id}/{}", key.as_str())
 }
 
-/// Prefix for all routing entries belonging to `tenant_id`.
-#[cfg(test)]
-#[allow(
-    dead_code,
-    reason = "reached only in some feature or target combinations"
-)]
-fn pr_tenant_prefix(tenant_id: TenantId) -> String {
-    format!("pr/{tenant_id}/")
-}
-
 // ── Correlated-process index key helpers ───────────────────────────────────────
 
 /// Correlated index key: `ci/{tenant_id}/{tag}/{process_id}` → `JSON(ProcessIdentity)`.

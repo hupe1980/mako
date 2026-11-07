@@ -36,6 +36,7 @@ pub struct ElectricityProvider {
 }
 
 impl ElectricityProvider {
+    /// Bill `product`, with the grid charges and Konzessionsabgabe taken from `grid`.
     #[must_use]
     pub fn new(product: ElectricityProduct, grid: GridInput) -> Self {
         Self { product, grid }
@@ -158,20 +159,7 @@ impl BillingProvider for ElectricityProvider {
             });
         }
 
-        // A price guarantee that ends inside or within 30 days of the billed
-        // period is something the operator wants to see before dispatch.
-        if let Some(bis) = self.product.preisgarantie_bis
-            && bis <= ctx.period_to() + time::Duration::days(30)
-        {
-            w.push(BillingWarning {
-                code: "PREISGARANTIE_ENDET",
-                severity: WarningSeverity::Warning,
-                message: format!(
-                    "the price guarantee ends {bis}, within 30 days of the billed \
-                     period — verify the follow-on price was communicated"
-                ),
-            });
-        }
+        w.extend(preisgarantie_warning(ctx, self.product.preisgarantie_bis));
 
         // A consumption deviation beyond 50 % of the prior year is the standard
         // plausibility threshold before an invoice goes out: it usually means a
@@ -649,8 +637,8 @@ impl BillingProvider for ElectricityProvider {
         positions.extend(electricity_common_positions(ctx, product, &meter));
 
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2);
+        // the cases the override covers are listed on `MwStProvider`.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
@@ -824,6 +812,7 @@ pub struct ControllableLoadProvider {
 }
 
 impl ControllableLoadProvider {
+    /// Bill `product`, with the grid charges taken from `grid`.
     #[must_use]
     pub fn new(product: ControllableLoadProduct, grid: GridInput) -> Self {
         Self { product, grid }
@@ -1193,9 +1182,14 @@ pub struct GasProvider {
 }
 
 impl GasProvider {
+    /// Bill `product`, with the gas grid charges, Konzessionsabgabe and Bilanzierungsumlage from `grid`.
     pub fn new(product: GasProduct, grid: GridInput) -> Self {
         Self { product, grid }
     }
+    /// Construct from a [`Product::Gas`](crate::Product::Gas).
+    ///
+    /// # Panics
+    /// Panics on any other `Product` variant.
     pub fn from_product(product: &crate::tariff::Product, grid: GridInput) -> Self {
         match product {
             crate::tariff::Product::Gas(p) => Self::new(p.clone(), grid),
@@ -1244,6 +1238,7 @@ impl BillingProvider for GasProvider {
             self.product.gas_indexed_price.as_ref(),
             has_gas_work_price,
         ));
+        w.extend(preisgarantie_warning(ctx, self.product.preisgarantie_bis));
 
         // § 40a Abs. 2 EnWG: an estimated reading is billable but
         // the caller must know it happened — dispatch systems treat it
@@ -1728,10 +1723,11 @@ impl BillingProvider for GasProvider {
         // what to file — see `crate::steuer`.
         let hinweise = entlastungs_hinweise(&product.steuerentlastungen, &positions);
         positions.extend(hinweise);
+        positions.extend(preisgarantie_position(ctx, product.preisgarantie_bis));
 
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2);
+        // the cases the override covers are listed on `MwStProvider`.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
@@ -1756,9 +1752,14 @@ pub struct HeatProvider {
 }
 
 impl HeatProvider {
+    /// Bill `product`.
     pub fn new(product: HeatProduct) -> Self {
         Self { product }
     }
+    /// Construct from a [`Product::Waerme`](crate::Product::Waerme).
+    ///
+    /// # Panics
+    /// Panics on any other `Product` variant.
     pub fn from_product(product: &crate::tariff::Product) -> Self {
         match product {
             crate::tariff::Product::Waerme(p) => Self::new(p.clone()),
@@ -1998,6 +1999,7 @@ pub struct WaterProvider {
 }
 
 impl WaterProvider {
+    /// Bill `product`.
     pub fn new(product: WaterProduct) -> Self {
         Self { product }
     }
@@ -2244,6 +2246,7 @@ pub struct SolarProvider {
 }
 
 impl SolarProvider {
+    /// Bill `product`.
     pub fn new(product: SolarProduct) -> Self {
         Self { product }
     }
@@ -2498,8 +2501,8 @@ impl BillingProvider for SolarProvider {
             &["solar"],
         ));
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2);
+        // the cases the override covers are listed on `MwStProvider`.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
@@ -2538,6 +2541,7 @@ pub struct EegProvider {
 }
 
 impl EegProvider {
+    /// Bill `product`.
     pub fn new(product: EegProduct) -> Self {
         Self { product }
     }
@@ -2707,8 +2711,8 @@ impl BillingProvider for EegProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2);
+        // the cases the override covers are listed on `MwStProvider`.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
@@ -2764,6 +2768,7 @@ pub struct EinspeisungProvider {
 }
 
 impl EinspeisungProvider {
+    /// Bill `product`.
     pub fn new(product: EinspeisungProduct) -> Self {
         Self { product }
     }
@@ -2844,8 +2849,8 @@ impl BillingProvider for EinspeisungProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2);
+        // the cases the override covers are listed on `MwStProvider`.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
@@ -2870,6 +2875,7 @@ pub struct HemsProvider {
 }
 
 impl HemsProvider {
+    /// Bill `product`.
     pub fn new(product: HemsProduct) -> Self {
         Self { product }
     }
@@ -2994,8 +3000,8 @@ impl BillingProvider for HemsProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2);
+        // the cases the override covers are listed on `MwStProvider`.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
@@ -3020,6 +3026,7 @@ pub struct EmobilityProvider {
 }
 
 impl EmobilityProvider {
+    /// Bill `product`.
     pub fn new(product: EmobilityProduct) -> Self {
         Self { product }
     }
@@ -3135,8 +3142,8 @@ impl BillingProvider for EmobilityProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2);
+        // the cases the override covers are listed on `MwStProvider`.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
@@ -3161,6 +3168,7 @@ pub struct ServiceProvider {
 }
 
 impl ServiceProvider {
+    /// Bill `product`.
     pub fn new(product: ServiceProduct) -> Self {
         Self { product }
     }
@@ -3246,8 +3254,8 @@ impl BillingProvider for ServiceProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2);
+        // the cases the override covers are listed on `MwStProvider`.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
@@ -3277,6 +3285,7 @@ pub struct DynamicElectricityProvider {
 }
 
 impl DynamicElectricityProvider {
+    /// Bill `product` at the interval spot prices, with the grid charges taken from `grid`.
     #[must_use]
     pub fn new(product: ElectricityProduct, grid: GridInput) -> Self {
         Self { product, grid }
@@ -3618,8 +3627,8 @@ impl BillingProvider for DynamicElectricityProvider {
         positions.extend(hinweise);
 
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2);
+        // the cases the override covers are listed on `MwStProvider`.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
@@ -3996,22 +4005,48 @@ fn electricity_common_positions(
     }
 
     // ── Preisgarantie notice (§41 Abs. 1 Nr. 4 EnWG) ─────────────────────
-    if let Some(pg_bis) = product.preisgarantie_bis.filter(|d| *d >= ctx.period_to()) {
-        positions.push(BillingPosition {
-            description: format!("Preisgarantie gültig bis {pg_bis}"),
-            legal_basis: Some("§41 Abs. 1 Nr. 4 EnWG".to_owned()),
-            quantity: Decimal::ZERO,
-            unit: String::new(),
-            unit_price_eur: Decimal::ZERO,
-            net_eur: Decimal::ZERO,
-            category: PositionCategory::Info,
-            tags: vec!["preisgarantie".to_owned()],
-            applicable_tax_rate: None,
-            trace: crate::position::PositionTrace::default(),
-        });
-    }
+    positions.extend(preisgarantie_position(ctx, product.preisgarantie_bis));
 
     positions
+}
+
+/// The „Preisgarantie gültig bis" notice on an invoice whose guarantee still
+/// runs at the end of the billed period (§ 41 Abs. 1 Nr. 4 EnWG) — Strom and
+/// Gas alike.
+fn preisgarantie_position(
+    ctx: &BillingContext,
+    preisgarantie_bis: Option<time::Date>,
+) -> Option<BillingPosition> {
+    let pg_bis = preisgarantie_bis.filter(|d| *d >= ctx.period_to())?;
+    Some(BillingPosition {
+        description: format!("Preisgarantie gültig bis {pg_bis}"),
+        legal_basis: Some("§41 Abs. 1 Nr. 4 EnWG".to_owned()),
+        quantity: Decimal::ZERO,
+        unit: String::new(),
+        unit_price_eur: Decimal::ZERO,
+        net_eur: Decimal::ZERO,
+        category: PositionCategory::Info,
+        tags: vec!["preisgarantie".to_owned()],
+        applicable_tax_rate: None,
+        trace: crate::position::PositionTrace::default(),
+    })
+}
+
+/// `PREISGARANTIE_ENDET`: a price guarantee ending inside or within 30 days of
+/// the billed period, which the operator wants to see before dispatch.
+fn preisgarantie_warning(
+    ctx: &BillingContext,
+    preisgarantie_bis: Option<time::Date>,
+) -> Option<BillingWarning> {
+    let bis = preisgarantie_bis.filter(|bis| *bis <= ctx.period_to() + time::Duration::days(30))?;
+    Some(BillingWarning {
+        code: "PREISGARANTIE_ENDET",
+        severity: WarningSeverity::Warning,
+        message: format!(
+            "the price guarantee ends {bis}, within 30 days of the billed \
+             period — verify the follow-on price was communicated"
+        ),
+    })
 }
 
 /// The `INDEXWERT_FEHLT` warning for an index-linked price whose index value
@@ -4143,7 +4178,7 @@ fn stromsteuer_positions(
             }
             vec![p.with_tag("stromsteuer_ermaessigt")]
         }
-        StromsteuerTarif::Regel => {
+        StromsteuerTarif::Regel {} => {
             if regelsatz_ct <= Decimal::ZERO {
                 return Vec::new();
             }
@@ -4191,7 +4226,7 @@ fn energiesteuer_positions(
                 grund.citation(),
             ),
         }],
-        EnergiesteuerTarif::Regel => {
+        EnergiesteuerTarif::Regel {} => {
             if regelsatz_ct <= Decimal::ZERO {
                 return Vec::new();
             }
@@ -4359,6 +4394,7 @@ pub struct EnergyShareProvider {
 }
 
 impl EnergyShareProvider {
+    /// Credit the sharing allocation at `product`'s credit rate.
     pub fn new(product: SharingProduct) -> Self {
         Self { product }
     }

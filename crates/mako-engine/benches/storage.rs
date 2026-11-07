@@ -322,15 +322,25 @@ fn bench_enqueue_single(c: &mut Criterion) {
 
 // ── Groups ────────────────────────────────────────────────────────────────────
 
-criterion_group!(
-    event_store_benches,
-    bench_append_single_event,
-    bench_append_batch_10,
-    bench_load_n_events,
+// `criterion_group!` (criterion 0.5) expands to an undocumented `pub fn`; a private
+// module keeps the group functions out of the crate's exported items.
+mod groups {
+    use super::*;
+
+    criterion_group!(
+        event_store_benches,
+        bench_append_single_event,
+        bench_append_batch_10,
+        bench_load_n_events,
+    );
+
+    criterion_group!(snapshot_benches, bench_state_vs_state_with_snapshot,);
+
+    criterion_group!(outbox_benches, bench_pending_at_depth, bench_enqueue_single,);
+}
+
+criterion_main!(
+    groups::event_store_benches,
+    groups::snapshot_benches,
+    groups::outbox_benches
 );
-
-criterion_group!(snapshot_benches, bench_state_vs_state_with_snapshot,);
-
-criterion_group!(outbox_benches, bench_pending_at_depth, bench_enqueue_single,);
-
-criterion_main!(event_store_benches, snapshot_benches, outbox_benches);

@@ -74,7 +74,6 @@
 //! ```
 
 #![deny(unsafe_code)]
-#![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
 #![expect(
     clippy::doc_markdown,

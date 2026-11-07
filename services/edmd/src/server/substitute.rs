@@ -20,10 +20,6 @@
 //! ausdrücklichem und optisch besonders hervorgehobenem Hinweis" — which is why
 //! every value written here keeps the `SUBSTITUTED` quality flag.
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 // ── § 60 Abs. 1 MsbG Auto-Substitute (post_substitute_values) ───────────────────────

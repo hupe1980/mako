@@ -1,9 +1,5 @@
 //! Ablesesteuerung — reading order API.
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 use rust_decimal::Decimal;

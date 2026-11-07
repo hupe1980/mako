@@ -99,6 +99,12 @@ Four traps, each of which has produced a false green or a stalled run:
   disk fails as `No space left on device` inside a compile, which reads like a
   build error and is not one.
 
+Two lint rules a plain `cargo check` only warns about, and the gate denies:
+every public item of a published crate is documented (`missing_docs`, set once
+in `[workspace.lints.rust]`), and a suppression is `#[expect(…, reason = "…")]`.
+An `#[allow]` is for a lint that fires in some feature or target builds and not
+others, and its file needs an entry in `xtask/src/allow_ratchet.rs` `SITES`.
+
 ## Build speed
 
 `[profile.dev]` keeps line tables (a backtrace still names `file:line`) and no

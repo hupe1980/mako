@@ -239,12 +239,12 @@ const RULES: &[Rule] = &[
     Rule {
         id: "ust-12-3-pv",
         row: "§12 Abs. 3 UStG 0 % applies to PV electricity",
-        pattern: r"(?i)§ 12 Abs\. 3 UStG.{0,40}(30 ?kWp|feed-in|einspeis)|kWp[^.;|]{0,60}§ 19\b|§ 19 (UStG )?(limit|grenze)\b",
+        pattern: r"(?i)§ 12 Abs\. 3 UStG.{0,40}(30 ?kWp|feed-in|einspeis)|kWp[^.;|]{0,20}§ 12 Abs\. 3 UStG|kWp[^.;|]{0,60}§ 19\b|§ 19 (UStG )?(limit|grenze)\b",
         reason: "§ 12 Abs. 3 UStG zero-rates the supply of the PV installation, never \
                  electricity or a feed-in Gutschrift; the Kleinunternehmerregelung (§ 19 \
                  UStG) is an election bounded by turnover, never by plant size. Narrower \
-                 than the row: the § 19 half is caught beside a kWp figure or as a bare \
-                 „§ 19 limit/Grenze\"; a „§ 19 turnover/Kleinunternehmer limit\" names the \
+                 than the row: the § 12 half is caught with a kWp figure on either side of it, the \
+                 § 19 half beside a kWp figure or as a bare „§ 19 limit/Grenze\"; a „§ 19 turnover/Kleinunternehmer limit\" names the \
                  real Umsatzgrenze and passes",
     },
     Rule {
@@ -898,6 +898,10 @@ mod tests {
             ),
             ("pid-13025", "// 13025 is not a real PID"),
             ("ust-12-3-pv", "/// §12 Abs. 3 UStG (Solar ≤ 30 kWp)"),
+            (
+                "ust-12-3-pv",
+                "        // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.",
+            ),
             (
                 "ust-12-3-pv",
                 "/// // 50 kWp solar → exceeds the §19 limit, Regelbesteuerung",

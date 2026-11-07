@@ -21,7 +21,6 @@ mako-pruefung = { workspace = true, features = ["role-esa"] }
 rubo4e       = { workspace = true }
 rust_decimal = { workspace = true }
 serde       = { workspace = true }
-thiserror   = { workspace = true }
 time        = { workspace = true }
 
 [dev-dependencies]

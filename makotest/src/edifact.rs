@@ -68,6 +68,7 @@ pub struct Finding {
     pub component: Option<u16>,
     /// Remediation hint, where the rule offers one.
     pub suggestion: Option<String>,
+    /// What the rule found, as the validator words it.
     pub message: String,
 }
 
@@ -256,7 +257,9 @@ pub struct MessageReport {
     pub index: usize,
     /// UNH message reference.
     pub message_ref: String,
+    /// The Prüfidentifikator (`RFF+Z13`), when the message carries one.
     pub pruefidentifikator: Option<u32>,
+    /// UNH message type, e.g. `"UTILMD"`, when the UNH could be read.
     pub message_type: Option<String>,
     /// Wire release read off the UNH, e.g. `"S2.1"`.
     pub release: Option<String>,
@@ -269,6 +272,7 @@ pub struct MessageReport {
     /// The SG4 Vorgänge this message carries, in wire order. Empty for every
     /// message type that has none.
     pub vorgaenge: Vec<Vorgang>,
+    /// Every finding the validator raised for this message, any severity.
     pub findings: Vec<Finding>,
 }
 
@@ -317,10 +321,13 @@ impl MessageReport {
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct Envelope {
+    /// UNB DE0004, the sender's MP-ID.
     pub sender_id: String,
     /// UNB DE0007 for the sender — `"500"` BDEW, `"502"` DVGW, `"14"` GLN.
     pub sender_qualifier: String,
+    /// UNB DE0010, the receiver's MP-ID.
     pub receiver_id: String,
+    /// UNB DE0007 for the receiver, as for the sender.
     pub receiver_qualifier: String,
     /// UNB DE0020 Datenaustauschreferenz, mirrored in UNZ DE0036.
     pub control_ref: String,
@@ -366,6 +373,7 @@ pub struct ValidationReport {
     pub is_valid: bool,
     /// `None` for a bare message (`UNH`…`UNT`) validated without an envelope.
     pub envelope: Option<Envelope>,
+    /// One report per message, in interchange order.
     pub messages: Vec<MessageReport>,
 }
 

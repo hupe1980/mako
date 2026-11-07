@@ -1094,6 +1094,7 @@ pub struct Guthabenerstattung {
     /// Whether offsetting it against the next Abschlag discharges the
     /// obligation. A Schlussrechnung has no next Abschlag, so it does not.
     pub verrechnung_zulaessig: bool,
+    /// The provision to cite: `§ 40c Abs. 3 Satz 2 EnWG` on a Schlussrechnung, `Satz 1` otherwise.
     pub rechtsgrundlage: &'static str,
 }
 

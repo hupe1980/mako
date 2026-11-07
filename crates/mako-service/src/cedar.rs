@@ -67,8 +67,11 @@ pub enum CedarError {
         "authorization denied: principal={principal} action={action} resource_tenant={resource_tenant}"
     )]
     Denied {
+        /// The Cedar principal the request was evaluated for.
         principal: String,
+        /// The Cedar action that was refused.
         action: String,
+        /// The tenant of the resource the principal asked for.
         resource_tenant: String,
     },
 }

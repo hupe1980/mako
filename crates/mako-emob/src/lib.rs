@@ -100,7 +100,6 @@
 //! - **MaBiS** BK6-24-174 Anlage 3, Kap. 3.8 / 3.10 / 5
 
 #![deny(unsafe_code)]
-#![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
 // German regulatory terms (MaLo, MaBiS, NGZ, Bilanzierungsgebiet…) are not Rust items.
 #![expect(

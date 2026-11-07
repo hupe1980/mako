@@ -9,7 +9,7 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
-## [0.27.0] — unreleased
+## [0.27.0] — 2026-11-07
 
 ### Added
 
@@ -27,25 +27,22 @@ History before this file is in `git log`.
 - Desk Überblick: Dead Letters for Netz (with a new Dead-Letters list),
   Rechnungsprüfung and Rechnungsdispute for Lieferant, überfällige
   Ableseaufträge for Messstelle — each counting what its Heute source lists.
-- makod answers every processed Strom message whose workflow sends no APERAK
-  of its own with the Anerkennungsmeldung (APERAK 29002 — `SG2 RFF+ACE`,
-  `RFF+AGO`, `DTM+171`) in the run's own write (APERAK AHB 1.1 § 2.2, § 2.4);
-  about thirty Strom workflows answered nothing. mako-engine adds
-  `RunOptions::acknowledgement` and `Workflow::APERAK_AFTER_RECEIPT`.
-- makod answers a message whose Prüfidentifikator no Marktrolle of the
-  deployment processes with a Verarbeitbarkeitsfehlermeldung `Z31` (APERAK AHB
-  1.1 Kap. 4.3), in both Sparten and on both doors, written with its dead letter
-  in one transaction (mako-engine `DeadLetterSink::reject_answered`).
-- makod answers a follow-up no process takes with `Z33` „Referenziertes
-  Geschäftsvorfall-Tupel nicht vorhanden" where the PID-Übersicht marks the
-  Zuordnungsprüfung `V` (APERAK AHB 1.1 § 2.1.3, Kap. 4.3). `import-pid-overview`
-  carries the „Zuordnung zu einem Geschäftsvorfall" and „Stelle der
-  Zuordnungsprüfung" columns into `pid-overview.json`; `check-pid-coverage`
-  refuses an inventory without them.
-- makod policy `[policy.ingest] unbekannter_vorgang`: `z33` (default, APERAK
-  AHB 1.1 Kap. 2.1.3) refuses an orphan follow-up with `Z33`; `zur_pruefung`
-  records it as a dead letter for a person and sends no APERAK — for a cutover
-  from another MaKo system or parallel operation (Kap. 1.3).
+- makod's door answers every inbound message the APERAK AHB 1.1 owes an
+  answer, in the same write as what it records:
+  - a processed Strom message whose workflow sends none: the
+    Anerkennungsmeldung (§ 2.2, § 2.4) — about thirty Strom workflows answered
+    nothing;
+  - a failed AHB check: `Z29` / `Z39`, every AHB-Fehler in its own `SG4 ERC`
+    group with its MIG segment name as Ortsangabe (§ 2.1.1), in both Sparten;
+  - a Prüfidentifikator no Marktrolle here processes: `Z31` (Kap. 4.3);
+  - a follow-up no process takes, where the PID-Übersicht marks the
+    Zuordnungsprüfung `V`: `Z33` (§ 2.1.3) — or, under the new policy
+    `[policy.ingest] unbekannter_vorgang = "zur_pruefung"`, a dead letter for
+    a person, for a cutover from another MaKo system.
+
+  mako-engine adds `RunOptions::acknowledgement`,
+  `Workflow::APERAK_AFTER_RECEIPT` and `DeadLetterSink::reject_answered`;
+  `pid-overview.json` carries the PID-Übersicht's Zuordnung columns.
 - `mako_fristen::APERAK_STROM_ALLGEMEIN_LABEL`: the delivery window of a
   Strom message that is not a UTILMD or ORDERS, the next Werktag 12 Uhr
   (APERAK AHB 1.1 § 2.4.1). mako-engine's `RunOptions` carries `received_at`
@@ -79,6 +76,18 @@ History before this file is in `git log`.
 - processd's `get_stp_rate`, `get_process_stp_rate` and `get_kpi_report`
   declare output schemas; the 95 % STP target is processd's operating target,
   not a regulatory one.
+- **Breaking:** `missing_docs` is set once in `[workspace.lints.rust]` (a
+  deny under the gate's `-D warnings`); `check-crate-lints` refuses a
+  crate-level level, and only `publish = false` crates may opt out. The public
+  items of `mako-markt`, `energy-billing`, `mako-pruefung`, `invoic-checker`
+  and `mako-service` are documented.
+- **Breaking:** invoic-checker's unused `CheckError` is removed.
+- The `#[allow]` ratchet is a list of named sites with reasons instead of a
+  ceiling; 24 suppressions that suppressed nothing are removed and 21 are
+  `#[expect]`.
+- `testcontainers` 0.27 and `testcontainers-modules` 0.15; every PostgreSQL
+  suite names its image tag. RUSTSEC-2026-0440 (`astral-tokio-tar`, dev-only)
+  is accepted; RUSTSEC-2025-0111 and -0134 no longer apply.
 - rmcp 3.9: a tool output field that is always serialized is listed as
   `required` (nullable where it can be empty); the MCP snapshots and the
   Desk's generated types follow.
@@ -88,12 +97,6 @@ History before this file is in `git log`.
 - The CloudEvent `time` of a notification an inbound message caused is its
   receipt instant, not the enqueue instant, so processd counts the
   Antwortfrist from the Übertragungstag (GPKE Teil 1 Kap. 7, S. 27).
-- A message failing its AHB check is answered by the door with `Z29` (a
-  missing Muss element) or `Z39` (a code not permitted) — every AHB-Fehler in
-  its own `SG4 ERC` group (§ 2.1.1) — with the segment's MIG name as
-  `FTX+Z02` Ortsangabe, instead of an Anerkennungsmeldung; in Gas the
-  Fehlermeldung opens its delivery window. edi-energy's AHB findings carry the
-  segment's MIG name (`segment_name`).
 - Every makod ingest arm but the GPKE supplier-change pair decides
   resume-or-spawn on its workflow's published occupancy verdict, so a second
   message for a settled process opens a new one instead of being dead-lettered
@@ -108,6 +111,16 @@ History before this file is in `git log`.
   within one DE 4440 (`an..512`), ending on a whole finding. invoicd records
   each answer before sending it, and `dispatch-answer` sends exactly that answer
   again; it sent a placeholder sentence and no Antwortcode.
+- A product's tax treatment (`StromsteuerTarif`, `EnergiesteuerTarif`)
+  refuses an unknown key; a mistyped one was ignored, so `{"art": "REGEL",
+  "grnd": …}` read as the operator's statement. **Breaking:** `Regel` is an
+  empty struct variant (`Regel {}`), the form serde's `deny_unknown_fields`
+  holds for in an internally tagged enum.
+- A gas invoice states its Preisgarantie and warns before it ends
+  (`PREISGARANTIE_ENDET`), as an electricity invoice does; the gas engine read
+  neither.
+- `check-known-wrong` catches the § 12 Abs. 3 UStG PV claim with the kWp
+  figure on either side; the false comments in `energy-billing` are corrected.
 - billingd's review queue lists only undecided records; a released or
   reviewed one never left it.
 - The Desk's gateway routes invoicd, billingd, edmd and netzbilanzd, which

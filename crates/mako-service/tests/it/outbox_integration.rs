@@ -24,13 +24,18 @@ use std::time::Duration;
 use mako_service::CloudEvent;
 use mako_service::outbox::{self, OutboxConfig, OutboxWorker};
 use sqlx::postgres::PgPoolOptions;
+use testcontainers::ImageExt as _;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
 // ── PostgreSQL ──────────────────────────────────────────────────────────────
 
 async fn boot() -> sqlx::PgPool {
-    let container = Postgres::default().start().await.expect("start postgres");
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .expect("start postgres");
     let port = container
         .get_host_port_ipv4(5432)
         .await

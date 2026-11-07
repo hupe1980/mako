@@ -12,34 +12,62 @@
 pub enum MdmError {
     /// A supplied MaLo-ID is syntactically or checksum-invalid.
     #[error("invalid MaLo-ID '{id}': {reason}")]
-    InvalidMaloId { id: String, reason: String },
+    InvalidMaloId {
+        /// The value as supplied.
+        id: String,
+        /// Why validation refused it.
+        reason: String,
+    },
 
     /// A supplied MeLo-ID is syntactically invalid.
     #[error("invalid MeLo-ID '{id}': {reason}")]
-    InvalidMeloId { id: String, reason: String },
+    InvalidMeloId {
+        /// The value as supplied.
+        id: String,
+        /// Why validation refused it.
+        reason: String,
+    },
 
     /// A supplied GLN / Codenummer is syntactically invalid.
     #[error("invalid GLN '{mp_id}': {reason}")]
-    InvalidMpId { mp_id: String, reason: String },
+    InvalidMpId {
+        /// The value as supplied.
+        mp_id: String,
+        /// Why validation refused it.
+        reason: String,
+    },
 
     /// The requested resource does not exist.
     #[error("not found: {resource_type} '{id}'")]
     NotFound {
+        /// Kind of resource looked up (e.g. `"melo"`).
         resource_type: &'static str,
+        /// Key it was looked up by.
         id: String,
     },
 
     /// ETag / `If-Match` header mismatch — optimistic concurrency conflict.
     #[error("version conflict: expected etag '{expected}', found '{actual}'")]
-    VersionConflict { expected: String, actual: String },
+    VersionConflict {
+        /// ETag the caller sent in `If-Match`.
+        expected: String,
+        /// ETag of the stored version.
+        actual: String,
+    },
 
     /// The caller is not authorised to perform this operation.
     #[error("forbidden: {reason}")]
-    Forbidden { reason: &'static str },
+    Forbidden {
+        /// Which permission was denied.
+        reason: &'static str,
+    },
 
     /// The request body is semantically invalid (business-rule violation).
     #[error("unprocessable: {reason}")]
-    Unprocessable { reason: String },
+    Unprocessable {
+        /// The business rule the request breaks.
+        reason: String,
+    },
 
     /// A downstream call to the `makod` admin API failed.
     #[error("makod sync failed: {0}")]
@@ -54,12 +82,19 @@ pub enum MdmError {
     /// error, not a transport failure: retrying the same command will keep
     /// failing, so it maps to 409 rather than 500.
     #[error("makod rejected the command ({kind}): {detail}")]
-    MakodConflict { kind: String, detail: String },
+    MakodConflict {
+        /// `makod`'s conflict kind (e.g. `invalid_state`).
+        kind: String,
+        /// `makod`'s detail message.
+        detail: String,
+    },
 
     /// A downstream call to an ERP webhook failed.
     #[error("webhook delivery failed (subscriber={subscriber_id}): {reason}")]
     WebhookDelivery {
+        /// ID of the ERP subscriber the delivery was for.
         subscriber_id: String,
+        /// Why the delivery failed.
         reason: String,
     },
 

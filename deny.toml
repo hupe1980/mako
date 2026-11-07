@@ -465,11 +465,6 @@ ignore = [
     { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader memory-exhaustion DoS; same version constraint and same usage analysis as RUSTSEC-2026-0194." },
     # Drops out with a jsonwebtoken on elliptic-curve 0.14.
     { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 timing; the signing path (energy-api JWS) is on patched 0.7.10 — 0.5.5 remains only under jsonwebtoken's public-key verification and the unshipped bedrock feature" },
-    # RUSTSEC-2025-0134: rustls-pemfile unmaintained (every version; the PEM
-    # parser lives on in rustls-pki-types). Pulled by testcontainers → bollard.
-    # Dev-only dependency (integration tests only); not present in any production
-    # binary. Resolve when bollard moves to rustls-pki-types.
-    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile unmaintained; dev-only dep via testcontainers/bollard — not in production binaries" },
     # RUSTSEC-2024-0320: yaml-rust unmaintained — syntect loads syntax
     # definitions with it. Unreachable from an invoice render (no code blocks),
     # and non-optional in typst-library.
@@ -482,11 +477,12 @@ ignore = [
     # model plus the operator's template literals — never a counterparty's.
     # Revisit if operator-supplied font files are ever accepted.
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained (no CVE); Typst's text shaper, on the render path but fed only bundled fonts, mako's own invoice model and the operator's own template — no counterparty-controlled input" },
-    # RUSTSEC-2025-0111 (CVE-2025-62518): tokio-tar PAX header smuggling.
-    # Pulled by testcontainers. Dev-only dependency (integration tests only); not
-    # present in any production binary, and it never reads a user-supplied archive.
-    # Resolve when testcontainers moves off tokio-tar.
-    { id = "RUSTSEC-2025-0111", reason = "tokio-tar PAX smuggling; dev-only dep via testcontainers — not in production binaries, no user-supplied archive input" },
+    # RUSTSEC-2026-0440: astral-tokio-tar unmaintained (every version; no safe
+    # upgrade). Pulled by testcontainers 0.27, and 0.28 still depends on it.
+    # Dev-only dependency (integration tests only); not present in any production
+    # binary, and it never reads a user-supplied archive. Resolve when
+    # testcontainers moves off it.
+    { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar unmaintained; dev-only dep via testcontainers — not in production binaries, no user-supplied archive input" },
     # RUSTSEC-2023-0071: rsa Marvin Attack timing side-channel.
     # rsa is pulled by mako-service → jsonwebtoken (`rust_crypto`), which verifies
     # RS256/384/512 OIDC tokens against the identity provider's public JWKS. The

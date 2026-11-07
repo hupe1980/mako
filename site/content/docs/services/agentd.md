@@ -215,18 +215,18 @@ person sends it. Each answer and Hinweis takes a „Hilfreich?" verdict, and a
 proposal records whether it was sent, edited or dismissed
 (`POST /api/v1/runs/{run}/bewertung`).
 
-A Freigabe's and a Rechnungsdisput's proposal is computed before anyone
-asks. Every `[vorschlaege] intervall_secs` agentd reads processd's open
-Freigaben (`list_pending_approvals`) and invoicd's open disputes
-(`list_disputes`) and starts one `desk-assistant` run per entry, asked „Was
-schlägst du vor?". The admission is keyed on the kind and the entry id, so a
-second tick, a restart or a second instance starts no second run; the Desk
-reads the result at `GET /api/v1/vorschlaege`. A Freigabe's proposal is
-`freigeben` or `ablehnen` with a code of its tree; a dispute's is `beilegen`
-or `aufrechterhalten` with the finding it rests on (`befund`), belegt only
-when the cited `get_check_result` names that finding. A billingd Prüfposten
-gets none: releasing a held invoice overrides the risk gate's deterministic
-check, and a model reading the same findings adds no evidence.
+Proposals are computed before anyone asks. Every
+`[vorschlaege] intervall_secs` agentd starts one `desk-assistant` run per open
+entry („Was schlägst du vor?"), admitted once per kind and id — a second tick,
+a restart or a second instance starts none — and the Desk reads the result at
+`GET /api/v1/vorschlaege`.
+
+| Entry | Read from | Proposal |
+|---|---|---|
+| Freigabe | processd `list_pending_approvals` | `freigeben` / `ablehnen` with a code of its tree |
+| Rechnungsdisput | invoicd `list_disputes` | `beilegen` / `aufrechterhalten` with its `befund`, belegt only when the cited `get_check_result` names it |
+| billingd Prüfposten | — | none: releasing a held invoice overrides a deterministic check, and a model reading the same findings adds no evidence |
+
 `automatisch = false` leaves the proposal to a person's question. It needs the
 `processd` and `invoicd` MCP servers and the `desk-assistant` activated; the
 startup log names what is missing.

@@ -30,7 +30,7 @@
 )]
 #![allow(
     clippy::missing_errors_doc,
-    reason = "a pedantic style lint this crate does not adopt"
+    reason = "a pedantic style lint this crate does not adopt; it fires in some feature combinations of this crate and not in others"
 )]
 
 pub mod bo4e;

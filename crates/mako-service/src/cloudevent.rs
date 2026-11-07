@@ -224,8 +224,11 @@ pub enum PublishError {
     /// caller may reschedule.
     #[error("CloudEvent delivery failed after {attempts} attempt(s){}: {last}", if *.permanent { " (permanent)" } else { "" })]
     Delivery {
+        /// Delivery attempts made, the last included.
         attempts: u32,
+        /// The last attempt's failure.
         last: String,
+        /// The receiver refused the event (3xx/4xx): dead-letter, do not retry.
         permanent: bool,
     },
 }

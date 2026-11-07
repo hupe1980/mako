@@ -815,6 +815,14 @@ impl MarktdClient {
             .map(str::to_owned))
     }
 
+    /// Prices of the accepted Angebote between `msb_mp_id` and `esa_mp_id`
+    /// that are valid on `at`.
+    ///
+    /// An empty list on `404`.
+    ///
+    /// # Errors
+    ///
+    /// Transport or decode failures.
     pub async fn esa_preise(
         &self,
         msb_mp_id: &str,
@@ -874,6 +882,15 @@ impl MarktdClient {
         Ok(())
     }
 
+    /// Whether the MSB–ESA framework is established: an EDI agreement is
+    /// recorded and the certificate state is none of `rejected`, `revoked`
+    /// or `suspended`.
+    ///
+    /// `Ok(false)` on `404` — no framework is recorded for the pair.
+    ///
+    /// # Errors
+    ///
+    /// Transport or decode failures.
     pub async fn esa_framework_established(
         &self,
         msb_mp_id: &str,

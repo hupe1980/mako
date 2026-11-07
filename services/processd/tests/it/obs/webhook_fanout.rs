@@ -63,7 +63,7 @@ async fn processd(pool: sqlx::PgPool, marktd: &str) -> String {
         "allow_insecure_no_auth": true,
         "http": {},
         "database": { "url": "postgres://unused/processd" },
-        "identity": { "own_mp_id": OWN },
+        "identity": { "own_mp_id": OWN, "verbundene_lieferanten": [] },
         "makod": { "url": marktd, "api_key": "test" },
         "marktd": { "url": marktd, "api_key": "test" },
     }))

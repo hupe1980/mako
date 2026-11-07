@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
+)]
 //! `vertragd` — retail contract and customer management for the LF role.
 //!
 //! Port: `:9780`

@@ -29,6 +29,7 @@ use crate::error::MdmError;
 /// the payload object.
 #[derive(Debug)]
 pub struct ForwardCommand {
+    /// Command name from [`crate::commands`] (e.g. `wim.geraetewechsel.beauftragen`).
     pub command: String,
     /// Optional Marktrolle disambiguation (required for multi-role commands
     /// such as `wim.geraetewechsel.beauftragen`).
@@ -37,6 +38,7 @@ pub struct ForwardCommand {
     pub malo_id: Option<String>,
     /// Convenience field: merged into `payload` as `"melo_id"` on serialization.
     pub melo_id: Option<String>,
+    /// Command-specific fields; a non-object value is replaced by an empty object.
     pub payload: serde_json::Value,
 }
 
@@ -75,8 +77,11 @@ impl serde::Serialize for ForwardCommand {
 /// makod serialises this in snake_case (`process_id`, `idempotency_key`).
 #[derive(Debug, Deserialize)]
 pub struct CommandAccepted {
+    /// ID of the `makod` process the command started or addressed.
     pub process_id: uuid::Uuid,
+    /// The command name, echoed back.
     pub command: String,
+    /// The `Idempotency-Key` the request carried, echoed back.
     pub idempotency_key: Option<String>,
 }
 
@@ -86,11 +91,14 @@ pub struct CommandAccepted {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MakodPartner {
+    /// MP-ID (BDEW-/DVGW-Codenummer or GLN) the partner is keyed on.
     pub mp_id: String,
+    /// Human-readable partner name, when known.
     pub display_name: Option<String>,
     /// BO4E market role — serialises as the BDEW code (e.g. `"LF"`), which is
     /// exactly the string makod's admin API expects.
     pub marktrolle: Option<rubo4e::current::Marktrolle>,
+    /// Communication channels, sent to `makod` unchanged as JSON.
     pub channels: serde_json::Value,
 }
 

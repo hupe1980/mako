@@ -571,6 +571,8 @@ pub const E_0614_CODES: &[AntwortCode] = &[
 
 /// `E_3001` / `G_0005` + `G_0006` — Kündigung Gasliefervertrag (44016 → 44017/44018).
 pub const EBD_KUENDIGUNG_GAS: &str = "E_3001";
+/// Antwortcodes of `E_3001`, taken from the Codelisten `G_0005` + `G_0006`; each carries
+/// `ebd: None`, so it renders as a bare `STS+E01++<code>'`.
 pub const E_3001_CODES: &[AntwortCode] = &[
     code!("E15", None, Zustimmung, "Zustimmung ohne Korrekturen"),
     code!(
@@ -610,6 +612,8 @@ pub const E_3001_CODES: &[AntwortCode] = &[
 
 /// `E_3002` / `G_0067` + `G_0068` — Abmeldung NN vom NB (44007 → 44008/44009).
 pub const EBD_ABMELDUNG_GAS: &str = "E_3002";
+/// Antwortcodes of `E_3002`, taken from the Codelisten `G_0067` + `G_0068`; each carries
+/// `ebd: None`, so it renders as a bare `STS+E01++<code>'`.
 pub const E_3002_CODES: &[AntwortCode] = &[
     code!("E15", None, Zustimmung, "Zustimmung ohne Korrekturen"),
     code!(
@@ -642,6 +646,8 @@ pub const E_3002_CODES: &[AntwortCode] = &[
 
 /// `E_3020` / `G_0009` + `G_0010` — Abmeldungsanfrage des NB (44010 → 44011/44012).
 pub const EBD_ABMELDUNGSANFRAGE_GAS: &str = "E_3020";
+/// Antwortcodes of `E_3020`, taken from the Codelisten `G_0009` + `G_0010`; each carries
+/// `ebd: None`, so it renders as a bare `STS+E01++<code>'`.
 pub const E_3020_CODES: &[AntwortCode] = &[
     code!("E15", None, Zustimmung, "Zustimmung ohne Korrekturen"),
     code!(
@@ -710,6 +716,8 @@ pub const E_0615_CODES: &[AntwortCode] = &[
 
 /// `E_3008` / `G_0013` + `G_0014` — Anmeldung E/G Gas (44013 → 44014 / 44015).
 pub const EBD_ANMELDUNG_EOG_GAS: &str = "E_3008";
+/// Antwortcodes of `E_3008`, taken from the Codelisten `G_0013` + `G_0014`; each carries
+/// `ebd: None`, so it renders as a bare `STS+E01++<code>'`.
 pub const E_3008_CODES: &[AntwortCode] = &[
     code!("E15", None, Zustimmung, "Zustimmung ohne Korrekturen"),
     code!(
@@ -4196,6 +4204,7 @@ pub const EBD_MSB_STORNO_NB: &str = "E_0569";
 const E_0569: Option<&'static str> = Some(EBD_MSB_STORNO_NB);
 
 // ── E_0210 (31 codes) ──
+/// 31 Antwortcodes of `E_0210` ([`EBD_MSB_RECHNUNG_LF`]), each tied to its Prüfschritt.
 pub const E_0210_CODES: &[AntwortCode] = &[
     // Kopfebene
     code!(
@@ -4397,6 +4406,7 @@ pub const E_0210_CODES: &[AntwortCode] = &[
 ];
 
 // ── E_0243 (8 codes) ──
+/// 8 Antwortcodes of `E_0243` ([`EBD_MSB_STORNO_LF`]), each tied to its Prüfschritt.
 pub const E_0243_CODES: &[AntwortCode] = &[
     // Kopfebene
     code!(
@@ -4451,6 +4461,7 @@ pub const E_0243_CODES: &[AntwortCode] = &[
 ];
 
 // ── E_0566 (31 codes) ──
+/// 31 Antwortcodes of `E_0566` ([`EBD_MSB_RECHNUNG_NB`]), each tied to its Prüfschritt.
 pub const E_0566_CODES: &[AntwortCode] = &[
     // Kopfebene
     code!(
@@ -4647,6 +4658,7 @@ pub const E_0566_CODES: &[AntwortCode] = &[
 ];
 
 // ── E_0567 (1 codes) ──
+/// The one Antwortcode of `E_0567` ([`EBD_MSB_NICHT_ZAHLUNGSAVIS_NB`]): `A99` at Prüfschritt 10.
 pub const E_0567_CODES: &[AntwortCode] = &[
     // Kopfebene
     code!(
@@ -4659,6 +4671,7 @@ pub const E_0567_CODES: &[AntwortCode] = &[
 ];
 
 // ── E_0568 (32 codes) ──
+/// 32 Antwortcodes of `E_0568` ([`EBD_MSB_RECHNUNG_ERNEUT_NB`]), each tied to its Prüfschritt.
 pub const E_0568_CODES: &[AntwortCode] = &[
     // Kopfebene
     code!(
@@ -4869,6 +4882,7 @@ pub const E_0568_CODES: &[AntwortCode] = &[
 ];
 
 // ── E_0569 (8 codes) ──
+/// 8 Antwortcodes of `E_0569` ([`EBD_MSB_STORNO_NB`]), each tied to its Prüfschritt.
 pub const E_0569_CODES: &[AntwortCode] = &[
     // Kopfebene
     code!(

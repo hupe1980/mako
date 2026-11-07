@@ -1,6 +1,10 @@
 //! `marktd` library root — exposes all modules for both `main.rs` and tests.
 
 #![deny(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
+)]
 
 pub mod config;
 pub mod consent_lifecycle;

@@ -93,14 +93,22 @@ default-members = [
 ]
 
 # Lint levels every member inherits through `[lints] workspace = true`.
+[workspace.lints.rust]
+# The one `missing_docs` policy: a warning, which the gate's `-D warnings` makes
+# a deny. A `publish = false` daemon library opts out at its crate root;
+# `cargo xtask check-crate-lints` refuses a root that restates the level and a
+# published crate that opts out.
+missing_docs = "warn"
+
 [workspace.lints.clippy]
 # A suppression states why it exists. `#[expect]` also fails when the lint
 # stops firing; `#[allow]` is kept where a lint fires only in some feature or
-# target combinations, where an expectation would be unfulfilled in the others.
+# target combinations, where an expectation would be unfulfilled in the others,
+# and each file holding one is named in `xtask/src/allow_ratchet.rs` `SITES`.
 allow_attributes_without_reason = "deny"
 
 [workspace.package]
-version     = "0.26.0"
+version     = "0.27.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -177,39 +185,39 @@ schemars                  = { version = "1.2.1" }
 # to the Opaque track, and a release code several profiles share. Off, those
 # decisions are taken silently. External consumers of the published crate still
 # choose for themselves; every build in this workspace gets them.
-edi-energy       = { path = "crates/edi-energy",  version = "0.26", features = ["tracing"] }
-mako-engine      = { path = "crates/mako-engine",      version = "0.26" }
-mako-markt       = { path = "crates/mako-markt",       version = "0.26" }
-mako-events      = { path = "crates/mako-events",      version = "0.26" }
-grid-billing     = { path = "crates/grid-billing",     version = "0.26" }
-eeg-billing      = { path = "crates/eeg-billing",      version = "0.26" }
-mako-wim         = { path = "crates/mako-wim",         version = "0.26" }
-mako-gpke        = { path = "crates/mako-gpke",        version = "0.26" }
+edi-energy       = { path = "crates/edi-energy",  version = "0.27", features = ["tracing"] }
+mako-engine      = { path = "crates/mako-engine",      version = "0.27" }
+mako-markt       = { path = "crates/mako-markt",       version = "0.27" }
+mako-events      = { path = "crates/mako-events",      version = "0.27" }
+grid-billing     = { path = "crates/grid-billing",     version = "0.27" }
+eeg-billing      = { path = "crates/eeg-billing",      version = "0.27" }
+mako-wim         = { path = "crates/mako-wim",         version = "0.27" }
+mako-gpke        = { path = "crates/mako-gpke",        version = "0.27" }
 # The INVOIC settle/dispute state machine, shared by every billing family.
 # GPKE, WiM, GaBi Gas and GeLi Gas register a family against it rather than
 # re-implementing the process, so the four cannot drift apart.
-mako-invoic      = { path = "crates/mako-invoic",      version = "0.26" }
-mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.26" }
+mako-invoic      = { path = "crates/mako-invoic",      version = "0.27" }
+mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.27" }
 # Every Frist in one leaf crate: BDEW Werktage, the MaKo holiday calendar, and
 # the per-Prüfidentifikator Antwortfrist tables. Depended on directly — there is
 # no re-export through `mako-engine`, so a caller names `mako_fristen`.
-mako-fristen     = { path = "crates/mako-fristen",     version = "0.26" }
+mako-fristen     = { path = "crates/mako-fristen",     version = "0.27" }
 # AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here because
 # mako-as4 and makod both depend on it: independent declarations drift onto two
 # versions in one build. `Profile::bdew()` fixes every security and wire
 # setting; mako supplies the parties, the SM-PKI root and the CRL signer.
 asx-rs           = { version = "0.16.2", default-features = false, features = ["as4", "http-client"] }
-mako-service     = { path = "crates/mako-service",     version = "0.26" }
-invoic-checker   = { path = "crates/invoic-checker",   version = "0.26" }
+mako-service     = { path = "crates/mako-service",     version = "0.27" }
+invoic-checker   = { path = "crates/invoic-checker",   version = "0.27" }
 # `default-features = false` on purpose: the crate's defaults are *every*
 # Marktrolle's Entscheidungsbäume. A member that inherits this dependency names
 # the roles it actually checks (`features = ["role-msb"]`), so the feature graph
 # says which trees a build carries instead of every build carrying all of them.
-mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.26", default-features = false }
-mako-emob        = { path = "crates/mako-emob",        version = "0.26" }
-mako-mabis       = { path = "crates/mako-mabis",       version = "0.26" }
-energy-billing   = { path = "crates/energy-billing",   version = "0.26" }
-dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.26" }
+mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.27", default-features = false }
+mako-emob        = { path = "crates/mako-emob",        version = "0.27" }
+mako-mabis       = { path = "crates/mako-mabis",       version = "0.27" }
+energy-billing   = { path = "crates/energy-billing",   version = "0.27" }
+dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.27" }
 metering         = { version = "0.25" }
 sepa             = { version = "0.9" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
@@ -235,9 +243,12 @@ arrow                   = { version = "58", default-features = false }
 # ── Testing utilities ───────────────────────────────────────────────────────
 # testcontainers: spin up Docker containers in Rust integration tests.
 # Used by services' `tests/` to validate SQL queries against a real PostgreSQL
-# instance (see `just test-db`).
-testcontainers   = { version = "0.23", features = ["blocking"] }
-testcontainers-modules = { version = "0.11", features = ["postgres"] }
+# instance (see `just test-db`). `testcontainers-modules` 0.15 is built on
+# `testcontainers` 0.27, so the two move together: its `Postgres` implements
+# 0.27's `Image`. Every suite names the image tag it starts (`with_tag`) rather
+# than taking the module's default.
+testcontainers   = "0.27"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }
 
 # ── Dev profile ─────────────────────────────────────────────────────────────
 # Line tables keep `file:line` in a backtrace — what a failing settlement test

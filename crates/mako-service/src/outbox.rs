@@ -465,11 +465,17 @@ impl OutboxWorker {
 /// A dead-lettered outbox row, for admin inspection.
 #[derive(Debug, sqlx::FromRow, serde::Serialize)]
 pub struct DeadLetter {
+    /// The outbox row's id.
     pub id: uuid::Uuid,
+    /// The CloudEvent `id`.
     pub event_id: String,
+    /// The CloudEvent `type`.
     pub ce_type: String,
+    /// Delivery attempts made before the row was dead-lettered.
     pub attempts: i16,
+    /// The last attempt's failure, if one was recorded.
     pub last_error: Option<String>,
+    /// When the row was dead-lettered.
     #[serde(with = "time::serde::rfc3339")]
     pub dead_lettered_at: time::OffsetDateTime,
 }

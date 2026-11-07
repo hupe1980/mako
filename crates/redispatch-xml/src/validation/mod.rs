@@ -117,10 +117,6 @@ impl std::fmt::Display for ValidationResult {
 /// This function does not return `Err`; all findings are collected in the
 /// returned [`ValidationResult`]. Returns `Err` only when a validation
 /// precondition check fails (not currently possible).
-#[allow(
-    unused_variables,
-    reason = "read only in some feature or target combinations"
-)]
 pub fn validate(doc: &Document) -> ValidationResult {
     let mut result = ValidationResult::default();
     structural::validate(doc, &mut result);

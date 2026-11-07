@@ -1,9 +1,5 @@
 //! Quality scoring: assessments, per-batch reports and retroactive rescoring.
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 // ── Quality assessments ─────────────────────────────────────────────────

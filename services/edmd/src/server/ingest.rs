@@ -1,9 +1,5 @@
 //! Direct-push ingest (iMSys/SMGW/Gas), V-rule validation, corrections and bulk ingestion.
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 // ── iMSys / SMGW 15-min direct push ─────────────────────────────────────────

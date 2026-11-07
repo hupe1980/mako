@@ -236,20 +236,27 @@ pub enum UpstreamError {
     /// The service could not be reached, or the request timed out.
     #[error("{service} unreachable: {source}")]
     Transport {
+        /// The peer service's name, for the log line and the error text.
         service: &'static str,
+        /// The transport failure.
         source: reqwest::Error,
     },
     /// The service answered with an error status.
     #[error("{service} returned {status}: {body}")]
     Status {
+        /// The peer service's name, for the log line and the error text.
         service: &'static str,
+        /// The error status it answered with.
         status: reqwest::StatusCode,
+        /// The response body, as text.
         body: String,
     },
     /// The service answered 2xx with a body the caller cannot use.
     #[error("{service} returned an unusable body: {source}")]
     Body {
+        /// The peer service's name, for the log line and the error text.
         service: &'static str,
+        /// The decode failure.
         source: reqwest::Error,
     },
 }

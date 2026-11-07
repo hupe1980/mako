@@ -465,7 +465,10 @@ impl BillingPosition {
     ///
     /// Override the engine-wide default for this specific position.
     /// Use `dec!(0.07)` for Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
-    /// `dec!(0.0)` for solar PV ≤30 kWp (§12 Abs. 3 UStG),
+    /// `dec!(0.0)` for a zero-rated position — never for electricity or a
+    /// feed-in Gutschrift on the strength of plant size: §12 Abs. 3 UStG
+    /// zero-rates the supply of the PV system, and a small operator's
+    /// Gutschrift is 0 % only through the Kleinunternehmerregelung (§19 UStG) —
     /// or omit to use the engine default (19%).
     #[must_use]
     pub fn with_tax_rate(mut self, rate: Decimal) -> Self {

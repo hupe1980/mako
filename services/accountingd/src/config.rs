@@ -66,10 +66,6 @@ pub struct EegConfig {
     pub bank_api_key: Option<String>,
 }
 
-#[allow(
-    dead_code,
-    reason = "reached only in some feature or target combinations"
-)]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountingdConfig {

@@ -591,18 +591,25 @@ fn bench_validate_fixture_file(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_parse,
-    bench_serialize,
-    bench_build,
-    bench_roundtrip,
-    bench_validate,
-    bench_validate_on_date,
-    bench_registry,
-    bench_interchange_throughput,
-    bench_light_vs_full_parse,
-    bench_validate_multi_pid,
-    bench_validate_fixture_file,
-);
-criterion_main!(benches);
+// `criterion_group!` (criterion 0.5) expands to an undocumented `pub fn`; a private
+// module keeps the group functions out of the crate's exported items.
+mod groups {
+    use super::*;
+
+    criterion_group!(
+        benches,
+        bench_parse,
+        bench_serialize,
+        bench_build,
+        bench_roundtrip,
+        bench_validate,
+        bench_validate_on_date,
+        bench_registry,
+        bench_interchange_throughput,
+        bench_light_vs_full_parse,
+        bench_validate_multi_pid,
+        bench_validate_fixture_file,
+    );
+}
+
+criterion_main!(groups::benches);

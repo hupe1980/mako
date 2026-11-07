@@ -244,10 +244,17 @@ fn bench_projection_catchup(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    workers,
-    bench_outbox_pending_now,
-    bench_deadline_due_now,
-    bench_projection_catchup,
-);
-criterion_main!(workers);
+// `criterion_group!` (criterion 0.5) expands to an undocumented `pub fn`; a private
+// module keeps the group functions out of the crate's exported items.
+mod groups {
+    use super::*;
+
+    criterion_group!(
+        workers,
+        bench_outbox_pending_now,
+        bench_deadline_due_now,
+        bench_projection_catchup,
+    );
+}
+
+criterion_main!(groups::workers);

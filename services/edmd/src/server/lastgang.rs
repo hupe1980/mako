@@ -1,9 +1,5 @@
 //! Lastgang / Zeitreihe / Summenzeitreihe read endpoints (incl. Arrow IPC and ESA Typ-2).
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 // ── Lastgang ──────────────────────────────────────────────────────────────────

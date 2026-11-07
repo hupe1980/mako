@@ -1,9 +1,5 @@
 //! Jahresablesung campaign scheduler and compliance report (§ 40b Abs. 1 EnWG).
 
-#[allow(
-    unused_imports,
-    reason = "used only in some feature or target combinations"
-)]
 use super::*;
 
 // ── Jahresablesung campaign (N7 — § 40b Abs. 1 EnWG) ───────────────────────────
