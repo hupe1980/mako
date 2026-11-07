@@ -60,13 +60,7 @@ impl Abwicklungsmodell {
     /// The BO4E wire value — `"MODELL_1"` / `"MODELL_2"`.
     #[must_use]
     pub fn bo4e_wire(self) -> &'static str {
-        // `IntoStaticStr` is a `strum` derive and `strum` is deliberately off
-        // (its `FromStr` accepts the `UNKNOWN` catch-all), so the wire value
-        // comes from the serde representation the enum itself defines.
-        match self.bo4e() {
-            rubo4e::current::Abwicklungsmodell::Modell1 => "MODELL_1",
-            _ => "MODELL_2",
-        }
+        self.bo4e().as_wire()
     }
 }
 
@@ -350,10 +344,9 @@ mod tests {
         assert_eq!(Abwicklungsmodell::Modell1.merkmal(), "ZE9");
     }
 
-    /// The BO4E wire strings are hand-written (`strum` is off), so they are
-    /// pinned against the enum's own serde representation. A `rubo4e` rename
-    /// fails here rather than silently writing an unrecognised
-    /// `Bilanzierung.abwicklungsmodell` into `marktd`.
+    /// `as_wire` and the serde representation are two outputs of one enum; a
+    /// disagreement would write an unrecognised `Bilanzierung.abwicklungsmodell`
+    /// into `marktd`.
     #[test]
     fn the_bo4e_wire_value_matches_what_rubo4e_serialises() {
         for m in [Abwicklungsmodell::Modell1, Abwicklungsmodell::Modell2] {

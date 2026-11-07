@@ -2,9 +2,9 @@
 --
 -- The double-entry ledger itself — the journal, per-account balances, the
 -- append-only Merkle log, period seals, and open-item clearing — lives in the
--- `doubleentry` crate's own schema (see `ledger.rs`), NOT here. This file holds
--- only the domain state around it: customer master data and the SEPA / dunning /
--- audit machinery.
+-- `doubleentry` crate's own schema `ledger` (see `ledger.rs`), NOT here. This
+-- file holds the domain state around it: customer master data, the booking
+-- drafts that feed the ledger, and the SEPA / dunning / audit machinery.
 --
 -- Tables:
 --   accounts             — one row per (malo_id, lf_mp_id, tenant) — Kundenstammdaten
@@ -21,12 +21,13 @@
 --   sepa_collection_runs — pain.008 XML archive for audit + replay
 --   jahresabschluss_runs — annual settlement idempotency
 --   account_audit_log    — §238 HGB master-data change trail
+--   booking_drafts       — every ledger booking, committed with its business change
 --
 -- Regulatory: §40 EnWG (Abschlag), §238 HGB (Buchführungspflicht 10y),
 --             §288 BGB (Verzugszinsen), GDPR Art. 15/17/20, SEPA Regulation 260/2012.
 --
--- No pgcrypto: the IBAN lookup hash is computed in the application (keyed BLAKE3),
--- so pgcrypto's digest() is no longer needed. gen_random_uuid() is core PostgreSQL
+-- No pgcrypto: the IBAN lookup hash is computed in the application (keyed BLAKE3).
+-- gen_random_uuid() is core PostgreSQL
 -- (>= 13), not an extension, so surrogate keys keep their server-side default.
 
 -- ── Kundenstammdaten ─────────────────────────────────────────────────────────
@@ -225,15 +226,14 @@ CREATE INDEX af_malo_periode ON abschlag_forderungen (tenant, malo_id, lf_mp_id,
 -- Advances still awaiting a settling invoice.
 CREATE INDEX af_offen ON abschlag_forderungen (tenant, malo_id) WHERE verrechnet_mit IS NULL;
 
--- ── The double-entry ledger lives in the `doubleentry` schema ─────────────────
+-- ── The double-entry ledger lives in the `ledger` schema ──────────────────────
 --
--- The former `ledger_entries` (immutable debit/credit log) and `journal_lines`
--- (SKR 03/04 double-entry shadow) tables are gone. Both are now one authoritative
--- structure owned by the `doubleentry` crate: an append-only journal with an
--- immutable Merkle log, per-account balances (no cached `balance_ct` to drift),
--- period seals, and open-item clearing — see `ledger.rs`. accountingd maps each
--- Buchungsart (RECHNUNG, ZAHLUNG, EEG_GUTSCHRIFT, …) to a balanced entry there.
--- doubleentry's tables live in their own PostgreSQL schema in this same database.
+-- The journal is owned by the `doubleentry` crate, in its own PostgreSQL schema
+-- `ledger` in this same database: an append-only Merkle log, per-account
+-- balances, period seals and open-item clearing, its log refused every change
+-- by triggers — see `ledger.rs`. accountingd maps each Buchungsart (RECHNUNG,
+-- ZAHLUNG, EEG_GUTSCHRIFT, …) to a balanced entry there; `booking_drafts`
+-- below is what a business change commits with.
 
 -- ── SEPA direct-debit mandates ────────────────────────────────────────────────
 
@@ -1127,3 +1127,43 @@ COMMENT ON TABLE bank_import_log IS
 CREATE INDEX bil_tenant      ON bank_import_log (tenant, imported_at DESC);
 CREATE INDEX bil_value_date  ON bank_import_log (tenant, value_date DESC);
 
+
+-- Every ledger entry accountingd books, stored whole in the transaction of the
+-- business change that causes it (`crate::booking`).
+--
+-- The ledger (schema `ledger`) owns its pool and joins no external
+-- transaction, so a business row and its booking cannot commit together. The
+-- draft is what commits with the business row; the ledger records it right
+-- after the commit, idempotent by `key`, and a recovery worker books whatever a
+-- crash left `offen`. `entwurf` is never recomputed: a retry rebuilds the
+-- identical entry from it, where a recomputed draft would be a key conflict.
+CREATE TABLE booking_drafts (
+    tenant       TEXT        NOT NULL,
+    -- The ledger idempotency key; doubleentry refuses one above 128 bytes.
+    key          TEXT        NOT NULL CHECK (octet_length(key) BETWEEN 1 AND 128),
+    -- `ledger::PostEntry`, verbatim.
+    entwurf      JSONB       NOT NULL,
+    status       TEXT        NOT NULL DEFAULT 'offen'
+                 CHECK (status IN ('offen', 'gebucht', 'geparkt', 'verworfen')),
+    -- doubleentry's rejection code of a parked draft (`301` a sealed period);
+    -- NULL for a refusal accountingd made itself.
+    code         INTEGER,
+    -- The refusal in words, for whoever clears the parked draft.
+    meldung      TEXT,
+    versuche     INTEGER     NOT NULL DEFAULT 0,
+    -- The ledger entry once booked (ledger schema; no FK).
+    entry_id     UUID,
+    -- Who discarded or rebooked a parked draft, and why.
+    erledigt_von TEXT,
+    grund        TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, key),
+    CHECK ((status = 'gebucht') = (entry_id IS NOT NULL)),
+    CHECK (status <> 'geparkt' OR meldung IS NOT NULL),
+    CHECK (status <> 'verworfen' OR (erledigt_von IS NOT NULL AND grund IS NOT NULL))
+);
+
+CREATE INDEX booking_drafts_offen   ON booking_drafts (tenant, updated_at) WHERE status = 'offen';
+CREATE INDEX booking_drafts_geparkt ON booking_drafts (tenant, created_at) WHERE status = 'geparkt';
+CREATE INDEX booking_drafts_entry   ON booking_drafts (entry_id) WHERE entry_id IS NOT NULL;

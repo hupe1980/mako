@@ -173,39 +173,23 @@ const REGISTRY: &[(&str, &str)] = &[
     ),
 ];
 
+/// mako's prefix, built through `rubo4e`'s `Namespace`: its `const`
+/// constructor refuses a malformed prefix at compile time, and its `SEPARATOR`
+/// holds the registry to the `namespace:key` form rubo4e reads back.
+const MAKO: rubo4e::zusatz_attribut::Namespace =
+    rubo4e::zusatz_attribut::Namespace::from_static("mako");
+
 /// Scan the workspace. Returns `true` when every emitted attribute conforms.
 pub fn run(workspace_root: &Path) -> bool {
     let registered: BTreeSet<&str> = REGISTRY.iter().map(|(n, _)| *n).collect();
     let mut findings: Vec<String> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
 
-    // The prefix is **`rubo4e`'s**, not a literal of mako's own.
-    //
-    // `ZusatzAttribut` is BO4E's extension slot and BO4E says nothing about how
-    // two systems writing into it stay out of each other's way — `"id"` written
-    // by a market-communication layer and by a household model is *one* entry,
-    // and the second write wins. `rubo4e` 0.14 supplies the missing half: a
-    // `namespace:key` convention and a registry of the prefixes the ecosystem
-    // has claimed. `mako` is one of the four.
-    //
-    // Reading it from there rather than writing `"mako:"` here makes that
-    // registration load-bearing: if the prefix were ever renamed or dropped
-    // upstream, this fails at the next CI run instead of mako shipping into a
-    // collision that no schema and no counterparty can see.
-    let ns = &rubo4e::zusatz_attribut::Namespace::MAKO;
-    let prefix = format!("{}{}", ns.as_str(), rubo4e::zusatz_attribut::SEPARATOR);
-    if !ns.is_registered() {
-        findings.push(format!(
-            "`rubo4e` no longer registers the {ns:?} namespace — every attribute mako emits \
-             is at risk of colliding with another system's, and the prefix has to be \
-             re-agreed upstream before this guard means anything"
-        ));
-    }
+    let prefix = format!("{}{}", MAKO.as_str(), rubo4e::zusatz_attribut::SEPARATOR);
     for (name, _) in REGISTRY {
         if !name.starts_with(&prefix) {
             findings.push(format!(
-                "{name} is in the registry but does not carry rubo4e's registered \
-                 {prefix:?} prefix"
+                "{name} is in the registry but does not carry the {prefix:?} prefix"
             ));
         }
     }

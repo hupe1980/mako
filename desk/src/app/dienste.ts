@@ -13,13 +13,13 @@ export const DIENST: Record<Service | "agentd", string> = {
   invoicd: "Rechnungseingang",
   edmd: "Messwerte",
   netzbilanzd: "Netzentgelte",
+  accountingd: "Kundenkonten",
   agentd: "Assistent",
 };
 
 /** Every service an assistant skill may read, as an operator knows it. */
 const ALLE: Record<string, string> = {
   ...DIENST,
-  accountingd: "Kundenkonten",
   einsd: "EEG-Abrechnung",
   productd: "Produktkatalog",
   portald: "Kundenportal",
@@ -44,6 +44,7 @@ const WERKZEUG: Record<string, string> = {
   list_overdue_processes: "Fristen",
   get_receipt: "Rechnung",
   get_check_result: "Prüfbefunde",
+  list_parked_bookings: "geparkte Buchungen",
 };
 
 /** The service a `server/tool` reference reaches, as an operator knows it. */

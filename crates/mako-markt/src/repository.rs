@@ -3274,12 +3274,10 @@ mod partner_record_tests {
             Some(rubo4e::current::Rollencodetyp::Bdew)
         );
 
-        // strum Display matches the serde repr — the PG TEXT binding uses it.
+        // `Display` matches the serde repr — the PG TEXT binding uses it.
         assert_eq!(rubo4e::current::Marktrolle::Nb.to_string(), "NB");
         assert_eq!(rubo4e::current::Rollencodetyp::Gln.to_string(), "GLN");
-        // `from_wire`, not `str::parse`: the `FromStr` impl comes from rubo4e's
-        // `strum` feature, which mako does not enable — and which would accept
-        // `"UNKNOWN"`, the catch-all's own spelling, as a Marktrolle.
+        // `from_wire` refuses `"UNKNOWN"`, the catch-all's own spelling.
         assert_eq!(
             rubo4e::current::Marktrolle::from_wire("LF"),
             Ok(rubo4e::current::Marktrolle::Lf)

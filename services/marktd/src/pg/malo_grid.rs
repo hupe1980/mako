@@ -68,7 +68,7 @@ impl PgMaloGridRepository {
                 updated_at           = EXCLUDED.updated_at
             "#,
         )
-        .bind(&rec.malo_id)
+        .bind(rec.malo_id.as_ref())
         .bind(&rec.tenant)
         .bind(&rec.nb_mp_id)
         .bind(&rec.bilanzierungsgebiet)
@@ -91,7 +91,7 @@ impl PgMaloGridRepository {
         let opt = sqlx::query(
             "SELECT malo_id, tenant, nb_mp_id, bilanzierungsgebiet, netzgebiet, sparte, source, updated_at FROM malo_grid WHERE malo_id = $1 AND tenant = $2",
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .fetch_optional(&self.pool)
         .await
@@ -124,7 +124,7 @@ impl PgMaloGridRepository {
     /// Delete a grid record (e.g. when MaStR signals decommissioning).
     pub async fn delete(&self, malo_id: &MaloId, tenant: &str) -> Result<(), MdmError> {
         sqlx::query("DELETE FROM malo_grid WHERE malo_id = $1 AND tenant = $2")
-            .bind(malo_id)
+            .bind(malo_id.as_ref())
             .bind(tenant)
             .execute(&self.pool)
             .await

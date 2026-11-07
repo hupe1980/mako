@@ -77,7 +77,7 @@ impl PgMeloRepository {
 
         let current: Option<i64> =
             sqlx::query_scalar("SELECT version FROM melo WHERE melo_id = $1")
-                .bind(melo_id)
+                .bind(melo_id.as_ref())
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(|e| MdmError::Internal(e.to_string()))?;
@@ -118,8 +118,8 @@ impl PgMeloRepository {
                    bo4e_version           = EXCLUDED.bo4e_version,
                    updated_at             = now()"#,
         )
-        .bind(melo_id)
-        .bind(malo_id)
+        .bind(melo_id.as_ref())
+        .bind(malo_id.map(AsRef::<str>::as_ref))
         .bind(cols.netzebene_messung)
         .bind(&cols.regelzone)
         .bind(cols.standorteigenschaften.as_ref())
@@ -210,14 +210,14 @@ impl PgMeloRepository {
         let row: Option<PgRow> = sqlx::query(
             "SELECT melo_id, malo_id, netzebene_messung, regelzone, standorteigenschaften, lokationsbuendel_objektcode, version, data, bo4e_version, updated_at FROM melo WHERE melo_id = $1",
         )
-        .bind(melo_id)
+        .bind(melo_id.as_ref())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         Ok(row.map(|r| MeloRecord {
-            melo_id: r.get("melo_id"),
-            malo_id: r.get("malo_id"),
+            melo_id: super::id(&r, "melo_id"),
+            malo_id: super::opt_id(&r, "malo_id"),
             netzebene_messung: r.try_get("netzebene_messung").unwrap_or(None),
             regelzone: r.try_get("regelzone").unwrap_or(None),
             standorteigenschaften: r.try_get("standorteigenschaften").unwrap_or(None),

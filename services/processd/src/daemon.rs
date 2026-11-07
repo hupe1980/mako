@@ -20,7 +20,7 @@ impl Daemon for Processd {
     type Config = Config;
     const NAME: &'static str = "processd";
 
-    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    async fn migrate(_cfg: &Self::Config, pool: &sqlx::PgPool) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await

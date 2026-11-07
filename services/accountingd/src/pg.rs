@@ -8,25 +8,17 @@ use uuid::Uuid;
 
 use crate::ledger::{PgLedger, PostEntry};
 
-/// Post a money movement through the doubleentry ledger, then refresh the
-/// `accounts.balance_ct` read cache to the authoritative ledger net.
+/// The booking draft for one money movement.
 ///
-/// The single money choke point. doubleentry is the authoritative, tamper-evident
-/// system of record; `balance_ct` is a cache set **absolutely** from the ledger
-/// net (never incremented, so it cannot drift by arithmetic).
-///
-/// Idempotent by `idempotency` — a CloudEvent id, a bank transaction id, or a
-/// deterministic key (`ABSCHLAG-{malo}-{YYYY}-{MM}`, `mahngebuehr:{case_id}:{stufe}`).
-/// A replay is a no-op returning the original entry id. Returns the doubleentry
-/// `EntryId` as a `Uuid` (for linking satellites like interest_charges).
+/// The one place the positional booking arguments become a [`PostEntry`];
+/// [`post_entry`] books it at once, a caller with business rows stages it in
+/// their transaction through [`crate::booking::stage`].
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
 )]
-pub async fn post_entry(
-    ledger: &PgLedger,
-    pool: &PgPool,
-    tenant: &str,
+#[must_use]
+pub fn draft(
     malo_id: &str,
     lf_mp_id: &str,
     entry_type: &str,
@@ -38,7 +30,7 @@ pub async fn post_entry(
     value_date: Date,
     description: Option<&str>,
     actor: Option<&str>,
-) -> anyhow::Result<Uuid> {
+) -> PostEntry {
     let mut req = PostEntry::new(
         malo_id,
         lf_mp_id,
@@ -60,47 +52,50 @@ pub async fn post_entry(
     if let Some(actor) = actor {
         req = req.with_actor(actor);
     }
-    let posted = ledger.post(req).await?;
+    req
+}
 
-    // Refresh the read cache to the authoritative ledger net. Absolute, not
-    // incremental — idempotent under replay and immune to arithmetic drift.
-    let net = ledger.balance_ct(lf_mp_id, malo_id).await?;
-    let updated = sqlx::query(
-        "UPDATE accounts SET balance_ct = $1, updated_at = now() \
-         WHERE malo_id = $2 AND lf_mp_id = $3 AND tenant = $4",
-    )
-    .bind(net)
-    .bind(malo_id)
-    .bind(lf_mp_id)
-    .bind(tenant)
-    .execute(pool)
-    .await
-    .context("refresh balance cache")?;
-    if updated.rows_affected() == 0 {
-        tracing::warn!(
-            malo = %malo_id,
-            "post_entry: no accounts row for balance-cache refresh (ledger remains authoritative)"
-        );
-    }
-
-    // Keep the Offene-Posten assignments current: match open credits against open
-    // debits FIFO (§ 252 HGB per-receivable tracking). Best-effort — a clearing
-    // failure must never fail the money post; the balance stays authoritative.
-    if let Err(e) = ledger
-        .apply_fifo_clearing(lf_mp_id, malo_id, booking_date)
-        .await
-    {
-        tracing::warn!(malo = %malo_id, error = %e, "post_entry: FIFO clearing skipped");
-    }
-
-    // …and only then the Verzug cache, which reads *residuals* and so must run
-    // after the clearing. (Ordering does not matter for `balance_ct`: clearing
-    // never changes the net.)
-    if let Err(e) = refresh_verzug(ledger, pool, tenant, malo_id, lf_mp_id).await {
-        tracing::warn!(malo = %malo_id, error = %e, "post_entry: Verzug cache refresh failed");
-    }
-
-    Ok(*posted.id.as_uuid())
+/// Book a money movement that has no business row of its own to commit with:
+/// stage its draft, record it, settle the caches ([`crate::booking::post`]).
+///
+/// Idempotent by `idempotency` — a CloudEvent id, a bank transaction id, or a
+/// deterministic key (`ABSCHLAG-{malo}-{YYYY}-{MM}`, `mahngebuehr:{case_id}:{stufe}`).
+/// A replay returns the original entry id. A draft the ledger refuses is parked
+/// and answered as a refusal.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
+pub async fn post_entry(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    lf_mp_id: &str,
+    entry_type: &str,
+    amount_ct: i64,
+    idempotency: &str,
+    correlation: Option<&str>,
+    reference: Option<&str>,
+    booking_date: Date,
+    value_date: Date,
+    description: Option<&str>,
+    actor: Option<&str>,
+) -> anyhow::Result<Uuid> {
+    let req = draft(
+        malo_id,
+        lf_mp_id,
+        entry_type,
+        amount_ct,
+        idempotency,
+        correlation,
+        reference,
+        booking_date,
+        value_date,
+        description,
+        actor,
+    );
+    Ok(crate::booking::post_booked(ledger, pool, tenant, &req).await?)
 }
 
 // ── Account ───────────────────────────────────────────────────────────────────
@@ -1539,56 +1534,56 @@ pub struct LedgerWindow {
 /// still adds up.
 pub async fn list_ledger(
     ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
     lf_mp_id: &str,
     malo_id: &str,
-    query: doubleentry::BalanceQuery<'_>,
+    query: &doubleentry::BalanceQuery,
     limit: i64,
 ) -> anyhow::Result<LedgerWindow> {
-    use doubleentry::Direction;
-    use doubleentry::storage::PostingCursor;
+    use doubleentry::Side;
+    let Some(statement) = ledger.statement(lf_mp_id, malo_id, query).await? else {
+        return Ok(LedgerWindow {
+            opening_ct: 0,
+            lines: Vec::new(),
+        });
+    };
     let cap = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
-    let mut window: std::collections::VecDeque<LedgerLine> = std::collections::VecDeque::new();
-    let mut cursor = PostingCursor::start();
-    // The first page's `opening` is the period's; later pages' include the lines
-    // already returned, so only the first one is the figure to start from.
-    let mut opening_ct: Option<i64> = None;
-    let mut dropped_ct = 0_i64;
-    loop {
-        let page = ledger.statement(lf_mp_id, malo_id, query, cursor).await?;
-        if opening_ct.is_none() {
-            opening_ct = Some(page.opening.signed_net().map(|a| a.to_minor()).unwrap_or(0));
-        }
-        for line in &page.lines {
-            let (side, signed): (&'static str, i64) = match line.direction {
-                Direction::Debit => ("D", line.amount.to_minor()),
-                Direction::Credit => ("C", -line.amount.to_minor()),
+    let ct = |a: crate::ledger::Eur| i64::try_from(a.to_minor()).unwrap_or(0);
+    let skip = statement.lines.len().saturating_sub(cap);
+    // What the cap drops from the front is folded into the opening balance, so
+    // a truncated page still adds up.
+    let opening_ct = match skip.checked_sub(1) {
+        Some(last_dropped) => ct(statement.lines[last_dropped].running.net()),
+        None => ct(statement.opening.net()),
+    };
+    let tail = &statement.lines[skip..];
+    let ids: Vec<Uuid> = tail
+        .iter()
+        .map(|l| crate::ledger::entry_uuid(l.entry))
+        .collect();
+    let described = crate::booking::describe(pool, tenant, &ids).await?;
+    let mut lines: Vec<LedgerLine> = tail
+        .iter()
+        .map(|line| {
+            let entry_id = crate::ledger::entry_uuid(line.entry);
+            let (side, signed): (&'static str, i64) = match line.side {
+                Side::Debit => ("D", ct(line.amount)),
+                Side::Credit => ("C", -ct(line.amount)),
             };
-            window.push_back(LedgerLine {
-                entry_id: *line.posting.entry.as_uuid(),
-                entry_type: line.kind.as_ref().map(|k| k.as_str().to_owned()),
+            LedgerLine {
+                entry_id,
+                entry_type: described.get(&entry_id).map(|(art, _)| art.clone()),
                 side,
-                amount_ct: line.amount.to_minor(),
+                amount_ct: ct(line.amount),
                 signed_ct: signed,
-                running_ct: line.running.signed_net().map(|a| a.to_minor()).unwrap_or(0),
+                running_ct: ct(line.running.net()),
                 booking_date: line.booking_date,
-            });
-            if window.len() > cap
-                && let Some(dropped) = window.pop_front()
-            {
-                dropped_ct += dropped.signed_ct;
             }
-        }
-        match page.next {
-            Some(next) => cursor = next,
-            None => break,
-        }
-    }
-    let mut lines: Vec<LedgerLine> = window.into_iter().collect();
+        })
+        .collect();
     lines.reverse(); // newest first
-    Ok(LedgerWindow {
-        opening_ct: opening_ct.unwrap_or(0) + dropped_ct,
-        lines,
-    })
+    Ok(LedgerWindow { opening_ct, lines })
 }
 
 // ── SEPA mandates ─────────────────────────────────────────────────────────────
@@ -3475,9 +3470,11 @@ pub async fn mark_sperrauftrag_dispatched(
 /// produced it. (`MAHNUNG_ISSUED` appeared in this file only as a *correlation
 /// string* on the Mahngebühr ledger entry, which is not an emission.)
 ///
-/// Case insert and outbox enqueue share one transaction: the outbox is
-/// persist-before-dispatch, so a crash between them would open a dunning case
-/// nobody downstream ever hears about.
+/// Case insert, the Mahngebühr's booking draft and the outbox enqueue share
+/// one transaction: the outbox is persist-before-dispatch, so a crash between
+/// them would open a dunning case nobody downstream ever hears about — and a
+/// Mahnung states its fee, so a case without its booking is a letter demanding
+/// money no receivable carries.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
@@ -3491,10 +3488,31 @@ pub async fn create_dunning_case_announced(
     stufe: i16,
     amount_due_ct: i64,
     due_date: Date,
+    fee: Option<MahnFee<'_>>,
 ) -> anyhow::Result<Uuid> {
     let mut tx = pool.begin().await?;
     let case_id =
         create_dunning_case(&mut *tx, account_id, tenant, stufe, amount_due_ct, due_date).await?;
+    let fee_draft = match &fee {
+        Some(f) if f.fee_ct > 0 => {
+            let d = draft(
+                malo_id,
+                lf_mp_id,
+                "MAHNGEBUEHR",
+                f.fee_ct,
+                &format!("mahngebuehr:{case_id}:{stufe}"),
+                Some(mako_events::accounting::MAHNUNG_ISSUED),
+                Some(&case_id.to_string()),
+                f.on,
+                f.on,
+                Some(&format!("Mahngebühr Mahnstufe {stufe}")),
+                None,
+            );
+            crate::booking::stage(&mut tx, f.ledger, tenant, &d).await?;
+            Some(d)
+        }
+        _ => None,
+    };
 
     let ce = mako_service::CloudEvent::new(
         mako_service::source("accountingd", tenant),
@@ -3505,14 +3523,29 @@ pub async fn create_dunning_case_announced(
             "lf_mp_id":      lf_mp_id,
             "mahnstufe":     stufe,
             "amount_due_ct": amount_due_ct,
-            "amount_eur":    format!("{:.2}", amount_due_ct as f64 / 100.0),
+            "amount_eur":    crate::handlers::format_ct_as_eur(amount_due_ct),
             "due_date":      due_date.to_string(),
             "case_id":       case_id.to_string(),
         }),
     );
     mako_service::outbox::enqueue(&mut tx, &ce).await?;
     tx.commit().await?;
+    if let (Some(f), Some(d)) = (fee, fee_draft)
+        && let Err(e) = crate::booking::book(f.ledger, pool, tenant, &d.idempotency).await
+    {
+        tracing::warn!(case_id = %case_id, error = %e, "accountingd: Mahngebühr booking deferred to recovery");
+    }
     Ok(case_id)
+}
+
+/// The Mahngebühr a dunning case charges, booked in the case's transaction.
+pub struct MahnFee<'a> {
+    /// The ledger the fee books into.
+    pub ledger: &'a PgLedger,
+    /// The fee in minor units; zero books nothing.
+    pub fee_ct: i64,
+    /// The booking date.
+    pub on: Date,
 }
 
 /// Buchungsarten that are **Verzugsschaden**, not the supply debt itself.
@@ -3821,7 +3854,7 @@ pub async fn run_auto_dunning(
     let stufe1_due_date = today + time::Duration::days(14); // 14-day payment deadline
 
     for (account_id, malo_id, lf_mp_id, balance_ct) in &candidates {
-        let case_id = create_dunning_case_announced(
+        create_dunning_case_announced(
             pool,
             tenant,
             *account_id,
@@ -3830,43 +3863,14 @@ pub async fn run_auto_dunning(
             1,
             *balance_ct,
             stufe1_due_date,
+            Some(MahnFee {
+                ledger,
+                fee_ct: fee_stufe1_ct,
+                on: today,
+            }),
         )
         .await
         .context("auto_dunning: create Mahnstufe1")?;
-
-        // Post Mahngebühr if configured > 0. Deterministic idempotency key per
-        // (malo, Mahnstufe, run-date) — a same-day re-run replays as a no-op
-        // instead of double-charging the fee.
-        if fee_stufe1_ct > 0 {
-            // The Mahnung states the fee, so a posting that does not land
-            // leaves a letter demanding money no receivable carries.
-            if let Err(e) = post_entry(
-                ledger,
-                pool,
-                tenant,
-                malo_id,
-                lf_mp_id,
-                "MAHNGEBUEHR",
-                fee_stufe1_ct,
-                &format!("mahngebuehr:{case_id}:1"),
-                Some(mako_events::accounting::MAHNUNG_ISSUED),
-                Some(&case_id.to_string()),
-                today,
-                today,
-                Some("Mahngebühr Mahnstufe 1"),
-                None,
-            )
-            .await
-            {
-                tracing::error!(
-                    case_id = %case_id,
-                    malo = %malo_id,
-                    fee_ct = fee_stufe1_ct,
-                    error = %e,
-                    "accountingd: Mahngebühr posting failed — the Mahnstufe 1 letter demands a fee that is not booked"
-                );
-            }
-        }
 
         mahnstufe1_created += 1;
         tracing::info!(
@@ -3918,7 +3922,7 @@ pub async fn run_auto_dunning(
             .await
             .context("auto_dunning: resolve Mahnstufe1")?;
 
-        let case_id = create_dunning_case_announced(
+        create_dunning_case_announced(
             pool,
             tenant,
             *account_id,
@@ -3927,40 +3931,14 @@ pub async fn run_auto_dunning(
             2,
             *amount_due_ct,
             stufe2_due_date,
+            Some(MahnFee {
+                ledger,
+                fee_ct: fee_stufe2_ct,
+                on: today,
+            }),
         )
         .await
         .context("auto_dunning: create Mahnstufe2")?;
-
-        if fee_stufe2_ct > 0 {
-            // The Mahnung states the fee, so a posting that does not land
-            // leaves a letter demanding money no receivable carries.
-            if let Err(e) = post_entry(
-                ledger,
-                pool,
-                tenant,
-                malo_id,
-                lf_mp_id,
-                "MAHNGEBUEHR",
-                fee_stufe2_ct,
-                &format!("mahngebuehr:{case_id}:2"),
-                Some(mako_events::accounting::MAHNUNG_ISSUED),
-                Some(&case_id.to_string()),
-                today,
-                today,
-                Some("Mahngebühr Mahnstufe 2"),
-                None,
-            )
-            .await
-            {
-                tracing::error!(
-                    case_id = %case_id,
-                    malo = %malo_id,
-                    fee_ct = fee_stufe2_ct,
-                    error = %e,
-                    "accountingd: Mahngebühr posting failed — the Mahnstufe 2 letter demands a fee that is not booked"
-                );
-            }
-        }
 
         escalated += 1;
         tracing::info!(account_id = %account_id, "accountingd: auto-dunning escalated to Mahnstufe 2");
@@ -4007,7 +3985,7 @@ pub async fn run_auto_dunning(
             .await
             .context("auto_dunning: resolve Mahnstufe2")?;
 
-        let _case_id = create_dunning_case_announced(
+        create_dunning_case_announced(
             pool,
             tenant,
             *account_id,
@@ -4016,40 +3994,14 @@ pub async fn run_auto_dunning(
             3,
             *amount_due_ct,
             stufe3_due_date,
+            Some(MahnFee {
+                ledger,
+                fee_ct: fee_stufe3_ct,
+                on: today,
+            }),
         )
         .await
         .context("auto_dunning: create Mahnstufe3")?;
-
-        if fee_stufe3_ct > 0 {
-            // The Mahnung states the fee, so a posting that does not land
-            // leaves a letter demanding money no receivable carries.
-            if let Err(e) = post_entry(
-                ledger,
-                pool,
-                tenant,
-                malo_id,
-                lf_mp_id,
-                "MAHNGEBUEHR",
-                fee_stufe3_ct,
-                &format!("mahngebuehr:{_case_id}:3"),
-                Some(mako_events::accounting::MAHNUNG_ISSUED),
-                Some(&_case_id.to_string()),
-                today,
-                today,
-                Some("Mahngebühr Mahnstufe 3"),
-                None,
-            )
-            .await
-            {
-                tracing::error!(
-                    case_id = %_case_id,
-                    malo = %malo_id,
-                    fee_ct = fee_stufe3_ct,
-                    error = %e,
-                    "accountingd: Mahngebühr posting failed — the Mahnstufe 3 letter demands a fee that is not booked"
-                );
-            }
-        }
 
         escalated += 1;
         sperrauftrag_triggered += 1;
@@ -4362,10 +4314,7 @@ pub async fn create_interest_charge(
     // the § 41f Abs. 3 arrears, but § 275 HGB reports Zinsen und ähnliche Erträge
     // separately from sonstige betriebliche Erträge, so they book to different GL
     // accounts. Deterministic idempotency key per malo + period.
-    let ledger_id = post_entry(
-        ledger,
-        pool,
-        tenant,
+    let interest = draft(
         malo_id,
         lf_mp_id,
         "VERZUGSZINSEN",
@@ -4377,15 +4326,13 @@ pub async fn create_interest_charge(
         period_to,
         Some(legal_basis),
         None,
-    )
-    .await
-    .context("create_interest_charge: ledger entry")?;
+    );
 
-    // The satellite row, the outbox announcement and the idempotency guard all
-    // commit together. Enqueueing afterwards in its own transaction would let a
-    // retry after a failed enqueue grow a second charge for the same period,
-    // while the ledger — idempotent on its own key — stayed right.
+    // The booking draft, the satellite row, the outbox announcement and the
+    // idempotency guard all commit together, so a charge never exists without
+    // its booking or its announcement.
     let mut tx = pool.begin().await?;
+    let ledger_id = crate::booking::stage(&mut tx, ledger, tenant, &interest).await?;
     let row = sqlx::query_as::<_, InterestChargeRow>(
         r"INSERT INTO interest_charges
               (account_id, tenant, invoice_reference, principal_ct, interest_ct, rate_pct,
@@ -4441,7 +4388,7 @@ pub async fn create_interest_charge(
             "lf_mp_id":          lf_mp_id,
             "principal_ct":      principal_ct,
             "interest_ct":       interest_ct,
-            "interest_eur":      format!("{:.2}", interest_ct as f64 / 100.0),
+            "interest_eur":      crate::handlers::format_ct_as_eur(interest_ct),
             "rate_pct":          annual_rate.normalize().to_string(),
             "customer_type":     customer_type,
             "period_from":       period_from.to_string(),
@@ -4452,6 +4399,9 @@ pub async fn create_interest_charge(
     );
     mako_service::outbox::enqueue(&mut tx, &ce).await?;
     tx.commit().await?;
+    if let Err(e) = crate::booking::book(ledger, pool, tenant, &interest.idempotency).await {
+        tracing::warn!(malo = %malo_id, error = %e, "accountingd: Verzugszinsen booking deferred to recovery");
+    }
 
     Ok(row)
 }
@@ -4722,23 +4672,31 @@ pub async fn bank_import_already_processed(
     Ok(exists)
 }
 
+/// One `bank_import_log` row, as a bank import stages it.
+pub struct BankImport<'a> {
+    /// `NtryRef` / `AcctSvcrRef` / `EndToEndId`, or the fallback hash.
+    pub bank_transaction_id: &'a str,
+    /// The amount in minor units, unsigned.
+    pub amount_ct: i64,
+    /// The counterparty IBAN.
+    pub iban: Option<&'a str>,
+    /// The value date.
+    pub value_date: time::Date,
+    /// The ledger entry the row books.
+    pub ledger_entry_id: Uuid,
+    /// `NtryDtls/Btch/PmtInfId`, for a batch.
+    pub payment_info_id: Option<&'a str>,
+    /// The itemised `EndToEndId`.
+    pub end_to_end_id: Option<&'a str>,
+}
+
 /// Record a bank transaction import in the deduplication log.
 ///
 /// Uses `ON CONFLICT DO NOTHING` so concurrent calls are safe.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-)]
 pub async fn record_bank_import(
-    pool: &PgPool,
+    exec: impl sqlx::PgExecutor<'_>,
     tenant: &str,
-    bank_transaction_id: &str,
-    amount_ct: i64,
-    iban: Option<&str>,
-    value_date: time::Date,
-    ledger_entry_id: Option<Uuid>,
-    payment_info_id: Option<&str>,
-    end_to_end_id: Option<&str>,
+    row: &BankImport<'_>,
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO bank_import_log \
@@ -4747,14 +4705,14 @@ pub async fn record_bank_import(
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (tenant, bank_transaction_id) DO NOTHING",
     )
     .bind(tenant)
-    .bind(bank_transaction_id)
-    .bind(amount_ct)
-    .bind(iban)
-    .bind(value_date)
-    .bind(ledger_entry_id)
-    .bind(payment_info_id)
-    .bind(end_to_end_id)
-    .execute(pool)
+    .bind(row.bank_transaction_id)
+    .bind(row.amount_ct)
+    .bind(row.iban)
+    .bind(row.value_date)
+    .bind(row.ledger_entry_id)
+    .bind(row.payment_info_id)
+    .bind(row.end_to_end_id)
+    .execute(exec)
     .await
     .context("record_bank_import")?;
     Ok(())
@@ -4836,10 +4794,7 @@ pub async fn raise_abschlagsforderung(
         "abschlag_ct must be positive to raise a demand"
     );
     let reference = abschlag_reference(&account.malo_id, periode);
-    let entry_id = post_entry(
-        ledger,
-        pool,
-        tenant,
+    let demand = draft(
         &account.malo_id,
         &account.lf_mp_id,
         "ABSCHLAG",
@@ -4856,9 +4811,12 @@ pub async fn raise_abschlagsforderung(
             periode.month() as u8
         )),
         None,
-    )
-    .await?;
+    );
 
+    // The draft and its register row commit together: a demand on the
+    // register is always a demand in the books.
+    let mut tx = pool.begin().await.context("begin Abschlagsforderung")?;
+    let entry_id = crate::booking::stage(&mut tx, ledger, tenant, &demand).await?;
     sqlx::query(
         r"INSERT INTO abschlag_forderungen
             (tenant, reference, account_id, malo_id, lf_mp_id,
@@ -4876,9 +4834,11 @@ pub async fn raise_abschlagsforderung(
     .bind(account.abschlag_ct)
     .bind(account.abschlag_ust_satz)
     .bind(entry_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("record abschlag_forderungen")?;
+    tx.commit().await.context("commit Abschlagsforderung")?;
+    crate::booking::book(ledger, pool, tenant, &demand.idempotency).await?;
 
     Ok((reference, entry_id))
 }
@@ -4972,10 +4932,20 @@ pub async fn verrechne_abschlaege(
     booking_date: Date,
 ) -> anyhow::Result<Uuid> {
     anyhow::ensure!(deducted_ct > 0, "nothing deducted");
-    let entry_id = post_entry(
+    // Which advances were received is read before the Verrechnung books: once
+    // booked, its credit clears the oldest open debits FIFO and an unpaid
+    // advance would read as received.
+    let open = list_abschlag_forderungen(
         ledger,
         pool,
         tenant,
+        malo_id,
+        lf_mp_id,
+        Date::from_calendar_date(1970, time::Month::January, 1)?,
+        booking_date,
+    )
+    .await?;
+    let verrechnung = draft(
         malo_id,
         lf_mp_id,
         "ABSCHLAG_VERRECHNUNG",
@@ -4988,22 +4958,14 @@ pub async fn verrechne_abschlaege(
         booking_date,
         Some("Verrechnung geleisteter Abschläge"),
         None,
-    )
-    .await?;
+    );
 
-    // Stamp the register oldest-first up to the deducted total, so a later
-    // invoice cannot deduct the same advance again. Only received advances are
-    // stamped; an unpaid one stays open and stays a receivable.
-    let open = list_abschlag_forderungen(
-        ledger,
-        pool,
-        tenant,
-        malo_id,
-        lf_mp_id,
-        Date::from_calendar_date(1970, time::Month::January, 1)?,
-        booking_date,
-    )
-    .await?;
+    // The draft and the register stamps commit together. Stamped oldest-first
+    // up to the deducted total, so a later invoice cannot deduct the same
+    // advance again; only received advances are stamped, and an unpaid one
+    // stays open and stays a receivable.
+    let mut tx = pool.begin().await.context("begin Verrechnung")?;
+    let entry_id = crate::booking::stage(&mut tx, ledger, tenant, &verrechnung).await?;
     let mut remaining = deducted_ct;
     for a in open.into_iter().filter(AbschlagForderung::deductible) {
         if remaining <= 0 {
@@ -5017,11 +4979,13 @@ pub async fn verrechne_abschlaege(
         .bind(tenant)
         .bind(&a.reference)
         .bind(rechnungsnummer)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .context("stamp abschlag_forderungen")?;
         remaining -= a.betrag_ct;
     }
+    tx.commit().await.context("commit Verrechnung")?;
+    crate::booking::book(ledger, pool, tenant, &verrechnung.idempotency).await?;
     if remaining > 0 {
         // More deducted than the register accounts for. Not a reason to refuse
         // the booking — the document is issued and says what it says — but a

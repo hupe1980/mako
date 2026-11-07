@@ -22,7 +22,7 @@ impl Daemon for Edmd {
     type Config = Config;
     const NAME: &'static str = "edmd";
 
-    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    async fn migrate(_cfg: &Self::Config, pool: &sqlx::PgPool) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await

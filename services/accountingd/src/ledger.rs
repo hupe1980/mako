@@ -4,10 +4,9 @@
 //! Massenkontokorrent, SKR 03/04, EEG payouts, dunning) and the domain-neutral
 //! [`doubleentry`] kernel. accountingd owns the **chart of accounts** and the
 //! **`entry_type` → postings** mapping; `doubleentry` owns everything a ledger
-//! must guarantee: balances, immutability, an
-//! append-only Merkle log with inclusion/consistency proofs, period seals
-//! (GoBD Unveränderbarkeit / § 146 AO), open-item clearing, and store-level
-//! idempotency.
+//! must guarantee: balances, immutability, an append-only RFC 6962 Merkle log
+//! with inclusion and consistency proofs, period seals (GoBD Unveränderbarkeit /
+//! § 146 AO), open-item clearing, and idempotent writes.
 //!
 //! ## The model
 //!
@@ -20,27 +19,24 @@
 //! - a **general-ledger** contra account, one per `entry_type`
 //!   ([`Chart`]) — Erlöse, Bank, Mahnerlöse, EEG-Aufwand.
 //!
-//! Because the entry is balanced by construction and the Kontokorrent leg
-//! reproduces the signed `amount_ct` exactly, per-customer balances survive the
-//! move with no cached column to drift, and the GL accounts roll up to the SKR
-//! trial balance for free — replacing both the `ledger_entries` running log and
-//! the `journal_lines` SKR shadow with one authoritative, provable structure.
-
-use std::sync::Mutex;
+//! The Kontokorrent posting carries three dimensions — `art` (the entry type),
+//! `korrelation` (the originating CloudEvent) and `akteur` (who booked it) — so
+//! a per-type sum is one `balance` query rather than a read per entry.
+//!
+//! ## Writes go through booking drafts
+//!
+//! [`Ledger::post`] is called only by [`crate::booking`], which stores the
+//! whole draft in the business transaction first; `cargo xtask
+//! check-ledger-drafts` holds every other module to that.
 
 use time::Date;
 
-use doubleentry::account::{Account, AccountId, AccountKind, AccountPath, AccountRecord};
-use doubleentry::clearing::{ClearedItem, Clearing, ClearingId, PostingRef};
-use doubleentry::entry::{Description, DocumentRef, LedgerPolicy, Provenance, SealContext};
-use doubleentry::period::{LedgerId, Period, PeriodCalendar, PeriodId, PeriodState};
-use doubleentry::posting::Direction;
-use doubleentry::seal::{SealChain, SealedBalanceOutcome};
-use doubleentry::storage::postgres::PostgresStore;
-use doubleentry::storage::{Cursor, EntryBatch, LedgerStore, PostingCursor, StatementPage};
+use doubleentry::currency::EUR;
+use doubleentry::error::QueryError;
+use doubleentry::store::{Postgres, SqlOptions, SqlStore, Store};
 use doubleentry::{
-    AccountRegistry, Amount, BalanceKey, BalanceQuery, ConsistencyProof, Currency, Entry, EntryId,
-    Hash, IdempotencyKey, InclusionProof, Label, Layer, OpenItem, Seal, TreeHead,
+    AccountKind, Amount, BalanceQuery, Document, Entry, EntryId, Error, Layer, LedgerId, Posting,
+    Side,
 };
 
 /// EUR at 2-dp minor units (cents) — accountingd's only currency.
@@ -49,45 +45,71 @@ pub type Eur = Amount<2>;
 /// The precision every accountingd account uses.
 pub const P: u8 = 2;
 
-/// The PostgreSQL schema the doubleentry ledger's tables live in, sharing
-/// accountingd's database with the customer/SEPA satellites in `public`.
-pub const LEDGER_SCHEMA: &str = "doubleentry";
+/// The PostgreSQL schema the ledger's tables live in, beside accountingd's own
+/// tables in `public`.
+///
+/// Not doubleentry's default `doubleentry`: a 0.7 ledger left under that name
+/// would meet 0.8's DDL as an opaque "relation exists" failure. Under its own
+/// name a leftover 0.7 schema is simply never read.
+pub const LEDGER_SCHEMA: &str = "ledger";
 
-/// The production ledger type — a doubleentry [`PostgresStore`] for one deployment.
-pub type PgLedger = Ledger<PostgresStore<P>>;
+/// The first day the ledger accepts a booking on.
+///
+/// Every booking date must fall in a defined period, and periods are
+/// contiguous, so the calendar starts here and runs in calendar months through
+/// next year. A booking dated earlier is refused (`300`) and parks.
+pub const BUCHUNGSBEGINN: Date = time::macros::date!(2015 - 01 - 01);
+
+/// The production ledger — a doubleentry PostgreSQL store for one deployment.
+pub type PgLedger = Ledger<SqlStore<Postgres, P>>;
 
 // ── Errors ─────────────────────────────────────────────────────────────────────
 
 /// What the ledger answers when it does not do what it was asked.
 ///
 /// The variants are the distinction a caller has to act on. A refusal and an
-/// unknown entry are answers about the request; an integrity failure and a
-/// storage failure are this service's fault and carry no detail a caller can
-/// correct. Folding them into one string makes a database outage read as a
-/// rejected period (`422`) or an absent entry (`404`).
+/// unknown subject are answers about the request; `Unavailable` is a failure
+/// worth retrying with the same draft; an integrity or storage failure is this
+/// service's fault and carries no detail a caller can correct.
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
-    /// The ledger refused the request for what it asked — an invalid period,
-    /// a zero amount, a reused idempotency key, a booking into a sealed period.
-    #[error("{0}")]
-    Refused(String),
+    /// The ledger refused the request for what it asked. `code` is
+    /// doubleentry's stable rejection code (`301` a sealed period, `200` a
+    /// reused key with other content); `None` for a refusal accountingd makes
+    /// itself before the ledger is asked.
+    #[error("{reason}")]
+    Refused {
+        /// doubleentry's rejection code, when the ledger refused.
+        code: Option<u16>,
+        /// The refusal, in words.
+        reason: String,
+    },
     /// What the request names is not in the books — an unknown entry, a
     /// period that was never sealed.
     #[error("{0}")]
     NotFound(String),
-    /// The books do not verify: a seal chain that does not chain, a closing
-    /// balance that no longer reproduces its seal, a stored row that does not
-    /// match its content hash.
+    /// The store failed transiently, or may have applied the write: the same
+    /// draft is retried.
+    #[error("ledger unavailable: {context}")]
+    Unavailable {
+        /// The operation the failure interrupted.
+        context: String,
+        /// The store's own error, kept for the log.
+        #[source]
+        source: Box<Error>,
+    },
+    /// The stored books do not verify.
     #[error("ledger integrity: {0}")]
     Integrity(String),
-    /// The store underneath failed — the database, the connection, the schema.
+    /// The store underneath failed for good — configuration, a permanent
+    /// backend error.
     #[error("ledger store failed: {context}")]
     Storage {
         /// The operation the failure interrupted.
         context: String,
         /// The store's own error, kept for the log.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: Box<Error>,
     },
 }
 
@@ -95,147 +117,93 @@ pub enum LedgerError {
 pub type LedgerResult<T> = Result<T, LedgerError>;
 
 impl LedgerError {
-    /// A refusal of what the request carried.
-    fn refused(context: impl std::fmt::Display, e: impl std::fmt::Display) -> Self {
-        Self::Refused(format!("{context}: {e}"))
-    }
-
-    /// A failure of this service that is not the store's: a value it built
-    /// itself that does not hold, or stored state it cannot rebuild.
-    fn fault(
-        context: impl Into<String>,
-        e: impl Into<Box<dyn std::error::Error + Send + Sync>>,
-    ) -> Self {
-        Self::Storage {
-            context: context.into(),
-            source: e.into(),
+    /// A refusal accountingd makes before the ledger is asked.
+    fn refused(reason: impl Into<String>) -> Self {
+        Self::Refused {
+            code: None,
+            reason: reason.into(),
         }
     }
 
-    /// An invariant the ledger relies on did not hold.
-    fn invariant(what: &'static str) -> Self {
-        Self::fault(what, what)
-    }
-
-    /// Classify a store error by what it says about the request.
-    fn store<E: StoreError>(context: impl Into<String>) -> impl FnOnce(E) -> Self {
+    /// Classify a doubleentry error by what it says about the request.
+    fn from_ledger(context: impl Into<String>) -> impl FnOnce(Error) -> Self {
         let context = context.into();
-        move |e| match e.kind() {
-            StoreErrorKind::Refused => Self::Refused(format!("{context}: {e}")),
-            StoreErrorKind::NotFound => Self::NotFound(format!("{context}: {e}")),
-            StoreErrorKind::Integrity => Self::Integrity(format!("{context}: {e}")),
-            StoreErrorKind::Storage => Self::Storage {
+        move |e| match &e {
+            Error::Rejected(r) | Error::BatchRejected { rejection: r, .. } => Self::Refused {
+                code: Some(r.code()),
+                reason: format!("{context}: {r}"),
+            },
+            Error::Query(
+                QueryError::UnknownAccount { .. }
+                | QueryError::UnknownEntry { .. }
+                | QueryError::UnknownPeriod { .. }
+                | QueryError::NotSealed { .. },
+            ) => Self::NotFound(format!("{context}: {e}")),
+            Error::Query(_) | Error::Value(_) | Error::Amount(_) => Self::Refused {
+                code: None,
+                reason: format!("{context}: {e}"),
+            },
+            Error::Integrity(_) => Self::Integrity(format!("{context}: {e}")),
+            _ if e.is_transient() || e.may_have_applied() => Self::Unavailable {
+                context,
+                source: Box::new(e),
+            },
+            _ => Self::Storage {
                 context,
                 source: Box::new(e),
             },
         }
     }
+
+    /// Whether the same draft may succeed when retried.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Unavailable { .. })
+    }
+
+    /// doubleentry's rejection code, when the ledger refused.
+    #[must_use]
+    pub fn code(&self) -> Option<u16> {
+        match self {
+            Self::Refused { code, .. } => *code,
+            _ => None,
+        }
+    }
+
+    /// The answer a handler gives for this failure.
+    ///
+    /// A refusal is `422` with code `ledger.<n>` (`409` for `200`, a reused
+    /// key with other content); an unknown subject `404`; a retryable failure
+    /// `503`; an integrity or storage failure a `500` whose `error_id` the log
+    /// line carries, with the store's text kept out of the body.
+    #[must_use]
+    pub fn to_api(&self) -> mako_service::ApiError {
+        use mako_service::ApiError;
+        match self {
+            Self::Refused {
+                code: Some(200),
+                reason,
+            } => ApiError::conflict(reason.clone()).with_code("ledger.200"),
+            Self::Refused {
+                code: Some(code),
+                reason,
+            } => ApiError::unprocessable(reason.clone()).with_code(format!("ledger.{code}")),
+            Self::Refused { code: None, reason } => ApiError::unprocessable(reason.clone()),
+            Self::NotFound(msg) => ApiError::not_found(msg.clone()),
+            Self::Unavailable { .. } => {
+                ApiError::unavailable("the ledger is unavailable; retry the request")
+            }
+            Self::Integrity(msg) => ApiError::internal(anyhow::anyhow!("ledger integrity: {msg}")),
+            Self::Storage { context, .. } => {
+                ApiError::internal(anyhow::anyhow!("ledger store failed: {context}"))
+            }
+        }
+    }
 }
 
 impl From<LedgerError> for mako_service::ApiError {
-    /// A refusal is `422` with its reason and an unknown subject `404`; an
-    /// integrity or storage failure is a `500` whose `error_id` the log line
-    /// carries, with the store's text kept out of the body.
     fn from(e: LedgerError) -> Self {
-        match e {
-            LedgerError::Refused(msg) => Self::unprocessable(msg),
-            LedgerError::NotFound(msg) => Self::not_found(msg),
-            e @ (LedgerError::Integrity(_) | LedgerError::Storage { .. }) => Self::internal(e),
-        }
-    }
-}
-
-/// What a store error says about the request that met it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StoreErrorKind {
-    /// The store refused the operation for what it asked.
-    Refused,
-    /// The operation named something the store does not hold.
-    NotFound,
-    /// The stored books do not verify.
-    Integrity,
-    /// The store itself failed.
-    Storage,
-}
-
-/// A [`LedgerStore`] error the ledger can classify.
-///
-/// A variant the backend adds later is a storage failure until it is named
-/// here: answering an unrecognised failure `500` sends an operator to the log,
-/// while answering it `422` tells a caller to change a request that was fine.
-pub trait StoreError: std::error::Error + Send + Sync + 'static {
-    /// What this error says about the request.
-    fn kind(&self) -> StoreErrorKind;
-}
-
-fn period_kind(e: &doubleentry::period::PeriodError) -> StoreErrorKind {
-    match e {
-        doubleentry::period::PeriodError::Unknown { .. } => StoreErrorKind::NotFound,
-        _ => StoreErrorKind::Refused,
-    }
-}
-
-fn sealed_balance_kind(e: &doubleentry::seal::SealedBalanceError) -> StoreErrorKind {
-    use doubleentry::seal::SealedBalanceError as E;
-    match e {
-        E::NotSealed { .. } | E::UndefinedPeriod { .. } => StoreErrorKind::NotFound,
-        // Restated, RegistryMismatch, and whatever the crate adds: the books no
-        // longer reproduce what was sealed.
-        _ => StoreErrorKind::Integrity,
-    }
-}
-
-fn account_kind(e: &doubleentry::account::AccountError) -> StoreErrorKind {
-    match e {
-        doubleentry::account::AccountError::UnknownAccount { .. } => StoreErrorKind::NotFound,
-        // A stored binding that does not rebuild.
-        _ => StoreErrorKind::Integrity,
-    }
-}
-
-impl StoreError for doubleentry::storage::postgres::PostgresError {
-    fn kind(&self) -> StoreErrorKind {
-        use doubleentry::storage::postgres::PostgresError as E;
-        match self {
-            E::Integrity(_)
-            | E::Malformed(_)
-            | E::MissingNode { .. }
-            | E::Nodes(_)
-            | E::PartialLog { .. }
-            | E::Accumulator(_)
-            | E::Seal(_) => StoreErrorKind::Integrity,
-            E::SealedBalance(e) => sealed_balance_kind(e),
-            E::Account(e) => account_kind(e),
-            E::Period(e) => period_kind(e),
-            E::IdempotencyConflict { .. }
-            | E::Proof(_)
-            | E::Money(_)
-            | E::Clearing(_)
-            | E::UnknownOriginal { .. }
-            | E::AlreadyReversed { .. }
-            | E::ReversalOfReversal { .. }
-            | E::NotAnInversion { .. }
-            | E::ClearingNotResettable { .. }
-            | E::DuplicateId { .. }
-            | E::AncestorHasPostings { .. }
-            | E::AccountRebound { .. }
-            | E::LimitBreached { .. } => StoreErrorKind::Refused,
-            // Database, WrongSearchPath, WrongLedger, and any variant added later.
-            _ => StoreErrorKind::Storage,
-        }
-    }
-}
-
-impl StoreError for doubleentry::storage::MemoryStoreError {
-    fn kind(&self) -> StoreErrorKind {
-        use doubleentry::storage::MemoryStoreError as E;
-        match self {
-            E::Journal(_) | E::Proof(_) | E::Money(_) => StoreErrorKind::Refused,
-            E::Account(e) => account_kind(e),
-            E::SealedBalance(e) => sealed_balance_kind(e),
-            E::Period(e) => period_kind(e),
-            _ => StoreErrorKind::Storage,
-        }
+        e.to_api()
     }
 }
 
@@ -267,74 +235,103 @@ pub fn iban_hash(key: Option<&[u8; 32]>, iban: &str) -> String {
     digest.to_hex().to_string()
 }
 
-/// The fixed general-ledger contra accounts, resolved once at load.
+// ── Chart of accounts ──────────────────────────────────────────────────────────
+
+/// The fixed general-ledger contra accounts, opened at boot.
 ///
 /// These are the non-customer side of every entry. The customer side is a
-/// per-Marktlokation Kontokorrent registered lazily on first booking.
+/// per-Marktlokation Kontokorrent opened on its first booking.
 ///
 /// # No `BalanceLimit` on any of them
 ///
 /// doubleentry can pin an account to one side of the ledger and reject in the
-/// append transaction any entry that would flip it. No account here takes one,
-/// and the reason differs per account rather than being an oversight:
+/// write any entry that would flip it. No account here takes one, and the
+/// reason differs per account rather than being an oversight:
 ///
 /// - **Kontokorrent** is bidirectional by design — a credit balance is how an
-///   EEG operator or an overpaying customer is represented. A limit here would
-///   contradict the ledger's own model.
+///   EEG operator or an overpaying customer is represented.
 /// - **Bank** looks like it qualifies (a chargeback always follows a
 ///   collection), but only in steady state. The ledger starts empty at
 ///   cut-over, so a `BANKRUECKLAST` for a collection made in the legacy system
 ///   would be the first movement on the account and a limit would make a
-///   legitimate inbound bank event permanently unbookable, with no override.
+///   legitimate inbound bank event permanently unbookable.
 /// - **Erloese / Mahnerloese / EEG-Aufwand** are each one side of a partial
 ///   view; a STORNO of a pre-migration invoice breaches them for the same
 ///   reason.
 /// - **Erstattungen** is only ever credited — nothing discharges it here — so a
-///   `NoDebitBalance` limit would be true and could never fire.
+///   limit would be true and could never fire.
 /// - **Anzahlungen** is credited by every Abschlagsforderung and debited by the
 ///   Verrechnung on the settling invoice, so it swings in both directions
 ///   whenever a Jahresrechnung lands out of order with the advances it settles.
-///
-/// The invariant that is actually worth enforcing (every entry balances) is
-/// structural and already unconditional.
-#[derive(Debug, Clone, Copy)]
-pub struct Chart {
+pub struct Chart;
+
+impl Chart {
     /// SKR 1200 — Bankguthaben. Debited by incoming payments, credited by chargebacks.
-    pub bank: AccountId,
+    pub const BANK: &'static str = "Aktiva:Bank";
     /// SKR 4000 — Energieerlöse. The revenue contra for invoices and settlements.
-    pub erloese: AccountId,
+    pub const ERLOESE: &'static str = "Ertrag:Energieerloese";
     /// SKR 4003 — Mahngebühren. Fees charged for the dunning process itself.
-    pub mahnerloese: AccountId,
+    pub const MAHNERLOESE: &'static str = "Ertrag:Mahnerloese";
     /// SKR 2650 — Zinserträge. **Not** the same account as Mahngebühren:
-    /// § 275 HGB puts *Zinsen und ähnliche Erträge* in their own P&L line,
-    /// separate from sonstige betriebliche Erträge. Verzugszinsen are interest;
-    /// a Mahngebühr is a fee for an administrative act.
-    pub zinsertrag: AccountId,
+    /// § 275 HGB puts *Zinsen und ähnliche Erträge* in their own P&L line.
+    pub const ZINSERTRAG: &'static str = "Ertrag:Zinsertraege";
     /// EEG feed-in expense (Aufwand) — the contra for EEG Gutschrift / Marktprämie.
-    pub eeg_aufwand: AccountId,
-    /// Refund payable — the contra when a Jahresabschluss books a customer refund
-    /// (Erstattung): the customer credit is zeroed and this liability recognises
-    /// the amount owed until the pain.001 payout discharges it.
-    pub erstattung: AccountId,
+    pub const EEG_AUFWAND: &'static str = "Aufwand:EEG-Einspeiseverguetung";
+    /// Refund payable — the contra when a Jahresabschluss books a customer refund.
+    pub const ERSTATTUNG: &'static str = "Passiva:Verbindlichkeiten:Erstattungen";
     /// SKR 03 1718 / SKR 04 3272 — **Erhaltene Anzahlungen**, the contra for the
-    /// Abschlag pair.
+    /// Abschlag pair (§ 40 Abs. 1 EnWG, § 14 Abs. 5 UStG): neither revenue nor
+    /// cash, and never `BANK`.
+    pub const ANZAHLUNGEN: &'static str = "Passiva:Verbindlichkeiten:ErhalteneAnzahlungen";
+    /// The grouping node every Kontokorrent sits under.
+    pub const KONTOKORRENT: &'static str = "Kontokorrent";
+
+    /// Every GL account with its kind, opened at boot.
+    pub const GL: [(&'static str, AccountKind); 7] = [
+        (Self::BANK, AccountKind::Asset),
+        (Self::ERLOESE, AccountKind::Income),
+        (Self::MAHNERLOESE, AccountKind::Income),
+        (Self::ZINSERTRAG, AccountKind::Income),
+        (Self::EEG_AUFWAND, AccountKind::Expense),
+        (Self::ERSTATTUNG, AccountKind::Liability),
+        (Self::ANZAHLUNGEN, AccountKind::Liability),
+    ];
+
+    /// The GL contra account for an `entry_type`, or `None` for one outside
+    /// [`ENTRY_TYPES`].
     ///
-    /// An Abschlag is neither revenue nor cash: it is a demand for a
-    /// part-payment on a supply not yet billed (§ 40 Abs. 1 EnWG,
-    /// § 14 Abs. 5 UStG). `ABSCHLAG` debits the Kontokorrent against this
-    /// account; `ABSCHLAG_VERRECHNUNG` credits it back when the settling
-    /// invoice bills the supply in full. Between the two, the balance is the
-    /// operator's open advance obligation — the § 266 Abs. 3 C.3 HGB line.
-    /// Never `bank`: no money moves at either end.
-    pub anzahlungen: AccountId,
+    /// The customer Kontokorrent is always the other leg; its direction follows
+    /// the sign of `amount_ct` (positive → debit customer, negative → credit),
+    /// which is what makes the Kontokorrent net equal `balance_ct`.
+    #[must_use]
+    pub fn contra(entry_type: &str) -> Option<&'static str> {
+        Some(match entry_type {
+            // SEPA_STORNO is a pain.007 reversal: the creditor hands a settled
+            // collection back, so the money leaves the bank account again and
+            // the receivable re-opens.
+            "ZAHLUNG" | "BANKRUECKLAST" | "SEPA_STORNO" => Self::BANK,
+            "ABSCHLAG" | "ABSCHLAG_VERRECHNUNG" => Self::ANZAHLUNGEN,
+            "MAHNGEBUEHR" => Self::MAHNERLOESE,
+            "VERZUGSZINSEN" => Self::ZINSERTRAG,
+            "EEG_GUTSCHRIFT" | "EEG_MARKTPRAEMIE" => Self::EEG_AUFWAND,
+            "JAHRESABSCHLUSS" => Self::ERSTATTUNG,
+            "RECHNUNG" | "STORNO" | "GUTSCHRIFT" | "KORREKTUR" => Self::ERLOESE,
+            _ => return None,
+        })
+    }
+
+    /// The Kontokorrent path of a Marktlokation.
+    #[must_use]
+    pub fn kontokorrent(lf_mp_id: &str, malo_id: &str) -> String {
+        format!("{}:{lf_mp_id}:{malo_id}", Self::KONTOKORRENT)
+    }
 }
 
 /// Every Buchungsart accountingd books.
 ///
-/// `Chart::contra` maps each to a GL account and
-/// `POST /accounts/{malo}/buchen` refuses anything outside the list — one list,
-/// so a kind cannot be bookable by an automated path and rejected by the
-/// operator interface, or fall through `contra`'s catch-all onto Energieerlöse.
+/// [`Chart::contra`] maps each to a GL account and refuses anything outside
+/// the list — one list, so a kind cannot be bookable by an automated path and
+/// rejected by the operator interface.
 pub const ENTRY_TYPES: &[&str] = &[
     "RECHNUNG",
     "STORNO",
@@ -352,66 +349,49 @@ pub const ENTRY_TYPES: &[&str] = &[
     "JAHRESABSCHLUSS",
 ];
 
-impl Chart {
-    /// The GL contra account for an `entry_type`.
-    ///
-    /// The customer Kontokorrent is always the other leg; its direction follows
-    /// the sign of `amount_ct` (positive → debit customer, negative → credit),
-    /// which is what makes the Kontokorrent net equal `balance_ct`.
-    #[must_use]
-    fn contra(&self, entry_type: &str) -> AccountId {
-        match entry_type {
-            // SEPA_STORNO is a pain.007 reversal: the creditor hands a settled
-            // collection back, so the money leaves the bank account again and
-            // the receivable re-opens — the same two accounts as the collection
-            // it undoes, in the opposite direction.
-            "ZAHLUNG" | "BANKRUECKLAST" | "SEPA_STORNO" => self.bank,
-            // The Abschlag pair. Never `bank`: no money moves when an advance is
-            // demanded, and none moves when the settling invoice absorbs it.
-            "ABSCHLAG" | "ABSCHLAG_VERRECHNUNG" => self.anzahlungen,
-            "MAHNGEBUEHR" => self.mahnerloese,
-            "VERZUGSZINSEN" => self.zinsertrag,
-            "EEG_GUTSCHRIFT" | "EEG_MARKTPRAEMIE" => self.eeg_aufwand,
-            // Erstattung: zero the customer credit against a refund payable.
-            "JAHRESABSCHLUSS" => self.erstattung,
-            // RECHNUNG, STORNO, GUTSCHRIFT, KORREKTUR, …
-            _ => self.erloese,
-        }
-    }
+/// The dimension axes on the Kontokorrent posting.
+pub mod axis {
+    /// The entry type (`RECHNUNG`, `ZAHLUNG`, …).
+    pub const ART: &str = "art";
+    /// The originating CloudEvent id.
+    pub const KORRELATION: &str = "korrelation";
+    /// Who booked it (an operator's subject, a worker's name).
+    pub const AKTEUR: &str = "akteur";
 }
 
-/// A request to post one balanced entry.
-#[derive(Debug, Clone)]
+// ── Requests and answers ───────────────────────────────────────────────────────
+
+/// A request to post one balanced entry — the whole booking draft.
+///
+/// Serialisable because [`crate::booking`] stores it verbatim beside the
+/// business change and rebuilds the identical entry from it: a draft
+/// recomputed from mutable state would turn a retry into a key conflict.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PostEntry {
     /// Marktlokation — identifies the customer Kontokorrent.
     pub malo_id: String,
     /// The LF's own market-partner id — namespaces the Kontokorrent path.
     pub lf_mp_id: String,
     /// The accountingd entry type (`RECHNUNG`, `ZAHLUNG`, `EEG_GUTSCHRIFT`, …).
-    /// Stored verbatim as the doubleentry entry `kind` label.
     pub entry_type: String,
     /// Signed minor units: positive increases the receivable, negative reduces it.
     pub amount_ct: i64,
-    /// The idempotency key. **Every** write carries one — a CloudEvent id, a bank
-    /// transaction id, or a deterministic string (`mahngebuehr:{malo}:{stufe}:{date}`).
-    /// The store makes the write a no-op on identical replay and a conflict on a
-    /// reused key with different content.
+    /// The idempotency key, ≤ 128 bytes — a CloudEvent id, a bank transaction
+    /// id, or a deterministic string (`mahngebuehr:{case}:{stufe}`).
     pub idempotency: String,
     /// Booking date (Buchungsdatum).
     pub booking_date: Date,
     /// Value date (Wertstellung); defaults to `booking_date`.
     pub value_date: Date,
-    /// Free-text line description.
+    /// Free-text line description, kept as the entry's erasable memo.
     pub description: Option<String>,
-    /// External correlation (a CloudEvent id) folded into provenance.
+    /// External correlation (a CloudEvent id).
     pub correlation: Option<String>,
-    /// Source-document identifier (invoice/record id) — attached as a
-    /// [`DocumentRef`], the tamper-evident link from a booking to its document.
+    /// Source-document identifier (invoice/record id), ≤ 256 bytes.
     pub document: Option<String>,
     /// The acting principal (operator sub for manual bookings).
     pub actor: Option<String>,
-    /// When set, this entry reverses `(id, original booking date)` — a STORNO.
-    pub reverses: Option<(EntryId, Date)>,
 }
 
 impl PostEntry {
@@ -437,7 +417,6 @@ impl PostEntry {
             correlation: None,
             document: None,
             actor: None,
-            reverses: None,
         }
     }
 
@@ -475,22 +454,88 @@ impl PostEntry {
         self.actor = Some(actor.into());
         self
     }
+
+    /// Refuses a draft the ledger could never take — an unknown entry type, a
+    /// zero amount, a field doubleentry would refuse — before anything is
+    /// written.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, as [`LedgerError::Refused`] without a code.
+    pub fn validate(&self) -> LedgerResult<()> {
+        self.entry().map(|_| ())
+    }
+
+    /// The doubleentry entry this draft books, or the refusal accountingd makes
+    /// before asking the ledger.
+    fn entry(&self) -> LedgerResult<Entry<P>> {
+        let Some(contra) = Chart::contra(&self.entry_type) else {
+            return Err(LedgerError::refused(format!(
+                "unknown entry type {:?}; bookable are {}",
+                self.entry_type,
+                ENTRY_TYPES.join(", ")
+            )));
+        };
+        if self.amount_ct == 0 {
+            return Err(LedgerError::refused(format!(
+                "refusing to post a zero-amount entry ({})",
+                self.entry_type
+            )));
+        }
+        let amount = Eur::from_minor(i128::from(self.amount_ct.unsigned_abs()))
+            .map_err(|e| LedgerError::refused(format!("amount: {e}")))?;
+        let customer_side = if self.amount_ct > 0 {
+            Side::Debit
+        } else {
+            Side::Credit
+        };
+        let kontokorrent = Chart::kontokorrent(&self.lf_mp_id, &self.malo_id);
+        let mut customer = match customer_side {
+            Side::Debit => Posting::debit(kontokorrent.as_str(), amount, EUR),
+            Side::Credit => Posting::credit(kontokorrent.as_str(), amount, EUR),
+        }
+        .dimension(axis::ART, self.entry_type.as_str());
+        if let Some(correlation) = &self.correlation {
+            customer = customer.dimension(axis::KORRELATION, correlation.as_str());
+        }
+        if let Some(actor) = &self.actor {
+            customer = customer.dimension(axis::AKTEUR, actor.as_str());
+        }
+        let gl = match customer_side {
+            Side::Debit => Posting::credit(contra, amount, EUR),
+            Side::Credit => Posting::debit(contra, amount, EUR),
+        };
+        let mut entry = Entry::new(self.idempotency.as_str(), self.booking_date)
+            .value_date(self.value_date)
+            .kind(self.entry_type.as_str())
+            .posting(customer)
+            .posting(gl);
+        if let Some(document) = &self.document {
+            entry = entry.document(
+                Document::new("beleg", document.as_str())
+                    .map_err(|e| LedgerError::refused(format!("document reference: {e}")))?,
+            );
+        }
+        if let Some(description) = &self.description {
+            entry = entry.memo(description.as_str());
+        }
+        if let Some(first) = entry.build_errors().first() {
+            return Err(LedgerError::refused(format!("booking draft: {first}")));
+        }
+        Ok(entry)
+    }
 }
 
-/// One entry of a given kind, with the customer it belongs to (see
-/// [`Ledger::entries_of_kind_in_month`]).
-#[derive(Debug, Clone)]
-pub struct KindEntry {
-    /// The LF market-partner id of the owning Kontokorrent.
-    pub lf_mp_id: String,
-    /// The Marktlokation of the owning Kontokorrent.
-    pub malo_id: String,
-    /// The doubleentry entry id.
-    pub entry_id: uuid::Uuid,
-    /// The Kontokorrent leg's amount in minor units.
-    pub amount_ct: i64,
-    /// The originating CloudEvent id, from provenance, if any.
-    pub correlation: Option<String>,
+/// An entry id as the `Uuid` accountingd's tables and routes carry.
+#[must_use]
+pub fn entry_uuid(id: EntryId) -> uuid::Uuid {
+    uuid::Uuid::from_bytes(*id.as_bytes())
+}
+
+/// The entry id behind a `Uuid` from accountingd's tables or routes.
+#[must_use]
+pub fn entry_id(uuid: uuid::Uuid) -> EntryId {
+    EntryId::from_bytes(*uuid.as_bytes())
 }
 
 /// One open receivable (unpaid invoice/fee) after recorded clearings — the
@@ -530,270 +575,187 @@ pub struct TrialBalanceLine {
 /// The result of a post.
 #[derive(Debug, Clone, Copy)]
 pub struct Posted {
-    /// The entry identifier (stable across idempotent replays).
+    /// The entry identifier (derived from the key, stable across replays).
     pub id: EntryId,
     /// `false` when an identical entry had already been recorded — a safe retry.
     pub is_new: bool,
 }
 
-/// A [`doubleentry`] ledger scoped to one accountingd deployment (one `tenant`).
-///
-/// Generic over the backend so unit tests run against `MemoryStore` and
-/// production runs against `PostgresStore`, both verified by doubleentry's own
-/// conformance suite.
-pub struct Ledger<S: LedgerStore<P>> {
-    store: S,
-    /// The account tree. Guarded by a std mutex held only across the synchronous
-    /// seal — never across an `await` — so posts to existing accounts run
-    /// concurrently at the database level.
-    registry: Mutex<AccountRegistry>,
-    chart: Chart,
-    /// Period calendar (Festschreibung). Guarded like the registry — locked only
-    /// across the synchronous seal validation, never across an `await`. Sealed
-    /// periods here make `post` reject a backdated booking into a closed period.
-    calendar: Mutex<PeriodCalendar>,
-    policy: LedgerPolicy,
+/// One sealed period (Festschreibung).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SealedPeriod {
+    /// The period id, `YYYY-MM`.
+    pub period: String,
+    /// The seal record's position in the log.
+    pub position: u64,
+    /// The period's first day.
+    pub start: Date,
+    /// The period's last day.
+    pub end: Date,
 }
 
-impl<S: LedgerStore<P>> Ledger<S>
-where
-    S::Error: StoreError,
-{
-    /// Opens the ledger over `store`, restoring the account tree from storage and
-    /// ensuring the fixed GL chart exists.
+/// Minor units as `i64`, the width accountingd's tables carry.
+fn ct(amount: Eur) -> i64 {
+    i64::try_from(amount.to_minor()).unwrap_or(if amount.is_negative() {
+        i64::MIN
+    } else {
+        i64::MAX
+    })
+}
+
+/// The first and last day of a `YYYY-MM` period.
+fn month_bounds(period: &str) -> Option<(Date, Date)> {
+    let (y, m) = period.split_once('-')?;
+    let month = time::Month::try_from(m.parse::<u8>().ok()?).ok()?;
+    let start = Date::from_calendar_date(y.parse().ok()?, month, 1).ok()?;
+    let end = start.replace_day(start.month().length(start.year())).ok()?;
+    Some((start, end))
+}
+
+// ── The ledger ─────────────────────────────────────────────────────────────────
+
+/// A [`doubleentry`] ledger scoped to one accountingd deployment (one `tenant`).
+///
+/// Generic over the store so unit tests run against `MemoryStore` and
+/// production against PostgreSQL, both held to doubleentry's conformance suite.
+pub struct Ledger<S: Store<P>> {
+    books: doubleentry::Ledger<S, P>,
+    /// A clone of the store (cheap, pool-sharing) for the one read the ledger
+    /// façade does not offer: the seal list.
+    store: S,
+}
+
+impl<S: Store<P>> Ledger<S> {
+    /// Opens the ledger over `store` — creating it when the store holds none —
+    /// and makes sure EUR, the calendar and the GL chart exist.
     ///
-    /// The registry is loaded from stored records (never rebuilt by re-registering
-    /// paths, which would reissue handles and repoint history), then the GL
-    /// accounts are registered if absent and persisted.
+    /// Every step is idempotent: an identical repeat writes nothing.
     ///
     /// # Errors
     ///
-    /// Propagates storage and registry errors.
-    pub async fn load(store: S) -> LedgerResult<Self> {
-        let records = store
-            .accounts()
+    /// A store or configuration failure (another ledger id in the store).
+    pub async fn open(store: S, tenant: &str, today: Date) -> LedgerResult<Self> {
+        let id = LedgerId::new(tenant)
+            .map_err(|e| LedgerError::refused(format!("ledger id {tenant}: {e}")))?;
+        let books = doubleentry::Ledger::new(store.clone(), id)
             .await
-            .map_err(LedgerError::store("load accounts"))?;
-        let mut registry = AccountRegistry::from_records(records)
-            .map_err(|e| LedgerError::fault("rebuild registry", e))?;
-
-        // Opening date for the GL chart: the epoch of the ledger. Booking dates
-        // are always after this, so the open-window check never rejects a GL leg.
-        let epoch = Date::from_calendar_date(2000, time::Month::January, 1)
-            .map_err(|e| LedgerError::fault("epoch", e))?;
-
-        let mut to_persist: Vec<AccountRecord> = Vec::new();
-        let mut ensure = |registry: &mut AccountRegistry,
-                          path: &str,
-                          kind: AccountKind|
-         -> LedgerResult<AccountId> {
-            let parsed = AccountPath::parse(path)
-                .map_err(|e| LedgerError::fault(format!("account path {path}"), e))?;
-            if let Some(id) = registry.id_of(&parsed) {
-                return Ok(id);
-            }
-            let account = Account::new(parsed, epoch).with_kind(kind);
-            let id = registry
-                .register(account.clone())
-                .map_err(|e| LedgerError::fault(format!("register {path}"), e))?;
-            to_persist.push(AccountRecord { id, account });
-            Ok(id)
-        };
-
-        let chart = Chart {
-            bank: ensure(&mut registry, "Aktiva:Bank", AccountKind::Asset)?,
-            erloese: ensure(&mut registry, "Ertrag:Energieerloese", AccountKind::Income)?,
-            mahnerloese: ensure(&mut registry, "Ertrag:Mahnerloese", AccountKind::Income)?,
-            zinsertrag: ensure(&mut registry, "Ertrag:Zinsertraege", AccountKind::Income)?,
-            eeg_aufwand: ensure(
-                &mut registry,
-                "Aufwand:EEG-Einspeiseverguetung",
-                AccountKind::Expense,
-            )?,
-            erstattung: ensure(
-                &mut registry,
-                "Passiva:Verbindlichkeiten:Erstattungen",
-                AccountKind::Liability,
-            )?,
-            anzahlungen: ensure(
-                &mut registry,
-                "Passiva:Verbindlichkeiten:ErhalteneAnzahlungen",
-                AccountKind::Liability,
-            )?,
-        };
-
-        for record in &to_persist {
-            store
-                .register_account(record)
+            .map_err(LedgerError::from_ledger("open ledger"))?
+            .as_actor("accountingd");
+        let ledger = Self { books, store };
+        ledger
+            .books
+            .declare_currency(EUR, P, BUCHUNGSBEGINN)
+            .await
+            .map_err(LedgerError::from_ledger("declare EUR"))?;
+        ledger.define_through(today.year() + 1).await?;
+        for (path, kind) in Chart::GL {
+            ledger
+                .books
+                .open(path, kind, BUCHUNGSBEGINN)
                 .await
-                .map_err(LedgerError::store("persist GL account"))?;
+                .map_err(LedgerError::from_ledger(format!("open {path}")))?;
         }
-
-        Ok(Self {
-            store,
-            registry: Mutex::new(registry),
-            chart,
-            calendar: Mutex::new(PeriodCalendar::new()),
-            policy: LedgerPolicy::default(),
-        })
+        Ok(ledger)
     }
 
-    /// The underlying store, for reads the ledger does not wrap.
-    pub fn store(&self) -> &S {
-        &self.store
-    }
-
-    /// The Kontokorrent path for a Marktlokation.
-    fn kontokorrent_path(lf_mp_id: &str, malo_id: &str) -> LedgerResult<AccountPath> {
-        AccountPath::parse(&format!("Kontokorrent:{lf_mp_id}:{malo_id}"))
-            .map_err(|e| LedgerError::refused(format!("kontokorrent path for {malo_id}"), e))
-    }
-
-    /// Resolves an existing Kontokorrent, or `None` if the customer has never been booked.
-    fn resolve(&self, lf_mp_id: &str, malo_id: &str) -> LedgerResult<Option<AccountId>> {
-        let path = Self::kontokorrent_path(lf_mp_id, malo_id)?;
-        let registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(registry.id_of(&path))
-    }
-
-    /// Resolves a Kontokorrent, registering (and persisting) it on first use.
-    ///
-    /// The account row is persisted before this returns, so any entry that later
-    /// references the handle cannot precede its account in the store.
-    async fn resolve_or_register(
-        &self,
-        lf_mp_id: &str,
-        malo_id: &str,
-        opened_on: Date,
-    ) -> LedgerResult<AccountId> {
-        let path = Self::kontokorrent_path(lf_mp_id, malo_id)?;
-
-        // A new binding to persist, produced under the lock. `None` = the account
-        // already existed (no persist needed). The lock is never held across the
-        // await below.
-        let new_record: Option<AccountRecord> = {
-            let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(id) = registry.id_of(&path) {
-                return Ok(id);
-            }
-            let account = Account::new(path.clone(), opened_on).with_kind(AccountKind::Asset);
-            let id = registry
-                .register(account.clone())
-                .map_err(|e| LedgerError::refused(format!("register kontokorrent {malo_id}"), e))?;
-            Some(AccountRecord { id, account })
-        };
-
-        match new_record {
-            Some(record) => {
-                let id = record.id;
-                store_register_account(&self.store, &record).await?;
-                Ok(id)
-            }
-            // Unreachable in practice (we returned above), kept for exhaustiveness.
-            None => self
-                .resolve(lf_mp_id, malo_id)?
-                .ok_or_else(|| LedgerError::invariant("kontokorrent vanished after registration")),
+    /// Defines every calendar month from [`BUCHUNGSBEGINN`] through December of
+    /// `year`; months already defined are skipped.
+    async fn define_through(&self, year: i32) -> LedgerResult<()> {
+        for y in BUCHUNGSBEGINN.year()..=year {
+            self.books
+                .define_months(y, 1..=12)
+                .await
+                .map_err(LedgerError::from_ledger(format!("define {y}")))?;
         }
+        Ok(())
     }
 
-    /// Posts one balanced entry and records it in the log.
-    ///
-    /// Idempotent by `req.idempotency`: an identical replay is a no-op returning
-    /// the original entry id; a reused key with different content is refused.
+    /// The Kontokorrent path of a Marktlokation, refused when either id would
+    /// leave an empty or invalid path segment.
+    fn konto(lf_mp_id: &str, malo_id: &str) -> LedgerResult<String> {
+        let path = Chart::kontokorrent(lf_mp_id, malo_id);
+        path.parse::<doubleentry::AccountPath>()
+            .map_err(|e| LedgerError::refused(format!("Kontokorrent {path:?}: {e}")))?;
+        Ok(path)
+    }
+
+    /// The id the entry under `key` has — derived from the ledger id and the
+    /// key, so it is known before the entry is booked and a business row
+    /// committed with the draft can name it.
     ///
     /// # Errors
     ///
-    /// Returns an error for a zero amount, an invalid field, a failed validation,
-    /// or a storage failure (including an idempotency conflict).
-    pub async fn post(&self, req: PostEntry) -> LedgerResult<Posted> {
-        if req.amount_ct == 0 {
-            return Err(LedgerError::Refused(format!(
-                "refusing to post a zero-amount entry ({})",
-                req.entry_type
-            )));
-        }
-        let abs = i64::try_from(req.amount_ct.unsigned_abs())
-            .map_err(|_| LedgerError::Refused("amount out of range".into()))?;
-        let amount = Eur::from_minor(abs);
+    /// A key doubleentry refuses (empty, over 128 bytes, a control character).
+    pub fn entry_id_for(&self, key: &str) -> LedgerResult<uuid::Uuid> {
+        let key = doubleentry::IdempotencyKey::new(key)
+            .map_err(|e| LedgerError::refused(format!("idempotency key {key:?}: {e}")))?;
+        Ok(entry_uuid(EntryId::derive(self.books.id(), &key)))
+    }
 
-        let customer = self
-            .resolve_or_register(&req.lf_mp_id, &req.malo_id, req.booking_date)
-            .await?;
-        let contra = self.chart.contra(&req.entry_type);
-        // Positive → customer owes (debit customer); negative → customer credited.
-        let (debit, credit) = if req.amount_ct > 0 {
-            (customer, contra)
-        } else {
-            (contra, customer)
-        };
+    /// The doubleentry ledger, for reads this façade does not wrap.
+    #[must_use]
+    pub fn books(&self) -> &doubleentry::Ledger<S, P> {
+        &self.books
+    }
 
-        let key = IdempotencyKey::new(req.idempotency.into_bytes())
-            .map_err(|e| LedgerError::refused("idempotency key", e))?;
-
-        let mut provenance = Provenance::none()
-            .with_source("accountingd")
-            .map_err(|e| LedgerError::fault("provenance source", e))?;
-        if let Some(correlation) = &req.correlation {
-            provenance = provenance
-                .with_correlation(correlation)
-                .map_err(|e| LedgerError::refused("provenance correlation", e))?;
-        }
-        if let Some(actor) = &req.actor {
-            provenance = provenance
-                .with_actor(actor)
-                .map_err(|e| LedgerError::refused("provenance actor", e))?;
-        }
-
-        let mut draft = Entry::new(EntryId::generate(), key, req.booking_date)
-            .with_value_date(req.value_date)
-            .debit(debit, amount, Currency::EUR)
-            .credit(credit, amount, Currency::EUR)
-            .with_kind(
-                Label::new(req.entry_type.as_str())
-                    .map_err(|e| LedgerError::refused("entry kind", e))?,
-            )
-            .with_provenance(provenance);
-        if let Some(description) = &req.description {
-            draft = draft.with_description(
-                Description::new(description.as_str())
-                    .map_err(|e| LedgerError::refused("description", e))?,
-            );
-        }
-        if let Some(document) = &req.document {
-            draft = draft.with_document(
-                DocumentRef::unverified(document.as_str())
-                    .map_err(|e| LedgerError::refused("document ref", e))?,
-            );
-        }
-        if let Some((original_id, original_date)) = req.reverses {
-            draft = draft.reversing(original_id, original_date);
-        }
-
-        let balanced = {
-            let registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
-            let calendar = self.calendar.lock().unwrap_or_else(|e| e.into_inner());
-            let ctx = SealContext {
-                accounts: &registry,
-                calendar: &calendar,
-                policy: &self.policy,
-            };
-            draft.seal(&ctx).map_err(|errors| {
-                LedgerError::refused("ledger validation rejected entry", errors)
-            })?
-        };
-
-        let recorded = self
-            .store
-            .append(&EntryBatch::single(balanced))
+    /// Opens the Kontokorrent of a Marktlokation unless it exists.
+    ///
+    /// `open` repeated with another date is refused (`420`), so the lookup comes
+    /// first; a new account opens on the later of [`BUCHUNGSBEGINN`] and the day
+    /// after the last seal, because an account may not open inside a sealed
+    /// period (`309`).
+    async fn ensure_kontokorrent(&self, path: &str) -> LedgerResult<()> {
+        if self
+            .books
+            .account(path)
             .await
-            .map_err(LedgerError::store("append entry"))?;
-        let first = recorded
-            .into_iter()
-            .next()
-            .ok_or_else(|| LedgerError::invariant("append returned no record"))?;
+            .map_err(LedgerError::from_ledger(format!("look up {path}")))?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let open_from = match self.sealed_through().await? {
+            Some(end) => end.next_day().unwrap_or(end).max(BUCHUNGSBEGINN),
+            None => BUCHUNGSBEGINN,
+        };
+        self.books
+            .open(path, AccountKind::Asset, open_from)
+            .await
+            .map_err(LedgerError::from_ledger(format!("open {path}")))?;
+        Ok(())
+    }
+
+    /// Posts one balanced entry.
+    ///
+    /// Idempotent by `req.idempotency`: an identical replay returns the original
+    /// entry; a reused key with different content is refused (`200`). Call it
+    /// only through [`crate::booking`].
+    ///
+    /// # Errors
+    ///
+    /// A refusal (unknown entry type, zero amount, a sealed or undefined
+    /// period, a key conflict) or a store failure.
+    pub async fn post(&self, req: &PostEntry) -> LedgerResult<Posted> {
+        let entry = req.entry()?;
+        if req.booking_date.year() > Date::MAX.year() - 1 {
+            return Err(LedgerError::refused("booking date out of range"));
+        }
+        // A booking into next year's calendar extends it; the calendar is
+        // contiguous, so every year between is defined too.
+        self.define_through(req.booking_date.year()).await?;
+        self.ensure_kontokorrent(&Self::konto(&req.lf_mp_id, &req.malo_id)?)
+            .await?;
+        let recorded = self
+            .books
+            .record(entry)
+            .await
+            .map_err(LedgerError::from_ledger(format!(
+                "book {}",
+                req.idempotency
+            )))?;
         Ok(Posted {
-            id: first.id,
-            is_new: first.is_new,
+            id: recorded.id,
+            is_new: !recorded.replayed,
         })
     }
 
@@ -803,305 +765,223 @@ where
     ///
     /// # Errors
     ///
-    /// Propagates storage errors.
+    /// A store failure.
     pub async fn balance_ct(&self, lf_mp_id: &str, malo_id: &str) -> LedgerResult<i64> {
-        let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
-            return Ok(0);
-        };
-        let key = BalanceKey {
-            account,
-            currency: Currency::EUR,
-            layer: Layer::Settled,
-        };
-        let balance = self
-            .store
-            .balance(key, BalanceQuery::all())
-            .await
-            .map_err(LedgerError::store("read balance"))?;
-        Ok(balance
-            .signed_net()
-            .map_err(|e| LedgerError::fault("net balance", e))?
-            .to_minor())
+        self.balance(lf_mp_id, malo_id, &BalanceQuery::all()).await
     }
 
-    /// The customer's open items (postings with an outstanding residual).
+    /// The customer's signed balance over `query`; zero for an account never booked.
+    async fn balance(
+        &self,
+        lf_mp_id: &str,
+        malo_id: &str,
+        query: &BalanceQuery,
+    ) -> LedgerResult<i64> {
+        match self
+            .books
+            .balance(Self::konto(lf_mp_id, malo_id)?.as_str(), EUR, query)
+            .await
+        {
+            Ok(balance) => Ok(ct(balance.net())),
+            Err(Error::Query(QueryError::UnknownAccount { .. })) => Ok(0),
+            Err(e) => Err(LedgerError::from_ledger("read balance")(e)),
+        }
+    }
+
+    /// The customer's open items — postings with an outstanding residual, in
+    /// log order; empty for an account never booked.
     ///
     /// # Errors
     ///
-    /// Propagates storage errors.
+    /// A store failure.
     pub async fn open_items(
         &self,
         lf_mp_id: &str,
         malo_id: &str,
-    ) -> LedgerResult<Vec<OpenItem<P>>> {
-        let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
-            return Ok(Vec::new());
-        };
-        let key = BalanceKey {
-            account,
-            currency: Currency::EUR,
-            layer: Layer::Settled,
-        };
-        self.all_open_items(key).await
-    }
-
-    /// Every open item on the account — the deliberately unbounded read.
-    ///
-    /// Both callers need completeness, not just the oldest few. Allocating a
-    /// payment across invoices and totalling what an account has outstanding are
-    /// each answered *wrongly* by a partial list: a payment larger than the first
-    /// page's residuals under-allocates, and a total comes out short.
-    ///
-    /// What a partial read would **not** break is the FIFO order itself — pages
-    /// come oldest first, so the first page is the oldest items and matching over
-    /// it is correct as far as it goes. The § 252 HGB risk here is incompleteness,
-    /// not mis-ordering.
-    ///
-    /// A per-Marktlokation Kontokorrent holds a handful of open invoices, so this
-    /// is one page in practice; it is written to be right when it is not.
-    async fn all_open_items(&self, key: BalanceKey) -> LedgerResult<Vec<OpenItem<P>>> {
-        self.store
-            .all_open_items(key)
+    ) -> LedgerResult<Vec<doubleentry::report::OpenItem<P>>> {
+        match self
+            .books
+            .open_items(
+                Self::konto(lf_mp_id, malo_id)?.as_str(),
+                EUR,
+                &BalanceQuery::all(),
+            )
             .await
-            .map_err(LedgerError::store("open items"))
-    }
-
-    /// Booking date + log position for every posting on the account, from the
-    /// statement — the ordering key for FIFO clearing and the OP list.
-    async fn posting_meta(
-        &self,
-        key: BalanceKey,
-    ) -> LedgerResult<std::collections::HashMap<PostingRef, (Date, u64, Option<String>)>> {
-        let mut meta = std::collections::HashMap::new();
-        // A posting cursor, not an entry cursor: one entry can put several lines
-        // on the same account, so a page boundary falling inside an entry would
-        // skip its remaining postings — invisibly, because the running balance
-        // stays consistent across the gap.
-        let mut cursor = PostingCursor::start();
-        loop {
-            let page = self
-                .store
-                .statement(key, BalanceQuery::all(), cursor)
-                .await
-                .map_err(LedgerError::store("statement"))?;
-            for line in &page.lines {
-                meta.insert(
-                    line.posting,
-                    (
-                        line.booking_date,
-                        line.index.get(),
-                        line.kind.as_ref().map(|k| k.as_str().to_owned()),
-                    ),
-                );
-            }
-            match page.next {
-                Some(next) => cursor = next,
-                None => break,
-            }
+        {
+            Ok(items) => Ok(items),
+            Err(Error::Query(QueryError::UnknownAccount { .. })) => Ok(Vec::new()),
+            Err(e) => Err(LedgerError::from_ledger("open items")(e)),
         }
-        Ok(meta)
     }
 
     /// Records a **FIFO Zahlungszuordnung**: matches the customer's open credit
     /// residuals (payments, Abschläge, Gutschriften) against their oldest open
-    /// debit residuals (invoices, fees), oldest first, and stores the clearing so
-    /// the open-item list reflects what has actually been paid — not a gross list.
+    /// debit residuals (invoices, fees), oldest first by booking date and log
+    /// position, one clearing per matched pair.
     ///
-    /// Returns the new clearing id, or `None` when nothing is left to match (so a
-    /// re-run is a safe no-op). This is the § 252 HGB per-receivable matching that
-    /// a running balance alone cannot express.
+    /// Returns the clearing positions — empty when nothing is left to match, so
+    /// a re-run is a safe no-op. Each pair's key carries the log size the run
+    /// started from, so a run after a reset clears anew rather than replaying
+    /// the reset clearing. This is the § 252 HGB per-receivable matching a
+    /// running balance alone cannot express.
     ///
     /// # Errors
     ///
-    /// Propagates storage/clearing errors.
+    /// A refusal or a store failure.
     pub async fn apply_fifo_clearing(
         &self,
         lf_mp_id: &str,
         malo_id: &str,
         on: Date,
-    ) -> LedgerResult<Option<ClearingId>> {
-        let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
-            return Ok(None);
-        };
-        let key = BalanceKey {
-            account,
-            currency: Currency::EUR,
-            layer: Layer::Settled,
-        };
-
-        let meta = self.posting_meta(key).await?;
-        let sort_key = |p: &PostingRef| meta.get(p).map_or((Date::MIN, u64::MAX), |m| (m.0, m.1));
-
-        let open = self.all_open_items(key).await?;
-        let mut debits: Vec<(PostingRef, i64)> = open
+    ) -> LedgerResult<Vec<u64>> {
+        let open = self.open_items(lf_mp_id, malo_id).await?;
+        let order = |i: &&doubleentry::report::OpenItem<P>| (i.booking_date, i.position);
+        let mut debits: Vec<_> = open
             .iter()
-            .filter(|i| i.direction == Direction::Debit && i.residual.to_minor() > 0)
-            .map(|i| (i.posting, i.residual.to_minor()))
+            .filter(|i| i.side == Side::Debit && i.residual.is_positive())
             .collect();
-        let credits: Vec<(PostingRef, i64)> = {
-            let mut c: Vec<(PostingRef, i64)> = open
-                .iter()
-                .filter(|i| i.direction == Direction::Credit && i.residual.to_minor() > 0)
-                .map(|i| (i.posting, i.residual.to_minor()))
-                .collect();
-            c.sort_by_key(|(p, _)| sort_key(p));
-            c
-        };
-        debits.sort_by_key(|(p, _)| sort_key(p));
+        let mut credits: Vec<_> = open
+            .iter()
+            .filter(|i| i.side == Side::Credit && i.residual.is_positive())
+            .collect();
+        debits.sort_by_key(order);
+        credits.sort_by_key(order);
+        let head = self
+            .books
+            .head()
+            .await
+            .map_err(LedgerError::from_ledger("head"))?
+            .size;
 
-        // Consume the credit pool against the oldest debits, oldest credit first.
-        let mut applied: std::collections::BTreeMap<PostingRef, i64> =
-            std::collections::BTreeMap::new();
-        let mut ci = 0usize;
-        let mut credit_left = credits.first().map_or(0, |c| c.1);
-        'debit: for (dref, mut need) in debits {
+        let mut positions = Vec::new();
+        let mut credits = credits.into_iter().map(|c| (c, c.residual.to_minor()));
+        let mut current = credits.next();
+        'debit: for debit in debits {
+            let mut need = debit.residual.to_minor();
             while need > 0 {
-                while credit_left == 0 {
-                    ci += 1;
-                    match credits.get(ci) {
-                        Some(c) => credit_left = c.1,
-                        None => break 'debit,
-                    }
+                let Some((credit, left)) = current.as_mut() else {
+                    break 'debit;
+                };
+                if *left == 0 {
+                    current = credits.next();
+                    continue;
                 }
-                let take = need.min(credit_left);
-                *applied.entry(dref).or_default() += take;
-                *applied.entry(credits[ci].0).or_default() += take;
+                let take = need.min(*left);
+                let key = format!("fifo:{}:{}:{head}", debit.position, credit.position);
+                let amount = Eur::from_minor(take)
+                    .map_err(|e| LedgerError::refused(format!("clearing amount: {e}")))?;
+                let position = self
+                    .books
+                    .clear(&key, debit.posting_ref(), credit.posting_ref(), amount, on)
+                    .await
+                    .map_err(LedgerError::from_ledger(format!("clear {key}")))?;
+                positions.push(position);
                 need -= take;
-                credit_left -= take;
+                *left -= take;
             }
         }
+        Ok(positions)
+    }
 
-        let items: Vec<ClearedItem<P>> = applied
-            .into_iter()
-            .filter(|(_, amt)| *amt > 0)
-            .map(|(posting, amt)| ClearedItem {
-                posting,
-                applied: Eur::from_minor(amt),
-            })
-            .collect();
-        if items.len() < 2 {
-            return Ok(None);
-        }
-        let id = ClearingId::generate();
-        self.store
-            .clear(Clearing {
-                id,
-                account,
-                currency: Currency::EUR,
-                // accountingd books only settled movements — it has no
-                // reservation layer. Naming it explicitly keeps a future
-                // reservation (a pending SEPA collection, say) from being
-                // netted against a booked payment.
-                layer: Layer::Settled,
-                cleared_on: on,
-                items,
-            })
+    /// Releases one clearing (a mis-assigned Zahlungszuordnung) — its amount
+    /// returns to both postings' residuals. The clearing record stays: an
+    /// assignment made and withdrawn is itself part of the trail.
+    ///
+    /// # Errors
+    ///
+    /// A refusal (unknown or already reset clearing) or a store failure.
+    pub async fn reset_clearing(&self, position: u64, on: Date) -> LedgerResult<()> {
+        self.books
+            .reset_clearing(&format!("reset:{position}"), position, on)
             .await
-            .map_err(LedgerError::store("record clearing"))?;
-        Ok(Some(id))
+            .map_err(LedgerError::from_ledger(format!(
+                "reset clearing {position}"
+            )))?;
+        Ok(())
     }
 
     /// The authoritative **Offene-Posten** list: open debit items (invoices, fees)
     /// with a positive residual after recorded clearings, each with its booking
-    /// date and Buchungsart, oldest first.
+    /// date, Buchungsart and Beleg, oldest first.
     ///
     /// # Errors
     ///
-    /// Propagates storage errors.
+    /// A store failure.
     pub async fn open_receivables(
         &self,
         lf_mp_id: &str,
         malo_id: &str,
     ) -> LedgerResult<Vec<OpenReceivable>> {
-        let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
-            return Ok(Vec::new());
-        };
-        let key = BalanceKey {
-            account,
-            currency: Currency::EUR,
-            layer: Layer::Settled,
-        };
-        let meta = self.posting_meta(key).await?;
-        let open = self.all_open_items(key).await?;
-        let mut out: Vec<OpenReceivable> = open
-            .iter()
-            .filter(|i| i.direction == Direction::Debit && i.residual.to_minor() > 0)
-            .map(|i| {
-                let (date, kind) = meta
-                    .get(&i.posting)
-                    .map(|m| (m.0, m.2.clone()))
-                    .unwrap_or((Date::MIN, None));
-                OpenReceivable {
-                    entry_id: *i.posting.entry.as_uuid(),
-                    entry_type: kind,
-                    amount_ct: i.original.to_minor(),
-                    outstanding_ct: i.residual.to_minor(),
-                    booking_date: date,
-                    // Filled below: the reference lives on the entry, not the
-                    // statement line, so it costs one read per *open* item.
-                    document: None,
-                }
-            })
-            .collect();
-        for item in &mut out {
-            item.document = self.document_of(item.entry_id).await?;
+        let mut out = Vec::new();
+        for item in self.open_items(lf_mp_id, malo_id).await? {
+            if item.side != Side::Debit || !item.residual.is_positive() {
+                continue;
+            }
+            let (entry_type, document) = self.describe(item.entry).await?;
+            out.push(OpenReceivable {
+                entry_id: entry_uuid(item.entry),
+                entry_type,
+                amount_ct: ct(item.original),
+                outstanding_ct: ct(item.residual),
+                booking_date: item.booking_date,
+                document,
+            });
         }
         out.sort_by_key(|o| o.booking_date);
         Ok(out)
     }
 
+    /// The entry type and Beleg one entry carries; `(None, None)` for an entry
+    /// the ledger does not hold.
+    async fn describe(&self, id: EntryId) -> LedgerResult<(Option<String>, Option<String>)> {
+        let record = self
+            .books
+            .entry(id)
+            .await
+            .map_err(LedgerError::from_ledger("read entry"))?;
+        Ok(record.map_or((None, None), |r| {
+            let parts = r.parts();
+            (
+                parts.kind.as_ref().map(|k| k.as_str().to_owned()),
+                parts.documents.first().map(|d| d.reference().to_owned()),
+            )
+        }))
+    }
+
     /// The source document one entry cites, if any.
-    ///
-    /// `PostEntry::with_document` records it as a doubleentry `DocumentRef`;
-    /// no statement line carries it, so this is the read that turns an entry id
-    /// back into the Rechnungsnummer a customer knows.
     ///
     /// # Errors
     ///
-    /// Propagates storage errors. An unresolvable entry is `None`, not an
-    /// error — the caller is building a page, and a missing reference degrades
-    /// one line rather than failing the document.
-    pub async fn document_of(&self, entry_id: uuid::Uuid) -> LedgerResult<Option<String>> {
-        let id = EntryId::from_uuid(entry_id);
-        let stored = self
-            .store
-            .get(id)
-            .await
-            .map_err(LedgerError::store(format!("entry {entry_id}")))?;
-        Ok(stored.and_then(|s| s.entry.document().map(|d| d.id.as_str().to_owned())))
+    /// A store failure. An unknown entry is `None`.
+    pub async fn document_of(&self, entry: uuid::Uuid) -> LedgerResult<Option<String>> {
+        Ok(self.describe(entry_id(entry)).await?.1)
     }
 
     /// The **Summen- und Saldenliste** (trial balance, § 238 HGB): gross debit and
-    /// credit turnover and the balance per GL account. The per-Marktlokation
-    /// Kontokorrent leaves are aggregated into one Debitoren line, so this stays a
-    /// GL-level report rather than one row per customer.
+    /// credit turnover and the balance per GL account, with the per-Marktlokation
+    /// Kontokorrent leaves as one Debitoren line.
     ///
     /// # Errors
     ///
-    /// Propagates storage errors.
+    /// A store failure.
     pub async fn trial_balance(&self) -> LedgerResult<Vec<TrialBalanceLine>> {
         let tb = self
-            .store
-            .trial_balance(BalanceQuery::all())
+            .books
+            .trial_balance(&BalanceQuery::all())
             .await
-            .map_err(LedgerError::store("trial balance"))?;
+            .map_err(LedgerError::from_ledger("trial balance"))?;
         let mut agg: std::collections::BTreeMap<String, (i64, i64)> =
             std::collections::BTreeMap::new();
-        {
-            let registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
-            for (key, balance) in tb.iter() {
-                let path = registry
-                    .get(key.account)
-                    .map_or_else(String::new, |a| a.path.to_string());
-                let group = if path.starts_with("Kontokorrent:") {
-                    "Aktiva:Forderungen:Debitoren (Summe)".to_owned()
-                } else {
-                    path
-                };
-                let entry = agg.entry(group).or_default();
-                entry.0 = entry.0.saturating_add(balance.debits.to_minor());
-                entry.1 = entry.1.saturating_add(balance.credits.to_minor());
-            }
+        for row in tb.rows() {
+            let path = row.path.to_string();
+            let group = if path.starts_with(Chart::KONTOKORRENT) {
+                "Aktiva:Forderungen:Debitoren (Summe)".to_owned()
+            } else {
+                path
+            };
+            let entry = agg.entry(group).or_default();
+            entry.0 = entry.0.saturating_add(ct(row.balance.debit()));
+            entry.1 = entry.1.saturating_add(ct(row.balance.credit()));
         }
         Ok(agg
             .into_iter()
@@ -1114,616 +994,388 @@ where
             .collect())
     }
 
-    /// Releases a clearing (a mis-assigned Zahlungszuordnung) — the applied
-    /// amounts return to their postings' residuals. The original record stays: an
-    /// assignment made and withdrawn is itself part of the trail.
+    /// The customer's statement over `query` — opening balance, movements with
+    /// running balance, closing balance; an empty statement for an account never
+    /// booked is `None`.
+    ///
+    /// A date-scoped query opens at the balance carried into the window, so a
+    /// March Kontokorrentauszug opens at February's closing figure.
     ///
     /// # Errors
     ///
-    /// Propagates storage/clearing errors (unknown or already-reset clearing).
-    pub async fn reset_clearing(&self, id: ClearingId, on: Date) -> LedgerResult<()> {
-        self.store
-            .reset_clearing(id, on)
-            .await
-            .map_err(LedgerError::store("reset clearing"))
-    }
-
-    /// A page of the customer's statement (movements + running balance).
-    ///
-    /// `query` narrows the window. A date-scoped one carries the period's
-    /// **opening balance** on the page, so a March statement opens at
-    /// February's closing figure rather than at zero — which is what a
-    /// Kontokorrentauszug has to show. `BalanceQuery::all()` opens at zero,
-    /// correctly: there is nothing before the first posting.
-    ///
-    /// # Errors
-    ///
-    /// Propagates storage errors.
+    /// A store failure.
     pub async fn statement(
         &self,
         lf_mp_id: &str,
         malo_id: &str,
-        query: BalanceQuery<'_>,
-        cursor: PostingCursor,
-    ) -> LedgerResult<StatementPage<P>> {
-        let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
-            return Ok(StatementPage {
-                opening: doubleentry::Balance::ZERO,
-                lines: Vec::new(),
-                next: None,
-            });
-        };
-        let key = BalanceKey {
-            account,
-            currency: Currency::EUR,
-            layer: Layer::Settled,
-        };
-        self.store
-            .statement(key, query, cursor)
+        query: &BalanceQuery,
+    ) -> LedgerResult<Option<doubleentry::report::Statement<P>>> {
+        match self
+            .books
+            .statement(Self::konto(lf_mp_id, malo_id)?.as_str(), EUR, query)
             .await
-            .map_err(LedgerError::store("statement"))
+        {
+            Ok(statement) => Ok(Some(statement)),
+            Err(Error::Query(QueryError::UnknownAccount { .. })) => Ok(None),
+            Err(e) => Err(LedgerError::from_ledger("statement")(e)),
+        }
     }
 
     /// True when the customer has any **debit** (charge) booked on or before
     /// `cutoff` — the "debt aged past the dunning grace period" signal.
     ///
-    /// The cutoff is the query's, not a per-line test: the store narrows by
-    /// booking date, so a backdated entry appended today is inside the window it
-    /// belongs to rather than at the end of the log.
-    ///
     /// # Errors
     ///
-    /// Propagates storage errors.
+    /// A store failure.
     pub async fn has_debit_on_or_before(
         &self,
         lf_mp_id: &str,
         malo_id: &str,
         cutoff: Date,
     ) -> LedgerResult<bool> {
-        use doubleentry::Direction;
-        let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
-            return Ok(false);
-        };
-        let key = BalanceKey {
-            account,
-            currency: Currency::EUR,
-            layer: Layer::Settled,
-        };
-        let mut cursor = PostingCursor::start();
-        loop {
-            let page = self
-                .store
-                .statement(key, BalanceQuery::through(cutoff), cursor)
-                .await
-                .map_err(LedgerError::store("statement"))?;
-            if page.lines.iter().any(|l| l.direction == Direction::Debit) {
-                return Ok(true);
-            }
-            match page.next {
-                Some(next) => cursor = next,
-                None => return Ok(false),
-            }
+        match self
+            .books
+            .balance(
+                Self::konto(lf_mp_id, malo_id)?.as_str(),
+                EUR,
+                &BalanceQuery::through(cutoff),
+            )
+            .await
+        {
+            Ok(balance) => Ok(balance.debit().is_positive()),
+            Err(Error::Query(QueryError::UnknownAccount { .. })) => Ok(false),
+            Err(e) => Err(LedgerError::from_ledger("read balance")(e)),
         }
     }
 
-    /// Signed Kontokorrent movement per `entry_type` (doubleentry `kind`) for a
-    /// customer within a calendar `year` — the input to the Jahresabschluss.
+    /// Signed Kontokorrent movement per `entry_type` for a customer within a
+    /// calendar `year` — the input to the Jahresabschluss.
     ///
     /// The value is the signed net on the Kontokorrent (debit positive, credit
-    /// negative), so `RECHNUNG` sums positive and `ABSCHLAG` negative — matching
-    /// `SUM(amount_ct)` semantics. Bounded: one customer's yearly entries.
+    /// negative), so `RECHNUNG` sums positive and `ABSCHLAG` negative. One
+    /// `balance` per entry type, filtered by the `art` dimension and the year's
+    /// booking dates; types with no movement are absent.
     ///
     /// # Errors
     ///
-    /// Propagates storage errors.
+    /// A store failure.
     pub async fn year_kind_sums(
         &self,
         lf_mp_id: &str,
         malo_id: &str,
         year: i32,
     ) -> LedgerResult<std::collections::HashMap<String, i64>> {
-        use doubleentry::Direction;
-        let mut sums: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
-        let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
-            return Ok(sums);
+        let (Ok(from), Ok(to)) = (
+            Date::from_calendar_date(year, time::Month::January, 1),
+            Date::from_calendar_date(year, time::Month::December, 31),
+        ) else {
+            return Err(LedgerError::refused(format!("year {year}")));
         };
-        let key = BalanceKey {
-            account,
-            currency: Currency::EUR,
-            layer: Layer::Settled,
-        };
-        // The year is the query's, not a per-line filter: the store narrows by
-        // booking date, so an entry appended today but booked into last December
-        // lands in the year it belongs to.
-        let (from, to) = (
-            Date::from_calendar_date(year, time::Month::January, 1)
-                .map_err(|e| LedgerError::refused(format!("year {year}"), e))?,
-            Date::from_calendar_date(year, time::Month::December, 31)
-                .map_err(|e| LedgerError::refused(format!("year {year}"), e))?,
-        );
-        let mut cursor = PostingCursor::start();
-        loop {
-            let page = self
-                .store
-                .statement(key, BalanceQuery::between(from, to), cursor)
-                .await
-                .map_err(LedgerError::store("statement"))?;
-            for line in &page.lines {
-                let signed = match line.direction {
-                    Direction::Debit => line.amount.to_minor(),
-                    Direction::Credit => -line.amount.to_minor(),
-                };
-                let kind = self
-                    .store
-                    .get(line.posting.entry)
-                    .await
-                    .map_err(LedgerError::store("get entry"))?
-                    .and_then(|stored| stored.entry.kind().map(|k| k.as_str().to_owned()))
-                    .unwrap_or_default();
-                *sums.entry(kind).or_default() += signed;
-            }
-            match page.next {
-                Some(next) => cursor = next,
-                None => break,
+        let mut sums = std::collections::HashMap::new();
+        for kind in ENTRY_TYPES {
+            let query = BalanceQuery::between(from, to).matching(axis::ART, kind);
+            let net = self.balance(lf_mp_id, malo_id, &query).await?;
+            if net != 0 {
+                sums.insert((*kind).to_owned(), net);
             }
         }
         Ok(sums)
     }
 
-    /// Every entry of a given `kind` booked in `(year, month)`, with the
-    /// customer it belongs to — the input to the batch EEG-payout run.
-    ///
-    /// Pages the whole log (a manual, infrequent batch operation). Each result
-    /// names the Kontokorrent leg's customer and that leg's amount.
+    /// Every sealed period, oldest first — the Festschreibung history.
     ///
     /// # Errors
     ///
-    /// Propagates storage errors.
-    pub async fn entries_of_kind_in_month(
+    /// A store failure, or a sealed period whose id is not a calendar month.
+    pub async fn seals(&self) -> LedgerResult<Vec<SealedPeriod>> {
+        let rows = self
+            .store
+            .seals(None)
+            .await
+            .map_err(|e| LedgerError::from_ledger("read seals")(Error::from(e)))?;
+        rows.into_iter()
+            .map(|row| {
+                let period = row.period.as_str().to_owned();
+                let (start, end) = month_bounds(&period).ok_or_else(|| {
+                    LedgerError::Integrity(format!("sealed period {period} is not a month"))
+                })?;
+                Ok(SealedPeriod {
+                    period,
+                    position: row.position,
+                    start,
+                    end,
+                })
+            })
+            .collect()
+    }
+
+    /// The date the books are closed through — the last day of the latest
+    /// sealed period, or `None` when nothing is sealed yet.
+    ///
+    /// # Errors
+    ///
+    /// A store failure.
+    pub async fn sealed_through(&self) -> LedgerResult<Option<Date>> {
+        Ok(self.seals().await?.last().map(|s| s.end))
+    }
+
+    /// Seals every open period through `period` (**Festschreibung** — GoBD /
+    /// § 146 AO / § 239 HGB), earliest first. After this a booking dated inside
+    /// a sealed period is refused (`301`); corrections book into a later open
+    /// period.
+    ///
+    /// # Errors
+    ///
+    /// A refusal (unknown period, `311`) or a store failure.
+    pub async fn seal_through(&self, period: &str) -> LedgerResult<Vec<SealedPeriod>> {
+        let receipts = self
+            .books
+            .seal_through(period)
+            .await
+            .map_err(LedgerError::from_ledger(format!("seal through {period}")))?;
+        receipts
+            .into_iter()
+            .map(|r| {
+                let period = r.period.as_str().to_owned();
+                let (start, end) = month_bounds(&period).ok_or_else(|| {
+                    LedgerError::Integrity(format!("sealed period {period} is not a month"))
+                })?;
+                Ok(SealedPeriod {
+                    period,
+                    position: r.position,
+                    start,
+                    end,
+                })
+            })
+            .collect()
+    }
+
+    /// Replays the whole log and compares every derived table with it: the
+    /// books verify, or this says where they do not.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Integrity`] when the books do not verify.
+    pub async fn audit(&self) -> LedgerResult<doubleentry::AuditReport> {
+        self.books
+            .audit()
+            .await
+            .map_err(LedgerError::from_ledger("audit"))
+    }
+
+    /// A tamper-evidence proof that `id` is in the log: the entry's leaf
+    /// hash, the inclusion proof and the head it verifies against.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::NotFound`] for an unknown entry; a store failure.
+    pub async fn prove_entry(
         &self,
-        kind: &str,
-        year: i32,
-        month: u8,
-    ) -> LedgerResult<Vec<KindEntry>> {
-        // Map Kontokorrent account handles back to (lf_mp, malo).
-        let records = self
-            .store
-            .accounts()
+        id: EntryId,
+    ) -> LedgerResult<(
+        doubleentry::log::Hash,
+        doubleentry::log::InclusionProof,
+        doubleentry::TreeHead,
+    )> {
+        let record = self
+            .books
+            .entry(id)
             .await
-            .map_err(LedgerError::store("load accounts"))?;
-        let mut konto: std::collections::HashMap<AccountId, (String, String)> =
-            std::collections::HashMap::new();
-        for rec in &records {
-            let path = rec.account.path.to_string();
-            if let Some(rest) = path.strip_prefix("Kontokorrent:")
-                && let Some((lf, malo)) = rest.split_once(':')
-            {
-                konto.insert(rec.id, (lf.to_owned(), malo.to_owned()));
-            }
-        }
-
-        let mut out = Vec::new();
-        let mut cursor = Cursor::start();
-        loop {
-            let page = self
-                .store
-                .page(cursor)
-                .await
-                .map_err(LedgerError::store("page log"))?;
-            for rec in &page.records {
-                let entry = &rec.entry;
-                if entry.kind().map(|k| k.as_str()) != Some(kind) {
-                    continue;
-                }
-                let bd = entry.booking_date();
-                if bd.year() != year || bd.month() as u8 != month {
-                    continue;
-                }
-                for posting in entry.postings() {
-                    if let Some((lf, malo)) = konto.get(&posting.account) {
-                        out.push(KindEntry {
-                            lf_mp_id: lf.clone(),
-                            malo_id: malo.clone(),
-                            entry_id: *entry.id().as_uuid(),
-                            amount_ct: posting.amount.to_minor(),
-                            correlation: entry
-                                .provenance()
-                                .correlation
-                                .as_ref()
-                                .map(|l| l.as_str().to_owned()),
-                        });
-                        break;
-                    }
-                }
-            }
-            match page.next {
-                Some(next) => cursor = next,
-                None => break,
-            }
-        }
-        Ok(out)
-    }
-
-    /// Every period seal recorded, oldest first — the Festschreibung history.
-    ///
-    /// # Errors
-    ///
-    /// Propagates storage errors.
-    pub async fn seals(&self) -> LedgerResult<Vec<Seal>> {
-        self.store
-            .seals()
-            .await
-            .map_err(LedgerError::store("read seals"))
-    }
-
-    /// The date the books are closed through — the latest end date among sealed
-    /// periods, or `None` when nothing is sealed yet.
-    ///
-    /// This, and not the list of sealed periods, is what decides whether a
-    /// booking is accepted: every date at or before it is Sealed whether or not
-    /// a period covers it. A gap below the watermark is not an opening to book
-    /// through — it is a range already committed to — so an operator asking
-    /// "can I still book into February" needs this number rather than the
-    /// calendar.
-    #[must_use]
-    pub fn sealed_through(&self) -> Option<Date> {
-        self.calendar
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .sealed_through()
-    }
-
-    /// Verifies the seal chain: every seal is self-consistent and commits to the
-    /// prior one, so removing or reordering a sealed period breaks the chain.
-    /// Returns the number of seals verified.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a seal is inconsistent or the chain is broken.
-    pub async fn verify_seals(&self) -> LedgerResult<usize> {
-        // The chain is bound to this ledger's identity: a seal names the books
-        // it attests to inside its own hash, so a seal lifted from another
-        // deployment cannot be pushed onto ours.
-        let mut chain = SealChain::new(self.store.ledger().clone());
-        for seal in self.seals().await? {
-            chain
-                .push(seal)
-                .map_err(|e| LedgerError::Integrity(format!("seal chain broken: {e}")))?;
-        }
-        Ok(chain.len())
-    }
-
-    /// A tamper-evidence proof that `id` is committed to by the current Merkle
-    /// head — the content hash, the `O(log n)` inclusion proof, and the head it
-    /// verifies against. An auditor can check it without this crate.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the entry is unknown or not yet sequenced.
-    pub async fn prove_entry(&self, id: EntryId) -> LedgerResult<(Hash, InclusionProof, TreeHead)> {
-        let stored = self
-            .store
-            .get(id)
-            .await
-            .map_err(LedgerError::store("get entry"))?
+            .map_err(LedgerError::from_ledger("read entry"))?
             .ok_or_else(|| LedgerError::NotFound("entry not found".to_owned()))?;
-        let index = stored
-            .require_index()
-            .map_err(|e| LedgerError::NotFound(e.to_string()))?;
-        let head = self
-            .store
-            .head()
-            .await
-            .map_err(LedgerError::store("head"))?;
         let proof = self
-            .store
-            .prove_inclusion(index)
+            .books
+            .prove_entry(id)
             .await
-            .map_err(LedgerError::store("inclusion proof"))?;
-        Ok((stored.content_hash, proof, head))
+            .map_err(LedgerError::from_ledger("inclusion proof"))?;
+        let head = self
+            .books
+            .head_at(proof.size)
+            .await
+            .map_err(LedgerError::from_ledger("head"))?;
+        let leaf = doubleentry::record::Record::Entry(record).leaf_hash();
+        Ok((leaf, proof, head))
     }
 
-    /// Proves that a **sealed period closed with a stated balance** for one
-    /// customer's Kontokorrent.
-    ///
-    /// [`Self::prove_entry`] answers "is this booking in the books". A
-    /// Betriebsprüfung asks the other question — "what did this customer owe at
-    /// the balance-sheet date" — and a number read out of a table is not
-    /// evidence for it. This answers it with two proofs that chain:
-    ///
-    /// 1. the [`BalanceProof`](doubleentry::BalanceProof) shows the balance sat
-    ///    in the trial balance the seal committed to, for some account *handle*;
-    /// 2. the [`AccountBindingProof`](doubleentry::AccountBindingProof) shows
-    ///    that handle was bound to this customer's Kontokorrent at the same
-    ///    moment.
-    ///
-    /// Neither half is sufficient alone: without the binding the handles float,
-    /// and re-registering the same accounts in a different order would leave
-    /// every balance proof verifying while referring to someone else's account.
-    ///
-    /// The closing balance is rebuilt **by booking date**, the way the seal
-    /// built it — not over a prefix of the log. Those differ in the ordinary
-    /// case: sealing January in February means the log already holds February
-    /// entries when the seal is taken, so a prefix-folded trial balance would
-    /// reproduce a different root and nothing would be provable at all.
-    ///
-    /// Three answers are possible and only one carries a proof. "No activity in
-    /// the period" and "not on the books yet" are both honest replies about
-    /// intact books, not failures, so they come back as
-    /// [`SealedBalanceOutcome`] variants rather than errors — and they are
-    /// different sentences to whoever asked.
+    /// Proves the balance one customer's Kontokorrent closed a sealed period
+    /// with, against the head alone — the Betriebsprüfung question „what did
+    /// this customer owe at the balance-sheet date", answered with evidence
+    /// rather than a figure read out of a table.
     ///
     /// # Errors
     ///
-    /// Returns an error when the period is not sealed, the customer has no
-    /// Kontokorrent at all, or the rebuilt closing balance does not reproduce
-    /// the seal — which means the books were restated beneath a Festschreibung,
-    /// and there is then nothing honest to prove.
+    /// [`LedgerError::NotFound`] when the period is not sealed or the account
+    /// did not exist at the seal; a store failure.
     pub async fn prove_period_balance(
         &self,
-        period_id: &str,
+        period: &str,
         lf_mp_id: &str,
         malo_id: &str,
-    ) -> LedgerResult<SealedBalanceOutcome<P>> {
-        let id = PeriodId::new(period_id).map_err(|e| LedgerError::refused("period id", e))?;
-        let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
-            // Never booked at all, so not an account the registry can speak
-            // about either — the same answer the seal would give.
-            return Ok(SealedBalanceOutcome::NotYetRegistered);
-        };
-        let key = BalanceKey {
-            account,
-            currency: Currency::EUR,
-            layer: Layer::Settled,
-        };
-
-        // The whole recipe — find the seal, rebuild the closing balance as the
-        // seal built it, check the rebuild *against* the seal, prove the row,
-        // prove the binding at the registry size the seal recorded — lives in
-        // doubleentry so that this service and the ledger cannot drift on it.
-        // The check in the middle is the one that matters and the one nothing
-        // forces when it is assembled by hand.
-        self.store
-            .prove_sealed_balance(&id, key)
+    ) -> LedgerResult<(
+        doubleentry::log::SealedBalanceProof<P>,
+        doubleentry::TreeHead,
+    )> {
+        let proof = self
+            .books
+            .prove_balance(Self::konto(lf_mp_id, malo_id)?, EUR, Layer::Settled, period)
             .await
-            .map_err(LedgerError::store("prove sealed balance"))
+            .map_err(LedgerError::from_ledger(format!("prove balance {period}")))?;
+        let head = self
+            .books
+            .head()
+            .await
+            .map_err(LedgerError::from_ledger("head"))?;
+        Ok((proof, head))
     }
 
     /// Proves the log has only ever been **appended to** since it had `old_size`
-    /// entries — that nothing recorded before then was altered or removed.
-    ///
-    /// An auditor who archived a head at an earlier visit checks the returned
-    /// proof against the head they hold and the head returned here. Without it,
-    /// a fresh inclusion proof says only that the ledger is internally
-    /// consistent *now*, which a rebuilt ledger would also satisfy.
+    /// records: the proof, the head then and the head now.
     ///
     /// # Errors
     ///
-    /// Returns an error when `old_size` exceeds the current log.
+    /// A refusal for `old_size` 0 or beyond the log; a store failure.
     pub async fn prove_append_only(
         &self,
         old_size: u64,
-    ) -> LedgerResult<(ConsistencyProof, TreeHead, TreeHead)> {
+    ) -> LedgerResult<(
+        doubleentry::log::ConsistencyProof,
+        doubleentry::TreeHead,
+        doubleentry::TreeHead,
+    )> {
         let now = self
-            .store
+            .books
             .head()
             .await
-            .map_err(LedgerError::store("head"))?;
+            .map_err(LedgerError::from_ledger("head"))?;
         let then = self
-            .store
+            .books
             .head_at(old_size)
             .await
-            .map_err(LedgerError::store(format!("head at {old_size}")))?;
+            .map_err(LedgerError::from_ledger(format!("head at {old_size}")))?;
         let proof = self
-            .store
-            .prove_consistency(old_size)
+            .books
+            .prove_consistency(old_size, now.size)
             .await
-            .map_err(LedgerError::store("consistency proof"))?;
+            .map_err(LedgerError::from_ledger("consistency proof"))?;
         Ok((proof, then, now))
     }
 }
 
-impl Ledger<PostgresStore<P>> {
-    /// Connects the deployment's ledger: opens `database_url` with `search_path`
-    /// set to the [`LEDGER_SCHEMA`], applies doubleentry's schema, and restores
-    /// the account registry. One ledger per deployment, named by `tenant`.
+impl Ledger<SqlStore<Postgres, P>> {
+    /// Opens the deployment's ledger in [`LEDGER_SCHEMA`] over `database_url`
+    /// (an already resolved URL; TLS is the URL's `sslmode`), creating it when
+    /// absent. One ledger per deployment, named by `tenant`.
     ///
     /// # Errors
     ///
-    /// Propagates connection, migration, and registry errors.
-    pub async fn connect(database_url: &str, tenant: &str) -> LedgerResult<Self> {
-        let ledger_id = LedgerId::new(tenant)
-            .map_err(|e| LedgerError::refused(format!("ledger id {tenant}"), e))?;
-        let store = PostgresStore::<P>::connect_with(database_url, ledger_id, LEDGER_SCHEMA)
-            .await
-            .map_err(LedgerError::store("connect ledger store"))?;
-        store
-            .migrate()
-            .await
-            .map_err(LedgerError::store("migrate ledger schema"))?;
-        let ledger = Self::load(store).await?;
-        // Reconstruct the period calendar from storage so that sealed periods keep
-        // rejecting backdated postings across restarts (Festschreibung).
-        ledger.refresh_calendar().await?;
-        Ok(ledger)
-    }
-
-    /// Seals a period (**Festschreibung** — GoBD / § 146 AO / § 239 HGB): defines
-    /// and closes it, then commits to which entries it contains and what they add
-    /// up to, as chained Merkle roots. After this, `post` rejects a backdated
-    /// booking into the period — corrections must book into a later open period.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an invalid period id/range or a storage failure.
-    pub async fn seal_period(&self, period_id: &str, start: Date, end: Date) -> LedgerResult<Seal> {
-        let id = PeriodId::new(period_id).map_err(|e| LedgerError::refused("period id", e))?;
-        let period = Period::new(id.clone(), start, end)
-            .map_err(|e| LedgerError::refused("period range", e))?;
-
-        // The store owns period state. Defining is idempotent for an unchanged
-        // range, so a re-run of a close that failed verification does not need
-        // to know whether the period had been defined before.
-        self.store
-            .define_period(&period)
-            .await
-            .map_err(LedgerError::store("define period"))?;
-        self.store
-            .transition_period(&id, PeriodState::Closing)
-            .await
-            .map_err(LedgerError::store("close period"))?;
-
-        // Seals in the same storage transaction that advances the period to
-        // Sealed, so a seal is never recorded for a period the books still
-        // consider open.
-        let seal = self
-            .store
-            .seal_period(&id)
-            .await
-            .map_err(LedgerError::store("seal period"))?;
-
-        self.refresh_calendar().await?;
-        Ok(seal)
-    }
-
-    /// Re-reads the period calendar from storage into the in-process mirror that
-    /// [`Self::post`] validates against.
-    ///
-    /// The mirror is what makes a backdated booking into a sealed period fail
-    /// without a database round-trip per entry; storage stays the authority for
-    /// what is sealed.
-    ///
-    /// # Errors
-    ///
-    /// Propagates storage errors and an inconsistent stored calendar.
-    async fn refresh_calendar(&self) -> LedgerResult<()> {
-        let periods = self
-            .store
-            .periods()
-            .await
-            .map_err(LedgerError::store("read periods"))?;
-        let calendar = PeriodCalendar::from_periods(periods)
-            .map_err(|e| LedgerError::fault("rebuild period calendar", e))?;
-        *self.calendar.lock().unwrap_or_else(|e| e.into_inner()) = calendar;
-        Ok(())
+    /// A connection, configuration or store failure.
+    pub async fn connect(database_url: &str, tenant: &str, today: Date) -> LedgerResult<Self> {
+        let store = SqlStore::<Postgres, P>::postgres_with(
+            database_url,
+            SqlOptions {
+                schema: LEDGER_SCHEMA.to_owned(),
+                max_connections: 5,
+                ..SqlOptions::default()
+            },
+        )
+        .await
+        .map_err(|e| LedgerError::from_ledger("connect ledger store")(Error::from(e)))?;
+        Self::open(store, tenant, today).await
     }
 }
 
-/// Persist an account through any [`LedgerStore`], mapping the store error.
-async fn store_register_account<S: LedgerStore<P>>(
-    store: &S,
-    record: &AccountRecord,
-) -> LedgerResult<()>
-where
-    S::Error: StoreError,
-{
-    store
-        .register_account(record)
-        .await
-        .map_err(LedgerError::store("persist account"))
+/// The grants a runtime role needs on a created ledger — exactly the list
+/// doubleentry's PostgreSQL store names: read and append everywhere, update
+/// only the maintained projections and three named columns, never `DELETE`,
+/// `TRUNCATE` or DDL.
+#[must_use]
+pub fn runtime_grants(role: &str) -> Vec<String> {
+    let s = LEDGER_SCHEMA;
+    let r = format!("\"{}\"", role.replace('"', "\"\""));
+    vec![
+        format!("GRANT USAGE ON SCHEMA {s} TO {r}"),
+        format!("GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA {s} TO {r}"),
+        format!("GRANT UPDATE ON {s}.balances, {s}.cleared, {s}.outstanding, {s}.slices TO {r}"),
+        format!("GRANT UPDATE (resolved_by, how) ON {s}.holds TO {r}"),
+        format!("GRANT UPDATE (salt, text) ON {s}.memos TO {r}"),
+        format!("GRANT UPDATE (fingerprint) ON {s}.entries TO {r}"),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use doubleentry::period::LedgerId;
-    use doubleentry::storage::MemoryStore;
+    use doubleentry::store::MemoryStore;
     use time::macros::date;
 
     async fn test_ledger() -> Ledger<MemoryStore<P>> {
-        let store = MemoryStore::<P>::new(LedgerId::new("test-tenant").expect("ledger id"));
-        Ledger::load(store).await.expect("load ledger")
+        Ledger::open(
+            MemoryStore::<P>::new(),
+            "test-tenant",
+            date!(2026 - 03 - 01),
+        )
+        .await
+        .expect("open ledger")
     }
+
+    fn post(kind: &str, amount: i64, key: &str, on: Date) -> PostEntry {
+        PostEntry::new("51238696012", "9900000000001", kind, amount, key, on)
+    }
+
+    const LF: &str = "9900000000001";
+    const MALO: &str = "51238696012";
 
     #[tokio::test]
     async fn invoice_then_payment_nets_to_zero() {
         let ledger = test_ledger().await;
-        let (malo, lf) = ("51238696781", "9900000000001");
-
         ledger
-            .post(PostEntry::new(
-                malo,
-                lf,
-                "RECHNUNG",
-                11900,
-                "inv-1",
-                date!(2026 - 03 - 15),
-            ))
+            .post(&post("RECHNUNG", 11900, "inv-1", date!(2026 - 03 - 15)))
             .await
             .expect("invoice");
-        assert_eq!(ledger.balance_ct(lf, malo).await.unwrap(), 11900);
-
+        assert_eq!(ledger.balance_ct(LF, MALO).await.unwrap(), 11900);
         ledger
-            .post(PostEntry::new(
-                malo,
-                lf,
-                "ZAHLUNG",
-                -11900,
-                "pay-1",
-                date!(2026 - 03 - 20),
-            ))
+            .post(&post("ZAHLUNG", -11900, "pay-1", date!(2026 - 03 - 20)))
             .await
             .expect("payment");
-        assert_eq!(ledger.balance_ct(lf, malo).await.unwrap(), 0);
+        assert_eq!(ledger.balance_ct(LF, MALO).await.unwrap(), 0);
     }
 
     #[tokio::test]
     async fn replay_is_idempotent_and_returns_original() {
         let ledger = test_ledger().await;
-        let (malo, lf) = ("51238696781", "9900000000001");
-        let entry = PostEntry::new(malo, lf, "RECHNUNG", 5000, "inv-dup", date!(2026 - 03 - 15));
-
-        let first = ledger.post(entry.clone()).await.expect("first");
+        let entry = post("RECHNUNG", 5000, "inv-dup", date!(2026 - 03 - 15))
+            .with_description("Jahresrechnung 2025")
+            .with_correlation("ce-1")
+            .with_document("RE-1");
+        let first = ledger.post(&entry).await.expect("first");
         assert!(first.is_new);
-        let second = ledger.post(entry).await.expect("replay");
+        let second = ledger.post(&entry).await.expect("replay");
         assert!(!second.is_new, "identical replay must be a no-op");
         assert_eq!(first.id, second.id, "replay returns the original entry id");
-        // Booked once, not twice.
-        assert_eq!(ledger.balance_ct(lf, malo).await.unwrap(), 5000);
+        assert_eq!(ledger.balance_ct(LF, MALO).await.unwrap(), 5000);
     }
 
     #[tokio::test]
-    async fn conflicting_key_is_refused() {
+    async fn conflicting_key_is_refused_with_200() {
         let ledger = test_ledger().await;
-        let (malo, lf) = ("51238696781", "9900000000001");
         ledger
-            .post(PostEntry::new(
-                malo,
-                lf,
-                "RECHNUNG",
-                5000,
-                "k",
-                date!(2026 - 03 - 15),
-            ))
+            .post(&post("RECHNUNG", 5000, "k", date!(2026 - 03 - 15)))
             .await
             .expect("first");
-        // Same idempotency key, different amount → conflict, never a second entry.
         let conflict = ledger
-            .post(PostEntry::new(
-                malo,
-                lf,
-                "RECHNUNG",
-                9999,
-                "k",
-                date!(2026 - 03 - 15),
-            ))
-            .await;
-        assert!(
-            conflict.is_err(),
-            "reused key with different content must be refused"
-        );
-        assert_eq!(ledger.balance_ct(lf, malo).await.unwrap(), 5000);
+            .post(&post("RECHNUNG", 9999, "k", date!(2026 - 03 - 15)))
+            .await
+            .expect_err("reused key with different content must be refused");
+        assert_eq!(conflict.code(), Some(200));
+        assert_eq!(conflict.to_api().status(), axum::http::StatusCode::CONFLICT);
+        assert_eq!(ledger.balance_ct(LF, MALO).await.unwrap(), 5000);
     }
 
     #[tokio::test]
     async fn eeg_gutschrift_credits_the_operator() {
         let ledger = test_ledger().await;
-        let (malo, lf) = ("51111111111", "9900000000001");
-        // We owe the plant operator: their Kontokorrent goes credit (negative).
         ledger
-            .post(PostEntry::new(
-                malo,
-                lf,
+            .post(&post(
                 "EEG_GUTSCHRIFT",
                 -25000,
                 "eeg-1",
@@ -1731,122 +1383,199 @@ mod tests {
             ))
             .await
             .expect("eeg");
-        assert_eq!(ledger.balance_ct(lf, malo).await.unwrap(), -25000);
+        assert_eq!(ledger.balance_ct(LF, MALO).await.unwrap(), -25000);
     }
 
     #[tokio::test]
-    async fn zero_amount_is_refused() {
+    async fn zero_amount_and_unknown_type_are_refused_before_the_ledger() {
         let ledger = test_ledger().await;
-        let err = ledger
-            .post(PostEntry::new(
-                "5",
-                "9",
-                "RECHNUNG",
-                0,
-                "z",
-                date!(2026 - 03 - 15),
-            ))
-            .await;
-        assert!(err.is_err());
+        let zero = ledger
+            .post(&post("RECHNUNG", 0, "z", date!(2026 - 03 - 15)))
+            .await
+            .expect_err("zero");
+        assert_eq!(zero.code(), None);
+        let unknown = ledger
+            .post(&post("SONSTIGES", 100, "u", date!(2026 - 03 - 15)))
+            .await
+            .expect_err("unknown type");
+        assert!(
+            unknown.to_string().contains("unknown entry type"),
+            "{unknown}"
+        );
+        assert_eq!(
+            ledger.books().head().await.unwrap().size,
+            test_ledger().await.books().head().await.unwrap().size,
+            "a refused draft writes nothing"
+        );
     }
 
     #[tokio::test]
-    async fn all_entry_types_balance() {
-        // Every mapped entry_type produces a balanced entry the ledger accepts.
+    async fn all_entry_types_balance_and_sum_by_type() {
         let ledger = test_ledger().await;
-        let (malo, lf) = ("51238696781", "9900000000001");
-        let cases = [
-            ("RECHNUNG", 10000),
-            ("ABSCHLAG", -3000),
-            ("ZAHLUNG", -2000),
-            ("MAHNGEBUEHR", 500),
-            ("BANKRUECKLAST", 2000),
-            ("GUTSCHRIFT", -1000),
-            ("STORNO", -10000),
-            ("KORREKTUR", 700),
-            ("JAHRESABSCHLUSS", 1200),
-        ];
-        for (i, (kind, amount)) in cases.iter().enumerate() {
+        for (i, kind) in ENTRY_TYPES.iter().enumerate() {
+            let amount = if i % 2 == 0 { 1000 } else { -400 };
             ledger
-                .post(PostEntry::new(
-                    malo,
-                    lf,
-                    *kind,
-                    *amount,
-                    format!("k-{i}"),
+                .post(&post(
+                    kind,
+                    amount,
+                    &format!("k-{i}"),
                     date!(2026 - 03 - 15),
                 ))
                 .await
                 .unwrap_or_else(|e| panic!("{kind} should post: {e}"));
         }
+        let tb = ledger.trial_balance().await.unwrap();
+        let (d, c): (i64, i64) = tb
+            .iter()
+            .fold((0, 0), |a, l| (a.0 + l.debits_ct, a.1 + l.credits_ct));
+        assert_eq!(d, c, "Σ Soll = Σ Haben");
+        let sums = ledger.year_kind_sums(LF, MALO, 2026).await.unwrap();
+        assert_eq!(sums.get("RECHNUNG"), Some(&1000));
+        assert_eq!(sums.get("STORNO"), Some(&-400));
+        assert!(
+            ledger
+                .year_kind_sums(LF, MALO, 2025)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_never_booked_malo_reads_as_empty() {
+        let ledger = test_ledger().await;
+        assert_eq!(ledger.balance_ct(LF, "51238696012").await.unwrap(), 0);
+        assert!(ledger.open_receivables(LF, MALO).await.unwrap().is_empty());
+        assert!(
+            ledger
+                .statement(LF, MALO, &BalanceQuery::all())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !ledger
+                .has_debit_on_or_before(LF, MALO, date!(2026 - 03 - 31))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_booking_into_a_sealed_month_is_refused_with_301() {
+        let ledger = test_ledger().await;
+        ledger
+            .post(&post("RECHNUNG", 1000, "jan", date!(2026 - 01 - 10)))
+            .await
+            .unwrap();
+        let sealed = ledger.seal_through("2026-01").await.unwrap();
+        assert_eq!(sealed.last().map(|s| s.period.as_str()), Some("2026-01"));
+        assert_eq!(
+            ledger.sealed_through().await.unwrap(),
+            Some(date!(2026 - 01 - 31))
+        );
+        let late = ledger
+            .post(&post("RECHNUNG", 1000, "late", date!(2026 - 01 - 20)))
+            .await
+            .expect_err("sealed");
+        assert_eq!(late.code(), Some(301));
+        // A MaLo first booked after the seal opens the day after it.
+        ledger
+            .post(&PostEntry::new(
+                "51238696020",
+                LF,
+                "RECHNUNG",
+                500,
+                "new",
+                date!(2026 - 02 - 02),
+            ))
+            .await
+            .expect("an account opened after the seal books into an open month");
+        assert!(ledger.audit().await.is_ok());
     }
 
     #[tokio::test]
     async fn fifo_clearing_matches_oldest_first_and_resets() {
         let ledger = test_ledger().await;
-        let (malo, lf) = ("51238696781", "9900000000001");
         ledger
-            .post(PostEntry::new(
-                malo,
-                lf,
-                "RECHNUNG",
-                10000,
-                "inv1",
-                date!(2026 - 01 - 01),
-            ))
+            .post(&post("RECHNUNG", 10000, "inv1", date!(2026 - 01 - 01)))
             .await
             .unwrap();
         ledger
-            .post(PostEntry::new(
-                malo,
-                lf,
-                "RECHNUNG",
-                20000,
-                "inv2",
-                date!(2026 - 02 - 01),
-            ))
+            .post(&post("RECHNUNG", 20000, "inv2", date!(2026 - 02 - 01)))
             .await
             .unwrap();
         ledger
-            .post(PostEntry::new(
-                malo,
-                lf,
-                "ZAHLUNG",
-                -15000,
-                "pay",
-                date!(2026 - 02 - 15),
-            ))
+            .post(&post("ZAHLUNG", -15000, "pay", date!(2026 - 02 - 15)))
             .await
             .unwrap();
+        assert_eq!(ledger.open_receivables(LF, MALO).await.unwrap().len(), 2);
 
-        // Before clearing: both invoices are gross-open.
-        assert_eq!(ledger.open_receivables(lf, malo).await.unwrap().len(), 2);
-
-        let cid = ledger
-            .apply_fifo_clearing(lf, malo, date!(2026 - 02 - 15))
+        let cleared = ledger
+            .apply_fifo_clearing(LF, MALO, date!(2026 - 02 - 15))
             .await
-            .unwrap()
-            .expect("a match is recorded");
-
-        // Oldest invoice fully cleared; the second keeps its 5000 residual.
-        let open = ledger.open_receivables(lf, malo).await.unwrap();
+            .unwrap();
+        assert_eq!(cleared.len(), 2, "the payment covers inv1 and part of inv2");
+        let open = ledger.open_receivables(LF, MALO).await.unwrap();
         assert_eq!(open.len(), 1, "oldest invoice fully cleared");
         assert_eq!(open[0].outstanding_ct, 15000, "second invoice partly open");
-
-        // A re-run matches nothing more.
         assert!(
             ledger
-                .apply_fifo_clearing(lf, malo, date!(2026 - 02 - 16))
+                .apply_fifo_clearing(LF, MALO, date!(2026 - 02 - 16))
                 .await
                 .unwrap()
-                .is_none()
+                .is_empty(),
+            "a re-run matches nothing more"
         );
+        for position in cleared {
+            ledger
+                .reset_clearing(position, date!(2026 - 02 - 17))
+                .await
+                .unwrap();
+        }
+        assert_eq!(ledger.open_receivables(LF, MALO).await.unwrap().len(), 2);
+        assert_eq!(
+            ledger
+                .apply_fifo_clearing(LF, MALO, date!(2026 - 02 - 18))
+                .await
+                .unwrap()
+                .len(),
+            2,
+            "after a reset the same pairs clear anew"
+        );
+    }
 
-        // Resetting the clearing re-opens both invoices (gross again).
-        ledger
-            .reset_clearing(cid, date!(2026 - 02 - 17))
+    #[tokio::test]
+    async fn proofs_verify_against_the_head() {
+        let ledger = test_ledger().await;
+        let posted = ledger
+            .post(&post("RECHNUNG", 1000, "p", date!(2026 - 01 - 10)))
             .await
             .unwrap();
-        assert_eq!(ledger.open_receivables(lf, malo).await.unwrap().len(), 2);
+        let (leaf, proof, head) = ledger.prove_entry(posted.id).await.unwrap();
+        proof.verify(&leaf, &head).expect("inclusion");
+        ledger.seal_through("2026-01").await.unwrap();
+        let (balance, head) = ledger
+            .prove_period_balance("2026-01", LF, MALO)
+            .await
+            .unwrap();
+        let proven = balance.verify(&head).expect("sealed balance");
+        assert_eq!(ct(proven.balance.net()), 1000);
+        let (consistency, then, now) = ledger.prove_append_only(1).await.unwrap();
+        consistency.verify(&then, &now).expect("append-only");
+    }
+
+    #[test]
+    fn grants_are_the_stores_list() {
+        let grants = runtime_grants("accountingd_app");
+        assert!(
+            grants
+                .iter()
+                .all(|g| !g.contains("DELETE") && !g.contains("TRUNCATE"))
+        );
+        assert!(
+            grants[1]
+                .contains("SELECT, INSERT ON ALL TABLES IN SCHEMA ledger TO \"accountingd_app\"")
+        );
     }
 }

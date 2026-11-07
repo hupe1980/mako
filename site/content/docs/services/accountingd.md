@@ -52,17 +52,42 @@ graph TB
 
 ## Ledger
 
-The ledger is the [`doubleentry`](https://github.com/hupe1980/doubleentry) crate
-in the `doubleentry` schema of accountingd's database (applied by
-`PgLedger::connect` at startup): balanced by construction, an append-only BLAKE3
-Merkle log with `O(log n)` proofs, period seals, open-item clearing and
-store-level idempotency. accountingd owns the chart of accounts
+The ledger is the [`doubleentry`](https://github.com/hupe1980/doubleentry) 0.8
+crate in the `ledger` schema of accountingd's database: balanced by
+construction, an append-only RFC 6962 SHA-256 Merkle log with `O(log n)`
+proofs, monthly periods from 2015-01 sealed in order, open-item clearing, and
+triggers that refuse every change to the log. accountingd owns the chart of
+accounts
 ([`ledger::Chart`](https://github.com/hupe1980/mako/blob/main/services/accountingd/src/ledger.rs));
 doubleentry owns the invariants.
 
-Soll = Haben is enforced in the engine and by a deferred constraint trigger (§
-238 HGB). Every posting carries an idempotency key; an identical replay is a
-store-level no-op.
+Every booking carries an idempotency key; the entry id is derived from it, an
+identical replay returns the original entry, and the same key with other
+content is refused (`ledger.200`). The Kontokorrent posting carries the
+dimensions `art`, `korrelation` and `akteur`.
+
+### Booking drafts
+
+The ledger owns its pool and joins no external transaction, so every booking is
+a **draft** first: the whole entry is written to `booking_drafts` in the same
+transaction as the business change that causes it (a dunning case and its
+Mahngebühr, a bank row and its `bank_import_log` entry and event, a Jahresabschluss
+and its refund), then recorded right after the commit. A crash between the two
+leaves the draft `offen`, and a recovery worker books it within a minute,
+exactly once.
+
+| Ledger answer | Draft |
+|---|---|
+| recorded, or replayed | `gebucht`, with the entry id |
+| transient failure | stays `offen`, retried |
+| refusal — `301` sealed month, `300` no period, `304` account not open, `200` key conflict | `geparkt` with the code; a person decides |
+
+A parked booking is listed by the MCP tool `list_parked_bookings` and shown in
+the Lieferant's Heute in the Desk, with what to do and, for a sealed month, the
+first open date. It is resolved by `POST /api/v1/bookings/{key}/rebook`
+`{ "buchungsdatum" }` (booked anew under a derived key) or
+`POST /api/v1/bookings/{key}/discard` `{ "grund" }`; both record who.
+`cargo xtask check-ledger-drafts` refuses a ledger write outside a draft.
 
 Each Buchungsart is one entry with two legs: the customer's **Kontokorrent**
 (`Kontokorrent:<lf_mp>:<malo>`, the SKR 1400 Debitoren subledger) and a GL
@@ -147,7 +172,7 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Statement for portald; `?from=&to=` returns `eroeffnungssaldo_ct` / `bewegung_ct` / `schlusssaldo_ct` |
 | `GET` | `/api/v1/accounts/{malo_id}/open-items` | Offene Posten after clearing |
 | `POST` | `/api/v1/accounts/{malo_id}/clear` | Run the FIFO Zahlungszuordnung |
-| `POST` | `/api/v1/clearings/{clearing_id}/reset` | Release a mis-assigned clearing |
+| `POST` | `/api/v1/clearings/{position}/reset` | Release one mis-assigned clearing (the position `clear` returned) |
 | `GET` | `/api/v1/trial-balance` | Summen- und Saldenliste (§ 238 HGB) |
 | `PUT` | `/api/v1/accounts/{malo_id}/abschlag` | Change the monthly advance; body `{ "abschlag_ct" }` |
 | `GET` | `/api/v1/accounts/{malo_id}/abschlaege` | Deductible advances with their USt rate (`?from=&to=`) |
@@ -163,8 +188,9 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `GET` | `/api/v1/business-partners/{kunden_nr}/accounts` · `/balance` | A partner's accounts; consolidated balance |
 | `GET` | `/api/v1/aging` | Receivables in 0–30 / 31–60 / 61–90 / >90 day buckets |
 | `GET` | `/api/v1/offene-posten` | Overdue accounts |
-| `POST` | `/api/v1/periods/{period_id}/seal` | Festschreibung; body `{ "start", "end" }` |
-| `GET` | `/api/v1/periods/seals` | Seal history, `chain_valid`, `sealed_through` |
+| `POST` | `/api/v1/periods/{period_id}/seal` | Festschreibung of every open month through `YYYY-MM`; no body |
+| `GET` | `/api/v1/periods/seals` | Sealed months, `sealed_through`, `verified` (a full `audit`) |
+| `POST` | `/api/v1/bookings/{key}/rebook` · `/discard` | Resolve a parked booking |
 | `GET` | `/api/v1/entries/{entry_id}/proof` | Merkle inclusion proof |
 | `GET` | `/api/v1/periods/{period_id}/balance-proof` | Closing balance of a Kontokorrent in a sealed period (`?malo_id=&lf_mp_id=`) |
 | `GET` | `/api/v1/entries/consistency-proof` | Append-only proof since `?since=<tree_size>` |
@@ -231,9 +257,10 @@ This sets `abschlag_ct = 7500` in the same write. Without a stored object the
 
 ## Offene Posten and balance integrity
 
-Every post records a FIFO **Zahlungszuordnung** in doubleentry's clearing
-register: open credits (payments, Abschläge, Gutschriften) against the oldest
-open debits (Einzelbewertung, § 252 Abs. 1 Nr. 4 HGB). `open-items` lists the
+Every booking records a FIFO **Zahlungszuordnung** in doubleentry's clearing
+register, one clearing per matched pair: open credits (payments, Abschläge,
+Gutschriften) against the oldest open debits (Einzelbewertung, § 252 Abs. 1
+Nr. 4 HGB). `open-items` lists the
 debits with a residual above zero, oldest first:
 
 ```json
@@ -486,56 +513,41 @@ function, at most 500 accounts per daily pass, and not before
 
 ## Festschreibung and audit proofs
 
-Sealing a period (GoBD, § 146 AO, § 239 HGB) commits, as chained BLAKE3 Merkle
-roots, to the entries it contains and the cumulative closing balances by
-**booking date**. A backdated booking into a sealed period is refused; a
-correction books into an open period carrying its original date (§ 146 Abs. 4
-AO).
+Sealing (GoBD, § 146 AO, § 239 HGB) closes calendar months in order: `POST
+/periods/2026-01/seal` seals every open month through January, each committing
+its closing balances per account to the log. A booking dated in a sealed month
+is refused (`ledger.301`) and parks; a correction books into an open month
+(§ 146 Abs. 4 AO).
 
 ```bash
-curl -X POST "http://accountingd:9380/api/v1/periods/2026-01/seal" \
-  -H 'content-type: application/json' \
-  -d '{"start":"2026-01-01","end":"2026-01-31"}'
-# → { "ledger", "period", "seal_hash", "tree_root", "tree_size",
-#     "trial_balance_root", "trial_balance_size", "accounts_root",
-#     "accounts_size", "entry_count", "prev_seal" }
+curl -X POST "http://accountingd:9380/api/v1/periods/2026-01/seal"
+# → { sealed_through: "2026-01-31", count, sealed: [{ period, position, start, end }] }
 
 curl "http://accountingd:9380/api/v1/periods/seals"
-# → { count, chain_valid, sealed_through: "2026-01-31", seals:[…] }
+# → { count, sealed_through, verified, audit_error, log_size, seals: […] }
 ```
 
-**`sealed_through` is a watermark**: every date at or before the greatest sealed
-end date is closed, whether or not a period covers it. Seal in order and expect
-everything below the watermark to close at once. It is rebuilt from the period
-table at startup. Seals chain (`chain_valid` detects a removed or reordered
-one), name the ledger inside their hash, and publish every root with the size of
-its tree.
+`verified` is doubleentry's `audit`: the whole log is replayed and every
+balance, clearing and seal compared with it.
 
 | Question | Endpoint | Returns |
 |---|---|---|
-| Is this booking in the books? | `GET /entries/{entry_id}/proof` | `content_hash`, `tree_size`, `tree_root`, `verified`, `proof` |
-| What did this customer owe at the balance-sheet date (§ 147 AO)? | `GET /periods/{id}/balance-proof?malo_id=&lf_mp_id=` | `balance_ct`, `debits_ct`, `credits_ct`, `verified`, `seal`, `sealed_balance` |
+| Is this booking in the books? | `GET /entries/{entry_id}/proof` | `leaf_hash`, `tree_size`, `tree_root`, `verified`, `proof` |
+| What did this customer owe at the balance-sheet date (§ 147 AO)? | `GET /periods/{id}/balance-proof?malo_id=&lf_mp_id=` | `balance_ct`, `debits_ct`, `credits_ct`, `verified`, `tree_size/root`, `proof` |
 | Has the journal only been appended to? | `GET /entries/consistency-proof?since=<tree_size>` | `archived_size/root`, `current_size/root`, `verified`, `proof` |
 
-All three are `O(log n)` and verifiable without this service.
+All three verify against a head alone, without this service; each is verified
+before it is published.
 
-- The **balance proof** bundles two proofs in `sealed_balance` that must be
-  checked together: the balance sat in the sealed trial balance under an account
-  handle, and that handle was bound to this Kontokorrent. Before answering, the
-  service rebuilds the closing balance and fails if it does not reproduce the
-  seal.
-- **Nothing to prove** has two answers, neither a zero balance:
-  `{ "absent": true, "reason": "not_yet_registered" }` (not on the books yet) and
-  `"no_row"` (nameable, but nothing booked on or before the period's end).
-- The **consistency proof** refuses `since=0`: every log extends the empty tree,
-  so it would verify against anything. Watch `vacuous` in the answer.
+- A customer whose account opened after the month was sealed has no sealed
+  balance: `404`, never a manufactured zero.
+- The consistency proof refuses `since=0`: every log extends the empty tree,
+  so it would verify against anything.
 - **Refusal, absence and failure answer differently** on every ledger-backed
-  route, the CloudEvent ingest included. What the ledger refuses — a period
-  that ends before it starts, a booking into a sealed period, a Kontokorrent it
-  cannot name — is `422`; an unknown entry or an unsealed period is `404` (on
-  the proof routes, a refusal answers `404` too). A ledger store that fails, or
-  a closing balance that no longer reproduces its seal, is `500` with an
-  `error_id` the log line carries.
+  route. A ledger refusal is `422` with code `ledger.<n>` (`409` for `200`, a
+  reused key); an unknown entry or an unsealed month is `404`; a ledger that is
+  unavailable is `503`; a store that fails or books that do not audit is `500`
+  with an `error_id` the log line carries.
 
 ---
 
@@ -901,7 +913,8 @@ Emitted through the outbox to `erp_webhook_url`:
 | Table | Purpose |
 |---|---|
 | `accounts` | One per `(malo_id, lf_mp_id, tenant)`: `balance_ct` and `verzug_ct` caches, `abschlag_ct`, `billing_day` (1–28), `iban` (ciphertext when `iban_encrypted`), `iban_hash`, `mandatsref`, `sparte`, `addr_*`, `vorauszahlung`, `zahlungsinformation`, `anonymized_at` |
-| `doubleentry.*` | Journal, postings, Merkle log, seals, clearings — the crate's own tables |
+| `ledger.*` | Journal, postings, Merkle log, seals, clearings — doubleentry's own tables, created by the migration role |
+| `booking_drafts` | Every booking, staged with its business change: `entwurf`, `status` (`offen`/`gebucht`/`geparkt`/`verworfen`), rejection `code` and `meldung`, `entry_id` |
 | `abschlag_forderungen` | USt rate and absorbing invoice per Abschlag |
 | `sepa_mandates` | Unique per `(tenant, mandatsref)`; `sequence_type` (defaults `FRST`), `signed_at`, `revoked_at`, `first_collected_at`, `debtor_*`, generated `mandatsref_norm` |
 | `sepa_collection_runs` | One per pain.008, with XML and `msg_id`; `UNIQUE (tenant, collection_date)`; `dispatch_status` |
@@ -1018,12 +1031,20 @@ bank_submit_url = "https://banking-adapter.internal/api/v1/pain001"
 bank_api_key    = "env:BANK_API_KEY"
 
 [database]
-url = "postgresql://accountingd:secret@db:5432/accountingd"
+url           = "postgresql://accountingd_app:secret@db:5432/accountingd?sslmode=verify-full"
+migration_url = "env:ACCOUNTINGD_MIGRATION_URL"   # the owning role; creates the ledger and grants `url`'s role
 
 [oidc]   # required unless allow_insecure_no_auth = true
 issuer   = "https://keycloak:8080/realms/mako"
 audience = "accountingd"
 ```
+
+**Two database roles.** With `migration_url` set, the owning role migrates,
+creates the ledger and grants `url`'s role exactly what doubleentry's store
+names — read and append, update only the maintained projections, never
+`DELETE`, `TRUNCATE` or DDL — and accountingd serves as that role, so the
+journal cannot be rewritten by the process that writes it. Without it, `url`
+does both. TLS is the URL's `sslmode` (`verify-full` recommended).
 
 `outputd_api_key` and `vertragd_api_key` authenticate the two clients; `[mcp]`
 configures the MCP credential layer.
@@ -1046,7 +1067,8 @@ service](@/docs/architecture/_index.md#what-metrics-carries-on-every-service).
 
 ## MCP server
 
-`accountingd` exposes **14 tools** at `/mcp` (Streamable HTTP 2025-11-25). Every
+`accountingd` exposes **15 tools** at `/mcp` (Streamable HTTP 2025-11-25), the
+contract pinned by `services/accountingd/mcp.snapshot.json`. Every
 tool is authorized by `mcp_server::tool_action` against the Cedar action its
 REST twin enforces; a tool without a mapping is refused. An `[mcp]` key
 authorizes as `User::"<key name>"` with the roles its `roles` list declares.
@@ -1061,6 +1083,7 @@ authorizes as `User::"<key name>"` with the roles its `roles` list declares.
 | `list_dunning` | Open dunning cases | `read-books` |
 | `list_overdue` | Overdue accounts | `read-books` |
 | `compute_bilanzielle_abgrenzung` | pRAP/aRAP for the HGB § 250 period close | `read-books` |
+| `list_parked_bookings` | Bookings the ledger refused for good, with what to do — typed (`outputSchema`), read by the Desk | `read-books` |
 | `list_sepa_collections` | Collections and their status | `read-banking` |
 | `update_abschlag` | Change the monthly advance | `write-account` |
 | `import_payments` | Flat bank-export import | `import-payments` |

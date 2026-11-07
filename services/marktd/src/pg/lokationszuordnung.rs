@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 /// Decode a [`Lokationstyp`] from the wire value stored in a `TEXT` column.
 ///
-/// rubo4e's `sqlx` feature is not enabled workspace-wide, so the graph bridges
-/// the enum at the SQL boundary via its strum `FromStr`/`IntoStaticStr` impls.
+/// The column holds the enum's wire string; its strict `FromStr` reads it back
+/// and refuses `"UNKNOWN"` and any value the schema does not define.
 fn typ_from_str(s: String) -> Result<Lokationstyp, sqlx::Error> {
     Lokationstyp::from_str(&s).map_err(|e| sqlx::Error::ColumnDecode {
         index: "typ".into(),

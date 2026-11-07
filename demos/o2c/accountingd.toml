@@ -15,7 +15,10 @@ erp_webhook_url = "http://webhook:8000/events"
 addr = "0.0.0.0:9380"
 
 [database]
-url = "postgres://demo:demo-secret@postgres/accountingd"
+# Serves as a role that may append to the journal and not rewrite it; the
+# owner migrates and grants it (init-db.sh creates both).
+url           = "postgres://accountingd_app:accountingd_app@postgres/accountingd"
+migration_url = "postgres://demo:demo-secret@postgres/accountingd"
 
 # No [oidc] section: the verifier starts disabled and every request is admitted
 # with dev claims. accountingd says so loudly at startup. Demo only — these are

@@ -5,10 +5,9 @@
 //! `zaehler_typ`, and a value the enum does not know deserialises to `UNKNOWN`
 //! rather than failing, so drift here degrades a delivery point silently.
 //!
-//! Since rubo4e 0.8 these guards are **structural**: every enum exposes
-//! `VARIANTS` / `COUNT` / `from_wire` / `as_wire` without the `strum` feature, so
-//! the CHECK list is proved against the enum itself rather than a hand-maintained
-//! magic number.
+//! These guards are **structural**: every enum exposes `VARIANTS` / `COUNT` /
+//! `from_wire` / `as_wire`, so the CHECK list is proved against the enum itself
+//! rather than a hand-maintained magic number.
 //!
 //! `UNKNOWN` is not admitted. It is BO4E's forward-compatibility catch-all, not
 //! a schema variant, and the device `PUT` handlers run
@@ -130,7 +129,7 @@ fn zaehler_typ_check_values_are_real_bo4e_values() {
 /// stale.
 ///
 /// Proved by set-equality against `Zaehlertyp::VARIANTS` (via `as_wire()`), which
-/// is stable for the schema version and available without `strum`. When a BO4E
+/// is stable for the schema version. When a BO4E
 /// release adds or removes a Zaehlertyp this fails with the precise delta — the
 /// list needs a deliberate decision, not silent divergence.
 #[test]

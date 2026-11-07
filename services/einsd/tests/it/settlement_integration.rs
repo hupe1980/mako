@@ -69,6 +69,7 @@ fn test_config() -> einsd::config::EinsdConfig {
     einsd::config::EinsdConfig {
         database: mako_service::config::DatabaseConfig {
             url: String::new(),
+            migration_url: None,
             pool_size: 10,
             min_connections: 0,
             acquire_timeout_secs: 30,

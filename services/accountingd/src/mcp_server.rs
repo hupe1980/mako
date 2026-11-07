@@ -65,6 +65,14 @@ pub struct AccountingdMcpState {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct NoParams {}
 
+/// Parameters of `list_parked_bookings`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ParkedParams {
+    /// Max results (default 50, clamped to 1–200).
+    pub limit: Option<i64>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MaloParams {
     pub malo_id: String,
@@ -221,7 +229,7 @@ impl AccountingdMcpHandler {
             Ok(Some(a)) => ContentBlock::json(serde_json::json!({
                 "malo_id": p.malo_id,
                 "balance_ct": a.balance_ct,
-                "balance_eur": format!("{:.2}", a.balance_ct as f64 / 100.0),
+                "balance_eur": crate::handlers::format_ct_as_eur(a.balance_ct),
                 "abschlag_ct": a.abschlag_ct,
             }))
             .map(|b| CallToolResult::success(vec![b]))
@@ -294,9 +302,11 @@ impl AccountingdMcpHandler {
         };
         match list_ledger(
             &self.state.ledger,
+            &self.state.pool,
+            &self.state.tenant,
             &acct.lf_mp_id,
             &acct.malo_id,
-            doubleentry::BalanceQuery::all(),
+            &doubleentry::BalanceQuery::all(),
             p.limit.unwrap_or(50),
         )
         .await
@@ -665,7 +675,7 @@ Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumpt
             "verzugsschaden_ct": s.verzugsschaden_sum,
             "sonstige_ct": s.sonstige_sum,
             "settlement_ct": s.settlement_ct,
-            "settlement_eur": format!("{:.2}", s.settlement_ct as f64 / 100.0),
+            "settlement_eur": crate::handlers::format_ct_as_eur(s.settlement_ct),
             "recommended_monthly_abschlag_ct": recommended_abschlag,
             "action": if s.settlement_ct > 0 {
                 "NACHZAHLUNG: the open receivable stands; collect it via SEPA or dunning"
@@ -781,11 +791,11 @@ aRAP (unbilled) cannot be computed here — requires GET edmd /api/v1/billing-pe
             // an Abschlag is demanded and debited when a settling invoice
             // absorbs it. § 266 Abs. 3 C.3 HGB.
             "prap_ct": prap_ct,
-            "prap_eur": format!("{:.2}", prap_ct as f64 / 100.0),
+            "prap_eur": crate::handlers::format_ct_as_eur(prap_ct),
             "prap_erp_entry": {
                 "debit":  "Umsatzerlöse Energie (SKR03: 8400)",
                 "credit": "Erhaltene Anzahlungen (SKR03: 1718 / SKR04: 3272)",
-                "amount_eur": format!("{:.2}", prap_ct as f64 / 100.0),
+                "amount_eur": crate::handlers::format_ct_as_eur(prap_ct),
                 "explanation": "Advances demanded ahead of the supply they pay for; released when the settling invoice absorbs them."
             },
 
@@ -802,7 +812,7 @@ aRAP (unbilled) cannot be computed here — requires GET edmd /api/v1/billing-pe
             // ── Summary ───────────────────────────────────────────────────
             "accounts_with_advance": accounts_with_advance,
             "monthly_abschlag_total_ct": abschlag_total_ct,
-            "monthly_abschlag_total_eur": format!("{:.2}", abschlag_total_ct as f64 / 100.0),
+            "monthly_abschlag_total_eur": crate::handlers::format_ct_as_eur(abschlag_total_ct),
 
             "regulatory_basis": "HGB §250 (Rechnungsabgrenzungsposten), §252 (Realisationsprinzip).                                  Required for §243 HGB Jahresabschluss compliance.",
             "audit_note": "pRAP must be reversed at start of next accounting period.                           Document reversal dates and amounts in the Anlagenspiegel.",
@@ -1052,6 +1062,30 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
+
+    #[tool(
+        description = "Bookings the ledger refused for good, oldest first: each a booking draft committed with its business change whose entry the ledger would not take — a date in a festgeschriebene (sealed) month (`code` 301), a date before the calendar (300), an account not yet open (304), a key already holding another booking (200). Each carries the refusal (`meldung`), what to do about it (`hinweis`) and, for a sealed month, the first open date (`vorschlag_datum`). Resolved by `POST /api/v1/bookings/{key}/rebook` on an open date or `POST /api/v1/bookings/{key}/discard` with a reason. `count` is the whole parked list; `saturated` means it is longer than `buchungen`.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::booking::GeparkteBuchungen>()
+    )]
+    async fn list_parked_bookings(
+        &self,
+        Parameters(p): Parameters<ParkedParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = p.limit.unwrap_or(50).clamp(1, 200);
+        let parked = crate::booking::parked(
+            &self.state.ledger,
+            &self.state.pool,
+            &self.state.tenant,
+            limit,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::structured(
+            serde_json::to_value(parked)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
+    }
 }
 
 #[prompt_router]
@@ -1134,7 +1168,10 @@ pub fn tool_action(tool: &str) -> Option<&'static str> {
         | "trigger_jahresabschluss" => "read-account",
         // Tenant-wide book reads — the dunning list, the aging list, the HGB
         // § 250 accrual position off the ledger.
-        "list_dunning" | "list_overdue" | "compute_bilanzielle_abgrenzung" => "read-books",
+        "list_dunning"
+        | "list_overdue"
+        | "compute_bilanzielle_abgrenzung"
+        | "list_parked_bookings" => "read-books",
         // The collection register: mandates, IBANs and the entries of a run.
         "list_sepa_collections" => "read-banking",
         // ── Writes ───────────────────────────────────────────────────────────
@@ -1247,5 +1284,21 @@ mod tests {
             "get_vorauszahlung reads a stored Vorauszahlung and must be declared read-only"
         );
         assert_eq!(tool_action("get_vorauszahlung"), Some("read-account"));
+    }
+
+    /// The tool contract the Desk is generated from: name, annotations and
+    /// both schemas. `BLESS_MCP_SNAPSHOT=1` rewrites `mcp.snapshot.json`.
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let tools: Vec<serde_json::Value> = AccountingdMcpHandler::tool_router()
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
     }
 }

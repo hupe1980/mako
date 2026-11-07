@@ -155,7 +155,7 @@ the Prozessüberwachung has it, each with the Festlegung its deadline came from.
 
 **Dead Letters** (Netz) counts every message the Marktkommunikation could not
 take or deliver and lists the most recent. The Lieferant also sees
-**Rechnungsprüfung** and **Rechnungsdispute**, the Messstelle **Ableseaufträge
+**Rechnungsprüfung**, **Rechnungsdispute** and **Geparkte Buchungen**, the Messstelle **Ableseaufträge
 überfällig** — each the same read as its row in Heute, which a click opens.
 
 [![The Überblick](ueberblick-light.png)](ueberblick-light.png)
@@ -171,7 +171,7 @@ Each item is something a service holds open for this Rolle:
 | Rolle | What Heute lists |
 |---|---|
 | Netz | Freigaben, overdue processes, Korrekturbedarf after a negative Prüfmitteilung |
-| Lieferant | Anmeldungen waiting on the Netzbetreiber, Freigaben, overdue processes, disputed invoices, invoices held for review, Anmeldungen not yet sent |
+| Lieferant | Anmeldungen waiting on the Netzbetreiber, Freigaben, overdue processes, disputed invoices, invoices held for review, bookings the ledger refused, Anmeldungen not yet sent |
 | Messstelle | Freigaben, overdue processes, overdue reading orders |
 | Energieservice | Freigaben, overdue processes |
 
@@ -197,7 +197,17 @@ An invoice the Abrechnung's risk check put aside is decided in place as well:
 a **held** one is released after the confirm, since releasing issues it; one
 **under review** went out already, and **Geprüft** takes it off the list,
 held for undo. The assistant proposes neither — the risk check's findings are
-the evidence, listed in the decision. A Korrekturbedarf opens nothing yet: the
+the evidence, listed in the decision.
+
+A booking the Kundenkonten' ledger refused for good — a sealed month, an
+account not yet open — is a **geparkte Buchung**: its row names the customer,
+the amount and the refusal, the decision says what to do about it. **Neu
+buchen** books it on the date you enter, filled in with the first open day
+where the ledger names one; **Verwerfen** drops it with the Grund you give.
+Both are final and recorded under your name, so each asks once more first; a
+refusal is shown in the ledger's words.
+
+A Korrekturbedarf opens nothing yet: the
 Desk has no Netzentgelte view.
 
 [![A disputed invoice decided in Heute: its finding, the assistant's proposal resting on it, Beilegen and Ablehnung senden](heute-disput-light.png)](heute-disput-light.png)

@@ -77,7 +77,7 @@ impl Daemon for Productd {
     type Config = config::ProductdConfig;
     const NAME: &'static str = "productd";
 
-    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    async fn migrate(_cfg: &Self::Config, pool: &sqlx::PgPool) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await

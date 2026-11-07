@@ -92,7 +92,7 @@ impl Daemon for Marktd {
     type Config = Config;
     const NAME: &'static str = "marktd";
 
-    async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
+    async fn migrate(_cfg: &Self::Config, pool: &PgPool) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await

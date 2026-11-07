@@ -623,7 +623,7 @@ pub async fn derive_supply_state(
                    FROM versorgungsstatus v
                    WHERE v.malo_id = $1 AND v.tenant = $2"#,
             )
-            .bind(&malo_id)
+            .bind(malo_id.as_ref())
             .bind(tenant)
             .fetch_optional(&mut *conn)
             .await
@@ -824,7 +824,7 @@ async fn versorgung_changed(
            FROM versorgungsstatus v
           WHERE v.malo_id = $1 AND v.tenant = $2",
     )
-    .bind(malo_id)
+    .bind(malo_id.as_ref())
     .bind(tenant)
     .fetch_optional(&mut *conn)
     .await

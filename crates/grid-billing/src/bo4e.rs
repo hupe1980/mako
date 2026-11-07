@@ -21,7 +21,7 @@ use rubo4e::current::{
 ///
 /// The decision — which code applies to which position in which settlement — is
 /// domain logic and lives in `grid-billing`. This is only the lookup from its
-/// codelist name into the BO4E enum, which `rubo4e` derives via `strum`.
+/// codelist name into the BO4E enum.
 ///
 /// **Important:** NNE Strom positions (PID 31002, NN-Rechnung) do NOT use classic
 /// Artikelnummern since BK6-20-160 — for those, `grid-billing` emits no codelist
@@ -33,10 +33,8 @@ pub fn kind_to_artikelnummer(
     kind: crate::BillingPositionKind,
     settlement_type: crate::SettlementType,
 ) -> Option<rubo4e::current::BdewArtikelnummer> {
-    // `from_wire`, not `FromStr`: both parse the same strings, but `FromStr`
-    // comes from `strum`, whose derive also accepts `"UNKNOWN"` — the
-    // catch-all's own spelling — and would hand back `Unknown` as if it were an
-    // article number. `from_wire` refuses it, and needs no feature flag.
+    // `from_wire` refuses `"UNKNOWN"`, the catch-all's own spelling, so an
+    // unmapped name yields `None` rather than `Unknown` as an article number.
     kind.artikelnummer(settlement_type)
         .and_then(|name| rubo4e::current::BdewArtikelnummer::from_wire(name).ok())
 }

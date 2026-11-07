@@ -14,7 +14,7 @@ impl Daemon for Vertragd {
     type Config = config::VertragdConfig;
     const NAME: &'static str = "vertragd";
 
-    async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
+    async fn migrate(_cfg: &Self::Config, pool: &PgPool) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await

@@ -63,21 +63,27 @@ fn account_not_found(malo_id: &str) -> axum::response::Response {
     ApiError::not_found(format!("account for MaLo {malo_id} not found")).into_response()
 }
 
+/// The answer a booking or ledger failure anywhere in `e`'s chain carries.
+fn ledger_answer(e: &anyhow::Error) -> Option<ApiError> {
+    e.chain().find_map(|c| {
+        c.downcast_ref::<crate::booking::BookingError>()
+            .map(crate::booking::BookingError::to_api)
+            .or_else(|| {
+                c.downcast_ref::<crate::ledger::LedgerError>()
+                    .map(crate::ledger::LedgerError::to_api)
+            })
+    })
+}
+
 /// A write refused for what it was asked to store answers `422` with the
 /// refusal; a database failure underneath is a `500` with an `error_id`, never
-/// its text.
+/// its text. A booking or ledger failure answers as it says.
 fn refusal(e: impl Into<anyhow::Error>) -> ApiError {
     let e = e.into();
-    let ledger_fault = e.chain().any(|c| {
-        matches!(
-            c.downcast_ref::<crate::ledger::LedgerError>(),
-            Some(
-                crate::ledger::LedgerError::Storage { .. }
-                    | crate::ledger::LedgerError::Integrity(_)
-            )
-        )
-    });
-    if ledger_fault || e.chain().any(|c| c.is::<sqlx::Error>()) {
+    if let Some(answer) = ledger_answer(&e) {
+        return answer;
+    }
+    if e.chain().any(|c| c.is::<sqlx::Error>()) {
         ApiError::internal(e)
     } else {
         ApiError::unprocessable(format!("{e:#}"))
@@ -86,20 +92,15 @@ fn refusal(e: impl Into<anyhow::Error>) -> ApiError {
 
 /// The answer to a failed ledger-backed read or write.
 ///
-/// A [`LedgerError`](crate::ledger::LedgerError) anywhere in the chain decides
-/// it: a refusal is `422` with its reason, an unknown subject `404`, and only an
-/// integrity or storage failure `500` with an `error_id`. A refusal is never
-/// answered `500`: a CloudEvent redelivered into the same refusal books nothing,
-/// and an operator sent to the log finds a request to correct, not an outage.
-/// Any other failure is `500`.
+/// A booking or ledger failure anywhere in the chain decides it: a refusal is
+/// `422` (`409` for a reused key), an unknown subject `404`, a retryable failure
+/// `503`, and only an integrity or storage failure `500` with an `error_id`. A
+/// refusal is never answered `500`: a CloudEvent redelivered into the same
+/// refusal books nothing, and an operator sent to the log finds a request to
+/// correct, not an outage. Any other failure is `500`.
 fn ledger_failure(e: impl Into<anyhow::Error>) -> ApiError {
-    use crate::ledger::LedgerError;
     let e = e.into();
-    match e.chain().find_map(|c| c.downcast_ref::<LedgerError>()) {
-        Some(LedgerError::Refused(msg)) => ApiError::unprocessable(msg.clone()),
-        Some(LedgerError::NotFound(msg)) => ApiError::not_found(msg.clone()),
-        _ => ApiError::internal(e),
-    }
+    ledger_answer(&e).unwrap_or_else(|| ApiError::internal(e))
 }
 
 /// Convert an amount in ct (i64, × 10⁻² EUR) to a `"1234.56"` EUR string.
@@ -214,9 +215,11 @@ pub async fn get_ledger(
     }
     match list_ledger(
         &ledger,
+        &pool,
+        &cfg.tenant,
         lf_mp_id,
         &malo_id,
-        doubleentry::BalanceQuery::all(),
+        &doubleentry::BalanceQuery::all(),
         q.limit.unwrap_or(100).min(1000),
     )
     .await
@@ -268,10 +271,11 @@ pub async fn get_kontoauszug(
     let query = period.map_or_else(doubleentry::BalanceQuery::all, |(from, to)| {
         doubleentry::BalanceQuery::between(from, to)
     });
-    let window = match list_ledger(&ledger, lf_mp_id, &malo_id, query, 500).await {
-        Ok(e) => e,
-        Err(e) => return ledger_failure(e).into_response(),
-    };
+    let window =
+        match list_ledger(&ledger, &pool, &cfg.tenant, lf_mp_id, &malo_id, &query, 500).await {
+            Ok(e) => e,
+            Err(e) => return ledger_failure(e).into_response(),
+        };
     // Eröffnungs- und Schlusssaldo: the two figures that make the page add up.
     // The closing figure is the opening plus everything on it, not the account's
     // current balance — a statement for last March must not close at today's.
@@ -1226,53 +1230,41 @@ pub async fn import_payments(
                 };
                 // Idempotency keyed on the bank transaction id — a re-import of the
                 // same row replays as a ledger no-op rather than double-booking.
-                let ledger_result = crate::pg::post_entry(
-                    &ledger,
-                    &pool,
-                    &cfg.tenant,
+                let key = format!("bank:{bank_txn_id}");
+                let draft = crate::pg::draft(
                     &malo_id,
                     &lf_mp_id,
                     entry_type,
                     entry.ledger_ct(),
-                    &format!("bank:{bank_txn_id}"),
+                    &key,
                     None,
                     Some(entry.reference.as_str()),
                     date,
                     date,
                     Some(entry.description().as_str()),
                     None,
-                )
-                .await;
-
-                match ledger_result {
-                    Ok(ledger_id) => {
-                        // Secondary audit log (the ledger key is the real dedup now).
-                        if let Err(e) = crate::pg::record_bank_import(
-                            &pool,
-                            &cfg.tenant,
-                            &bank_txn_id,
-                            entry.ledger_ct().abs(),
-                            Some(entry.iban.as_str()),
-                            date,
-                            Some(ledger_id),
-                            None,
-                            entry.end_to_end_id.as_deref(),
-                        )
-                        .await
-                        {
-                            tracing::warn!(error = %e, "accountingd: bank_import_log insert failed");
-                        }
-
-                        // Announce the booking. `de.accounting.bankruecklast`
-                        // is what drives agentd's payment-reconciliation agent,
-                        // and a returned direct debit is what that exists for.
-                        let ce_type = if is_return {
-                            mako_events::accounting::BANKRUECKLAST
-                        } else {
-                            mako_events::accounting::PAYMENT_IMPORTED
-                        };
-                        let amount_ct = entry.ledger_ct().abs();
-                        let ce = mako_service::CloudEvent::new(
+                );
+                // Announce the booking. `de.accounting.bankruecklast` is what
+                // drives agentd's payment-reconciliation agent, and a returned
+                // direct debit is what that exists for.
+                let ce_type = if is_return {
+                    mako_events::accounting::BANKRUECKLAST
+                } else {
+                    mako_events::accounting::PAYMENT_IMPORTED
+                };
+                let amount_ct = entry.ledger_ct().abs();
+                let staged = stage_bank_row(&ledger, &pool, &cfg.tenant, &draft, |ledger_id| {
+                    (
+                        crate::pg::BankImport {
+                            bank_transaction_id: &bank_txn_id,
+                            amount_ct,
+                            iban: Some(entry.iban.as_str()),
+                            value_date: date,
+                            ledger_entry_id: ledger_id,
+                            payment_info_id: None,
+                            end_to_end_id: entry.end_to_end_id.as_deref(),
+                        },
+                        mako_service::CloudEvent::new(
                             mako_service::source("accountingd", &cfg.tenant),
                             ce_type,
                             &malo_id,
@@ -1280,28 +1272,28 @@ pub async fn import_payments(
                                 "malo_id":      malo_id,
                                 "lf_mp_id":     lf_mp_id,
                                 "amount_ct":    amount_ct,
-                                "amount_eur":   format!("{:.2}", amount_ct as f64 / 100.0),
+                                "amount_eur":   crate::handlers::format_ct_as_eur(amount_ct),
                                 "is_return":    is_return,
                                 "reference":    entry.reference.as_str(),
                                 "bank_txn_id":  bank_txn_id,
                                 "booking_date": date.to_string(),
                                 "ledger_id":    ledger_id.to_string(),
                                 // Which rung of the resolution ladder matched:
-                                // "iban" is the bank's own assertion, the others
-                                // are inferences a reconciliation agent may want
-                                // to review.
+                                // "iban" is the bank's own assertion, the
+                                // others are inferences a reconciliation agent
+                                // may want to review.
                                 "matched_by":   matched.matched_by,
                             }),
-                        );
-                        if let Err(e) = enqueue_ce(&pool, &ce).await {
-                            tracing::warn!(error = %e, "accountingd: bank import CE enqueue failed");
-                        }
-                        accepted += 1;
-                    }
+                        ),
+                    )
+                })
+                .await;
+                match staged {
+                    Ok(_) => accepted += 1,
                     Err(e) => {
                         tracing::error!(
                             error = %e,
-                            "accountingd: ledger write FAILED — entry discarded; investigate DB health"
+                            "accountingd: bank booking FAILED — entry discarded; investigate DB health"
                         );
                         failed += 1;
                         skipped += 1;
@@ -1324,19 +1316,30 @@ pub async fn import_payments(
     .into_response()
 }
 
-/// Enqueue `ce` on the transactional outbox in its own transaction.
+/// One bank row: its booking draft, its `bank_import_log` row and its
+/// announcement commit in one transaction, then the draft is booked.
 ///
-/// The ledger write already committed by the time this runs, so the event is
-/// announced after the fact rather than atomically with it. That is the weaker
-/// guarantee, but the alternative — threading the ledger's own transaction out
-/// of `post_entry` — would change the ledger API for every caller. A lost
-/// enqueue here re-appears on the next import of the same bank transaction,
-/// which is idempotent at the ledger level.
-async fn enqueue_ce(pool: &sqlx::PgPool, ce: &mako_service::CloudEvent) -> anyhow::Result<()> {
+/// The entry id is derived from the key, so the log row and the event can name
+/// it before the ledger has recorded anything; a crash after the commit leaves
+/// the draft `offen` for the recovery worker, never a logged payment without
+/// its booking or a booking nobody hears about.
+async fn stage_bank_row<'a>(
+    ledger: &crate::ledger::PgLedger,
+    pool: &sqlx::PgPool,
+    tenant: &str,
+    draft: &crate::ledger::PostEntry,
+    row: impl FnOnce(Uuid) -> (crate::pg::BankImport<'a>, mako_service::CloudEvent),
+) -> anyhow::Result<Uuid> {
     let mut tx = pool.begin().await?;
-    mako_service::outbox::enqueue(&mut tx, ce).await?;
+    let ledger_id = crate::booking::stage(&mut tx, ledger, tenant, draft).await?;
+    let (log, ce) = row(ledger_id);
+    crate::pg::record_bank_import(&mut *tx, tenant, &log).await?;
+    mako_service::outbox::enqueue(&mut tx, &ce).await?;
     tx.commit().await?;
-    Ok(())
+    if let Err(e) = crate::booking::book(ledger, pool, tenant, &draft.idempotency).await {
+        tracing::warn!(key = %draft.idempotency, error = %e, "accountingd: bank booking deferred");
+    }
+    Ok(ledger_id)
 }
 
 /// Everything the shared camt importer needs, so camt.053 and camt.054 differ
@@ -1632,41 +1635,65 @@ async fn import_cash_entries(
                 None => "camt Zahlungseingang".to_owned(),
             };
 
-            match crate::pg::post_entry(
-                ledger,
-                pool,
-                &cfg.tenant,
+            let key = format!("bank:{bank_txn_id}");
+            let draft = crate::pg::draft(
                 &malo_id,
                 &lf_mp_id,
                 entry_type,
                 ledger_ct,
-                &format!("bank:{bank_txn_id}"),
+                &key,
                 None,
                 Some(reference),
                 date,
                 date,
                 Some(&description),
                 None,
-            )
-            .await
-            {
-                Ok(ledger_id) => {
-                    if let Err(e) = crate::pg::record_bank_import(
-                        pool,
-                        &cfg.tenant,
-                        &bank_txn_id,
-                        signed_ct.abs(),
-                        Some(counterparty_iban),
-                        date,
-                        Some(ledger_id),
-                        batch_pmt_inf_id,
+            );
+            let ce_type = if is_return {
+                mako_events::accounting::BANKRUECKLAST
+            } else {
+                mako_events::accounting::PAYMENT_IMPORTED
+            };
+            let amount_ct = ledger_ct.abs();
+            let staged = stage_bank_row(ledger, pool, &cfg.tenant, &draft, |ledger_id| {
+                (
+                    crate::pg::BankImport {
+                        bank_transaction_id: &bank_txn_id,
+                        amount_ct: signed_ct.abs(),
+                        iban: Some(counterparty_iban),
+                        value_date: date,
+                        ledger_entry_id: ledger_id,
+                        payment_info_id: batch_pmt_inf_id,
                         end_to_end_id,
-                    )
-                    .await
-                    {
-                        tracing::warn!(error = %e, "accountingd: bank_import_log insert failed");
-                    }
-
+                    },
+                    mako_service::CloudEvent::new(
+                        mako_service::source("accountingd", &cfg.tenant),
+                        ce_type,
+                        &malo_id,
+                        serde_json::json!({
+                            "malo_id":         malo_id,
+                            "lf_mp_id":        lf_mp_id,
+                            "amount_ct":       amount_ct,
+                            "amount_eur":      crate::sepa::ct_to_eur_str(amount_ct),
+                            "is_return":       is_return,
+                            "return_reason":   return_reason,
+                            "reference":       reference,
+                            "bank_txn_id":     bank_txn_id,
+                            "payment_info_id": batch_pmt_inf_id,
+                            "end_to_end_id":   end_to_end_id,
+                            "booking_date":    date.to_string(),
+                            "ledger_id":       ledger_id.to_string(),
+                            // Which rung of the resolution ladder matched:
+                            // "iban" is the bank's own assertion, the others are
+                            // inferences an agent may want to review.
+                            "matched_by":      matched.matched_by,
+                        }),
+                    ),
+                )
+            })
+            .await;
+            match staged {
+                Ok(_) => {
                     // Close the loop on the collection this booking settles or
                     // returns. The EndToEndId is accountingd's Mandatsreferenz,
                     // so a booked collection stops being an open SUBMITTED row
@@ -1732,44 +1759,12 @@ async fn import_cash_entries(
                         }
                     }
 
-                    let ce_type = if is_return {
-                        mako_events::accounting::BANKRUECKLAST
-                    } else {
-                        mako_events::accounting::PAYMENT_IMPORTED
-                    };
-                    let amount_ct = ledger_ct.abs();
-                    let ce = mako_service::CloudEvent::new(
-                        mako_service::source("accountingd", &cfg.tenant),
-                        ce_type,
-                        &malo_id,
-                        serde_json::json!({
-                            "malo_id":         malo_id,
-                            "lf_mp_id":        lf_mp_id,
-                            "amount_ct":       amount_ct,
-                            "amount_eur":      crate::sepa::ct_to_eur_str(amount_ct),
-                            "is_return":       is_return,
-                            "return_reason":   return_reason,
-                            "reference":       reference,
-                            "bank_txn_id":     bank_txn_id,
-                            "payment_info_id": batch_pmt_inf_id,
-                            "end_to_end_id":   end_to_end_id,
-                            "booking_date":    date.to_string(),
-                            "ledger_id":       ledger_id.to_string(),
-                            // Which rung of the resolution ladder matched:
-                            // "iban" is the bank's own assertion, the others are
-                            // inferences an agent may want to review.
-                            "matched_by":      matched.matched_by,
-                        }),
-                    );
-                    if let Err(e) = enqueue_ce(pool, &ce).await {
-                        tracing::warn!(error = %e, "accountingd: bank import CE enqueue failed");
-                    }
                     out.accepted += 1;
                 }
                 Err(e) => {
                     tracing::error!(
                         error = %e,
-                        "accountingd: ledger write FAILED — entry discarded; investigate DB health"
+                        "accountingd: bank booking FAILED — entry discarded; investigate DB health"
                     );
                     out.skipped += 1;
                 }
@@ -2355,6 +2350,7 @@ pub async fn escalate_dunning(
         stufe,
         amount_due_ct,
         due_date,
+        None,
     )
     .await
     {
@@ -3729,7 +3725,9 @@ pub async fn settle_jahresabschluss(
     // pain.001 — but only when the account carries an IBAN. Without one the
     // credit is carried forward and offset against the next Rechnung
     // (§40 EnWG "Verrechnung mit der nächsten Abrechnung").
-    let mut settlement_entry_id: Option<Uuid> = None;
+    // The refund's clearing debit, staged in the transaction below with the run
+    // it belongs to and booked after its commit.
+    let mut refund_draft: Option<crate::ledger::PostEntry> = None;
     let mut refund_pain001: Option<String> = None;
     if settlement_ct < 0 {
         let refund_ct = -settlement_ct; // positive: amount owed to the customer
@@ -3782,13 +3780,8 @@ pub async fn settle_jahresabschluss(
                     }
                 }
                 // Clearing debit: zeroes the credit balance the refund pays out.
-                // Idempotent by `ce_id` — if the satellite tx below fails, an
-                // operator retry replays this as a no-op and completes the run.
                 let desc = format!("Erstattung Jahresabschluss {year} (Auszahlung an Kunde)");
-                match crate::pg::post_entry(
-                    ledger,
-                    pool,
-                    &cfg.tenant,
+                refund_draft = Some(crate::pg::draft(
                     malo_id,
                     lf_mp_id,
                     "JAHRESABSCHLUSS",
@@ -3800,14 +3793,7 @@ pub async fn settle_jahresabschluss(
                     today,
                     Some(&desc),
                     None,
-                )
-                .await
-                {
-                    Ok(id) => settlement_entry_id = Some(id),
-                    Err(e) => {
-                        return Err(SettleError(ledger_failure(e)));
-                    }
-                }
+                ));
             }
             None => {
                 tracing::info!(
@@ -3819,15 +3805,23 @@ pub async fn settle_jahresabschluss(
         }
     }
 
-    // Steps 3–5 commit atomically: the Jahresabschluss idempotency row, the
-    // Abschlag update, and the refund CloudEvent (persist-before-dispatch) all
-    // land in ONE transaction, so a delivery failure can never orphan the event
-    // from the state it represents.
+    // Steps 3–5 commit atomically: the refund's booking draft, the
+    // Jahresabschluss idempotency row, the Abschlag update, and the refund
+    // CloudEvent (persist-before-dispatch) all land in ONE transaction, so a
+    // crash can never leave a run without its booking, or a booking without
+    // its run.
     let mut tx = match pool.begin().await {
         Ok(t) => t,
         Err(e) => {
             return Err(SettleError(ApiError::internal(e)));
         }
+    };
+    let settlement_entry_id = match &refund_draft {
+        Some(draft) => match crate::booking::stage(&mut tx, ledger, &cfg.tenant, draft).await {
+            Ok(id) => Some(id),
+            Err(e) => return Err(SettleError(e.to_api())),
+        },
+        None => None,
     };
 
     // Record the run so a re-call is a no-op (audit + idempotency guard).
@@ -3941,6 +3935,13 @@ pub async fn settle_jahresabschluss(
 
     if let Err(e) = tx.commit().await {
         return Err(SettleError(ApiError::internal(e)));
+    }
+    // Committed with the run; a failure here leaves the draft `offen` for the
+    // recovery worker, never a run without its booking.
+    if let Some(draft) = &refund_draft
+        && let Err(e) = crate::booking::book(ledger, pool, &cfg.tenant, &draft.idempotency).await
+    {
+        tracing::warn!(malo_id, error = %e, "accountingd: Erstattung booking deferred to recovery");
     }
 
     Ok(serde_json::json!({
@@ -4340,71 +4341,44 @@ pub async fn post_reconcile(
 
 // ── Festschreibung (period seals) + audit proofs — GoBD / § 146 AO / § 239 HGB ──
 
-/// Body for `POST /api/v1/periods/{period_id}/seal`.
-#[derive(Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SealPeriodRequest {
-    /// First day of the period (inclusive, ISO 8601).
-    pub start: String,
-    /// Last day of the period (inclusive, ISO 8601).
-    pub end: String,
-}
-
-fn seal_json(seal: &doubleentry::Seal) -> serde_json::Value {
-    serde_json::json!({
-        "ledger": seal.ledger.as_str(),
-        "period": seal.period.as_str(),
-        "seal_hash": seal.seal_hash.to_string(),
-        "tree_root": seal.tree_head.root.to_string(),
-        "tree_size": seal.tree_head.size,
-        // Roots travel with their sizes. A Merkle root on its own does not fix
-        // which tree it is the root of, so a proof checked against a bare root
-        // can be replayed against a different tree; every commitment a seal
-        // publishes is therefore published as a (root, size) pair.
-        "trial_balance_root": seal.trial_balance.root.to_string(),
-        "trial_balance_size": seal.trial_balance.size,
-        // What the trial balance's account handles meant at sealing time.
-        // Without it the handles float and every balance in the seal could
-        // silently refer to a different account.
-        "accounts_root": seal.accounts.root.to_string(),
-        "accounts_size": seal.accounts.size,
-        "entry_count": seal.entry_count,
-        "first_index": seal.first_index,
-        "last_index": seal.last_index,
-        "prev_seal": seal.prev_seal.map(|h| h.to_string()),
-    })
-}
-
 /// `POST /api/v1/periods/{period_id}/seal` — Festschreibung.
 ///
-/// Closes and seals a period, committing to its entries and closing balances as
-/// chained Merkle roots. After sealing, a backdated booking into the period is
-/// rejected — corrections book into a later open period (§ 146 Abs. 4 AO).
+/// Seals every open calendar month through `period_id` (`YYYY-MM`), earliest
+/// first, committing each month's closing balances to the log. After sealing,
+/// a booking dated inside a sealed month is refused (`ledger.301`) and parks;
+/// corrections book into a later open month (§ 146 Abs. 4 AO).
 pub async fn post_seal_period(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Path(period_id): Path<String>,
-    Json(req): Json<SealPeriodRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "close-period", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    use time::format_description::well_known::Iso8601;
-    let (Ok(start), Ok(end)) = (
-        time::Date::parse(&req.start, &Iso8601::DEFAULT),
-        time::Date::parse(&req.end, &Iso8601::DEFAULT),
-    ) else {
-        return ApiError::bad_request("invalid start/end date (ISO 8601)").into_response();
-    };
-    match ledger.seal_period(&period_id, start, end).await {
-        Ok(seal) => (StatusCode::CREATED, Json(seal_json(&seal))).into_response(),
-        Err(e) => ApiError::from(e).into_response(),
+    match ledger.seal_through(&period_id).await {
+        Ok(sealed) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "sealed_through": sealed.last().map(|s| s.end.to_string()),
+                "count": sealed.len(),
+                // Every month this call sealed, earliest first; empty when
+                // `period_id` was sealed already.
+                "sealed": sealed,
+            })),
+        )
+            .into_response(),
+        Err(e) => e.to_api().into_response(),
     }
 }
 
-/// `GET /api/v1/periods/seals` — the Festschreibung history, with chain verification.
+/// `GET /api/v1/periods/seals` — the Festschreibung history and whether the
+/// books verify.
+///
+/// `audit` replays the whole log and compares every derived table with it, so
+/// `verified: true` says more than a seal chain could: no balance, clearing or
+/// seal disagrees with the entries beneath it.
 pub async fn get_seals(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4416,24 +4390,24 @@ pub async fn get_seals(
     }
     let seals = match ledger.seals().await {
         Ok(s) => s,
-        Err(e) => return ApiError::from(e).into_response(),
+        Err(e) => return e.to_api().into_response(),
     };
-    let verified = ledger.verify_seals().await;
+    let audit = ledger.audit().await;
     Json(serde_json::json!({
         "count": seals.len(),
-        "chain_valid": verified.is_ok(),
-        "verify_error": verified.err().map(|e| e.to_string()),
-        // The watermark, not the period list, decides what may still be booked:
-        // every date at or before it is sealed whether or not a period covers
-        // it. An operator asking "is February still open" needs this.
-        "sealed_through": ledger.sealed_through().map(|d| d.to_string()),
-        "seals": seals.iter().map(seal_json).collect::<Vec<_>>(),
+        "verified": audit.is_ok(),
+        "audit_error": audit.as_ref().err().map(ToString::to_string),
+        "log_size": audit.as_ref().ok().map(|a| a.size),
+        // The watermark decides what may still be booked: every date at or
+        // before it is sealed.
+        "sealed_through": seals.last().map(|s| s.end.to_string()),
+        "seals": seals,
     }))
     .into_response()
 }
 
 /// `GET /api/v1/entries/{entry_id}/proof` — a Merkle inclusion proof that the
-/// entry is committed to by the current head (tamper-evidence for an auditor).
+/// entry is in the log, with the head it verifies against (RFC 6962).
 pub async fn get_entry_proof(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4447,19 +4421,14 @@ pub async fn get_entry_proof(
     let Ok(uuid) = Uuid::parse_str(&entry_id) else {
         return ApiError::bad_request("invalid entry_id").into_response();
     };
-    match ledger
-        .prove_entry(doubleentry::EntryId::from_uuid(uuid))
-        .await
-    {
-        Ok((content_hash, proof, head)) => {
+    match ledger.prove_entry(crate::ledger::entry_id(uuid)).await {
+        Ok((leaf, proof, head)) => {
             // Against the whole head, never the bare root: a proof is only
-            // meaningful for a stated tree size. Checked against a root alone,
-            // a genuine proof for one leaf verifies unchanged as a proof for a
-            // different leaf of a differently sized log.
-            let verified = proof.verify(&content_hash, &head);
+            // meaningful for a stated tree size.
+            let verified = proof.verify(&leaf, &head).is_ok();
             Json(serde_json::json!({
                 "entry_id": entry_id,
-                "content_hash": content_hash.to_string(),
+                "leaf_hash": leaf.to_string(),
                 "tree_size": head.size,
                 "tree_root": head.root.to_string(),
                 "verified": verified,
@@ -4467,15 +4436,8 @@ pub async fn get_entry_proof(
             }))
             .into_response()
         }
-        // An entry the ledger does not hold, or holds but has not sequenced
-        // yet, answers as the entry this caller cannot see.
-        Err(
-            e @ (crate::ledger::LedgerError::NotFound(_) | crate::ledger::LedgerError::Refused(_)),
-        ) => {
-            tracing::warn!(error = %e, %entry_id, "accountingd: inclusion proof failed");
-            ApiError::NotFound.into_response()
-        }
-        Err(e) => ApiError::from(e).into_response(),
+        Err(crate::ledger::LedgerError::NotFound(_)) => ApiError::NotFound.into_response(),
+        Err(e) => e.to_api().into_response(),
     }
 }
 
@@ -4489,12 +4451,13 @@ pub struct BalanceProofQuery {
 }
 
 /// `GET /api/v1/periods/{period_id}/balance-proof` — proves what one customer's
-/// account closed at, for a sealed period.
+/// account closed a sealed month at.
 ///
 /// The Betriebsprüfung question (§ 147 AO / GoBD) is not "is this booking in the
 /// books" but "what did this customer owe at the balance-sheet date". A figure
-/// read out of a table is not evidence for that; this returns the two chained
-/// Merkle proofs that are.
+/// read out of a table is not evidence for that; this returns the seal's
+/// inclusion proof and the account's leaf in the sealed balance tree, verified
+/// against the head before it is published.
 pub async fn get_period_balance_proof(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4506,89 +4469,48 @@ pub async fn get_period_balance_proof(
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    let outcome = match ledger
+    let (proof, head) = match ledger
         .prove_period_balance(&period_id, &q.lf_mp_id, &q.malo_id)
         .await
     {
-        Ok(o) => o,
-        // A period that was never sealed, or a period id the ledger refuses,
-        // answers as the period this caller cannot see. A closing balance that
-        // no longer reproduces its seal is an integrity failure and a `500`.
-        Err(
-            e @ (crate::ledger::LedgerError::NotFound(_) | crate::ledger::LedgerError::Refused(_)),
-        ) => {
-            tracing::warn!(error = %e, %period_id, "accountingd: sealed-balance proof failed");
-            return ApiError::NotFound.into_response();
+        Ok(p) => p,
+        // The month is not sealed, or the account did not exist when it was:
+        // the seal cannot speak about it, and no proof may be manufactured.
+        Err(crate::ledger::LedgerError::NotFound(reason)) => {
+            return ApiError::not_found(reason).into_response();
         }
-        Err(e) => return ApiError::from(e).into_response(),
+        Err(e) => return e.to_api().into_response(),
     };
-
-    // Two ways to have nothing to prove, and they are different sentences. The
-    // books are intact in both, so neither is an error — but "had no movement
-    // that period" and "was not a customer yet" answer an auditor differently,
-    // and collapsing them would invite reading the second as the first.
-    let proof = match outcome {
-        doubleentry::SealedBalanceOutcome::Proven(proof) => *proof,
-        doubleentry::SealedBalanceOutcome::NoRow => {
-            return Json(serde_json::json!({
-                "period": period_id,
-                "malo_id": q.malo_id,
-                "lf_mp_id": q.lf_mp_id,
-                "absent": true,
-                "reason": "no_row",
-                // Absent is not zero. A seal's closing balances are cumulative
-                // as of the period's last day, so this means nothing was booked
-                // on or before that date — not merely that the period itself was
-                // quiet. There is nothing the seal committed to, and no proof
-                // may be manufactured.
-                "detail": "the account was nameable when the period closed but has \
-                           nothing booked on or before its last day, so the seal \
-                           committed to no balance for it — this is not a proven zero",
-            }))
-            .into_response();
-        }
-        doubleentry::SealedBalanceOutcome::NotYetRegistered => {
-            return Json(serde_json::json!({
-                "period": period_id,
-                "malo_id": q.malo_id,
-                "lf_mp_id": q.lf_mp_id,
-                "absent": true,
-                "reason": "not_yet_registered",
-                "detail": "the account did not exist when the period sealed — \
-                           a seal names the handles the registry had issued by then, \
-                           so it cannot speak about this account at all",
-            }))
-            .into_response();
-        }
-    };
-
     // Verified here before it is published: handing out a proof that does not
     // check is worse than returning nothing, because it looks like evidence.
-    if !proof.verify() {
-        return ApiError::internal(anyhow::anyhow!(
-            "constructed balance proof does not verify against its seal"
-        ))
-        .into_response();
-    }
-
-    let balance = &proof.balance.balance;
+    let proven = match proof.verify(&head) {
+        Ok(p) => p,
+        Err(e) => {
+            return ApiError::internal(anyhow::anyhow!(
+                "constructed balance proof does not verify: {e}"
+            ))
+            .into_response();
+        }
+    };
+    let ct = |a: crate::ledger::Eur| i64::try_from(a.to_minor()).unwrap_or(0);
     Json(serde_json::json!({
         "period": period_id,
         "malo_id": q.malo_id,
         "lf_mp_id": q.lf_mp_id,
-        "account": proof.path().to_string(),
-        "debits_ct": balance.debits.to_minor(),
-        "credits_ct": balance.credits.to_minor(),
+        "account": proven.account.to_string(),
+        "start": proven.start.to_string(),
+        "end": proven.end.to_string(),
+        "debits_ct": ct(proven.balance.debit()),
+        "credits_ct": ct(proven.balance.credit()),
         // Positive = the customer owes, negative = the customer is owed.
-        "balance_ct": balance.debits.to_minor() - balance.credits.to_minor(),
+        "balance_ct": ct(proven.balance.net()),
         "verified": true,
-        "seal": seal_json(&proof.seal),
-        // The whole bundle, verbatim. A recipient deserialises this back into a
-        // `doubleentry::SealedBalance` and calls `verify()` themselves — the
-        // flattened fields above are for reading, this is the evidence. An
-        // edited seal fails to deserialise at all, so someone who never calls
-        // `verify` is not fooled either.
-        "sealed_balance": serde_json::to_value(&proof).unwrap_or(serde_json::Value::Null),
+        "tree_size": head.size,
+        "tree_root": head.root.to_string(),
+        // The whole proof, verbatim: a recipient deserialises it into a
+        // `doubleentry::log::SealedBalanceProof` and verifies it against the
+        // head themselves. The fields above are for reading; this is the evidence.
+        "proof": serde_json::to_value(&proof).unwrap_or(serde_json::Value::Null),
     }))
     .into_response()
 }
@@ -4600,8 +4522,8 @@ pub struct ConsistencyQuery {
     pub since: u64,
 }
 
-/// `GET /api/v1/entries/consistency-proof?since=N` — proves the journal has only
-/// been appended to since it held `N` entries.
+/// `GET /api/v1/entries/consistency-proof?since=N` — proves the log has only
+/// been appended to since it held `N` records.
 ///
 /// An inclusion proof on its own says the ledger is internally consistent *now*,
 /// which a rebuilt ledger would satisfy just as well. This is the half that makes
@@ -4617,26 +4539,26 @@ pub async fn get_consistency_proof(
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
+    // `since=0` is refused: every log extends the empty tree, so a proof from
+    // it verifies against any root of the right size — `verified: true` from a
+    // check that examined nothing.
+    if q.since == 0 {
+        return ApiError::bad_request("since must be at least 1").into_response();
+    }
     match ledger.prove_append_only(q.since).await {
         Ok((proof, then, now)) => Json(serde_json::json!({
             "archived_size": then.size,
             "archived_root": then.root.to_string(),
             "current_size": now.size,
             "current_root": now.root.to_string(),
-            "verified": proof.verify(&then, &now),
+            "verified": proof.verify(&then, &now).is_ok(),
             "proof": serde_json::to_value(&proof).unwrap_or(serde_json::Value::Null),
         }))
         .into_response(),
-        // `since=0` lands here. Every log extends the empty tree, so a proof
-        // from it verifies against any root of the right size — correct
-        // mathematics and a trap, because `verified: true` from a check that
-        // examined nothing is indistinguishable from a real verification. The
-        // ledger refuses to build one; an auditor gets the refusal, not
-        // reassurance.
-        Err(
-            e @ (crate::ledger::LedgerError::NotFound(_) | crate::ledger::LedgerError::Refused(_)),
-        ) => ApiError::bad_request(e.to_string()).into_response(),
-        Err(e) => ApiError::from(e).into_response(),
+        Err(e @ crate::ledger::LedgerError::Refused { .. }) => {
+            ApiError::bad_request(e.to_string()).into_response()
+        }
+        Err(e) => e.to_api().into_response(),
     }
 }
 
@@ -4690,42 +4612,103 @@ pub async fn post_clear(
     }
     let today = mako_fristen::heute();
     match ledger.apply_fifo_clearing(lf_mp_id, &malo_id, today).await {
-        Ok(Some(id)) => Json(serde_json::json!({
-            "cleared": true,
-            "clearing_id": id.to_string(),
-        }))
-        .into_response(),
-        Ok(None) => Json(serde_json::json!({
-            "cleared": false,
-            "message": "nothing left to match",
+        Ok(positions) => Json(serde_json::json!({
+            "cleared": !positions.is_empty(),
+            // Each matched (debit, credit) pair is one clearing, named by its
+            // log position — what `POST /clearings/{position}/reset` takes.
+            "clearings": positions,
         }))
         .into_response(),
         Err(e) => ApiError::from(e).into_response(),
     }
 }
 
-/// `POST /api/v1/clearings/{clearing_id}/reset` — release a Zahlungszuordnung; the
-/// applied amounts return to the postings' residuals (the original record stays).
+/// `POST /api/v1/clearings/{position}/reset` — release one Zahlungszuordnung; the
+/// applied amount returns to both postings' residuals (the clearing record stays).
 pub async fn post_reset_clearing(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
-    Path(clearing_id): Path<String>,
+    Path(position): Path<u64>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    let Ok(uuid) = Uuid::parse_str(&clearing_id) else {
-        return ApiError::bad_request("invalid clearing_id").into_response();
-    };
     let today = mako_fristen::heute();
-    match ledger
-        .reset_clearing(doubleentry::clearing::ClearingId::from_uuid(uuid), today)
-        .await
-    {
+    match ledger.reset_clearing(position, today).await {
         Ok(()) => Json(serde_json::json!({ "reset": true })).into_response(),
         Err(e) => refusal(e).into_response(),
+    }
+}
+
+// ── Parked bookings — drafts the ledger refused for good ─────────────────────
+
+/// Body of `POST /api/v1/bookings/{key}/rebook`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RebookRequest {
+    /// The date to book on (ISO 8601) — an open month; the parked list names
+    /// the first one as `vorschlag_datum`.
+    pub buchungsdatum: String,
+}
+
+/// Body of `POST /api/v1/bookings/{key}/discard`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscardRequest {
+    /// Why the booking is dropped — kept with the draft for the audit trail.
+    pub grund: String,
+}
+
+/// `POST /api/v1/bookings/{key}/rebook` — book a parked draft on an open date.
+///
+/// The successor draft and the retirement of the parked one commit together;
+/// the successor is then booked, and answers as the ledger does.
+pub async fn post_rebook(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Path(key): Path<String>,
+    Json(req): Json<RebookRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    let Ok(on) = time::Date::parse(
+        &req.buchungsdatum,
+        &time::format_description::well_known::Iso8601::DATE,
+    ) else {
+        return ApiError::bad_request("buchungsdatum must be an ISO 8601 date").into_response();
+    };
+    match crate::booking::rebook(&ledger, &pool, &cfg.tenant, &key, on, claims.sub()).await {
+        Ok(crate::booking::Booked::Gebucht { entry_id, .. }) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "gebucht": true, "entry_id": entry_id })),
+        )
+            .into_response(),
+        Ok(_) => ApiError::conflict("the rebooking is parked again").into_response(),
+        Err(e) => e.to_api().into_response(),
+    }
+}
+
+/// `POST /api/v1/bookings/{key}/discard` — drop a parked draft with a reason.
+pub async fn post_discard(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Extension(pool): Extension<PgPool>,
+    Path(key): Path<String>,
+    Json(req): Json<DiscardRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    match crate::booking::discard(&pool, &cfg.tenant, &key, &req.grund, claims.sub()).await {
+        Ok(()) => Json(serde_json::json!({ "verworfen": true })).into_response(),
+        Err(e) => e.to_api().into_response(),
     }
 }
 
@@ -4898,7 +4881,6 @@ pub async fn post_run_eeg_payouts(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Json(req): Json<RunEegPayoutsRequest>,
 ) -> impl IntoResponse {
@@ -4920,15 +4902,23 @@ pub async fn post_run_eeg_payouts(
     let year = req.billing_year.unwrap_or(today.year() as i16);
     let month = req.billing_month.unwrap_or(today.month() as i16);
 
-    // EEG_GUTSCHRIFT entries booked in the period, from the ledger. Re-runs are
-    // idempotent via ON CONFLICT (end_to_end_ref) below, so no exclusion query is
-    // needed — an already-paid entry simply produces no new order.
-    let candidates = match ledger
-        .entries_of_kind_in_month("EEG_GUTSCHRIFT", year as i32, month as u8)
-        .await
+    // EEG_GUTSCHRIFT entries booked in the period. Re-runs are idempotent via
+    // ON CONFLICT (end_to_end_ref) below, so no exclusion query is needed — an
+    // already-paid entry simply produces no new order.
+    let (Ok(month_u8), true) = (u8::try_from(month), (1..=12).contains(&month)) else {
+        return ApiError::unprocessable("billing_month must be 1–12").into_response();
+    };
+    let candidates = match crate::booking::booked_of_kind_in_month(
+        &pool,
+        &cfg.tenant,
+        "EEG_GUTSCHRIFT",
+        i32::from(year),
+        month_u8,
+    )
+    .await
     {
         Ok(c) => c,
-        Err(e) => return ApiError::from(e).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let mut generated = 0usize;
@@ -5757,14 +5747,11 @@ pub async fn post_sepa_reversal(
         }
     };
 
-    // The compensating ledger entry re-opens the receivable. Positive = Forderung.
-    let ledger_entry_id = match (entry.malo_id.as_deref(), entry.lf_mp_id.as_deref()) {
+    // The compensating entry re-opens the receivable. Positive = Forderung.
+    let storno = match (entry.malo_id.as_deref(), entry.lf_mp_id.as_deref()) {
         (Some(malo_id), Some(lf_mp_id)) => {
             let today = mako_fristen::heute();
-            match crate::pg::post_entry(
-                &ledger,
-                &pool,
-                &cfg.tenant,
+            Some(crate::pg::draft(
                 malo_id,
                 lf_mp_id,
                 "SEPA_STORNO",
@@ -5779,27 +5766,27 @@ pub async fn post_sepa_reversal(
                     entry.collection_date,
                     reason.as_code()
                 )),
-                None,
-            )
-            .await
-            {
-                Ok(id) => Some(id),
-                Err(e) => {
-                    tracing::error!(error = %e, "accountingd: SEPA_STORNO ledger post failed");
-                    return ledger_failure(e.context("reversal ledger post failed"))
-                        .into_response();
-                }
-            }
+                Some(claims.sub()),
+            ))
         }
         _ => None,
     };
 
-    // Record the reversal, close the collected entry and announce it in one
-    // transaction: the unique index on `collection_entry_id` is what stops a
-    // second request refunding the same collection twice.
+    // Stage the booking, record the reversal, close the collected entry and
+    // announce it in one transaction: the unique index on
+    // `collection_entry_id` is what stops a second request refunding the same
+    // collection twice, and a refused second request rolls its booking back
+    // with it.
     let mut tx = match pool.begin().await {
         Ok(t) => t,
         Err(e) => return ApiError::internal(e).into_response(),
+    };
+    let ledger_entry_id = match &storno {
+        Some(draft) => match crate::booking::stage(&mut tx, &ledger, &cfg.tenant, draft).await {
+            Ok(id) => Some(id),
+            Err(e) => return e.to_api().into_response(),
+        },
+        None => None,
     };
     let reversal_id = match crate::pg::record_sepa_reversal(
         &mut *tx,
@@ -5869,6 +5856,11 @@ pub async fn post_sepa_reversal(
     }
     if let Err(e) = tx.commit().await {
         return ApiError::internal(e).into_response();
+    }
+    if let Some(draft) = &storno
+        && let Err(e) = crate::booking::book(&ledger, &pool, &cfg.tenant, &draft.idempotency).await
+    {
+        tracing::warn!(error = %e, "accountingd: SEPA_STORNO booking deferred to recovery");
     }
 
     (

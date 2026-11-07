@@ -108,7 +108,7 @@ missing_docs = "warn"
 allow_attributes_without_reason = "deny"
 
 [workspace.package]
-version     = "0.27.0"
+version     = "0.28.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -125,7 +125,7 @@ miette       = { version = "7", features = ["fancy-no-syscall"] }
 # `validate` carries the BO4E cross-field rules (`mako_markt::bo4e`). Off:
 # `schemars` (no mako type exposes a rubo4e type in a JSON Schema) and `strum`
 # (its `FromStr` accepts the `"UNKNOWN"` catch-all; `from_wire` refuses it).
-rubo4e       = { version = "0.14.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "json", "builder"] }
+rubo4e       = { version = "0.15.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "json", "builder"] }
 # `serde-str` makes a `Decimal` deserialize from its **string** form only. A
 # JSON float cannot represent 0.1, so accepting one for a price or a billed
 # quantity rounds it through `f64` silently — the same argument that makes the
@@ -147,8 +147,8 @@ billing      = { version = "0.16.0", features = ["serde"] }
 # catalogue walk, the CII re-parse and the metadata/payload `Divergence` checks
 # outputd's publish gate runs. outputd writes the carrier itself
 # (`outputd::document::facturx`).
-en16931         = { version = "0.8.0", features = ["billing", "serde", "time"] }
-en16931-formats = { version = "0.8.0", features = ["cii", "ubl", "serde", "zugferd"] }
+en16931         = { version = "0.10.0", features = ["billing", "serde", "time"] }
+en16931-formats = { version = "0.10.0", features = ["cii", "ubl", "serde", "zugferd"] }
 serde        = { version = "1", features = ["derive"] }
 # Jaro-Winkler for the `E_0624` Prüfschritt-50 name comparison. Already in the
 # tree via clap and darling, so it adds no supply-chain surface.
@@ -185,45 +185,45 @@ schemars                  = { version = "1.2.1" }
 # to the Opaque track, and a release code several profiles share. Off, those
 # decisions are taken silently. External consumers of the published crate still
 # choose for themselves; every build in this workspace gets them.
-edi-energy       = { path = "crates/edi-energy",  version = "0.27", features = ["tracing"] }
-mako-engine      = { path = "crates/mako-engine",      version = "0.27" }
-mako-markt       = { path = "crates/mako-markt",       version = "0.27" }
-mako-events      = { path = "crates/mako-events",      version = "0.27" }
-grid-billing     = { path = "crates/grid-billing",     version = "0.27" }
-eeg-billing      = { path = "crates/eeg-billing",      version = "0.27" }
-mako-wim         = { path = "crates/mako-wim",         version = "0.27" }
-mako-gpke        = { path = "crates/mako-gpke",        version = "0.27" }
+edi-energy       = { path = "crates/edi-energy",  version = "0.28", features = ["tracing"] }
+mako-engine      = { path = "crates/mako-engine",      version = "0.28" }
+mako-markt       = { path = "crates/mako-markt",       version = "0.28" }
+mako-events      = { path = "crates/mako-events",      version = "0.28" }
+grid-billing     = { path = "crates/grid-billing",     version = "0.28" }
+eeg-billing      = { path = "crates/eeg-billing",      version = "0.28" }
+mako-wim         = { path = "crates/mako-wim",         version = "0.28" }
+mako-gpke        = { path = "crates/mako-gpke",        version = "0.28" }
 # The INVOIC settle/dispute state machine, shared by every billing family.
 # GPKE, WiM, GaBi Gas and GeLi Gas register a family against it rather than
 # re-implementing the process, so the four cannot drift apart.
-mako-invoic      = { path = "crates/mako-invoic",      version = "0.27" }
-mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.27" }
+mako-invoic      = { path = "crates/mako-invoic",      version = "0.28" }
+mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.28" }
 # Every Frist in one leaf crate: BDEW Werktage, the MaKo holiday calendar, and
 # the per-Prüfidentifikator Antwortfrist tables. Depended on directly — there is
 # no re-export through `mako-engine`, so a caller names `mako_fristen`.
-mako-fristen     = { path = "crates/mako-fristen",     version = "0.27" }
+mako-fristen     = { path = "crates/mako-fristen",     version = "0.28" }
 # AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here because
 # mako-as4 and makod both depend on it: independent declarations drift onto two
 # versions in one build. `Profile::bdew()` fixes every security and wire
 # setting; mako supplies the parties, the SM-PKI root and the CRL signer.
 asx-rs           = { version = "0.16.2", default-features = false, features = ["as4", "http-client"] }
-mako-service     = { path = "crates/mako-service",     version = "0.27" }
-invoic-checker   = { path = "crates/invoic-checker",   version = "0.27" }
+mako-service     = { path = "crates/mako-service",     version = "0.28" }
+invoic-checker   = { path = "crates/invoic-checker",   version = "0.28" }
 # `default-features = false` on purpose: the crate's defaults are *every*
 # Marktrolle's Entscheidungsbäume. A member that inherits this dependency names
 # the roles it actually checks (`features = ["role-msb"]`), so the feature graph
 # says which trees a build carries instead of every build carrying all of them.
-mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.27", default-features = false }
-mako-emob        = { path = "crates/mako-emob",        version = "0.27" }
-mako-mabis       = { path = "crates/mako-mabis",       version = "0.27" }
-energy-billing   = { path = "crates/energy-billing",   version = "0.27" }
-dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.27" }
+mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.28", default-features = false }
+mako-emob        = { path = "crates/mako-emob",        version = "0.28" }
+mako-mabis       = { path = "crates/mako-mabis",       version = "0.28" }
+energy-billing   = { path = "crates/energy-billing",   version = "0.28" }
+dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.28" }
 metering         = { version = "0.25" }
 sepa             = { version = "0.9" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and
 # SKR mapping live in accountingd, never in the crate.
-doubleentry      = { version = "0.7" }
+doubleentry      = { version = "0.8.1" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
 # The one consumer is `edmd` (kafka_ingest), for high-volume metering ingest;

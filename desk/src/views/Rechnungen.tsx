@@ -34,22 +34,34 @@ const WAHL =
 const PRIMAER =
   "focus-ring h-9 rounded-control bg-accent px-4 text-body font-semibold text-on-accent data-[disabled]:opacity-40";
 
-/** The confirm a message-sending decision passes: what goes out, then the send. */
-function Bestaetigen({
+/**
+ * The confirm a final decision passes: what it does, then the act. A
+ * message-sending decision keeps the default words; a booking names its own.
+ */
+export function Bestaetigen({
   text,
   pending,
   onAbbrechen,
   onSenden,
+  frage = "Senden bestätigen",
+  los = "Jetzt senden",
+  laeuft = "Sendet …",
 }: {
   text: string;
   pending: boolean;
   onAbbrechen: () => void;
   onSenden: () => void;
+  /** The dialog's name. */
+  frage?: string;
+  /** The button that acts. */
+  los?: string;
+  /** The button while it acts. */
+  laeuft?: string;
 }) {
   return (
     <div
       role="alertdialog"
-      aria-label="Senden bestätigen"
+      aria-label={frage}
       className="flex flex-wrap items-center gap-3 rounded-[10px] bg-fill px-3 py-2"
     >
       <p className="m-0 flex-1 text-body text-text">{text}</p>
@@ -65,7 +77,7 @@ function Bestaetigen({
         onPress={onSenden}
         className="focus-ring h-8 rounded-control bg-accent px-3 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
       >
-        {pending ? "Sendet …" : "Jetzt senden"}
+        {pending ? laeuft : los}
       </AriaButton>
     </div>
   );

@@ -44,6 +44,8 @@ Commands:
   check-routes        Refuse axum 0.7 `/:param` route literals, which panic at startup
   check-publish-order Refuse a crates.io publish order that precedes its own dependencies
   check-bo4e-attributes Refuse a ZusatzAttribut that is not `mako:`-namespaced and registered
+  check-ledger-drafts   Refuse an accountingd ledger write outside a booking draft, and a
+                        cent amount formatted through f64
   check-request-bodies  No body reaches a handler past `mako_service::Json`'s unknown-key
                         refusal unlisted (a flatten, an untagged/tagged enum, `Lenient`,
                         `axum::Json`), and a BO4E document in one is a `Bo4e<T>`
@@ -162,6 +164,7 @@ mod check_event_verlauf;
 mod check_expected_tenant;
 mod check_frist_literals;
 mod check_known_wrong;
+mod check_ledger_drafts;
 mod check_malo_ids;
 mod check_occupancy;
 mod check_outbox_notify;
@@ -218,6 +221,7 @@ fn main() {
         Some("check-sql") => check_sql(),
         Some("check-publish-order") => check_publish_order::check_publish_order(),
         Some("check-bo4e-attributes") => check_bo4e_attributes(),
+        Some("check-ledger-drafts") => check_ledger_drafts(),
         Some("check-request-bodies") => check_request_bodies(),
         Some("check-bo4e-discriminants") => check_bo4e_discriminants(),
         Some("check-bo4e-examples") => check_bo4e_examples(),
@@ -510,6 +514,13 @@ fn check_bo4e_discriminants() {
 fn check_bo4e_examples() {
     let (workspace_root, _) = workspace_info();
     if !check_bo4e_examples::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_ledger_drafts() {
+    let (workspace_root, _) = workspace_info();
+    if !check_ledger_drafts::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

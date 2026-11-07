@@ -54,6 +54,10 @@ upstreamConfig:
       path: ^/svc/billingd/(.*)$
       rewriteTarget: /$1
       uri: http://billingd:9280
+    - id: accountingd
+      path: ^/svc/accountingd/(.*)$
+      rewriteTarget: /$1
+      uri: http://accountingd:9380
     - id: agentd
       path: ^/svc/agentd/(.*)$
       rewriteTarget: /$1

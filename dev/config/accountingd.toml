@@ -13,4 +13,7 @@ tenant = "9900357000004"
 addr = "127.0.0.1:9380"
 
 [database]
-url = "postgres://dev:dev@localhost:5432/accountingd"
+# Serves as a role that may append to the journal and not rewrite it; the
+# owner migrates and grants it (dev/init-db.sh creates both).
+url           = "postgres://accountingd_app:accountingd_app@localhost:5432/accountingd"
+migration_url = "postgres://dev:dev@localhost:5432/accountingd"

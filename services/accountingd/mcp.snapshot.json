@@ -1,0 +1,544 @@
+[
+  {
+    "name": "compute_bilanzielle_abgrenzung",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cutoff_date": {
+          "description": "Cutoff date for the period-end accrual (YYYY-MM-DD).\nDefaults to today. Use last day of month for Monatsabschluss.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_balance",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_vorauszahlung",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": "string"
+        },
+        "lf_mp_id": {
+          "description": "The LF MP-ID the account is held under. Defaults to the tenant, as on\nthe REST route.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "import_payments",
+    "annotations": {
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "entries"
+      ],
+      "type": "object",
+      "properties": {
+        "entries": {
+          "description": "CAMT.054 payment entries. Each entry: `{ \"malo_id\": \"...\", \"amount_ct\": 5000, \"value_date\": \"2026-01-15\", \"reference\": \"...\" }`.",
+          "type": "array",
+          "items": true
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_dunning",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_ledger",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        },
+        "lf_mp_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_overdue",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "days_overdue": {
+          "description": "Minimum days overdue (default 1).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "list_parked_bookings",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "description": "Max results (default 50, clamped to 1–200).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "GeparkteBuchung": {
+          "description": "A parked booking, as the Desk shows it.",
+          "type": "object",
+          "properties": {
+            "key": {
+              "description": "The draft's key — what rebook and discard name.",
+              "type": "string"
+            },
+            "art": {
+              "description": "The Buchungsart.",
+              "type": "string"
+            },
+            "malo_id": {
+              "description": "The Marktlokation.",
+              "type": "string"
+            },
+            "lf_mp_id": {
+              "description": "The Lieferant's MP-ID.",
+              "type": "string"
+            },
+            "betrag_ct": {
+              "description": "Signed amount in minor units (positive: the customer owes).",
+              "type": "integer",
+              "format": "int64"
+            },
+            "buchungsdatum": {
+              "description": "The booking date the ledger refused.",
+              "type": "string",
+              "format": "date"
+            },
+            "beleg": {
+              "description": "The Beleg, when the draft cites one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "code": {
+              "description": "doubleentry's rejection code; `None` for a refusal accountingd made.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "meldung": {
+              "description": "The refusal in words.",
+              "type": "string"
+            },
+            "hinweis": {
+              "description": "What the operator can do about it, in words.",
+              "type": "string"
+            },
+            "vorschlag_datum": {
+              "description": "The first date a rebooking is accepted on, when the refusal is a\nsealed period (`301`) — the day after the last seal.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "seit": {
+              "description": "When the draft was staged (RFC 3339).",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "key",
+            "art",
+            "malo_id",
+            "lf_mp_id",
+            "betrag_ct",
+            "buchungsdatum",
+            "beleg",
+            "code",
+            "meldung",
+            "hinweis",
+            "vorschlag_datum",
+            "seit"
+          ]
+        }
+      },
+      "required": [
+        "buchungen",
+        "count",
+        "saturated"
+      ],
+      "type": "object",
+      "properties": {
+        "buchungen": {
+          "description": "Up to `limit` parked bookings.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GeparkteBuchung"
+          }
+        },
+        "count": {
+          "description": "How many are parked in all.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "saturated": {
+          "description": "Whether `count` exceeds what `buchungen` carries.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_sepa_collections",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "status": {
+          "description": "Lifecycle filter: `SUBMITTED` | `SETTLED` | `REJECTED` | `RETURNED` | `REVERSED`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "malo_id": {
+          "description": "Restrict to one customer MaLo.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Maximum rows (default 100, capped at 1000).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "post_manual_booking",
+    "annotations": {
+      "readOnlyHint": false,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "entry_type",
+        "amount_ct"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        },
+        "entry_type": {
+          "description": "Buchungsart. One of: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE,\nBANKRUECKLAST, MAHNGEBUEHR, VERZUGSZINSEN, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.",
+          "type": "string"
+        },
+        "amount_ct": {
+          "description": "Amount in ct (× 10⁻² EUR). Positive = debit; negative = credit.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reference_id": {
+          "description": "External reference for audit trail (invoice number, CAMT ref, etc.).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Human-readable description for the Kontoauszug.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "run_abschlag_cycle",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "day_of_month": {
+          "description": "Day of month to process (1–28). Defaults to today's day.\nSet explicitly to process a specific billing day (e.g. catchup runs).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int16",
+          "minimum": -32768,
+          "maximum": 32767
+        },
+        "dry_run": {
+          "description": "Dry-run: if true, returns counts without posting ledger entries.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "run_sepa_collection",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "suggest_payment_match",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "amount_ct",
+        "reference"
+      ],
+      "properties": {
+        "amount_ct": {
+          "description": "Payment amount in 1/100 EUR cents (e.g. 12500 = 125.00 EUR).",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reference": {
+          "description": "Payment reference / Verwendungszweck from the bank statement.",
+          "type": "string"
+        },
+        "iban": {
+          "description": "Counterparty IBAN, when the bank reported one — the strongest evidence\nof who paid, and the rung that resolves without any guessing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "end_to_end_id": {
+          "description": "`EndToEndId`, when the bank echoed one back.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value_date": {
+          "description": "Value date of the payment (YYYY-MM-DD).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tolerance_pct": {
+          "description": "Fuzzy tolerance for the fallback rung: how many percent the open balance\nmay deviate from the payment (default 2 %). Ignored when the reference\nidentifies the account outright.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "trigger_jahresabschluss",
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID for which to run the annual settlement.",
+          "type": "string"
+        },
+        "year": {
+          "description": "Billing year (YYYY) — defaults to previous calendar year.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "update_abschlag",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "abschlag_ct"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": "string"
+        },
+        "abschlag_ct": {
+          "description": "New monthly advance payment in ct (× 10⁻² EUR). 0 disables the advance payment.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "billing_day": {
+          "description": "Day of month for SEPA direct debit (1–28). Defaults to current setting.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int16",
+          "minimum": -32768,
+          "maximum": 32767
+        }
+      }
+    },
+    "outputSchema": null
+  }
+]

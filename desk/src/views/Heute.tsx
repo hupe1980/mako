@@ -13,6 +13,7 @@ import { BAENDER, type Band, band, useNow } from "../format/frist";
 import type { Eintrag, QuelleId, Stand } from "../inbox/model";
 import { alsEintrag, useBenannt, useHinweise, useQuellen, useVorschlaege } from "../inbox/quellen";
 import { Bewertung } from "./Bewertung";
+import { GeparktEntscheiden } from "./Buchungen";
 import { Fragen } from "./Fragen";
 import { Entscheiden } from "./Freigaben";
 import { Lage } from "./Lage";
@@ -28,6 +29,7 @@ const GLYPH: Record<QuelleId, IconName> = {
   ableseauftraege: "clock",
   dispute: "doc",
   pruefposten: "doc",
+  geparkt: "warn",
   hinweise: "sparkle",
 };
 
@@ -147,7 +149,7 @@ function Zeile({
 }) {
   const router = useRouter();
   const ai = e.quelle === "hinweise";
-  const entscheidbar = Boolean(e.freigabe || e.disput || e.pruefposten);
+  const entscheidbar = Boolean(e.freigabe || e.disput || e.pruefposten || e.geparkt);
   return (
     <li className="border-b border-separator last:border-b-0">
       <button
@@ -159,7 +161,7 @@ function Zeile({
         aria-expanded={entscheidbar ? offen : undefined}
         onFocus={() => onFocus(index)}
         onClick={() => {
-          // A Freigabe, a Disput and a Prüfposten are decided here;
+          // A Freigabe, a Disput, a Prüfposten and a geparkte Buchung are decided here;
           // everything else opens its view.
           if (entscheidbar) onOeffnen(offen ? null : e.id);
           else if (e.ziel) router.navigate(e.ziel);
@@ -225,6 +227,7 @@ function Zeile({
           {e.freigabe && <Entscheiden f={e.freigabe} onDone={onEntschieden} sofort={sofort} />}
           {e.disput && <DisputEntscheiden d={e.disput} onDone={onEntschieden} sofort={sofort} />}
           {e.pruefposten && <PruefpostenEntscheiden r={e.pruefposten} onDone={onEntschieden} />}
+          {e.geparkt && <GeparktEntscheiden b={e.geparkt} onDone={onEntschieden} />}
         </div>
       )}
     </li>
@@ -416,8 +419,9 @@ export function HeuteView() {
 
       <Quellenzeile staende={staende} agent={agentFehler} />
       <p className="m-0 px-1 text-caption text-text-2">
-        J K oder ↑↓ wählen · ↵ öffnet, Freigaben, Dispute und Prüfposten werden hier entschieden (A
-        / R, U übernimmt den Vorschlag) · ⌘J fragt den Assistenten zum gewählten Eintrag
+        J K oder ↑↓ wählen · ↵ öffnet, Freigaben, Dispute, Prüfposten und geparkte Buchungen werden
+        hier entschieden (A / R, U übernimmt den Vorschlag) · ⌘J fragt den Assistenten zum gewählten
+        Eintrag
       </p>
     </div>
   );

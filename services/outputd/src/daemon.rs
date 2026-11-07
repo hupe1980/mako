@@ -18,7 +18,7 @@ impl Daemon for Outputd {
     type Config = config::OutputdConfig;
     const NAME: &'static str = "outputd";
 
-    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    async fn migrate(_cfg: &Self::Config, pool: &sqlx::PgPool) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await

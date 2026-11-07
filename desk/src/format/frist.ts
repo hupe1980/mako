@@ -37,6 +37,11 @@ export function distance(due: Instant, now: number): Distance {
   return { urgency, text: `in ${span(left)}` };
 }
 
+/** `seit 3 Tagen`, `seit 2 h` — how long ago `since` was, on the wall clock. */
+export function seit(since: Instant, now: number): string {
+  return `seit ${span(Math.max(0, now - epochMs(since)))}`;
+}
+
 /** The current time, re-read every `everyMs` while mounted. */
 export function useNow(everyMs = 30_000): number {
   const [now, setNow] = useState(() => Date.now());

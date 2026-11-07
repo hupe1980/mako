@@ -12,6 +12,9 @@ export type Handlung =
   | { dienst: "processd"; aktion: "entscheiden" }
   | { dienst: "invoicd"; aktion: "entscheiden" }
   | { dienst: "billingd"; aktion: "freigeben" | "pruefen" }
+  // Neu buchen and Verwerfen are one Cedar action (`post-entry`): a refusal
+  // of either is a refusal of both.
+  | { dienst: "accountingd"; aktion: "buchen" }
   | { dienst: "agentd"; aktion: "fragen" | "bewerten" };
 
 /** The service refused the person this action: its reason, as it wrote it. */

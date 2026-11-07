@@ -27,7 +27,8 @@
 //   "write-account"      — PUT  account master data, Abschlag, Vorauszahlung,
 //                          Zahlungsinformation, business-partner link
 //   "post-entry"         — POST a manual ledger booking, a clearing, a clearing
-//                          reset, an interest charge, a reconcile
+//                          reset, an interest charge, a reconcile, a parked
+//                          booking's rebook or discard
 //   "manage-dunning"     — POST Mahnstufe escalation/resolution, the §41g Abs. 1
 //                          S. 2 Abwendungsvereinbarung offer, placing and lifting
 //                          a Mahnsperre (dunning lock), and recording or closing

@@ -58,13 +58,14 @@ export const VORIGE: Shortcut = {
 };
 export const FREIGEBEN: Shortcut = {
   keys: "A",
-  label: "Freigeben wählen — beim Disput Beilegen, beim Prüfposten Geprüft",
+  label:
+    "Freigeben wählen — beim Disput Beilegen, beim Prüfposten Geprüft, bei einer geparkten Buchung Neu buchen",
   group: "Entscheiden",
   match: letter("a"),
 };
 export const ABLEHNEN: Shortcut = {
   keys: "R",
-  label: "Ablehnen wählen — beim Disput Ablehnung senden",
+  label: "Ablehnen wählen — beim Disput Ablehnung senden, bei einer geparkten Buchung Verwerfen",
   group: "Entscheiden",
   match: letter("r"),
 };

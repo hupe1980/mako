@@ -9,6 +9,58 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.28.0] — unreleased
+
+### Added
+
+- accountingd books through **booking drafts**: every ledger entry is staged in
+  `booking_drafts` in the transaction of the business change that causes it —
+  a dunning case and its Mahngebühr, a bank row with its `bank_import_log` entry
+  and event, a Jahresabschluss and its refund, a SEPA reversal, an interest
+  charge, an Abschlagsforderung and its Verrechnung — and recorded after the
+  commit; a recovery worker books what a crash left open, exactly once. A
+  booking the ledger refuses for good is **parked** with its code, listed by
+  the MCP tool `list_parked_bookings` and the Lieferant's Heute in the Desk, and
+  resolved by `POST /api/v1/bookings/{key}/rebook` or `/discard`. In the Desk
+  a geparkte Buchung reads in plain German with its Beleg and refusal, is
+  rebooked on the date the service suggests or discarded with a Grund, each
+  confirmed, and counts on the Überblick.
+  `cargo xtask check-ledger-drafts` refuses a ledger write outside a draft and a
+  cent amount formatted through `f64`.
+- `[database] migration_url`: the runner migrates as the owning role and grants
+  `url`'s role data access without DDL. accountingd grants its runtime role
+  exactly doubleentry's list, so the journal cannot be rewritten by the process
+  that writes it. The dev and o2c configs run accountingd as `accountingd_app`;
+  **recreate the dev database volume** so `dev/init-db.sh` creates the role.
+
+### Changed
+
+- **Breaking:** accountingd's ledger is doubleentry 0.8.1 in schema `ledger`
+  (0.7 used `doubleentry`; no migration — 0.8 cannot read a 0.7 ledger).
+  Periods are calendar months from 2015-01; `POST /api/v1/periods/{id}/seal`
+  takes no body and seals every open month through `id`; `GET /periods/seals`
+  reports `verified` (a full audit) instead of `chain_valid`; the proof routes
+  return doubleentry 0.8's proof shapes; a clearing is one matched pair,
+  reset by its position (`POST /api/v1/clearings/{position}/reset`). A ledger
+  refusal answers `422` with code `ledger.<n>` (`409` for a reused key), an
+  unavailable ledger `503`.
+- **Breaking:** `Daemon::migrate` takes the daemon's config.
+- accountingd: an Abschlag Verrechnung reads which advances were received
+  before its own credit is booked, so an unpaid advance is no longer stamped
+  as absorbed; every money amount in an event or MCP answer is formatted from
+  integer cents.
+
+- **Breaking:** `mako_bo4e_decimal_from_json_number_total` is
+  `mako_bo4e_fractional_json_number_total`, counted by the BO4E gate
+  (`mako_markt::bo4e::decode`) instead of `rubo4e`: it counts the fractional
+  JSON numbers an inbound BO4E payload carries, on every daemon that decodes
+  through the gate. makod no longer exports it; its BO4E reads do not cross
+  the gate.
+- `rubo4e` 0.15 (no `sqlx` feature: marktd binds identifiers as TEXT and
+  parses them back) and `en16931` / `en16931-formats` 0.10: a missing required
+  term in a received e-invoice is fatal, and sub-invoice lines, CII payment
+  means and BT-89 are read and written in full.
+
 ## [0.27.0] — 2026-11-07
 
 ### Added

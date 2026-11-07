@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { BusinessDate, Decimal, Instant } from "./brands";
 import { formatBusinessDate, formatInstant, formatInstantUtc } from "./date";
-import { band, distance } from "./frist";
-import { formatDecimal, formatEuro } from "./money";
+import { band, distance, seit } from "./frist";
+import { formatCent, formatDecimal, formatEuro } from "./money";
 
 const instant = (s: string) => s as Instant;
 
@@ -35,6 +35,12 @@ describe("amounts", () => {
     expect(formatEuro("1234.56789" as Decimal)).toBe("1.234,56789 €");
     expect(formatDecimal("0.30000000000000004441" as Decimal)).toBe("0,30000000000000004441");
   });
+
+  it("formats a ledger's cents as euro, the sign kept", () => {
+    expect(formatCent(900)).toBe(formatEuro("9.00" as Decimal));
+    expect(formatCent(-123456)).toBe(formatEuro("-1234.56" as Decimal));
+    expect(formatCent(5)).toBe(formatEuro("0.05" as Decimal));
+  });
 });
 
 describe("Frist-Uhr", () => {
@@ -57,6 +63,14 @@ describe("Frist-Uhr", () => {
 
   it("is calm beyond a day", () => {
     expect(distance(due, at("2026-11-01T12:00:00Z")).urgency).toBe("calm");
+  });
+});
+
+describe("how long ago", () => {
+  it("says how long something has waited", () => {
+    const now = Date.parse("2026-11-07T12:00:00Z");
+    expect(seit(instant("2026-11-04T12:00:00Z"), now)).toBe("seit 3 Tagen");
+    expect(seit(instant("2026-11-07T10:00:00Z"), now)).toBe("seit 2 h");
   });
 });
 

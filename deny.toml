@@ -623,9 +623,29 @@ version = "=0.1"
 reason  = "paired with cipher 0.4 skip."
 
 [[bans.skip]]
-name    = "ordered-float"
-version = "=2"
-reason  = "petgraph 0.7 (via iceberg) uses ordered-float 2; workspace uses ordered-float 4."
+name    = "sqlx"
+version = "=0.8"
+reason  = "mako stays on sqlx 0.8 while meterstore, which shares its pool, is on 0.8; doubleentry 0.8.1, accountingd's ledger, carries sqlx 0.9 privately — no sqlx type crosses its API."
+
+[[bans.skip]]
+name    = "sqlx-core"
+version = "=0.8"
+reason  = "the sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
+
+[[bans.skip]]
+name    = "sqlx-postgres"
+version = "=0.8"
+reason  = "the sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
+
+[[bans.skip]]
+name    = "etcetera"
+version = "=0.8"
+reason  = "the sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
+
+[[bans.skip]]
+name    = "hashlink"
+version = "=0.10"
+reason  = "the sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
 
 [[bans.skip]]
 name    = "petgraph"

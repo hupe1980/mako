@@ -161,7 +161,7 @@ async fn append_history_snapshot(
            FROM versorgungsstatus v
            WHERE v.malo_id = $1 AND v.tenant = $2"#
     ))
-    .bind(malo_id)
+    .bind(malo_id.as_ref())
     .bind(tenant)
     .execute(conn)
     .await
@@ -185,7 +185,7 @@ async fn touch(
            SET last_process_id = $3, updated_at = now(), version = version + 1
            WHERE malo_id = $1 AND tenant = $2"#,
     )
-    .bind(malo_id)
+    .bind(malo_id.as_ref())
     .bind(tenant)
     .bind(process_id)
     .execute(conn)
@@ -211,7 +211,7 @@ async fn ensure_root(
            VALUES ($1, $2, 'Unbeliefert', $3, now(), 0)
            ON CONFLICT (malo_id, tenant) DO NOTHING"#,
     )
-    .bind(malo_id)
+    .bind(malo_id.as_ref())
     .bind(tenant)
     .bind(nb_mp_id)
     .execute(conn)
@@ -248,7 +248,7 @@ async fn resync_lieferstatus(
              AND v.lieferstatus IN ('Beliefert', 'Unbeliefert',
                                     'Ersatzversorgung', 'Grundversorgung')"#,
     )
-    .bind(malo_id)
+    .bind(malo_id.as_ref())
     .bind(tenant)
     .execute(conn)
     .await
@@ -287,7 +287,7 @@ impl PgVersorgungsStatusRepository {
                    WHERE malo_id = $1 AND tenant = $2 AND version = $3
                    RETURNING version"#,
             )
-            .bind(&rec.malo_id)
+            .bind(rec.malo_id.as_ref())
             .bind(&rec.tenant)
             .bind(expected)
             .bind(rec.lieferstatus.to_string())
@@ -316,7 +316,7 @@ impl PgVersorgungsStatusRepository {
                        version         = versorgungsstatus.version + 1
                    RETURNING version"#,
             )
-            .bind(&rec.malo_id)
+            .bind(rec.malo_id.as_ref())
             .bind(&rec.tenant)
             .bind(rec.lieferstatus.to_string())
             .bind(rec.lieferende)
@@ -380,7 +380,7 @@ impl PgVersorgungsStatusRepository {
                    process_id       = EXCLUDED.process_id,
                    updated_at       = now()"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(lf_mp_id_next)
         .bind(prozent)
@@ -430,7 +430,7 @@ impl PgVersorgungsStatusRepository {
                     r#"SELECT DISTINCT lf_mp_id FROM lf_zuordnung
                        WHERE malo_id = $1 AND tenant = $2 AND status = 'Angekuendigt'"#,
                 )
-                .bind(malo_id)
+                .bind(malo_id.as_ref())
                 .bind(tenant)
                 .fetch_all(&mut *conn)
                 .await
@@ -458,7 +458,7 @@ impl PgVersorgungsStatusRepository {
                        AND n.tranche_id IS NOT DISTINCT FROM a.tranche_id
                  )"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(&lf_mp_id)
         .execute(&mut *conn)
@@ -471,7 +471,7 @@ impl PgVersorgungsStatusRepository {
                WHERE malo_id = $1 AND tenant = $2
                  AND lf_mp_id = $3 AND status = 'Angekuendigt'"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(&lf_mp_id)
         .bind(process_id)
@@ -510,7 +510,7 @@ impl PgVersorgungsStatusRepository {
                WHERE malo_id = $1 AND tenant = $2 AND status = 'Aktiv'
                  AND ($3::text IS NULL OR lf_mp_id = $3)"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(lf_mp_id)
         .execute(&mut *conn)
@@ -524,7 +524,7 @@ impl PgVersorgungsStatusRepository {
                    updated_at = now(), version = version + 1
                WHERE malo_id = $1 AND tenant = $2"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(lieferende)
         .bind(nb_mp_id)
@@ -572,7 +572,7 @@ impl PgVersorgungsStatusRepository {
         sqlx::query(
             "DELETE FROM lf_zuordnung WHERE malo_id = $1 AND tenant = $2 AND status = 'Aktiv'",
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .execute(&mut *conn)
         .await
@@ -583,7 +583,7 @@ impl PgVersorgungsStatusRepository {
                 zuordnungsbeginn, process_id, updated_at)
                VALUES ($1, $2, $3, 100, NULL, 'Aktiv', $4, $5, now())"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(gv_mp_id)
         .bind(eog_seit)
@@ -598,7 +598,7 @@ impl PgVersorgungsStatusRepository {
                    last_process_id = $6, updated_at = now(), version = version + 1
                WHERE malo_id = $1 AND tenant = $2"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(eog_status.to_string())
         .bind(nb_mp_id)
@@ -630,7 +630,7 @@ impl PgVersorgungsStatusRepository {
                WHERE malo_id = $1 AND tenant = $2 AND status = 'Angekuendigt'
                  AND ($3::text IS NULL OR lf_mp_id = $3)"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(lf_mp_id)
         .execute(&mut *conn)
@@ -654,7 +654,7 @@ async fn replace_zuordnungen(
     zuordnungen: &[LfZuordnung],
 ) -> Result<(), MdmError> {
     sqlx::query("DELETE FROM lf_zuordnung WHERE malo_id = $1 AND tenant = $2")
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .execute(&mut *conn)
         .await
@@ -666,7 +666,7 @@ async fn replace_zuordnungen(
                 zuordnungsbeginn, zuordnungsende, process_id, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(&z.lf_mp_id)
         .bind(z.prozent)
@@ -713,7 +713,7 @@ impl PgVersorgungsStatusRepository {
             "SELECT v.*, {ZUORDNUNGEN_JSON} FROM versorgungsstatus v
              WHERE v.malo_id = $1 AND v.tenant = $2"
         ))
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .fetch_optional(&self.pool)
         .await
@@ -751,7 +751,7 @@ impl PgVersorgungsStatusRepository {
                ORDER BY valid_from DESC
                LIMIT 1"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(at)
         .fetch_optional(&self.pool)
@@ -781,7 +781,7 @@ impl PgVersorgungsStatusRepository {
         let total: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM versorgungsstatus_history WHERE malo_id = $1 AND tenant = $2",
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .fetch_one(&self.pool)
         .await
@@ -794,7 +794,7 @@ impl PgVersorgungsStatusRepository {
                ORDER BY valid_from DESC
                LIMIT $3 OFFSET $4"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(tenant)
         .bind(limit)
         .bind(offset)

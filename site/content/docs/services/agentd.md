@@ -427,7 +427,7 @@ graph TB
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 11 services, 167 tools"]
+    subgraph tools ["MCP Tools — 11 services, 168 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · processd"]
         T3["einsd · netzbilanzd · ..."]

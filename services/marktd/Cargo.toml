@@ -27,7 +27,7 @@ mako-markt = { path = "../../crates/mako-markt", features = ["makod-client"] }
 # code the Marktrolle may not order, and folds in the dated Pflicht rule.
 mako-wim   = { workspace = true }
 metering   = { workspace = true, features = ["serde"] }
-rubo4e    = { workspace = true, features = ["sqlx"] }
+rubo4e    = { workspace = true }
 
 anyhow             = { workspace = true }
 axum               = { version = "0.8", features = [] }

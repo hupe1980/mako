@@ -86,6 +86,15 @@ pub struct DatabaseConfig {
     /// avoids storing secrets in TOML files checked into version control.
     pub url: String,
 
+    /// The role that owns the schema, for migrations only (`env:` allowed).
+    ///
+    /// When set, the runner migrates over one connection with this URL and
+    /// serves with `url`, so the runtime role can be one without `CREATE` —
+    /// and, where a service grants it, without `UPDATE`/`DELETE` on its
+    /// append-only tables. Unset: `url` migrates too.
+    #[serde(default)]
+    pub migration_url: Option<String>,
+
     /// Maximum number of connections in the pool. Default: 10.
     #[serde(default = "DatabaseConfig::default_pool_size")]
     pub pool_size: u32,
@@ -160,6 +169,30 @@ impl DatabaseConfig {
             .connect_with(options.application_name(application_name))
             .await
     }
+}
+
+/// The runtime role, when it is not the role that migrates.
+///
+/// `Some(user)` when `[database] migration_url` is set and names another user
+/// than `url`: the role the runner then grants the schema to after migrating.
+/// `None` for a single-role deployment.
+///
+/// # Errors
+///
+/// An unresolvable `env:` reference or an unparseable URL.
+pub fn runtime_role(db: &DatabaseConfig) -> anyhow::Result<Option<String>> {
+    use anyhow::Context as _;
+    let Some(migration_url) = &db.migration_url else {
+        return Ok(None);
+    };
+    let user = |raw: &str| -> anyhow::Result<String> {
+        let url = resolve_env(raw).context("resolve a database url")?;
+        let options: sqlx::postgres::PgConnectOptions =
+            url.parse().context("parse a database url")?;
+        Ok(options.get_username().to_owned())
+    };
+    let runtime = user(&db.url)?;
+    Ok((runtime != user(migration_url)?).then_some(runtime))
 }
 
 /// The listen-address block every daemon's config takes:
@@ -1086,6 +1119,7 @@ mod loader_diagnostics_tests {
             "print",
             "api_key = \"hunter2\"\nplaceholder = \"env:SOME_SECRET\"\n\
              [database]\nurl = \"postgres://dev:topsecret@localhost/db\"\n\
+             migration_url = \"postgres://owner:ownersecret@localhost/db\"\n\
              [webhook]\nhmac_secret = \"s3cr3t\"\nendpoint = \"http://example.invalid\"\n",
         );
         let out = render_config("fixturesvc", Some(&path)).expect("renders");
@@ -1098,5 +1132,7 @@ mod loader_diagnostics_tests {
         );
         assert!(out.contains("http://example.invalid"), "{out}");
         assert!(out.contains("postgres://dev:***@localhost/db"), "{out}");
+        assert!(!out.contains("ownersecret"), "{out}");
+        assert!(out.contains("postgres://owner:***@localhost/db"), "{out}");
     }
 }

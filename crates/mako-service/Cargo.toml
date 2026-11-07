@@ -45,7 +45,7 @@ oidc = ["dep:jsonwebtoken", "cedar"]
 ## Registers `mako_http_requests_total` and `mako_http_request_duration_seconds`
 ## on the default Prometheus registry. `ServiceBuilder::with_metrics()` mounts the
 ## handler and adds a per-request recording middleware automatically.
-metrics = ["dep:prometheus", "dep:rubo4e"]
+metrics = ["dep:prometheus", "dep:mako-markt"]
 
 ## Enables `ServiceBuilder::with_rate_limit(RateLimitConfig)`.
 ## Adds a global GCRA rate limiter (429 when exhausted) via `governor`.
@@ -103,14 +103,16 @@ jsonwebtoken              = { workspace = true, optional = true }
 
 # Optional Prometheus dep — only compiled when feature=metrics is enabled
 prometheus                = { version = "0.14", default-features = false, features = ["process"], optional = true }
-# Only for `decimal_serde::decimal_from_json_number_count` — the process-wide
-# count of BO4E amounts read from a JSON number, exported by `metrics`.
-rubo4e                    = { workspace = true, optional = true }
+# Only for `bo4e::fractional_json_number_count` — the process-wide count of
+# fractional JSON numbers the BO4E gate admitted, exported by `metrics`.
+mako-markt                = { workspace = true, optional = true }
 
 # Optional governor dep — only compiled when feature=rate-limit is enabled
 governor                  = { version = "0.6", optional = true }
 
 [dev-dependencies]
+# Test-only: names the BO4E type the metrics test sends through the gate.
+rubo4e        = { workspace = true }
 # Test-only: the CloudEvents envelope builder takes any `&str` `type`, and the
 # tests pass catalogue constants to show what a real caller sends. Nothing in
 # the crate's own code reaches for the catalogue, so it is not a dependency

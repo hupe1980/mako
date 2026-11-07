@@ -423,6 +423,8 @@ describe("the Desk", () => {
           result = { structuredContent: { records: [], count: 50, saturated: true } };
         } else if (m.method === "tools/call" && url.includes("/svc/invoicd/")) {
           result = { structuredContent: { disputes: [], count: 3, saturated: false } };
+        } else if (m.method === "tools/call" && url.includes("/svc/accountingd/")) {
+          result = { structuredContent: { buchungen: [], count: 120, saturated: true } };
         }
         if (m.method === "tools/call") calls.push(`${url.split("/")[2]}/${m.params.name}`);
         return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
@@ -442,8 +444,14 @@ describe("the Desk", () => {
     expect(
       (await screen.findByRole("link", { name: "Rechnungsdispute: 3" })).getAttribute("href"),
     ).toBe("/heute");
+    // accountingd's count is every parked booking, not the page it sent: exact
+    // even when the page is full.
+    expect(
+      (await screen.findByRole("link", { name: "Geparkte Buchungen: 120" })).getAttribute("href"),
+    ).toBe("/heute");
     // One read per tile, and none of another Rolle's sources.
     for (const tool of [
+      "accountingd/list_parked_bookings",
       "billingd/list_review_queue",
       "invoicd/list_disputes",
       "processd/list_overdue_processes",
@@ -1219,6 +1227,8 @@ describe("the Desk", () => {
     wartend?: Record<string, unknown>;
     /** A service's answer to a write, when it is not a plain 204. */
     antwort?: (url: string) => Response | undefined;
+    /** The parked bookings accountingd lists. */
+    geparkt?: Record<string, unknown>[];
   }) {
     const disput = {
       id: "rc-1",
@@ -1253,7 +1263,11 @@ describe("the Desk", () => {
       created_at: "2031-02-01T08:00:00Z",
     });
     return vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.startsWith("/svc/invoicd/api/") || url.startsWith("/svc/billingd/api/")) {
+      if (
+        url.startsWith("/svc/invoicd/api/") ||
+        url.startsWith("/svc/billingd/api/") ||
+        url.startsWith("/svc/accountingd/api/")
+      ) {
         opts.posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
         return opts.antwort?.(url) ?? new Response(null, { status: 204 });
       }
@@ -1290,19 +1304,34 @@ describe("the Desk", () => {
                     saturated: false,
                   },
                 }
-              : name === "list_pending_approvals"
-                ? { structuredContent: { freigaben: [], count: 0, saturated: false } }
-                : name === "list_open_processes"
-                  ? { structuredContent: { prozesse: [], weiter: null } }
-                  : name === "list_overdue_processes"
-                    ? { structuredContent: { overdue: [], count: 0, saturated: false, limit: 500 } }
-                    : name === "list_anmeldungen"
-                      ? { structuredContent: { anmeldungen: [], gesamt: 0 } }
-                      : name === "kunden_zu_malos"
-                        ? { structuredContent: { kunden: [] } }
-                        : name
-                          ? { structuredContent: {} }
-                          : {};
+              : name === "list_parked_bookings"
+                ? {
+                    structuredContent: {
+                      buchungen: opts.geparkt ?? [],
+                      count: opts.geparkt?.length ?? 0,
+                      saturated: false,
+                    },
+                  }
+                : name === "list_pending_approvals"
+                  ? { structuredContent: { freigaben: [], count: 0, saturated: false } }
+                  : name === "list_open_processes"
+                    ? { structuredContent: { prozesse: [], weiter: null } }
+                    : name === "list_overdue_processes"
+                      ? {
+                          structuredContent: {
+                            overdue: [],
+                            count: 0,
+                            saturated: false,
+                            limit: 500,
+                          },
+                        }
+                      : name === "list_anmeldungen"
+                        ? { structuredContent: { anmeldungen: [], gesamt: 0 } }
+                        : name === "kunden_zu_malos"
+                          ? { structuredContent: { kunden: [] } }
+                          : name
+                            ? { structuredContent: {} }
+                            : {};
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
         headers: { "content-type": "application/json", "mcp-session-id": "s" },
       });
@@ -1455,6 +1484,97 @@ describe("the Desk", () => {
       url: "/svc/billingd/api/v1/billing/b-rev/reviewed",
       body: null,
     });
+    localStorage.removeItem("mako-desk.rolle");
+  });
+
+  it("resolves a geparkte Buchung in place: rebooked on the date it fills in, discarded with a Grund, each confirmed", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    const posts: { url: string; body: unknown }[] = [];
+    let versuche = 0;
+    const geparkt = (key: string, beleg: string) => ({
+      key,
+      art: "RECHNUNG",
+      malo_id: "51238696012",
+      lf_mp_id: "9900357000004",
+      betrag_ct: 900,
+      buchungsdatum: "2031-01-31",
+      beleg,
+      code: 301,
+      meldung: "period sealed through 2031-01-31",
+      hinweis: "Die Periode ist festgeschrieben. Auf ein Datum im ersten offenen Monat neu buchen.",
+      vorschlag_datum: "2031-02-01",
+      seit: "2031-02-02T08:00:00Z",
+    });
+    const fetch = rechnungFetch({
+      posts,
+      geparkt: [geparkt("rechnung:R-1", "R-1"), geparkt("rechnung:R-2", "R-2")],
+      antwort: (url) => {
+        if (!url.endsWith("/rebook")) return undefined;
+        versuche += 1;
+        return versuche === 1
+          ? Response.json(
+              {
+                error: "Unprocessable Entity",
+                detail: "period sealed through 2031-02-28",
+                code: "ledger.301",
+              },
+              { status: 422 },
+            )
+          : Response.json({ gebucht: true, entry_id: "e-1" }, { status: 201 });
+      },
+    });
+    vi.stubGlobal("fetch", fetch);
+    await open("/heute");
+    // In words, by its amount and its refusal — not the ledger's code.
+    const [erste, zweite] = await screen.findAllByRole("button", {
+      name: /Rechnung 9,00\s€ — Periode festgeschrieben/,
+    });
+    if (!erste || !zweite) throw new Error("two parked bookings expected");
+    expect(erste.textContent).toContain("Beleg R-1");
+    expect(erste.textContent).toContain("Buchungsdatum 31.01.2031");
+    fireEvent.click(erste);
+    expect(erste.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText(/Auf ein Datum im ersten offenen Monat neu buchen/)).toBeTruthy();
+    // The first open day the service names is filled in, and stays editable.
+    const datum = screen.getByLabelText(/Neu buchen am/) as HTMLInputElement;
+    expect(datum.value).toBe("2031-02-01");
+    fireEvent.click(screen.getByRole("button", { name: "Neu buchen …" }));
+    expect(posts).toEqual([]);
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt buchen" }));
+    // The ledger's refusal, in its words, where the decision is.
+    expect(await screen.findByText(/period sealed through 2031-02-28/)).toBeTruthy();
+    expect(posts).toEqual([
+      {
+        url: "/svc/accountingd/api/v1/bookings/rechnung%3AR-1/rebook",
+        body: { buchungsdatum: "2031-02-01" },
+      },
+    ]);
+    fireEvent.change(datum, { target: { value: "2031-03-01" } });
+    fireEvent.click(screen.getByRole("button", { name: "Neu buchen …" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt buchen" }));
+    await waitFor(() => expect(erste.getAttribute("aria-expanded")).toBe("false"));
+    expect(posts.at(-1)).toEqual({
+      url: "/svc/accountingd/api/v1/bookings/rechnung%3AR-1/rebook",
+      body: { buchungsdatum: "2031-03-01" },
+    });
+
+    // R chooses Verwerfen; it waits for a Grund, then for the confirm.
+    fireEvent.click(zweite);
+    fireEvent.keyDown(window, { key: "r" });
+    const verwerfen = await screen.findByRole("button", { name: "Verwerfen …" });
+    expect(verwerfen.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(screen.getByRole("textbox", { name: /Warum wird sie verworfen/ }), {
+      target: { value: "Doppelt erfasst" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Verwerfen …" }));
+    expect(posts).toHaveLength(2);
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt verwerfen" }));
+    await waitFor(() =>
+      expect(posts.at(-1)).toEqual({
+        url: "/svc/accountingd/api/v1/bookings/rechnung%3AR-2/discard",
+        body: { grund: "Doppelt erfasst" },
+      }),
+    );
     localStorage.removeItem("mako-desk.rolle");
   });
 

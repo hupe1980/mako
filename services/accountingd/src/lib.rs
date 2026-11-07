@@ -21,6 +21,7 @@
 //! | `sepa` | pain.001/.007/.008, camt and pain.002 |
 //! | `sperr` | the §§ 41f/41g EnWG disconnection sequence |
 
+pub mod booking;
 pub mod clients;
 pub mod config;
 pub mod daemon;

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "accountingd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -22,7 +22,7 @@ dependencies = [
  "sepa",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "testcontainers",
  "testcontainers-modules",
  "thiserror 2.0.21",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "agentd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "agentplane",
  "anyhow",
@@ -1491,7 +1491,7 @@ dependencies = [
 
 [[package]]
 name = "billingd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1511,7 +1511,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "testcontainers",
  "testcontainers-modules",
  "thiserror 2.0.21",
@@ -3729,6 +3729,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "document-features"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
+dependencies = [
+ "litrs",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3736,17 +3745,18 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "doubleentry"
-version = "0.7.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c9d8b8aa59d617705b1d34f378bd7b809f99b3ff2162187b056f3ab8be15d61"
+checksum = "e83c2a4c5e23fb0ad96fa1d8b879b16a3736fba3b76cae06bebacb3fdd576a94"
 dependencies = [
- "blake3",
+ "document-features",
+ "getrandom 0.3.4",
  "serde",
- "smallvec",
- "sqlx",
+ "sha2 0.11.1",
+ "sqlx 0.9.0",
  "thiserror 2.0.21",
  "time",
- "uuid",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -3770,7 +3780,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "edifact-rs",
  "rust_decimal",
@@ -3884,7 +3894,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "criterion",
  "edifact-rs",
@@ -3926,7 +3936,7 @@ dependencies = [
 
 [[package]]
 name = "edmd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -3947,7 +3957,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "tempfile",
  "testcontainers",
  "testcontainers-modules",
@@ -3975,7 +3985,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "billing",
  "grid-billing",
@@ -3990,7 +4000,7 @@ dependencies = [
 
 [[package]]
 name = "einsd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4008,7 +4018,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "testcontainers",
  "testcontainers-modules",
  "time",
@@ -4041,7 +4051,7 @@ dependencies = [
  "ff 0.13.1",
  "generic-array",
  "group 0.13.0",
- "hkdf",
+ "hkdf 0.12.4",
  "pem-rfc7468 0.7.0",
  "pkcs8 0.10.2",
  "rand_core 0.6.4",
@@ -4082,9 +4092,9 @@ dependencies = [
 
 [[package]]
 name = "en16931"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e43193bb5750922c35b7b60f47b4faccac36329f97f1b5d9eec8396963491aac"
+checksum = "111dd083b494801cbfbe2c6aa4647218dd1ea76397f14ff8c5deb21e909ff5c1"
 dependencies = [
  "billing",
  "rust_decimal",
@@ -4095,9 +4105,9 @@ dependencies = [
 
 [[package]]
 name = "en16931-formats"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c97a56a4ad4fe9c9fed4df64173c4e4d62ed927457b5d99aee96cfad16a6fe4"
+checksum = "38bb13ef3ce32a6901ee0fc0d0cedabc06513ef05ce4a336b7674fd88435829b"
 dependencies = [
  "en16931",
  "flate2",
@@ -4142,7 +4152,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "axum",
  "base64ct",
@@ -4164,7 +4174,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -4520,6 +4530,17 @@ name = "flume"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin 0.9.9",
+]
+
+[[package]]
+name = "flume"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -5027,7 +5048,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "billing",
  "mako-markt",
@@ -5154,6 +5175,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "824e001ac4f3012dd16a264bec811403a67ca9deb6c102fc5049b32c4574b35f"
+dependencies = [
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -5330,6 +5360,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
 dependencies = [
  "hmac 0.12.1",
+]
+
+[[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac 0.13.0",
 ]
 
 [[package]]
@@ -5620,7 +5659,7 @@ checksum = "0f0c1140a8520c39d7f90bf3b6bcdcedecc5f835affac163a589872a413d32c6"
 dependencies = [
  "async-trait",
  "iceberg",
- "sqlx",
+ "sqlx 0.8.6",
  "strum 0.27.2",
 ]
 
@@ -5992,7 +6031,7 @@ dependencies = [
 
 [[package]]
 name = "invoic-checker"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "billing",
  "mako-fristen",
@@ -6006,7 +6045,7 @@ dependencies = [
 
 [[package]]
 name = "invoicd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6025,7 +6064,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "testcontainers",
  "testcontainers-modules",
  "time",
@@ -6656,6 +6695,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "litrs"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6793,7 +6838,7 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "asx-rs",
  "thiserror 2.0.21",
@@ -6801,7 +6846,7 @@ dependencies = [
 
 [[package]]
 name = "mako-emob"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -6817,7 +6862,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "criterion",
  "mako-events",
@@ -6838,11 +6883,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.27.0"
+version = "0.28.0"
 
 [[package]]
 name = "mako-fristen"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "time",
  "time-tz",
@@ -6850,7 +6895,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "dvgw-edi",
  "mako-engine",
@@ -6866,7 +6911,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6881,7 +6926,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6897,7 +6942,7 @@ dependencies = [
 
 [[package]]
 name = "mako-invoic"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "mako-engine",
  "rubo4e",
@@ -6909,7 +6954,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -6927,7 +6972,7 @@ dependencies = [
 
 [[package]]
 name = "mako-markt"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -6946,7 +6991,7 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "mako-fristen",
  "rubo4e",
@@ -6958,7 +7003,7 @@ dependencies = [
 
 [[package]]
 name = "mako-pruefung"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "edi-energy",
  "mako-fristen",
@@ -6973,7 +7018,7 @@ dependencies = [
 
 [[package]]
 name = "mako-redispatch"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -6985,7 +7030,7 @@ dependencies = [
 
 [[package]]
 name = "mako-service"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6997,6 +7042,7 @@ dependencies = [
  "hmac 0.12.1",
  "jsonwebtoken",
  "mako-events",
+ "mako-markt",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
@@ -7009,7 +7055,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "sha2 0.10.9",
- "sqlx",
+ "sqlx 0.8.6",
  "subtle",
  "testcontainers",
  "testcontainers-modules",
@@ -7028,7 +7074,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7045,7 +7091,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -7101,7 +7147,7 @@ dependencies = [
 
 [[package]]
 name = "makotest-native"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "edi-energy",
  "edifact-rs",
@@ -7115,7 +7161,7 @@ dependencies = [
 
 [[package]]
 name = "marktd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7135,7 +7181,7 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "testcontainers",
  "testcontainers-modules",
  "time",
@@ -7255,8 +7301,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sqlx",
- "sqlx-postgres",
+ "sqlx 0.8.6",
+ "sqlx-postgres 0.8.6",
  "thiserror 2.0.21",
  "time",
  "time-tz",
@@ -7407,7 +7453,7 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 
 [[package]]
 name = "netzbilanzd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7431,7 +7477,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "testcontainers",
  "testcontainers-modules",
  "thiserror 2.0.21",
@@ -8124,7 +8170,7 @@ dependencies = [
 
 [[package]]
 name = "outputd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8141,7 +8187,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sqlx",
+ "sqlx 0.8.6",
  "testcontainers",
  "testcontainers-modules",
  "thiserror 2.0.21",
@@ -8790,7 +8836,7 @@ dependencies = [
 
 [[package]]
 name = "portald"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8981,7 +9027,7 @@ dependencies = [
 
 [[package]]
 name = "processd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9003,7 +9049,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "testcontainers",
  "testcontainers-modules",
  "thiserror 2.0.21",
@@ -9039,7 +9085,7 @@ dependencies = [
 
 [[package]]
 name = "productd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9055,7 +9101,7 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "testcontainers",
  "testcontainers-modules",
  "time",
@@ -9565,7 +9611,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -10014,9 +10060,9 @@ dependencies = [
 
 [[package]]
 name = "rubo4e"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "519d32f81b957c4fb4cf7dff24e59ff8c9aeddbfe4b2d61a001d4c80a8a4d109"
+checksum = "59b2c9defd0382fb71ead8a72105b1e8a4c759c40b4da04bf7dc0d182c653ce4"
 dependencies = [
  "garde",
  "indexmap 2.14.2",
@@ -10024,7 +10070,6 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
- "sqlx",
  "thiserror 2.0.21",
  "time",
  "typed-builder 0.23.2",
@@ -11051,11 +11096,24 @@ version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fefb893899429669dcdd979aff487bd78f4064e5e7907e4269081e0ef7d97dc"
 dependencies = [
- "sqlx-core",
- "sqlx-macros",
- "sqlx-mysql",
- "sqlx-postgres",
- "sqlx-sqlite",
+ "sqlx-core 0.8.6",
+ "sqlx-macros 0.8.6",
+ "sqlx-mysql 0.8.6",
+ "sqlx-postgres 0.8.6",
+ "sqlx-sqlite 0.8.6",
+]
+
+[[package]]
+name = "sqlx"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "378620ccc25c62c89d8be1c819e76a88d59bdcc3304733330788948e619bfd71"
+dependencies = [
+ "sqlx-core 0.9.0",
+ "sqlx-macros 0.9.0",
+ "sqlx-mysql 0.9.0",
+ "sqlx-postgres 0.9.0",
+ "sqlx-sqlite 0.9.0",
 ]
 
 [[package]]
@@ -11075,7 +11133,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "hashbrown 0.15.5",
- "hashlink",
+ "hashlink 0.10.0",
  "indexmap 2.14.2",
  "log",
  "memchr",
@@ -11098,6 +11156,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlx-core"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05b44e85bf579a8eeb4ceaa77a3a523baf2bf0e9bac7e40f405d537b5d2d5ccb"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "cfg-if",
+ "crc",
+ "crossbeam-queue",
+ "either",
+ "event-listener",
+ "futures-core",
+ "futures-intrusive",
+ "futures-io",
+ "futures-util",
+ "hashbrown 0.16.1",
+ "hashlink 0.11.1",
+ "indexmap 2.14.2",
+ "log",
+ "memchr",
+ "percent-encoding",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "smallvec",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "url",
+ "webpki-roots 1.0.11",
+]
+
+[[package]]
 name = "sqlx-macros"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11105,8 +11200,21 @@ checksum = "a2d452988ccaacfbf5e0bdbc348fb91d7c8af5bee192173ac3636b5fb6e6715d"
 dependencies = [
  "proc-macro2",
  "quote",
- "sqlx-core",
- "sqlx-macros-core",
+ "sqlx-core 0.8.6",
+ "sqlx-macros-core 0.8.6",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "sqlx-macros"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd2b84f2bc39a5705ef27ec785a11c934a41bbd4a24941e257927cddc26b60bf"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "sqlx-core 0.9.0",
+ "sqlx-macros-core 0.9.0",
  "syn 2.0.119",
 ]
 
@@ -11126,10 +11234,35 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sqlx-core",
- "sqlx-mysql",
- "sqlx-postgres",
- "sqlx-sqlite",
+ "sqlx-core 0.8.6",
+ "sqlx-mysql 0.8.6",
+ "sqlx-postgres 0.8.6",
+ "sqlx-sqlite 0.8.6",
+ "syn 2.0.119",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "sqlx-macros-core"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb8d96de5fdc85a5c4ec813432b523ec637e80ba98f046555f75f7908ddac7c3"
+dependencies = [
+ "cfg-if",
+ "dotenvy",
+ "either",
+ "heck 0.5.0",
+ "hex",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx-core 0.9.0",
+ "sqlx-mysql 0.9.0",
+ "sqlx-postgres 0.9.0",
+ "sqlx-sqlite 0.9.0",
  "syn 2.0.119",
  "tokio",
  "url",
@@ -11156,7 +11289,7 @@ dependencies = [
  "futures-util",
  "generic-array",
  "hex",
- "hkdf",
+ "hkdf 0.12.4",
  "hmac 0.12.1",
  "itoa",
  "log",
@@ -11171,13 +11304,40 @@ dependencies = [
  "sha1 0.10.7",
  "sha2 0.10.9",
  "smallvec",
- "sqlx-core",
+ "sqlx-core 0.8.6",
  "stringprep",
  "thiserror 2.0.21",
  "time",
  "tracing",
  "uuid",
  "whoami 1.6.1",
+]
+
+[[package]]
+name = "sqlx-mysql"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90b8020fe17c5f2c245bfa2505d7ef59c5604839527c740266ad2214acebea27"
+dependencies = [
+ "bitflags 2.13.2",
+ "byteorder",
+ "bytes",
+ "crc",
+ "digest 0.11.3",
+ "dotenvy",
+ "either",
+ "futures-core",
+ "futures-util",
+ "generic-array",
+ "log",
+ "percent-encoding",
+ "serde",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
+ "sqlx-core 0.9.0",
+ "thiserror 2.0.21",
+ "time",
+ "tracing",
 ]
 
 [[package]]
@@ -11197,7 +11357,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "hex",
- "hkdf",
+ "hkdf 0.12.4",
  "hmac 0.12.1",
  "home",
  "itoa",
@@ -11211,7 +11371,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "smallvec",
- "sqlx-core",
+ "sqlx-core 0.8.6",
  "stringprep",
  "thiserror 2.0.21",
  "time",
@@ -11221,13 +11381,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlx-postgres"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87a2bdd6e83f6b3ea525ca9fee568030508b58355a43d0b2c1674d5f79dcd65e"
+dependencies = [
+ "atoi",
+ "base64 0.22.1",
+ "bitflags 2.13.2",
+ "byteorder",
+ "crc",
+ "dotenvy",
+ "etcetera 0.11.0",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "hkdf 0.13.0",
+ "hmac 0.13.0",
+ "itoa",
+ "log",
+ "md-5 0.11.0",
+ "memchr",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "smallvec",
+ "sqlx-core 0.9.0",
+ "stringprep",
+ "thiserror 2.0.21",
+ "time",
+ "tracing",
+ "whoami 2.1.3",
+]
+
+[[package]]
 name = "sqlx-sqlite"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2d12fe70b2c1b4401038055f90f151b78208de1f9f89a7dbfd41587a10c3eea"
 dependencies = [
  "atoi",
- "flume",
+ "flume 0.11.1",
  "futures-channel",
  "futures-core",
  "futures-executor",
@@ -11238,12 +11434,37 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_urlencoded",
- "sqlx-core",
+ "sqlx-core 0.8.6",
  "thiserror 2.0.21",
  "time",
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "sqlx-sqlite"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488e99c397a62007e4229aec669a179816339afc6d2620ca6fa420dbee2e982c"
+dependencies = [
+ "atoi",
+ "flume 0.12.0",
+ "form_urlencoded",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-intrusive",
+ "futures-util",
+ "libsqlite3-sys",
+ "log",
+ "percent-encoding",
+ "serde",
+ "sqlx-core 0.9.0",
+ "thiserror 2.0.21",
+ "time",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -13119,7 +13340,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vertragd"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -13136,7 +13357,7 @@ dependencies = [
  "sepa",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "strsim",
  "testcontainers",
  "testcontainers-modules",

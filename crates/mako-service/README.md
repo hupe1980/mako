@@ -28,7 +28,7 @@ impl Daemon for MyService {
     type Config = MyConfig;
     const NAME: &'static str = "my-service";
 
-    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    async fn migrate(_cfg: &MyConfig, pool: &sqlx::PgPool) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations").run(pool).await?;
         Ok(())
     }
@@ -45,6 +45,12 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+`migrate` runs as the role that owns the schema: `[database] migration_url`
+when set (one connection, closed after), `url` otherwise. With two roles the
+runner then grants `url`'s role data access to `public` — `SELECT`, `INSERT`,
+`UPDATE`, `DELETE`, sequences, functions — and no DDL, so a service can serve
+as a role that cannot alter its own schema.
+
 `build` must not bind a listener or add health routes — the runner mounts them,
 and `build_for_test::<D>(cfg)` (feature `testing`) builds the router exactly as
 `run` does so a startup test catches a route collision or a refused config.
@@ -58,7 +64,7 @@ and `build_for_test::<D>(cfg)` (feature `testing`) builds the router exactly as
 | `json` | `Json`, `Lenient`, `DETAIL_SENTINEL` | The request-body extractor — every rejection in the problem shape, and a key the type does not declare refused as a 422 with its JSON path; `Lenient` reads an externally specified schema without that refusal |
 | `headers` | `single_str` | Identity/idempotency headers — a repeated header is refused, never first-wins |
 | `dates` | `parse_iso_date`, `DateError` | The one request-date parser — a malformed date is a 400 naming the field, never `None` |
-| `config` | `load_config`, `DatabaseConfig`, `HttpConfig` | Layered TOML + env-var config loading |
+| `config` | `load_config`, `DatabaseConfig`, `HttpConfig`, `runtime_role` | Layered TOML + env-var config loading; `[database]` takes `url`, an optional `migration_url` and the pool tuning |
 | `policy` | `policy_choice!`, `Policy`, `PolicyReport`, `router` | Operator settings under `[policy]` — each option sourced, logged at startup, exported as `mako_policy_info`, changes recorded in `service_policy_log`, served at `GET /api/v1/policy` |
 | `shutdown` | `token()`, `serve()` | Graceful shutdown — SIGINT **and** SIGTERM |
 | `oidc` | `OidcConfig`, `OidcVerifier`, `Claims`, `ExpectedTenant` | OIDC/JWT verification + `build_verifier()` factory |
@@ -87,6 +93,6 @@ Configuration is `<NAME>.toml` (or `<NAME>_CONFIG`), overridden per key by
 | `oidc` | `OidcVerifier`, `Claims` extractor, `ExpectedTenant`, JWKS background refresh |
 | `cedar` | `CedarEnforcer`, Cedar ABAC policy evaluation |
 | `otel` | OpenTelemetry OTLP/gRPC traces via `tracing-opentelemetry` |
-| `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total`, `mako_http_request_duration_seconds` and `mako_bo4e_decimal_from_json_number_total` |
+| `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total`, `mako_http_request_duration_seconds` and `mako_bo4e_fractional_json_number_total` |
 | `rate-limit` | GCRA rate limiter via `governor` |
 | `testing` | `build_for_test` / `build_for_test_on` — a daemon's router as `run` mounts it, for startup tests; a dev-dependency feature only |

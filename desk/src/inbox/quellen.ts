@@ -6,10 +6,11 @@ import { useQuery } from "@tanstack/react-query";
 import { nichtErreichbar } from "../app/dienste";
 import { ROLLEN, type Rolle, useRolle } from "../app/rollen";
 import { type Answer, type Hinweis, hinweise, type VorschlagArt, vorschlaege } from "../data/agent";
+import { abgelehntWeil, buchungsart } from "../data/buchung";
 import { call, ServiceUnavailable } from "../data/mcp";
-import type { Decimal, Instant } from "../format/brands";
-import { formatBusinessDate } from "../format/date";
-import { formatEuro } from "../format/money";
+import type { BusinessDate, Decimal, Instant } from "../format/brands";
+import { formatBusinessDate, formatInstant } from "../format/date";
+import { formatCent, formatEuro } from "../format/money";
 import { ANMELDUNG_PIDS } from "../views/Lage";
 import type { Eintrag, QuelleId, Stand } from "./model";
 
@@ -22,6 +23,7 @@ export const QUELLEN: Record<Rolle, QuelleId[]> = {
     "ueberfaellig",
     "dispute",
     "pruefposten",
+    "geparkt",
     "nicht_uebermittelt",
   ],
   messstelle: ["freigaben", "ueberfaellig", "ableseauftraege"],
@@ -288,6 +290,40 @@ function usePruefposten(aktiv: boolean): Stand {
   return stand("pruefposten", "Rechnungsprüfung", q, eintraege, q.data?.saturated ?? false);
 }
 
+/**
+ * Bookings the ledger refused for good, oldest first — each titled by its
+ * MaLo, which `useBenannt` turns into the customer's name.
+ */
+function useGeparkt(aktiv: boolean): Stand {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "accountingd", "list_parked_bookings"],
+    queryFn: () => call("accountingd", "list_parked_bookings", { limit: SEITE }),
+    enabled: aktiv,
+    refetchInterval: TAKT,
+  });
+  const eintraege: Eintrag[] = (q.data?.buchungen ?? []).map((b) => ({
+    id: `buchung:${b.key}`,
+    quelle: "geparkt",
+    titel: b.malo_id,
+    kennung: true,
+    detail: [
+      b.beleg ? `Beleg ${b.beleg}` : null,
+      `Buchungsdatum ${formatBusinessDate(b.buchungsdatum)}`,
+      `geparkt seit ${formatInstant(b.seit)}`,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    grund: `${buchungsart(b.art)} ${formatCent(b.betrag_ct)} — ${abgelehntWeil(b.code)}`,
+    frist: null,
+    bezug: [b.malo_id],
+    anker: { malo: b.malo_id },
+    ziel: null,
+    geparkt: b,
+  }));
+  return stand("geparkt", "Geparkte Buchungen", q, eintraege, q.data?.saturated ?? false);
+}
+
 /** The agent's open Hinweise, for every Rolle; agentd absent is no failure of Heute. */
 export function useHinweise(): { hinweise: Hinweis[]; fehler: string | null } {
   const { rolle } = useRolle();
@@ -398,6 +434,7 @@ export function useQuellen(rolle: Rolle): Stand[] {
     useAbleseauftraege(liest.has("ableseauftraege")),
     useDispute(liest.has("dispute")),
     usePruefposten(liest.has("pruefposten")),
+    useGeparkt(liest.has("geparkt")),
   ];
   return QUELLEN[rolle].flatMap((id) => alle.filter((s) => s.quelle === id));
 }

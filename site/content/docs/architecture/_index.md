@@ -417,10 +417,9 @@ panics. Domain routes, workers, the OIDC verifier and MCP auth live in
 |---|---|---|
 | `mako_http_requests_total{method,path,status}` | counter | Request volume and status mix. A UUID, a pure-digit segment or anything over 24 characters becomes `{id}`, so a MaLo-ID cannot multiply series |
 | `mako_http_request_duration_seconds{method,path}` | histogram | Latency, bucketed 1 ms → 5 s |
-| `mako_bo4e_decimal_from_json_number_total` | counter | BO4E amounts read from a JSON **number** rather than a string |
+| `mako_bo4e_fractional_json_number_total` | counter | Fractional JSON **numbers** the BO4E gate admitted (`mako_markt::bo4e::decode`) |
 
-`makod` renders the third itself beside its own `makod_*` gauges. `marktd` and
-`processd` register their gauges on the same registry; `invoicd`, `processd`'s
+`marktd` and `processd` register their gauges on the same registry; `invoicd`, `processd`'s
 read model and `accountingd` serve theirs from their own path (`/invoicd/metrics`,
 `/obs/metrics`, `/accountingd/metrics`). No daemon may route `/metrics` a second
 time — `Router::merge` panics on the overlap at startup — and `cargo xtask
@@ -428,9 +427,11 @@ check-runner-routes` holds every runner daemon to that.
 
 The third metric is worth an alert. A fractional JSON number has passed through
 `f64` before any deserializer sees it (`0.1` is
-`0.1000000000000000055511151231`). BO4E permits both spellings, so mako counts
-rather than refuses: a rising series identifies the producer, a flat zero says
-every amount arrived with its scale intact.
+`0.1000000000000000055511151231`). BO4E permits both spellings, so the gate
+counts rather than refuses: a rising series identifies the producer, a flat zero
+says every amount arrived with its scale intact. The count covers the daemons
+that decode BO4E through the gate — `marktd`, `productd`, `vertragd`,
+`invoicd`, `portald`, `netzbilanzd`.
 
 ---
 

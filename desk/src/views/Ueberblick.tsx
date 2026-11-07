@@ -97,6 +97,26 @@ function PruefpostenTile() {
   );
 }
 
+function GeparktTile() {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "accountingd", "list_parked_bookings"],
+    queryFn: () => call("accountingd", "list_parked_bookings", { limit: SEITE }),
+    refetchInterval: 60_000,
+  });
+  // `count` is every parked booking the service holds, not the page it
+  // lists, so it is exact even when the page is full; each one is an amount
+  // the ledger does not carry yet, so any is a breach.
+  return (
+    <Tile
+      label="Geparkte Buchungen"
+      source={DIENST.accountingd}
+      href="/heute"
+      state={tileState(q, "accountingd", (d) => ({ n: d.count, breach: d.count > 0 }))}
+    />
+  );
+}
+
 function DisputeTile() {
   const { rolle } = useRolle();
   const q = useQuery({
@@ -161,6 +181,7 @@ export function UeberblickView() {
             <AnmeldungenTile />
             <PruefpostenTile />
             <DisputeTile />
+            <GeparktTile />
           </>
         )}
         {rolle === "messstelle" && <AbleseauftraegeTile />}

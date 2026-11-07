@@ -71,7 +71,7 @@ impl PgMaloRepository {
                    WHERE malo_id = $1 AND version = $12
                    RETURNING version"#,
             )
-            .bind(malo_id)
+            .bind(malo_id.as_ref())
             .bind(&sparte_str)
             .bind(cols.netzebene)
             .bind(&cols.bilanzierungsgebiet)
@@ -105,7 +105,7 @@ impl PgMaloRepository {
                        updated_at           = now()
                    RETURNING version"#,
             )
-            .bind(malo_id)
+            .bind(malo_id.as_ref())
             .bind(&sparte_str)
             .bind(cols.netzebene)
             .bind(&cols.bilanzierungsgebiet)
@@ -129,7 +129,7 @@ impl PgMaloRepository {
         };
 
         sqlx::query("DELETE FROM rollenzuordnungen WHERE malo_id = $1")
-            .bind(malo_id)
+            .bind(malo_id.as_ref())
             .execute(&mut *conn)
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?;
@@ -155,7 +155,7 @@ impl PgMaloRepository {
                    SELECT $1, unnest($2::text[]), unnest($3::text[]),
                           unnest($4::date[]), unnest($5::date[])"#,
             )
-            .bind(malo_id)
+            .bind(malo_id.as_ref())
             .bind(zuordnungstypen)
             .bind(rollencodenummern)
             .bind(valid_froms)
@@ -191,7 +191,7 @@ impl PgMaloRepository {
                    updated_at           = now()
                WHERE malo_id = $1"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(bilanzierungsmethode)
         .bind(fallgruppe)
         .execute(conn)
@@ -283,7 +283,7 @@ impl PgMaloRepository {
                WHERE m.malo_id = $1
                GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.fernsteuerbar, m.abwicklungsmodell, m.version, m.data, m.bo4e_version, m.updated_at"#,
         )
-        .bind(malo_id)
+        .bind(malo_id.as_ref())
         .bind(at)
         .fetch_optional(&self.pool)
         .await
@@ -461,7 +461,7 @@ fn row_to_malo(r: PgRow) -> MaloRecord {
     let lz_json: serde_json::Value = r.get("rollenzuordnung");
     let rollenzuordnung: Vec<Rollenzuordnung> = serde_json::from_value(lz_json).unwrap_or_default();
     MaloRecord {
-        malo_id: r.get("malo_id"),
+        malo_id: super::id(&r, "malo_id"),
         sparte: sparte_str
             .parse::<Sparte>()
             .expect("DB has CHECK constraint on sparte"),

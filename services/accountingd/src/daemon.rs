@@ -48,7 +48,7 @@ impl Daemon for Accountingd {
     type Config = config::AccountingdConfig;
     const NAME: &'static str = "accountingd";
 
-    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    async fn migrate(cfg: &Self::Config, pool: &sqlx::PgPool) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await
@@ -61,6 +61,27 @@ impl Daemon for Accountingd {
         mako_service::outbox::ensure_schema(pool)
             .await
             .context("ensure outbox schema")?;
+
+        // The ledger is created by the role that owns the schema — its `create`
+        // runs DDL and installs the triggers that refuse every change to the
+        // log — and the runtime role is then granted exactly what doubleentry's
+        // store names: read and append, update only the maintained
+        // projections, never `DELETE`, `TRUNCATE` or DDL.
+        let db = &cfg.database;
+        let owner_url =
+            mako_service::config::resolve_env(db.migration_url.as_deref().unwrap_or(&db.url))
+                .context("resolve the ledger owner's database url")?;
+        crate::ledger::PgLedger::connect(&owner_url, &cfg.tenant, mako_fristen::heute())
+            .await
+            .context("create the ledger")?;
+        if let Some(role) = mako_service::config::runtime_role(db)? {
+            for grant in crate::ledger::runtime_grants(&role) {
+                sqlx::query(&grant)
+                    .execute(pool)
+                    .await
+                    .context("grant the runtime role its ledger privileges")?;
+            }
+        }
         Ok(())
     }
 
@@ -111,14 +132,24 @@ impl Daemon for Accountingd {
         );
 
         // ── doubleentry ledger — accountingd's accounting/storage base ──────────
-        // One ledger per deployment, in its own `doubleentry` PG schema sharing
-        // this database. Constructing it applies the ledger schema and restores the
-        // account registry (see `ledger.rs`).
+        // One ledger per deployment, in its own `ledger` schema of this
+        // database, created by `migrate`; here it is opened as the runtime role.
+        // The URL is resolved like the runner's own, so `env:` works for both.
+        let ledger_url = mako_service::config::resolve_env(&cfg.database.url)
+            .context("resolve database url for the ledger")?;
         let ledger = Arc::new(
-            crate::ledger::PgLedger::connect(&cfg.database.url, &cfg.tenant)
+            crate::ledger::PgLedger::connect(&ledger_url, &cfg.tenant, mako_fristen::heute())
                 .await
-                .context("connect doubleentry ledger")?,
+                .context("open the ledger")?,
         );
+        // Books whatever a crash or a failed booking left `offen`.
+        tokio::spawn(crate::booking::run_recovery(
+            ledger.clone(),
+            pool.clone(),
+            cfg.tenant.clone(),
+            std::time::Duration::from_secs(30),
+            ct.clone(),
+        ));
         // ── makod command client — the §§41f/41g market channel ────────────
         // Phase 3/4 of the disconnection sequence are ORDERS 17115/17117, so they
         // go out over the market, not as an HTTP call into the NB's own queue.
@@ -358,6 +389,12 @@ impl Daemon for Accountingd {
                 post(handlers::post_seal_period),
             )
             .route("/api/v1/periods/seals", get(handlers::get_seals))
+            // ── Parked bookings ─────────────────────────────────────────────
+            .route("/api/v1/bookings/{key}/rebook", post(handlers::post_rebook))
+            .route(
+                "/api/v1/bookings/{key}/discard",
+                post(handlers::post_discard),
+            )
             .route(
                 "/api/v1/entries/{entry_id}/proof",
                 get(handlers::get_entry_proof),
@@ -380,7 +417,7 @@ impl Daemon for Accountingd {
                 post(handlers::post_clear),
             )
             .route(
-                "/api/v1/clearings/{clearing_id}/reset",
+                "/api/v1/clearings/{position}/reset",
                 post(handlers::post_reset_clearing),
             )
             // ── Verzugszinsen §288 BGB ─────────────────────────────────────────
@@ -519,7 +556,7 @@ impl Daemon for Accountingd {
                                         "malo_id":      acct.malo_id,
                                         "lf_mp_id":     acct.lf_mp_id,
                                         "amount_ct":    acct.abschlag_ct,
-                                        "amount_eur":   format!("{:.2}", acct.abschlag_ct as f64 / 100.0),
+                                        "amount_eur":   crate::handlers::format_ct_as_eur(acct.abschlag_ct),
                                         "ust_satz":     acct.abschlag_ust_satz.to_string(),
                                         "faellig_am":   today.to_string(),
                                         "period_month": format!("{:04}-{:02}", today.year(), today.month() as u8),

@@ -17,4 +17,6 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
     GRANT ALL PRIVILEGES ON DATABASE outputd TO "$POSTGRES_USER";
     CREATE DATABASE accountingd;
     GRANT ALL PRIVILEGES ON DATABASE accountingd TO "$POSTGRES_USER";
+    CREATE ROLE accountingd_app LOGIN PASSWORD 'accountingd_app';
+    GRANT CONNECT ON DATABASE accountingd TO accountingd_app;
 EOSQL

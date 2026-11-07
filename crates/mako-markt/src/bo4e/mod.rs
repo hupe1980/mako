@@ -41,7 +41,7 @@ pub use conformance::Bo4eConformance;
 // dependency just to name the failure type.
 pub use gate::{
     Bo4eRejection, Bo4eSerialiseError, Bo4eTyped, decode, decode_received, ensure_conformant,
-    to_canonical_json,
+    fractional_json_number_count, to_canonical_json,
 };
 pub use rubo4e::validation::ValidationFailure;
 pub use typed::{Bo4e, REJECTION_SENTINEL, recover_rejection};

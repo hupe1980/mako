@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { ROLLEN, type Rolle } from "../app/rollen";
+import type { GeparkteBuchung } from "../data/gen/accountingd";
+import { Abgelehnt } from "../data/rechnung";
 import { AiNote } from "../design/AiNote";
 import { Button } from "../design/Button";
 import { FristUhr } from "../design/FristUhr";
@@ -9,14 +11,30 @@ import { EmptyState, Notice, Panel } from "../design/Panel";
 import { SearchField } from "../design/SearchField";
 import { SourceChip } from "../design/SourceChip";
 import { Tile } from "../design/Tile";
-import type { Instant } from "../format/brands";
+import type { BusinessDate, Instant } from "../format/brands";
 import { epochMs } from "../format/date";
+import { GeparktEntscheiden } from "../views/Buchungen";
 
 // Every control in every state, in both appearances side by side: the Desk's
 // visual regression fixture, and the page a design change is reviewed on.
 
 const at = (iso: string) => iso as Instant;
 const NOW = epochMs(at("2026-11-03T09:00:00Z"));
+
+const GEPARKT: GeparkteBuchung = {
+  key: "rechnung:9900357000004:51238696012:R-2026-0815",
+  art: "RECHNUNG",
+  malo_id: "51238696012",
+  lf_mp_id: "9900357000004",
+  betrag_ct: 900,
+  buchungsdatum: "2026-10-31" as BusinessDate,
+  beleg: "R-2026-0815",
+  code: 301,
+  meldung: "period sealed through 2026-10-31",
+  hinweis: "Die Periode ist festgeschrieben. Auf ein Datum im ersten offenen Monat neu buchen.",
+  vorschlag_datum: "2026-11-01" as BusinessDate,
+  seit: at("2026-11-03T07:00:00Z"),
+};
 
 function Specimen({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -144,6 +162,25 @@ function Specimens() {
           />
         </div>
       </Specimen>
+      <Specimen title="Geparkte Buchung">
+        <div className="grid w-full gap-3">
+          <GeparktEntscheiden b={GEPARKT} onDone={() => undefined} />
+          <GeparktEntscheiden
+            b={GEPARKT}
+            onDone={() => undefined}
+            anfang={{ aktion: "verwerfen", grund: "Doppelt erfasst", bestaetigen: true }}
+          />
+          <GeparktEntscheiden
+            b={GEPARKT}
+            onDone={() => undefined}
+            anfang={{
+              aktion: "buchen",
+              fehler: new Abgelehnt("period sealed through 2026-11-30"),
+            }}
+          />
+        </div>
+      </Specimen>
+
       <Specimen title="Zustände">
         <div className="grid w-full gap-3">
           <Notice tone="refusal" title="Kein Prozess für „51238696012“">

@@ -70,7 +70,7 @@ impl PgNbContractRepository {
                RETURNING version"#,
         )
         .bind(&rec.contract_id)
-        .bind(&rec.malo_id)
+        .bind(rec.malo_id.as_ref())
         .bind(&rec.nb_mp_id)
         .bind(rec.sparte.to_string())
         .bind(&rec.netzebene)

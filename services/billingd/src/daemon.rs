@@ -85,7 +85,7 @@ impl Daemon for Billingd {
     type Config = config::BillingdConfig;
     const NAME: &'static str = "billingd";
 
-    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    async fn migrate(_cfg: &Self::Config, pool: &sqlx::PgPool) -> anyhow::Result<()> {
         // Run migrations (currently a single 0001_schema.sql).
         sqlx::migrate!("./migrations")
             .run(pool)

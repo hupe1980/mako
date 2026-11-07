@@ -577,7 +577,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "edi-energy"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "edifact-rs",
  "rubo4e",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "billing",
  "grid-billing",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "billing",
  "rust_decimal",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -1312,11 +1312,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.27.0"
+version = "0.28.0"
 
 [[package]]
 name = "mako-fristen"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "time",
  "time-tz",
@@ -1922,9 +1922,9 @@ dependencies = [
 
 [[package]]
 name = "rubo4e"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "519d32f81b957c4fb4cf7dff24e59ff8c9aeddbfe4b2d61a001d4c80a8a4d109"
+checksum = "59b2c9defd0382fb71ead8a72105b1e8a4c759c40b4da04bf7dc0d182c653ce4"
 dependencies = [
  "garde",
  "indexmap",

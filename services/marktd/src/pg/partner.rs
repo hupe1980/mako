@@ -29,7 +29,7 @@ impl PgPartnerRepository {
     pub async fn upsert(&self, partner: PartnerRecord) -> Result<i64, MdmError> {
         let current: Option<i64> =
             sqlx::query_scalar("SELECT version FROM partners WHERE mp_id = $1")
-                .bind(&partner.mp_id)
+                .bind(partner.mp_id.as_ref())
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(|e| MdmError::Internal(e.to_string()))?;
@@ -37,7 +37,7 @@ impl PgPartnerRepository {
         let new_version = current.map_or(1, |v| v + 1);
         let sparte_str = partner.sparte.map(|s| s.to_string());
         // Columns stay TEXT; the typed enums serialise to their BDEW codes
-        // ("LF", "NB", … / "BDEW", "DVGW", "GLN") via strum.
+        // ("LF", "NB", … / "BDEW", "DVGW", "GLN") through `Display`.
         let marktrolle_str = partner.marktrolle.map(|m| m.to_string());
         let rollencodetyp_str = partner.rollencodetyp.map(|r| r.to_string());
 
@@ -56,7 +56,7 @@ impl PgPartnerRepository {
                    version       = EXCLUDED.version,
                    updated_at    = now()"#,
         )
-        .bind(&partner.mp_id)
+        .bind(partner.mp_id.as_ref())
         .bind(&partner.display_name)
         .bind(&marktrolle_str)
         .bind(sparte_str)
@@ -78,7 +78,7 @@ impl PgPartnerRepository {
         let row: Option<PgRow> = sqlx::query(&format!(
             "SELECT {SELECT_COLS} FROM partners WHERE mp_id = $1"
         ))
-        .bind(id)
+        .bind(id.as_ref())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
@@ -125,7 +125,7 @@ fn row_to_partner(r: PgRow) -> PartnerRecord {
     let marktrolle_str: Option<String> = r.get("marktrolle");
     let rollencodetyp_str: Option<String> = r.try_get("rollencodetyp").unwrap_or(None);
     PartnerRecord {
-        mp_id: r.get("mp_id"),
+        mp_id: super::id(&r, "mp_id"),
         display_name: r.get("display_name"),
         // Stored as the BO4E wire strings, and `CHECK`-constrained to them.
         //

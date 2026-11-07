@@ -4,8 +4,9 @@
 the retail stack: open items, Abschläge, dunning and the §§ 41f/41g EnWG
 Sperr-Sequenz, SEPA collections and payouts, bank-statement import and the
 Jahresabschluss. Every money movement is one balanced entry in the
-[`doubleentry`](https://github.com/hupe1980/doubleentry) ledger — append-only,
-Merkle-logged and sealable per period (GoBD / § 146 AO).
+[`doubleentry`](https://github.com/hupe1980/doubleentry) 0.8 ledger — append-only,
+Merkle-logged and sealable per month (GoBD / § 146 AO) — committed with the
+business change that causes it through a booking draft.
 
 ## Run it
 
@@ -17,14 +18,14 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 
 | | |
 |---|---|
-| **Database** | PostgreSQL — satellites (accounts, mandates, dunning, SEPA runs) in `public`, the ledger in the `doubleentry` schema |
+| **Database** | PostgreSQL — satellites (accounts, mandates, dunning, SEPA runs, booking drafts) in `public`, the ledger in the `ledger` schema; `migration_url` migrates, `url`'s role cannot rewrite the journal |
 | **Auth** | OIDC + Cedar `policies/accountingd.cedar` on every route; reads split into `read-account`, `read-banking`, `read-books`. `/webhook` is HMAC-verified |
-| **Ledger** | accountingd owns the chart of accounts (`ledger::Chart`) and the Buchungsart → postings map; everything posts through `pg::post_entry` |
+| **Ledger** | accountingd owns the chart of accounts (`ledger::Chart`) and the Buchungsart → postings map; every booking is a draft staged in its business transaction and booked after the commit (`booking`); a refused one parks for the Desk |
 | **SEPA** | pain.008 per collection date (CORE/B2B × sequence type), pain.001 payouts, pain.002 status (incl. Verification of Payee), pain.007 reversal, camt.055/029 recall; structured `PstlAdr` (or none) |
 | **Bank import** | camt.052/053/054 and a flat JSON import; only `BOOK` entries post, deduplicated on the bank reference |
 | **Dunning** | Mahnstufe 1→3, then Sperrandrohung → Sperrankündigung → Sperrauftrag (ORDERS 17115 via `makod`) → Entsperrauftrag (17117); Mahnsperren and Forderungseinwände are recorded acts |
 | **Events** | `de.accounting.*` through the transactional outbox to `erp_webhook_url` |
-| **MCP** | 14 tools at `/mcp`, each authorized as its REST twin |
+| **MCP** | 15 tools at `/mcp`, each authorized as its REST twin; the contract is pinned by `mcp.snapshot.json` |
 | **Metrics** | `GET /accountingd/metrics` (the runner owns `/metrics`) |
 
 ## Routes
@@ -36,7 +37,8 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 | Dunning | `/api/v1/dunning`, `/{id}/locks`, `/{id}/einwaende`, `/{id}/abwendung/angebot`, `/{id}/resolve`, `/{account_id}/escalate` |
 | SEPA | `/api/v1/sepa/mandates`, `/run`, `/pain002`, `/reversals`, `/recalls`, `/camt029`, `/collections/{run_id}/entries` |
 | Payments | `POST /api/v1/payments/import`, `/import/camt052`, `/camt053`, `/camt054` |
-| Periods & proofs | `POST /api/v1/periods/{id}/seal`, `GET /periods/{id}/balance-proof`, `/entries/{id}/proof`, `/entries/consistency-proof` |
+| Periods & proofs | `POST /api/v1/periods/{id}/seal`, `GET /periods/seals`, `/periods/{id}/balance-proof`, `/entries/{id}/proof`, `/entries/consistency-proof` |
+| Parked bookings | `POST /api/v1/bookings/{key}/rebook`, `/discard` |
 | Jahresabschluss · EEG | `POST /api/v1/jahresabschluss/{malo_id}`; `/api/v1/eeg/payouts` |
 
 ## Configuration

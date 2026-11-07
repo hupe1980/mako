@@ -4,6 +4,37 @@
 //! and can be passed to axum `State<Arc<AppState>>` without extra `Arc` wrapping.
 
 use mako_markt::error::MdmError;
+use sqlx::{Row, postgres::PgRow};
+
+/// Read a TEXT identifier column into its typed form.
+///
+/// The column is bound as the identifier's string (`id.as_ref()`) and read
+/// back through its `FromStr`, so the identifier's own validator decides what
+/// is a MaLo-ID — no database driver needs to know the type. A stored value
+/// that does not parse panics, as [`Row::get`] does on a decode failure: the
+/// rows are marktd's own, written through the same type.
+pub(crate) fn id<T>(r: &PgRow, column: &str) -> T
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let raw: String = r.get(column);
+    raw.parse()
+        .unwrap_or_else(|e| panic!("column {column:?} holds {raw:?}, not an identifier: {e}"))
+}
+
+/// [`id`] for a nullable column.
+pub(crate) fn opt_id<T>(r: &PgRow, column: &str) -> Option<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let raw: Option<String> = r.get(column);
+    raw.map(|raw| {
+        raw.parse()
+            .unwrap_or_else(|e| panic!("column {column:?} holds {raw:?}, not an identifier: {e}"))
+    })
+}
 
 /// PostgreSQL `exclusion_violation`.
 ///

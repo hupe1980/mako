@@ -121,15 +121,19 @@ pub trait Daemon: Send + 'static {
     /// tracing target, and the pool's `application_name`.
     const NAME: &'static str;
 
-    /// Apply schema (`sqlx::migrate!`, `outbox::ensure_schema`, …) to the fresh
-    /// pool before the router is built. Only called when the daemon has a
-    /// database. Default: nothing.
+    /// Apply schema (`sqlx::migrate!`, `outbox::ensure_schema`, …) before the
+    /// router is built. Only called when the daemon has a database. `pool` is
+    /// connected as the migration role — `[database] migration_url` when set,
+    /// `url` otherwise — so the runtime role needs no DDL. Default: nothing.
     ///
     /// # Errors
     ///
     /// Return an error to abort startup (a service that cannot migrate must not
     /// start serving).
-    fn migrate(_pool: &PgPool) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+    fn migrate(
+        _cfg: &Self::Config,
+        _pool: &PgPool,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
         async { Ok(()) }
     }
 
@@ -244,6 +248,68 @@ pub async fn run<D: Daemon>() -> anyhow::Result<()> {
     serve::<D>(cfg, crate::shutdown::token()).await
 }
 
+/// Run the schema steps as the role that owns the schema.
+///
+/// With `[database] migration_url` set, a one-connection pool on it runs
+/// [`Daemon::migrate`] and the `service_policy_log` DDL and is closed again, so
+/// the runtime pool's role needs no `CREATE`; without it, `runtime` does both,
+/// as a single-role deployment always has.
+async fn migrate_as_owner<D: Daemon>(
+    cfg: &D::Config,
+    db: &DatabaseConfig,
+    runtime: &PgPool,
+    policy_schema: bool,
+) -> anyhow::Result<()> {
+    let owner = match &db.migration_url {
+        Some(raw) => {
+            let url = crate::config::resolve_env(raw).context("resolve database migration_url")?;
+            let options: sqlx::postgres::PgConnectOptions =
+                url.parse().context("parse database migration_url")?;
+            Some(
+                sqlx::postgres::PgPoolOptions::new()
+                    .max_connections(1)
+                    .acquire_timeout(std::time::Duration::from_secs(db.acquire_timeout_secs))
+                    .connect_with(options.application_name(&format!("{}-migrate", D::NAME)))
+                    .await
+                    .context("connect the migration role")?,
+            )
+        }
+        None => None,
+    };
+    let pool = owner.as_ref().unwrap_or(runtime);
+    D::migrate(cfg, pool).await.context("run migrations")?;
+    if policy_schema {
+        crate::policy::ensure_schema(pool)
+            .await
+            .context("ensure service_policy_log schema")?;
+    }
+    if let Some(role) = crate::config::runtime_role(db)? {
+        for grant in public_grants(&role) {
+            sqlx::query(&grant)
+                .execute(pool)
+                .await
+                .context("grant the runtime role the service schema")?;
+        }
+    }
+    if let Some(owner) = owner {
+        owner.close().await;
+    }
+    Ok(())
+}
+
+/// What a runtime role needs on the tables a migration role created in
+/// `public`: data access, no DDL. A table that must stay append-only says so
+/// with its own trigger, which holds against this grant.
+fn public_grants(role: &str) -> [String; 4] {
+    let r = format!("\"{}\"", role.replace('"', "\"\""));
+    [
+        format!("GRANT USAGE ON SCHEMA public TO {r}"),
+        format!("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {r}"),
+        format!("GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {r}"),
+        format!("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO {r}"),
+    ]
+}
+
 /// Everything [`run`] does once the config is loaded: validate, report, pool,
 /// migrations, `service_policy_log`, build, bind every port, serve until
 /// `shutdown` is cancelled.
@@ -264,11 +330,8 @@ pub async fn serve<D: Daemon>(cfg: D::Config, shutdown: CancellationToken) -> an
             .connect(&url, D::NAME)
             .await
             .context("connect database pool")?;
-        D::migrate(&pool).await.context("run migrations")?;
+        migrate_as_owner::<D>(&cfg, db, &pool, !report.is_empty()).await?;
         if !report.is_empty() {
-            crate::policy::ensure_schema(&pool)
-                .await
-                .context("ensure service_policy_log schema")?;
             let changes = crate::policy::record(&pool, D::NAME, &report)
                 .await
                 .context("record the policy report in service_policy_log")?;
@@ -455,7 +518,10 @@ pub async fn build_for_test_on<D: Daemon>(
 ) -> anyhow::Result<axum::Router> {
     let report = validate_config::<D>(&cfg)?;
     crate::policy::export_metric(D::NAME, &report);
-    D::migrate(&pool).await.context("run migrations")?;
+    let db = cfg
+        .database()
+        .context("build_for_test_on needs a [database] block")?;
+    migrate_as_owner::<D>(&cfg, db, &pool, true).await?;
     build_with::<D>(cfg, Some(pool)).await
 }
 

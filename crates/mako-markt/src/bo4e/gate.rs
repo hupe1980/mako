@@ -30,6 +30,8 @@
 //! gate has run. Keeping the two apart is what lets the gate be identical
 //! everywhere.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use rubo4e::Bo4eStrict;
 use serde::de::DeserializeOwned;
 
@@ -184,6 +186,32 @@ impl Bo4eRejection {
     }
 }
 
+static FRACTIONAL_JSON_NUMBERS: AtomicU64 = AtomicU64::new(0);
+
+/// How many JSON numbers written with a fraction or an exponent have crossed
+/// the inbound gate in this process.
+///
+/// Every BO4E amount is a decimal, and a fractional JSON number has been
+/// through `f64` before any deserializer sees it: `0.1` is
+/// `0.1000000000000000055511151231`, and `1.005` cannot round to `1.01` because
+/// it is not `1.005` any more. Refusing the shape would refuse a producer BO4E
+/// permits, so the gate admits it and counts it; `mako-service` exports the
+/// count as `mako_bo4e_fractional_json_number_total`, and a rising series names
+/// a producer sending floats before its cents fail to reconcile.
+#[must_use]
+pub fn fractional_json_number_count() -> u64 {
+    FRACTIONAL_JSON_NUMBERS.load(Ordering::Relaxed)
+}
+
+fn fractional_numbers(value: &serde_json::Value) -> u64 {
+    match value {
+        serde_json::Value::Number(n) => u64::from(n.is_f64()),
+        serde_json::Value::Array(items) => items.iter().map(fractional_numbers).sum(),
+        serde_json::Value::Object(map) => map.values().map(fractional_numbers).sum(),
+        _ => 0,
+    }
+}
+
 /// Decode an untrusted BO4E payload into its typed form, or refuse it.
 ///
 /// Runs all four stages in order. `_typ` is **injected when absent** — the
@@ -281,6 +309,7 @@ fn decode_structural<T>(data: serde_json::Value) -> Result<T, Bo4eRejection>
 where
     T: DeserializeOwned + Bo4eTyped + Bo4eStrict + rubo4e::json::Bo4eJsonExt,
 {
+    FRACTIONAL_JSON_NUMBERS.fetch_add(fractional_numbers(&data), Ordering::Relaxed);
     let expected = T::TYP_WIRE;
     let data = match data {
         serde_json::Value::Object(mut obj) => {
@@ -575,6 +604,28 @@ mod tests {
         .expect("number spelling");
         let wert = |r: &Rechnung| r.gesamtbrutto.as_ref().and_then(|b| b.wert);
         assert_eq!(wert(&as_string), wert(&as_number));
+    }
+
+    /// A fractional JSON number is admitted and counted, at any depth; an
+    /// integer and a string are not counted, because neither went through
+    /// `f64`. The count is process-wide, so the test reads a difference.
+    #[test]
+    fn a_fractional_json_number_is_counted() {
+        let before = super::fractional_json_number_count();
+        let _: Rechnung = decode(serde_json::json!({ "gesamtbrutto": { "wert": 29.5 } }))
+            .expect("a JSON number is lawful BO4E");
+        assert!(
+            super::fractional_json_number_count() > before,
+            "29.5 crossed the gate and must be counted"
+        );
+        assert_eq!(
+            super::fractional_numbers(&serde_json::json!({"a": [1, "0.1", {"b": 2}]})),
+            0
+        );
+        assert_eq!(
+            super::fractional_numbers(&serde_json::json!({"a": [1.5, {"b": 2e3}]})),
+            2
+        );
     }
 
     /// A nested COM may omit its `_typ` — the key it was filed under already

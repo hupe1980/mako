@@ -41,8 +41,8 @@ impl PgCorrelationIndex {
         .bind(entry.process_id)
         .bind(entry.workflow_name)
         .bind(entry.pid)
-        .bind(entry.malo_id)
-        .bind(entry.melo_id)
+        .bind(entry.malo_id.as_deref())
+        .bind(entry.melo_id.as_deref())
         .bind(entry.contract_id)
         .bind(entry.erp_contract_id)
         .bind(entry.erp_order_id)
@@ -138,7 +138,7 @@ impl PgCorrelationIndex {
                  ORDER BY initiated_at DESC LIMIT 200"
         ))
         .bind(filter.erp_order_id)
-        .bind(filter.malo_id)
+        .bind(filter.malo_id.as_deref())
         .bind(status_str)
         .fetch_all(&self.pool)
         .await
@@ -154,8 +154,8 @@ fn row_to_entry(r: PgRow) -> CorrelationEntry {
         process_id: r.get("process_id"),
         workflow_name: r.get("workflow_name"),
         pid: r.get("pid"),
-        malo_id: r.get("malo_id"),
-        melo_id: r.get("melo_id"),
+        malo_id: super::opt_id(&r, "malo_id"),
+        melo_id: super::opt_id(&r, "melo_id"),
         contract_id: r.get("contract_id"),
         erp_contract_id: r.get("erp_contract_id"),
         erp_order_id: r.get("erp_order_id"),

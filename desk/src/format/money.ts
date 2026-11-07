@@ -25,3 +25,15 @@ export function formatEuro(amount: Decimal): string {
 export function formatDecimal(value: Decimal): string {
   return plain.format(value as Intl.StringNumericLiteral);
 }
+
+/**
+ * `-12,34 €` — a whole number of cents, as a ledger keeps it. The digits are
+ * rearranged into a decimal string, so no float division ever touches it.
+ */
+export function formatCent(ct: number): string {
+  const sign = ct < 0 ? "-" : "";
+  const digits = Math.abs(Math.trunc(ct)).toString().padStart(3, "0");
+  return euro.format(
+    `${sign}${digits.slice(0, -2)}.${digits.slice(-2)}` as Intl.StringNumericLiteral,
+  );
+}

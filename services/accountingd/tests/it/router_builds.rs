@@ -29,6 +29,10 @@ async fn postgres() -> Option<(ContainerAsync<Postgres>, String, sqlx::PgPool)> 
 /// Build the router from `cfg` with its `[database] url` pointed at `url`.
 async fn build(mut cfg: toml::Value, url: String, pool: sqlx::PgPool) -> axum::Router {
     cfg["database"]["url"] = toml::Value::String(url);
+    // One role in the throwaway container: it migrates and serves.
+    if let Some(db) = cfg["database"].as_table_mut() {
+        db.remove("migration_url");
+    }
     let cfg = cfg
         .try_into()
         .expect("the configuration is an accountingd one");
@@ -62,12 +66,9 @@ async fn call(
     (status, body)
 }
 
-fn seal_request(period: &str, start: &str, end: &str) -> axum::http::Request<axum::body::Body> {
+fn seal_request(period: &str) -> axum::http::Request<axum::body::Body> {
     axum::http::Request::post(format!("/api/v1/periods/{period}/seal"))
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(
-            serde_json::json!({ "start": start, "end": end }).to_string(),
-        ))
+        .body(axum::body::Body::empty())
         .expect("request")
 }
 
@@ -81,36 +82,37 @@ async fn a_ledger_store_failure_under_a_seal_answers_500() {
     let Some((app, pool, _pg)) = dev_app().await else {
         return;
     };
-    sqlx::query("DROP TABLE doubleentry.periods CASCADE")
+    sqlx::query("DROP TABLE ledger.seals CASCADE")
         .execute(&pool)
         .await
         .expect("drop the table the seal writes");
 
-    let (status, body) = call(app, seal_request("2020-01", "2020-01-01", "2020-01-31")).await;
+    let (status, body) = call(app, seal_request("2020-01")).await;
     assert_eq!(
         status,
         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         "{body}"
     );
     assert!(body["error_id"].is_string(), "{body}");
-    assert!(!body.to_string().contains("periods"), "{body}");
+    assert!(!body.to_string().contains("seals"), "{body}");
 }
 
-/// The refusal half stays a refusal: a period that ends before it starts is
-/// the caller's to correct, so it answers `422` with the reason.
+/// The refusal half stays a refusal: a month the calendar does not define is
+/// the caller's to correct, so it answers `422` with the ledger's code.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_period_the_ledger_refuses_answers_422() {
     let Some((app, _pool, _pg)) = dev_app().await else {
         return;
     };
-    let (status, body) = call(app, seal_request("2020-02", "2020-02-29", "2020-02-01")).await;
+    let (status, body) = call(app, seal_request("1999-01")).await;
     assert_eq!(
         status,
         axum::http::StatusCode::UNPROCESSABLE_ENTITY,
         "{body}"
     );
     assert!(body.get("error_id").is_none(), "{body}");
+    assert_eq!(body["code"], "ledger.311", "{body}");
 }
 
 /// An entry the ledger does not hold is a `404`; a store that cannot be read
@@ -131,7 +133,7 @@ async fn an_entry_proof_tells_absence_from_a_store_failure() {
     let (status, body) = call(app.clone(), get()).await;
     assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
 
-    sqlx::query("DROP TABLE doubleentry.entries CASCADE")
+    sqlx::query("DROP TABLE ledger.entries CASCADE")
         .execute(&pool)
         .await
         .expect("drop the table the proof reads");
