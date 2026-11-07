@@ -25,21 +25,19 @@ pub fn validate(doc: &Document, result: &mut ValidationResult) {
                 ActivationDocType::TenderReduction => {}
             }
         }
-        Document::Kostenblatt(d) => {
-            if d.time_series.is_empty() {
+        Document::Kostenblatt(d)
+            if d.time_series.is_empty() => {
                 result.errors.push(ValidationError::Semantic(
                     "Kostenblatt must contain at least one CostTimeSeries".to_string(),
                 ));
             }
-        }
-        Document::PlannedResourceSchedule(d) => {
-            if d.time_series.is_empty() {
+        Document::PlannedResourceSchedule(d)
+            if d.time_series.is_empty() => {
                 result.errors.push(ValidationError::Semantic(
                     "PlannedResourceScheduleDocument must contain at least one PlannedResourceTimeSeries"
                         .to_string(),
                 ));
             }
-        }
         Document::Stammdaten(d) => {
             // A Stammdaten document must describe at least one SR_Objekt
             // (controllable resource) unless it is a deactivation/withdrawal.
@@ -98,28 +96,26 @@ pub fn validate(doc: &Document, result: &mut ValidationResult) {
                 }
             }
         }
-        Document::NetworkConstraint(d) => {
+        Document::NetworkConstraint(d)
             // A NetworkConstraintDocument without a withdrawal status must carry
             // at least one time series.
-            if d.doc_status.is_none() && d.time_series.is_empty() {
+            if d.doc_status.is_none() && d.time_series.is_empty() => {
                 result.errors.push(ValidationError::Semantic(
                     "NetworkConstraintDocument must contain at least one NetworkConstraintTimeSeries \
                      (or carry a DocStatus withdrawal)"
                         .to_string(),
                 ));
             }
-        }
-        Document::Unavailability(d) => {
+        Document::Unavailability(d)
             // An unavailability document without a docStatus must carry at least
             // one TimeSeries.
-            if d.doc_status.is_none() && d.time_series.is_empty() {
+            if d.doc_status.is_none() && d.time_series.is_empty() => {
                 result.errors.push(ValidationError::Semantic(
                     "Unavailability_MarketDocument must contain at least one TimeSeries \
                      (or carry a docStatus withdrawal)"
                         .to_string(),
                 ));
             }
-        }
         // Acknowledgement, StatusRequest, Kaskade: no additional semantic rules.
         _ => {}
     }

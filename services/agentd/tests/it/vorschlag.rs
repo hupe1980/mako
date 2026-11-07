@@ -1,7 +1,7 @@
-//! The proposal that is waiting: every open Freigabe and Rechnungsdisput gets
-//! exactly one desk-assistant run, however often the tick reads its list, and
-//! its checked proposal is read back by its kind and id without starting
-//! another.
+//! The proposal that is waiting: every open Freigabe, Rechnungsdisput and
+//! parked booking gets exactly one desk-assistant run, however often the tick
+//! reads its list, and its checked proposal is read back by its kind and id
+//! without starting another.
 
 use std::sync::Arc;
 
@@ -42,6 +42,16 @@ impl ToolClient for Processd {
                 "count": 1,
                 "saturated": false,
             }),
+            "list_parked_bookings" => json!({
+                "buchungen": [{ "key": "rechnung:RE-1" }],
+                "count": 1,
+                "saturated": false,
+            }),
+            "get_parked_booking" => json!({
+                "key": "rechnung:RE-1",
+                "buchungsdatum": "2026-01-20",
+                "vorschlag_datum": "2026-02-01",
+            }),
             _ => json!({ "id": "e1", "malo_id": "51238696012", "pid": 55001 }),
         })
     }
@@ -78,6 +88,8 @@ async fn every_open_freigabe_gets_one_proposal_run_however_often_the_tick_reads(
         "aktion": "freigeben",
         "antwortcode": null,
         "befund": null,
+        "buchungsdatum": null,
+        "grund": null,
         "begruendung": "Die Anmeldung für 51238696012 ist gehalten.",
         "quelle": "processd/get_queue_entry"
     });
@@ -153,6 +165,8 @@ async fn every_open_freigabe_gets_one_proposal_run_however_often_the_tick_reads(
         "aktion": "aufrechterhalten",
         "antwortcode": null,
         "befund": "TariffDeviation",
+        "buchungsdatum": null,
+        "grund": null,
         "begruendung": "Der Preis weicht vom Preisblatt ab.",
         "quelle": "invoicd/get_check_result"
     })));
@@ -178,6 +192,34 @@ async fn every_open_freigabe_gets_one_proposal_run_however_often_the_tick_reads(
             .expect("readable")
             .is_none()
     );
+
+    // A parked booking is the third kind: one run per key, read back by it.
+    provider.will_answer(Completion {
+        structured: Some(json!({
+            "saetze": [{ "text": "Der Januar ist festgeschrieben.", "quelle": "accountingd/get_parked_booking" }],
+            "vorschlag": {
+                "aktion": "neu_buchen",
+                "antwortcode": null,
+                "befund": null,
+                "buchungsdatum": "2026-02-01",
+                "grund": null,
+                "begruendung": "Der erste offene Tag ist der 2026-02-01.",
+                "quelle": "accountingd/get_parked_booking"
+            },
+        })),
+        ..proposal(Value::Null)
+    });
+    let buchungen = agentd::plane::vorschlag::tick(&plane, Art::Buchung, processd.as_ref())
+        .await
+        .expect("the tick reads the parked bookings");
+    let again = agentd::plane::vorschlag::tick(&plane, Art::Buchung, processd.as_ref())
+        .await
+        .expect("the tick reads the parked bookings");
+    assert_eq!((buchungen, again), (1, 0), "one parked booking is one run");
+    let answer = concluded(&plane, Art::Buchung, "rechnung:RE-1").await;
+    let vorschlag = answer.vorschlag.expect("a proposal for the parked booking");
+    assert_eq!(vorschlag.aktion, "neu_buchen");
+    assert_eq!(vorschlag.buchungsdatum.as_deref(), Some("2026-02-01"));
 }
 
 /// The proposal run of one entry, once it has concluded.

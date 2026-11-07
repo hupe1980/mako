@@ -28,7 +28,7 @@ strsim        = { workspace = true }
 tokio         = { version = "1", features = ["full"] }
 serde         = { workspace = true, features = ["derive"] }
 serde_json    = { workspace = true }
-sqlx          = { version = "0.8", features = ["postgres","uuid","time","runtime-tokio-rustls","json","rust_decimal"] }
+sqlx          = { workspace = true, features = ["rust_decimal"] }
 uuid          = { workspace = true, features = ["v4","serde"] }
 time          = { workspace = true }
 reqwest       = { workspace = true }

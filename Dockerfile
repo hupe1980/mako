@@ -73,7 +73,7 @@ ARG DEMO_BUILDER_IMAGE=demo-builder
 # official rust image. The tagging scheme is:
 #   latest-rust-<rust-version>-<debian-variant>
 # The tag is for the reader; the digest is what is pulled.
-FROM lukemathwalker/cargo-chef:latest-rust-1.94-bookworm@sha256:7e550e59b8c14e74aa86ca9e5950b75d937c9d51e7f5a4c840e726a33b4b8455 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.95-bookworm@sha256:a26ffd9b429500b0c3f818fe18e876212eb6264689a7b973dcc6a40a11fb8153 AS chef
 
 # Native build dependencies required by -sys crates:
 #   pkg-config      openssl-sys build script
@@ -103,8 +103,8 @@ ENV OPENSSL_STATIC=1 \
     CARGO_INCREMENTAL=0
 
 # The compiler is `rust-toolchain.toml`'s channel. The base image's default
-# toolchain carries a full version name (`1.94.1`), which rustup does not take
-# for the file's `1.94`, so the file's toolchain is installed here — in a cached
+# toolchain carries a full version name (`1.95.0`), which rustup does not take
+# for the file's `1.95`, so the file's toolchain is installed here — in a cached
 # layer, rather than by the first `cargo` call after `COPY . .` on every source
 # change. The assertion fails the build when anything (a `RUSTUP_TOOLCHAIN`
 # override, a changed file) makes the active compiler disagree with the file.

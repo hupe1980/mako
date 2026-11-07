@@ -434,7 +434,7 @@ pub async fn list_orders_pg(
     only_due: bool,
     limit: i64,
 ) -> anyhow::Result<Vec<SperrOrderRow>> {
-    sqlx::query_as::<_, SperrOrderRow>(&format!(
+    sqlx::query_as::<_, SperrOrderRow>(mako_service::sql::dynamic(format!(
         r"SELECT {ORDER_COLUMNS}
           FROM sperr_orders
           WHERE tenant = $1
@@ -443,7 +443,7 @@ pub async fn list_orders_pg(
             AND (NOT $4 OR COALESCE(ausfuehrung_am, fruehestens_am) <= heute())
           ORDER BY COALESCE(ausfuehrung_am, fruehestens_am) NULLS LAST, created_at DESC
           LIMIT $5"
-    ))
+    )))
     .bind(tenant)
     .bind(status.map(OrderStatus::as_str))
     .bind(malo_id)
@@ -459,9 +459,9 @@ pub async fn fetch_order_pg(
     id: Uuid,
     tenant: &str,
 ) -> anyhow::Result<Option<SperrOrderRow>> {
-    sqlx::query_as::<_, SperrOrderRow>(&format!(
+    sqlx::query_as::<_, SperrOrderRow>(mako_service::sql::dynamic(format!(
         "SELECT {ORDER_COLUMNS} FROM sperr_orders WHERE id = $1 AND tenant = $2"
-    ))
+    )))
     .bind(id)
     .bind(tenant)
     .fetch_optional(pool)
@@ -852,7 +852,7 @@ async fn record_iftsta_failure(
           WHERE id = $1 AND tenant = $2"
         ),
     };
-    sqlx::query(&sql)
+    sqlx::query(mako_service::sql::dynamic(sql))
         .bind(id)
         .bind(tenant)
         // Bounded: a provider error can be arbitrarily long and this column is read
@@ -904,7 +904,7 @@ pub async fn claim_iftsta_retry(
     pool: &PgPool,
     tenant: &str,
 ) -> anyhow::Result<Option<DispatchTarget>> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(mako_service::sql::dynamic(format!(
         r"UPDATE sperr_orders
              SET iftsta_attempts        = iftsta_attempts + 1,
                  iftsta_next_attempt_at = {IFTSTA_BACKOFF}
@@ -921,7 +921,7 @@ pub async fn claim_iftsta_retry(
            )
            RETURNING id, malo_id, lf_mp_id, order_type, process_id, status,
                      executed_at, execution_note, fail_reason, pruefschritt_code"
-    ))
+    )))
     .bind(tenant)
     .bind(IFTSTA_MAX_ATTEMPTS)
     .fetch_optional(pool)

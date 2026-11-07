@@ -74,7 +74,7 @@ subtle     = "2"
 secrecy    = "0.10"
 # Shared PostgreSQL pool builder (`DatabaseConfig::connect`). Every daemon speaks
 # to Postgres through sqlx; centralising the pool tuning here keeps it consistent.
-sqlx       = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "macros"] }
+sqlx       = { workspace = true }
 figment    = { workspace = true }
 figment-file-provider-adapter = { workspace = true }
 toml       = "0.8"

@@ -685,15 +685,17 @@ impl MdmdMcpHandler {
             let id = pid_str
                 .parse::<uuid::Uuid>()
                 .map_err(|_| McpError::invalid_params("process_id must be a valid UUID", None))?;
-            sqlx::query_as::<_, CorrelationRow>(&format!("{COLS} WHERE process_id = $1"))
-                .bind(id)
-                .fetch_optional(&self.state.pool)
-                .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            sqlx::query_as::<_, CorrelationRow>(mako_service::sql::dynamic(format!(
+                "{COLS} WHERE process_id = $1"
+            )))
+            .bind(id)
+            .fetch_optional(&self.state.pool)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
         } else if let Some(ref erp_id) = p.erp_order_id {
-            sqlx::query_as::<_, CorrelationRow>(&format!(
+            sqlx::query_as::<_, CorrelationRow>(mako_service::sql::dynamic(format!(
                 "{COLS} WHERE erp_order_id = $1 ORDER BY initiated_at DESC LIMIT 1"
-            ))
+            )))
             .bind(erp_id)
             .fetch_optional(&self.state.pool)
             .await

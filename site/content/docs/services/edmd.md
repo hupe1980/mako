@@ -270,19 +270,19 @@ roles  = ["nb"]
 | `[policy]` | `physische_loeschung` (`false`) | [Physical deletion](#policy-physische-loeschung) |
 | `[mcp]` | `api_key`, `named_keys`, `api_key_roles` | MCP key fallback beside OIDC |
 
-**TLS to PostgreSQL.** meterstore reads `[database] url` for its Iceberg
-catalog and connects over TLS: a URL that names no `sslmode` (in the URL or in
+**TLS to PostgreSQL.** meterstore opens its own pool and its Iceberg catalog
+from `[database] url` and connects over TLS: a URL that names no `sslmode` (in the URL or in
 `PGSSLMODE`) connects with **`verify-full`**, the production default — the
 server's certificate must chain to a trusted root and name the host. `require`,
 `verify-ca` and `disable` are honoured; `prefer` and `allow` are refused at
 startup. Local development and the test containers speak plaintext and say so
 (`postgres://dev:dev@localhost:5432/edmd?sslmode=disable`).
 
-**Connection budget.** Size `pool_size` and PostgreSQL's `max_connections` for
-the main pool (which also backs meterstore's hot tier) plus one shared Iceberg
-catalog metadata pool of up to 4 connections — `meter_reads`, `esa_typ2_reads`
-and `meter_readings` are three tables of one `MeterCatalog`. Connections are
-tagged `edmd` in `pg_stat_activity`.
+**Connection budget.** Size PostgreSQL's `max_connections` for three pools:
+edmd's business pool (`pool_size`, tagged `edmd`), meterstore's own pool for the
+hot tier and the subject registry (10, tagged `edmd-meterstore`), and one shared
+Iceberg catalog metadata pool of up to 4 — `meter_reads`, `esa_typ2_reads` and
+`meter_readings` are three tables of one `MeterCatalog`.
 
 **marktd subscription.** With `subscription.webhook_url` set, edmd registers for
 `de.mako.process.initiated` and `de.mako.process.completed` at startup. Verify:
@@ -1417,14 +1417,17 @@ tiers, unattributable — § 147 Abs. 1 AO retention is preserved.
 (personal Messwerte deleted or anonymized at the latest three years after the
 collection year) is discharged by the same mechanism.
 
-`DELETE /api/v1/gdpr/erasure/{malo_id}` runs in **one transaction** on edmd's
-pool (the registry shares the database):
+`DELETE /api/v1/gdpr/erasure/{malo_id}` runs in two steps, edmd's first:
 
-1. Records the request in `gdpr_deletions` (idempotent on `malo_id + tenant`).
-2. Destroys every subject mapping of the tenant-qualified MaLo
-   (`SubjectRegistry::erase_all_in`) — intervals, ZSG readings and ESA Typ-2
-   values at once.
-3. Rewrites or deletes edmd's own MaLo-keyed rows:
+1. In one transaction on edmd's pool: records the request in `gdpr_deletions`
+   (idempotent on `malo_id + tenant`) and rewrites or deletes edmd's own
+   MaLo-keyed rows (table below).
+2. After that commit, destroys every subject mapping of the tenant-qualified
+   MaLo in meterstore's own transaction (`SubjectRegistry::erase_all`) —
+   intervals, ZSG readings and ESA Typ-2 values at once.
+
+A failure after step 1 answers `500` with the request recorded and the mapping
+intact; every step is idempotent, so re-running the request completes it.
 
 | Treatment | Tables |
 |---|---|

@@ -2,6 +2,65 @@
 import type { Instant, BusinessDate } from "../../format/brands";
 
 export interface AccountingdTools {
+  get_parked_booking: {
+    input: {
+      /**
+       * The parked booking's key, as `list_parked_bookings` names it.
+       */
+      key: string;
+    };
+    output: {
+      /**
+       * The draft's key — what rebook and discard name.
+       */
+      key: string;
+      /**
+       * The Buchungsart.
+       */
+      art: string;
+      /**
+       * The Marktlokation.
+       */
+      malo_id: string;
+      /**
+       * The Lieferant's MP-ID.
+       */
+      lf_mp_id: string;
+      /**
+       * Signed amount in minor units (positive: the customer owes).
+       */
+      betrag_ct: number;
+      /**
+       * The booking date the ledger refused.
+       */
+      buchungsdatum: BusinessDate;
+      /**
+       * The Beleg, when the draft cites one.
+       */
+      beleg: string | null;
+      /**
+       * doubleentry's rejection code; `None` for a refusal accountingd made.
+       */
+      code: number | null;
+      /**
+       * The refusal in words.
+       */
+      meldung: string;
+      /**
+       * What the operator can do about it, in words.
+       */
+      hinweis: string;
+      /**
+       * The first date a rebooking is accepted on, when the refusal is a
+       * sealed period (`301`) — the day after the last seal.
+       */
+      vorschlag_datum: BusinessDate | null;
+      /**
+       * When the draft was staged (RFC 3339).
+       */
+      seit: Instant;
+    };
+  };
   list_parked_bookings: {
     input: {
       /**

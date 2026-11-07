@@ -73,17 +73,17 @@ async fn metrics(State(state): State<ObsState>) -> impl IntoResponse {
         .fetch_one(pool)
         .await
         .unwrap_or(0);
-    let open_processes: i64 = sqlx::query_scalar(&format!(
+    let open_processes: i64 = sqlx::query_scalar(mako_service::sql::dynamic(format!(
         "SELECT COUNT(*) FROM process_projections WHERE state NOT IN ({TERMINAL_STATE_SQL})"
-    ))
+    )))
     .fetch_one(pool)
     .await
     .inspect_err(|e| tracing::warn!(%e, "processd obs: open-process gauge query failed"))
     .unwrap_or(0);
-    let overdue_processes: i64 = sqlx::query_scalar(&format!(
+    let overdue_processes: i64 = sqlx::query_scalar(mako_service::sql::dynamic(format!(
         "SELECT COUNT(*) FROM process_projections \
          WHERE state NOT IN ({TERMINAL_STATE_SQL}) AND deadline_at < now()"
-    ))
+    )))
     .fetch_one(pool)
     .await
     .inspect_err(|e| tracing::warn!(%e, "processd obs: overdue-process gauge query failed"))

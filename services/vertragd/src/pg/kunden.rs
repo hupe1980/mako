@@ -983,7 +983,7 @@ pub async fn fetch_rechnungsempfaenger_by_malo(
     // has a party it is billed to, so the two questions must be answered off one
     // status list. Two lists put a priced period and no Leistungsempfänger on
     // the same invoice.
-    let row: Option<BuyerCols> = sqlx::query_as(&format!(
+    let row: Option<BuyerCols> = sqlx::query_as(mako_service::sql::dynamic(format!(
         "SELECT {BUYER_COLS}
            FROM versorgungsvertraege v
            JOIN vertragskomponenten k ON k.vertrag_id = v.id
@@ -994,7 +994,7 @@ pub async fn fetch_rechnungsempfaenger_by_malo(
           ORDER BY v.vertragsbeginn DESC LIMIT 1",
         vertrag = super::vertraege::VERTRAG_BILLABLE,
         komponente = super::vertraege::KOMPONENTE_BILLABLE,
-    ))
+    )))
     .bind(malo_id)
     .bind(tenant)
     .fetch_optional(pool)
@@ -1016,12 +1016,12 @@ pub async fn fetch_rechnungsempfaenger_by_rahmenvertrag(
     rahmenvertrag_id: Uuid,
     tenant: &str,
 ) -> Result<Option<RechnungsempfaengerRow>> {
-    let row: Option<BuyerCols> = sqlx::query_as(&format!(
+    let row: Option<BuyerCols> = sqlx::query_as(mako_service::sql::dynamic(format!(
         "SELECT {BUYER_COLS}
            FROM rahmenvertraege r
            JOIN kunden ku ON ku.id = r.kunden_id
           WHERE r.id=$1 AND r.tenant=$2",
-    ))
+    )))
     .bind(rahmenvertrag_id)
     .bind(tenant)
     .fetch_optional(pool)
@@ -1044,12 +1044,12 @@ pub async fn fetch_rechnungsempfaenger_by_ggv(
     ggv_id: &str,
     tenant: &str,
 ) -> Result<Option<RechnungsempfaengerRow>> {
-    let row: Option<BuyerCols> = sqlx::query_as(&format!(
+    let row: Option<BuyerCols> = sqlx::query_as(mako_service::sql::dynamic(format!(
         "SELECT {BUYER_COLS}
            FROM ggv_betreiber g
            JOIN kunden ku ON ku.id = g.kunden_id
           WHERE g.ggv_id=$1 AND g.tenant=$2",
-    ))
+    )))
     .bind(ggv_id)
     .bind(tenant)
     .fetch_optional(pool)

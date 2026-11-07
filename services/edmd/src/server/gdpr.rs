@@ -8,9 +8,11 @@
 //! to the erased MaLo is gone, so they are unattributable everywhere at once, with
 //! no external Parquet-rewrite step to schedule.
 //!
-//! edmd's own tables are handled by what they are, in the **same transaction**
-//! as the mapping erasure, so an Art. 17 request either completes whole or not
-//! at all. The Buchungsbelege among them — corrections, the substitute-value
+//! edmd's own tables are handled by what they are, in one transaction that
+//! commits before the mapping is destroyed, so an Art. 17 request completes
+//! whole or stays open: a failure after that commit leaves the request recorded
+//! and the mapping in place, and re-running it — every step is idempotent —
+//! finishes it. The Buchungsbelege among them — corrections, the substitute-value
 //! log, receipts, reading orders, gas quality data and the ZSG conversion log —
 //! are kept and their `malo_id` rewritten to a reference that resolves to no
 //! one; the derived and operational ones (billing-period cache, quality
@@ -25,12 +27,14 @@ use super::*;
 ///
 /// Executes GDPR Art. 17 right-to-erasure for a MaLo.
 ///
-/// ## What this does (one transaction)
+/// ## What this does
 ///
 /// 1. Records the erasure request in `gdpr_deletions` (idempotent on
-///    `malo_id + tenant`).
-/// 2. Destroys every one of the MaLo's subject mappings in meterstore's registry
-///    ([`SubjectRegistry::erase_all_in`]) — the intervals, the ESA Typ-2 values
+///    `malo_id + tenant`), and handles edmd's own tables (3.) in the same
+///    transaction.
+/// 2. After that commit, destroys every one of the MaLo's subject mappings in
+///    meterstore's registry ([`SubjectRegistry::erase_all`], in the registry's
+///    own transaction — meterstore owns its pool) — the intervals, the ESA Typ-2 values
 ///    and the Zählerstandsgang become unattributable in both tiers at once. One
 ///    registry spans the catalog's tables, so this is one destruction rather
 ///    than three, and one call covers every retention epoch the identifier is
@@ -59,7 +63,7 @@ use super::*;
 /// **Cedar action**: `write-gdpr-erasure` — erasure is irreversible, so it is
 /// gated by its own action rather than the general write permission.
 ///
-/// [`SubjectRegistry::erase_all_in`]: meterstore::SubjectRegistry::erase_all_in
+/// [`SubjectRegistry::erase_all`]: meterstore::SubjectRegistry::erase_all
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GdprErasureRequest {
@@ -103,8 +107,22 @@ pub(crate) async fn post_gdpr_erasure(
     let natural_id = crate::store::subject_natural_id(resource_tenant, &malo_id);
     let now = OffsetDateTime::now_utc();
 
-    // Every step runs in one transaction: the mapping erasure and the derived-row
-    // deletes must commit together or roll back together.
+    // The references the erasure will destroy, read first: edmd's Belege are
+    // rewritten to a pseudonym derived from them, in edmd's transaction, before
+    // the registry destroys the mapping in its own.
+    let subjects: Vec<meterstore::erasure::SubjectRef> = match store.subject_registry() {
+        Some(reg) => match reg.references(&natural_id).await {
+            Ok(refs) => refs,
+            Err(e) => {
+                tracing::error!(malo_id = %malo_id, error = %e, "edmd: GDPR erasure could not read the subject references");
+                return ApiError::internal(e).into_response();
+            }
+        },
+        None => Vec::new(),
+    };
+
+    // edmd's own steps run in one transaction and commit before the mapping is
+    // destroyed.
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -147,31 +165,6 @@ pub(crate) async fn post_gdpr_erasure(
         .execute(&mut *tx)
         .await
     );
-
-    // 2. Destroy the subject linkage in the same transaction (pseudonymisation).
-    //    One call for the identifier rather than one per reference: it unlinks
-    //    every epoch and, where a suppression key is configured, records the
-    //    tombstone even for an identifier this deployment holds no mapping for —
-    //    a request that arrived before the delivery did is honoured rather than
-    //    lost. The advisory lock inside it is transaction-scoped, which is why
-    //    this takes the transaction and not a bare connection: a concurrent
-    //    re-registration cannot interleave.
-    let subjects: Vec<meterstore::erasure::SubjectRef> = match store.subject_registry() {
-        Some(reg) => {
-            let erased = erasure_step!(
-                "erase_subject",
-                reg.erase_all_in(&mut tx, &natural_id, &req.reason, &req.authorized_by, now)
-                    .await
-            );
-            // What was actually unlinked, in this transaction — not what a read
-            // before it saw. A record naming no reference is the pre-emptive
-            // case: a request that arrived before any delivery did, which
-            // leaves a tombstone and nothing to pseudonymise with.
-            erased.into_iter().filter_map(|r| r.subject).collect()
-        }
-        None => Vec::new(),
-    };
-    let subject_unlinked = !subjects.is_empty();
 
     // 3. Every other table that keys rows on this MaLo. Unlinking the reading
     //    store alone left the MaLo-ID — and, in four of these, register readings
@@ -292,6 +285,29 @@ pub(crate) async fn post_gdpr_erasure(
     );
 
     erasure_step!("commit", tx.commit().await);
+
+    // 2. Destroy the subject linkage (pseudonymisation) in the registry's own
+    //    transaction. One call for the identifier rather than one per
+    //    reference: it unlinks every epoch and, where a suppression key is
+    //    configured, records the tombstone even for an identifier this
+    //    deployment holds no mapping for — a request that arrived before the
+    //    delivery did is honoured rather than lost.
+    let subject_unlinked = match store.subject_registry() {
+        Some(reg) => match reg
+            .erase_all(&natural_id, &req.reason, &req.authorized_by, now)
+            .await
+        {
+            Ok(erased) => erased.iter().any(|r| r.subject.is_some()),
+            Err(e) => {
+                tracing::error!(
+                    malo_id = %malo_id, step = "erase_subject", error = %e,
+                    "edmd: GDPR Art. 17 erasure recorded but the mapping is intact — re-run it"
+                );
+                return ApiError::internal(e).into_response();
+            }
+        },
+        None => false,
+    };
 
     tracing::info!(
         malo_id,

@@ -1,6 +1,6 @@
 # Contributing to mako
 
-Rust 1.94 (pinned in `rust-toolchain.toml`, installed by `rustup` on first
+Rust 1.95 (pinned in `rust-toolchain.toml`, installed by `rustup` on first
 use), [`just`](https://github.com/casey/just), and Docker for the database.
 `AGENTS.md` holds the domain rules and non-negotiables; read it before you
 change domain code.

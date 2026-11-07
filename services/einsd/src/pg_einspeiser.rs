@@ -84,11 +84,13 @@ const COLS: &str = "e.einspeiser_id, e.name, e.mastr_akteur_id, e.ust_status,
 pub async fn find(pool: &PgPool, tenant: &str, einspeiser_id: &str) -> Result<Option<Einspeiser>> {
     let sql =
         format!("SELECT {COLS} FROM einspeiser e WHERE e.tenant = $1 AND e.einspeiser_id = $2");
-    Ok(sqlx::query_as::<_, Einspeiser>(&sql)
-        .bind(tenant)
-        .bind(einspeiser_id)
-        .fetch_optional(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, Einspeiser>(mako_service::sql::dynamic(sql))
+            .bind(tenant)
+            .bind(einspeiser_id)
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 /// The operator responsible for a plant, resolved through `eeg_anlagen`.
@@ -110,11 +112,13 @@ pub async fn find_for_anlage(
            ON a.einspeiser_id = e.einspeiser_id AND a.tenant = e.tenant
          WHERE e.tenant = $1 AND a.tr_id = $2"
     );
-    Ok(sqlx::query_as::<_, Einspeiser>(&sql)
-        .bind(tenant)
-        .bind(tr_id)
-        .fetch_optional(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, Einspeiser>(mako_service::sql::dynamic(sql))
+            .bind(tenant)
+            .bind(tr_id)
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 /// List every operator in the tenant.
@@ -124,10 +128,12 @@ pub async fn find_for_anlage(
 /// Propagates storage errors.
 pub async fn list(pool: &PgPool, tenant: &str) -> Result<Vec<Einspeiser>> {
     let sql = format!("SELECT {COLS} FROM einspeiser e WHERE e.tenant = $1 ORDER BY e.name");
-    Ok(sqlx::query_as::<_, Einspeiser>(&sql)
-        .bind(tenant)
-        .fetch_all(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, Einspeiser>(mako_service::sql::dynamic(sql))
+            .bind(tenant)
+            .fetch_all(pool)
+            .await?,
+    )
 }
 
 /// Create or replace an operator.

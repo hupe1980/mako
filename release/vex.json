@@ -71,16 +71,13 @@
           "subcomponents": [
             {
               "@id": "pkg:cargo/quick-xml@0.38.4"
-            },
-            {
-              "@id": "pkg:cargo/quick-xml@0.39.4"
             }
           ]
         }
       ],
       "status": "not_affected",
       "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
-      "impact_statement": "Quadratic duplicate-attribute scan, patched in 0.41. Every parser that reads XML from a counterparty is on quick-xml 0.41 (mako's own crates, asx-rs for AS4). 0.39.4 is reached only through opendal, which parses authenticated S3/GCS/Azure responses for edmd's cold tier; 0.38.4 only through typst's hayagriva/citationberg, which parses bundled assets while rendering mako's own templates."
+      "impact_statement": "Quadratic duplicate-attribute scan, patched in 0.41. Every parser that reads XML from a counterparty is on quick-xml 0.41 (mako's own crates, asx-rs for AS4, opendal for edmd's cold tier). 0.38.4 is reached only through typst's hayagriva/citationberg, which parses bundled assets while rendering mako's own templates."
     },
     {
       "vulnerability": {
@@ -92,16 +89,13 @@
           "subcomponents": [
             {
               "@id": "pkg:cargo/quick-xml@0.38.4"
-            },
-            {
-              "@id": "pkg:cargo/quick-xml@0.39.4"
             }
           ]
         }
       ],
       "status": "not_affected",
       "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
-      "impact_statement": "Unbounded namespace-declaration allocation in NsReader, patched in 0.41. Same versions and same reachability as RUSTSEC-2026-0194: no counterparty-controlled XML reaches 0.38.4 or 0.39.4."
+      "impact_statement": "Unbounded namespace-declaration allocation in NsReader, patched in 0.41. Same version and same reachability as RUSTSEC-2026-0194: no counterparty-controlled XML reaches 0.38.4."
     },
     {
       "vulnerability": {

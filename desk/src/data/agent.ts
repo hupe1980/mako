@@ -12,8 +12,21 @@ const BASE = "/svc/agentd/api/v1/runs";
 export type Anker =
   | { kunde: string }
   | { malo: string }
+  | { process: string }
   | { freigabe: string }
-  | { disput: string };
+  | { disput: string }
+  | { buchung: string };
+
+/** Every Anker key the desk-assistant's manifest names. */
+export type AnkerArt = "kunde" | "malo" | "process" | "freigabe" | "disput" | "buchung";
+
+/** The Anker's key: what it is about. */
+export function ankerArt(a: Anker): AnkerArt {
+  return (Object.keys(a)[0] ?? "malo") as AnkerArt;
+}
+
+/** What „Warum?" asks about a Heute item, with its Anker. */
+export const WARUM_FRAGE = "Warum steht das auf meiner Liste, und was entscheidet es?";
 
 export interface AnswerSentence {
   text: string;
@@ -30,7 +43,7 @@ export interface Answer {
   /** agentd's disclosure, shown first. */
   disclosure: string;
   saetze: AnswerSentence[];
-  /** A decision the assistant proposes for a Freigabe or a Disput — prefilled, never sent. */
+  /** A decision the assistant proposes for a Freigabe, a Disput or a geparkte Buchung — prefilled, never sent. */
   vorschlag: Vorschlag | null;
   /** Every service read the run made, in order; `fertig` once it settled. */
   schritte: { quelle: string; fertig: boolean }[];
@@ -39,12 +52,19 @@ export interface Answer {
 }
 
 export interface Vorschlag {
-  /** For a Freigabe `freigeben` or `ablehnen`; for a Disput `beilegen` or `aufrechterhalten`. */
-  aktion: "freigeben" | "ablehnen" | "beilegen" | "aufrechterhalten";
+  /**
+   * For a Freigabe `freigeben` or `ablehnen`; for a Disput `beilegen` or
+   * `aufrechterhalten`; for a geparkte Buchung `neu_buchen` or `verwerfen`.
+   */
+  aktion: "freigeben" | "ablehnen" | "beilegen" | "aufrechterhalten" | "neu_buchen" | "verwerfen";
   /** The Antwortcode a refusal carries; null for an approval and a Disput. */
   antwortcode: string | null;
   /** For a Disput: the checker finding it rests on, as the Rechnungseingang names it. */
   befund?: string | null;
+  /** For a Buchung `neu_buchen`: the date to book on, `YYYY-MM-DD`. */
+  buchungsdatum?: string | null;
+  /** For a Buchung `verwerfen`: why it is dropped. */
+  grund?: string | null;
   begruendung: string;
   /** The read the Begründung rests on, `server/tool`. */
   quelle: string | null;
@@ -138,8 +158,8 @@ async function verdict(run: string, body: object, keepalive: boolean): Promise<v
   if (res.status !== 204) throw await failure(res, { dienst: "agentd", aktion: "bewerten" });
 }
 
-/** What the assistant proposes on unasked: a Freigabe or a Rechnungsdisput. */
-export type VorschlagArt = "freigabe" | "disput";
+/** What the assistant proposes on unasked: a Freigabe, a Rechnungsdisput, a geparkte Buchung. */
+export type VorschlagArt = "freigabe" | "disput" | "buchung";
 
 /** How each proposed action reads, on a row and on its card. */
 export const AKTION: Record<Vorschlag["aktion"], string> = {
@@ -147,6 +167,8 @@ export const AKTION: Record<Vorschlag["aktion"], string> = {
   ablehnen: "Ablehnen",
   beilegen: "Beilegen",
   aufrechterhalten: "Aufrechterhalten",
+  neu_buchen: "Neu buchen",
+  verwerfen: "Verwerfen",
 };
 
 /**
@@ -181,6 +203,26 @@ export interface Faehigkeit {
   liest: { werkzeug: string; wozu: string | null }[];
   nur_lesend: boolean;
   mit_freigabe: number;
+  /** Its record over the last `tage` days; null for a skill not activated. */
+  bilanz: Bilanz | null;
+}
+
+/**
+ * What a skill's runs came to over a window — agentplane's track record as
+ * agentd's catalog reports it, never a count the Desk keeps.
+ */
+export interface Bilanz {
+  tage: number;
+  /** Runs admitted. */
+  laeufe: number;
+  /** Runs still working. */
+  offen: number;
+  /** Concluded runs by outcome. */
+  abgeschlossen: Record<string, number>;
+  /** „Hilfreich?" verdicts. */
+  hilfreich: { ja: number; nein: number };
+  /** What became of the proposals: `sent` übernommen, `edited` angepasst, `dismissed` verworfen. */
+  vorschlag: { sent?: number; edited?: number; dismissed?: number };
 }
 
 /** Every skill compiled into agentd. */

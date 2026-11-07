@@ -334,8 +334,8 @@ reason  = "asx-rs WS-Security uses hmac 0.13 (RustCrypto 2024); p256/ecdsa ecosy
 # ── quick-xml versions in the tree ─────────────────────────────────────────────
 # 0.41 is the workspace version: mako's own crates, asx-rs (AS4 SOAP/ebMS3) and
 # object_store (slatedb cloud) all agree on it. The others come in transitively
-# and are not ours to move: opendal pins 0.39, and typst's document tooling
-# pulls both 0.38 (hayagriva → citationberg) and 0.42 (syntect → plist).
+# and are not ours to move: typst's document tooling pulls both 0.38
+# (hayagriva → citationberg) and 0.42 (syntect → plist).
 [[bans.skip]]
 name    = "quick-xml"
 version = "0.41"
@@ -455,13 +455,12 @@ ignore = [
     # RUSTSEC-2026-0194 / RUSTSEC-2026-0195: quick-xml O(N²) attribute-dedup scan
     # and unbounded namespace-declaration allocation, both patched in 0.41.
     # Every path that parses XML from a counterparty is on 0.41: mako's own crates,
-    # asx-rs (AS4 SOAP/ebMS3 envelopes) and object_store (cloud API responses).
-    # What remains on an affected version is transitive and reaches no untrusted
-    # input: opendal 0.57 (0.39) parses authenticated S3/GCS/Azure responses on
-    # edmd's cold tier, and typst's citation tooling (0.38) parses bundled assets
-    # while rendering our own document templates.
-    # Resolution: drops out when opendal and hayagriva reach quick-xml ≥ 0.41.
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml O(N²) DoS, patched in 0.41 — every counterparty-facing parser here is on 0.41; the affected versions remain only under opendal (authenticated cloud APIs) and typst (bundled assets)" },
+    # asx-rs (AS4 SOAP/ebMS3 envelopes), object_store and opendal (cloud API
+    # responses). What remains on an affected version is typst's citation
+    # tooling (0.38), which parses bundled assets while rendering our own
+    # document templates.
+    # Resolution: drops out when hayagriva reaches quick-xml ≥ 0.41.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml O(N²) DoS, patched in 0.41 — every counterparty-facing parser here is on 0.41; the affected version remains only under typst (bundled assets)" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader memory-exhaustion DoS; same version constraint and same usage analysis as RUSTSEC-2026-0194." },
     # Drops out with a jsonwebtoken on elliptic-curve 0.14.
     { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 timing; the signing path (energy-api JWS) is on patched 0.7.10 — 0.5.5 remains only under jsonwebtoken's public-key verification and the unshipped bedrock feature" },
@@ -553,9 +552,9 @@ version = "=0.14"
 reason  = "transitional: iceberg/slatedb ecosystem requires 0.14 alongside 0.15."
 
 [[bans.skip]]
-name    = "quick-xml"
-version = "=0.39"
-reason  = "opendal 0.57 (iceberg-storage-opendal, edmd/meterstore cold tier) pins quick-xml 0.39; the workspace uses 0.41."
+name    = "asyncband"
+version = "=0.6"
+reason  = "opendal 0.58 (iceberg-storage-opendal, edmd/meterstore cold tier) uses asyncband 0.6; slatedb's foyer uses 0.7."
 
 [[bans.skip]]
 name    = "quick-xml"
@@ -625,7 +624,7 @@ reason  = "paired with cipher 0.4 skip."
 [[bans.skip]]
 name    = "sqlx"
 version = "=0.8"
-reason  = "mako stays on sqlx 0.8 while meterstore, which shares its pool, is on 0.8; doubleentry 0.8.1, accountingd's ledger, carries sqlx 0.9 privately — no sqlx type crosses its API."
+reason  = "mako is on sqlx 0.9; iceberg-catalog-sql 0.11 (meterstore's cold-tier SQL catalogue, its own pool) is still on 0.8. No sqlx type crosses meterstore's API."
 
 [[bans.skip]]
 name    = "sqlx-core"

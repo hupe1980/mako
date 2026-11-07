@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: desk-assistant
-  version: "1.2.0"
+  version: "1.3.0"
   annotations:
     mako.de/titel: "Assistent im Desk"
     mako.de/zweck: "Beantwortet eine Frage zum Kunden, zur Marktlokation, zum Prozess oder zur Entscheidung auf dem Bildschirm, jeden Satz mit seiner Quelle."
@@ -27,13 +27,15 @@ spec:
     role: >-
       Answers an operator's question about the customer, Marktlokation or
       process on the Desk's screen, or about a decision held for a person,
-      citing the service read behind every sentence.
+      citing the service read behind every sentence, and proposing a
+      decision held for a person when asked what to do.
     constraints: |
       You answer one question from an operator of a German energy-market
       participant, in German, about the Anker named in the input: `kunde` (a
       customer id), `malo` (a MaLo-ID), `process` (a process id),
-      `freigabe` (a decision held for a person) or `disput` (a disputed
-      INVOIC receipt).
+      `freigabe` (a decision held for a person), `disput` (a disputed
+      INVOIC receipt) or `buchung` (a booking the ledger refused, by its
+      key).
 
       ## PROCEDURE
       1. For a `kunde`: call vertragd `get_kunde` for its Lieferstellen.
@@ -48,7 +50,10 @@ spec:
       6. For a `disput`: call invoicd `get_receipt` with its `id`, then
          invoicd `get_check_result` with the same `id` for the findings the
          dispute rests on.
-      7. Answer in at most five sentences.
+      7. For a `buchung`: call accountingd `get_parked_booking` with its
+         `key`, then accountingd `list_ledger` with the booking's `malo_id`
+         for what is already booked on that account.
+      8. Answer in at most five sentences.
 
       ## A VORSCHLAG — only for a `freigabe`, and only when asked what to do
       Propose one decision in `vorschlag`: `aktion` `freigeben` or
@@ -70,6 +75,19 @@ spec:
       `quelle`. When the findings do not settle it, propose nothing
       (`vorschlag: null`) and say what is missing. The person decides; you
       never act.
+
+      ## A VORSCHLAG — only for a `buchung`, and only when asked what to do
+      Propose one decision in `vorschlag`: `aktion` `verwerfen` when
+      accountingd `list_ledger` shows a movement with the same `beleg` and the
+      same amount already booked — `grund` names that Beleg and its booking
+      date, and `quelle` is `accountingd/list_ledger`; otherwise `neu_buchen`
+      with `buchungsdatum` the booking's `vorschlag_datum` exactly as
+      accountingd `get_parked_booking` states it, `quelle`
+      `accountingd/get_parked_booking`. `antwortcode` and `befund` are null;
+      the field the other action uses is null too. `begruendung` is one
+      sentence. When the booking has no `vorschlag_datum` and no duplicate
+      shows, propose nothing (`vorschlag: null`) and say what is missing.
+      The person decides; you never act.
 
       ## EVERY SENTENCE
       - names in `quelle` the one call whose output carries its figures, as
@@ -130,14 +148,15 @@ spec:
         vorschlag:
           type: [object, "null"]
           additionalProperties: false
-          required: [aktion, antwortcode, befund, begruendung, quelle]
+          required: [aktion, antwortcode, befund, buchungsdatum, grund, begruendung, quelle]
           properties:
             aktion:
               type: string
-              enum: [freigeben, ablehnen, beilegen, aufrechterhalten]
+              enum: [freigeben, ablehnen, beilegen, aufrechterhalten, neu_buchen, verwerfen]
               description: >-
                 freigeben or ablehnen for a freigabe; beilegen or
-                aufrechterhalten for a disput.
+                aufrechterhalten for a disput; neu_buchen or verwerfen for a
+                buchung.
             antwortcode:
               type: [string, "null"]
               description: >-
@@ -148,6 +167,16 @@ spec:
               description: >-
                 For a disput, the kind of the finding it rests on; null for
                 a freigabe.
+            buchungsdatum:
+              type: [string, "null"]
+              description: >-
+                For a buchung neu_buchen, the ISO date to book on — the
+                booking's vorschlag_datum; null otherwise.
+            grund:
+              type: [string, "null"]
+              description: >-
+                For a buchung verwerfen, why it is dropped, naming the Beleg
+                already booked; null otherwise.
             begruendung:
               type: string
             quelle:
@@ -188,6 +217,18 @@ spec:
       description: >-
         The invoic-checker findings of a receipt, each with its kind and
         sentence — the grounds a dispute rests on.
+    - ref: tool://accountingd/get_parked_booking
+      mutates: false
+      max_sensitivity: confidential
+      description: >-
+        A booking the ledger refused: its Buchungsart, amount, Beleg, the
+        refusal and the first open date to book it on.
+    - ref: tool://accountingd/list_ledger
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        A customer account's ledger movements, newest first, each with its
+        Beleg, and the balance the window opens at.
     - ref: tool://processd/list_open_processes
       mutates: false
       max_sensitivity: internal

@@ -166,9 +166,9 @@ impl PgNetzzugangRepository {
         tenant: &str,
         id: Uuid,
     ) -> Result<Option<NetzzugangAntragRow>, MdmError> {
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM netzzugang_antraege WHERE tenant = $1 AND id = $2"
-        ))
+        )))
         .bind(tenant)
         .bind(id)
         .fetch_optional(&self.pool)
@@ -186,14 +186,14 @@ impl PgNetzzugangRepository {
         status: Option<NetzzugangStatus>,
         netzanschluss_id: Option<&str>,
     ) -> Result<Vec<NetzzugangAntragRow>, MdmError> {
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM netzzugang_antraege \
              WHERE tenant = $1 \
                AND ($2::text IS NULL OR status = $2) \
                AND ($3::text IS NULL OR netzanschluss_id = $3) \
              ORDER BY created_at DESC \
              LIMIT 500"
-        ))
+        )))
         .bind(tenant)
         .bind(status.map(NetzzugangStatus::as_str))
         .bind(netzanschluss_id)
@@ -238,7 +238,7 @@ impl PgNetzzugangRepository {
             (Some(_), _) => {}
         }
 
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(mako_service::sql::dynamic(format!(
             "UPDATE netzzugang_antraege SET \
                status       = $3, \
                platform_ref = COALESCE($4, platform_ref), \
@@ -249,7 +249,7 @@ impl PgNetzzugangRepository {
                updated_at   = now() \
              WHERE tenant = $1 AND id = $2 \
              RETURNING {SELECT_COLS}"
-        ))
+        )))
         .bind(tenant)
         .bind(id)
         .bind(status.as_str())

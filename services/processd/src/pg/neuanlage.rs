@@ -203,13 +203,13 @@ pub async fn due_for_pruefung(
     today: Date,
     limit: i64,
 ) -> anyhow::Result<Vec<NeuanlageFall>> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(mako_service::sql::dynamic(format!(
         r"SELECT {COLUMNS} FROM neuanlage_faelle
           WHERE tenant = $1 AND status = 'offen'
             AND (letzte_pruefung_am IS NULL OR letzte_pruefung_am < $2)
           ORDER BY letzter_pruefungstag
           LIMIT $3"
-    ))
+    )))
     .bind(tenant)
     .bind(today)
     .bind(limit)
@@ -335,9 +335,9 @@ pub async fn fetch_case(
     id: Uuid,
     tenant: &str,
 ) -> anyhow::Result<Option<NeuanlageFall>> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(mako_service::sql::dynamic(format!(
         "SELECT {COLUMNS} FROM neuanlage_faelle WHERE id = $1 AND tenant = $2"
-    ))
+    )))
     .bind(id)
     .bind(tenant)
     .fetch_optional(pool)
@@ -357,12 +357,12 @@ pub async fn list_cases(
     status: Option<&str>,
     limit: i64,
 ) -> anyhow::Result<Vec<NeuanlageFall>> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(mako_service::sql::dynamic(format!(
         r"SELECT {COLUMNS} FROM neuanlage_faelle
           WHERE tenant = $1 AND ($2::text IS NULL OR status = $2)
           ORDER BY created_at DESC
           LIMIT $3"
-    ))
+    )))
     .bind(tenant)
     .bind(status)
     .bind(limit)

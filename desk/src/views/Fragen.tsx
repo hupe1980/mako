@@ -10,18 +10,23 @@ import {
   AgentAbgelehnt,
   AKTION,
   type Anker,
+  type AnkerArt,
   type Answer,
+  ankerArt,
   antwort,
+  type Bilanz,
   fragen,
-  katalog,
   schicksal,
   type Vorschlag,
 } from "../data/agent";
 import { useVerweigert, Verweigert } from "../data/verweigert";
 import { Icon } from "../design/Icon";
+import type { BusinessDate } from "../format/brands";
+import { formatBusinessDate } from "../format/date";
 import { Bewertung } from "./Bewertung";
+import { DESK_ASSISTANT, useKatalog, VorschlagBilanz } from "./Bilanz";
 
-const VORSCHLAEGE: Record<"kunde" | "malo" | "freigabe" | "disput", string[]> = {
+const VORSCHLAEGE: Record<AnkerArt, string[]> = {
   freigabe: ["Was schlägst du vor?", "Warum liegt das bei uns?", "Was kam zuletzt an?"],
   disput: ["Was schlägst du vor?", "Worauf beruht der Disput?", "Ist die Ablehnung versandt?"],
   kunde: [
@@ -30,9 +35,16 @@ const VORSCHLAEGE: Record<"kunde" | "malo" | "freigabe" | "disput", string[]> = 
     "Welche Frist läuft zuerst ab?",
   ],
   malo: ["Was kam zuletzt an?", "Was ist hier offen?", "Wann endet die Frist?"],
+  process: ["Was kam zuletzt an?", "Worauf wartet der Prozess?", "Wann endet die Frist?"],
+  buchung: [
+    "Was schlägst du vor?",
+    "Warum hat das Hauptbuch sie abgelehnt?",
+    "Ist der Beleg schon gebucht?",
+  ],
 };
 
-function Satz({ s }: { s: Answer["saetze"][number] }) {
+/** One sentence of an answer, with the read it cites and agentd's check of it. */
+export function Satz({ s }: { s: Answer["saetze"][number] }) {
   return (
     <li className="flex flex-col gap-1.5 py-2 first:pt-0 last:pb-0">
       <p className={`m-0 text-callout ${s.quelle ? "text-text" : "text-text-2 italic"}`}>
@@ -66,7 +78,7 @@ function modellName(m: string): string {
 }
 
 /** What the run is reading, each read ticked off once it answered. */
-function Lesen({ schritte }: { schritte: Answer["schritte"] }) {
+export function Lesen({ schritte }: { schritte: Answer["schritte"] }) {
   if (schritte.length === 0) {
     return (
       <p role="status" className="m-0 mt-4 flex items-center gap-2 text-callout text-text-2">
@@ -102,8 +114,9 @@ function Lesen({ schritte }: { schritte: Answer["schritte"] }) {
 }
 
 /**
- * The assistant's proposal for a Freigabe or a Disput: what to do, the code or
- * the finding it rests on, and the one sentence why, checked like any other.
+ * The assistant's proposal for a Freigabe, a Disput or a geparkte Buchung:
+ * what to do, the code, finding or date it rests on, and the one sentence why,
+ * checked like any other — with one line of how its proposals fared.
  * „Übernehmen" fills the decision form and sends nothing; „Verwerfen" hides it
  * and, once its hold ends, says so beside the run — a routine decision, taken
  * back with „Rückgängig" (FR-029).
@@ -112,14 +125,18 @@ export function VorschlagKarte({
   v,
   run,
   onUebernehmen,
+  onVerwerfen,
   disclosure,
   hinweis,
   befund,
+  bilanz,
 }: {
   v: Vorschlag;
   run: string;
   /** Absent where the proposal leaves nothing to fill in. */
   onUebernehmen?: ((v: Vorschlag, run: string) => void) | undefined;
+  /** Told when the person sets the proposal aside (`true`) and takes that back (`false`). */
+  onVerwerfen?: ((verworfen: boolean) => void) | undefined;
   /** agentd's disclosure, where the card stands outside the answer that carries it. */
   disclosure?: string;
   /** What taking it in would mean, where there is nothing to take in. */
@@ -129,6 +146,8 @@ export function VorschlagKarte({
    * in German; the proposal itself carries only the finding's identifier.
    */
   befund?: string | undefined;
+  /** The assistant's record for the card's last line; read from the catalog when absent. */
+  bilanz?: Bilanz | null | undefined;
 }) {
   const [weg, setWeg] = useState(false);
   const hold = useHold();
@@ -142,6 +161,9 @@ export function VorschlagKarte({
         <span className="text-text">
           {AKTION[v.aktion]}
           {v.antwortcode && <span className="ml-1 font-mono">{v.antwortcode}</span>}
+          {v.aktion === "neu_buchen" && v.buchungsdatum && (
+            <span className="ml-1">am {formatBusinessDate(v.buchungsdatum as BusinessDate)}</span>
+          )}
         </span>
         {befund && (
           <span className="font-normal text-text-2">
@@ -168,13 +190,17 @@ export function VorschlagKarte({
         <AriaButton
           onPress={() => {
             setWeg(true);
+            onVerwerfen?.(true);
             hold(
               `vorschlag/${run}`,
               "Vorschlag verworfen",
               // What became of a proposal is the assistant's quality signal;
               // a lost one costs nothing the person sees.
               (keepalive) => schicksal(run, "dismissed", keepalive),
-              () => setWeg(false),
+              () => {
+                setWeg(false);
+                onVerwerfen?.(false);
+              },
             );
           }}
           className="focus-ring h-7 rounded-full px-3 text-body text-text-2 data-[hovered]:bg-fill data-[hovered]:text-text"
@@ -194,6 +220,7 @@ export function VorschlagKarte({
           </AriaButton>
         )}
       </div>
+      <VorschlagBilanz bilanz={bilanz} />
     </div>
   );
 }
@@ -217,13 +244,8 @@ export function Fragen({
   const feld = useRef<HTMLInputElement>(null);
   // The catalog names the model that answers, and a catalog that cannot be
   // read means agentd is absent: then Fragen is not offered at all.
-  const skill = useQuery({
-    queryKey: ["agentd", "catalog"],
-    queryFn: katalog,
-    staleTime: 300_000,
-    retry: false,
-  });
-  const modell = skill.data?.find((f) => f.name === "desk-assistant")?.modell;
+  const skill = useKatalog();
+  const modell = skill.data?.find((f) => f.name === DESK_ASSISTANT)?.modell;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!FRAGEN.match?.(e)) return;
@@ -234,14 +256,7 @@ export function Fragen({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   const verweigert = useVerweigert({ dienst: "agentd", aktion: "fragen" });
-  const kind =
-    "kunde" in anker
-      ? "kunde"
-      : "malo" in anker
-        ? "malo"
-        : "disput" in anker
-          ? "disput"
-          : "freigabe";
+  const kind = ankerArt(anker);
   const start = useMutation({ mutationFn: (q: string) => fragen(q, anker) });
   const run = start.data;
   const answer = useQuery({

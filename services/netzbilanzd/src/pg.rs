@@ -396,9 +396,9 @@ pub async fn fetch_draft(
     tenant: &str,
     id: Uuid,
 ) -> anyhow::Result<Option<DraftRow>> {
-    sqlx::query_as::<_, DraftRow>(&format!(
+    sqlx::query_as::<_, DraftRow>(mako_service::sql::dynamic(format!(
         "SELECT {DRAFT_COLUMNS} FROM invoice_drafts WHERE tenant = $1 AND id = $2"
-    ))
+    )))
     .bind(tenant)
     .bind(id)
     .fetch_optional(executor)
@@ -491,7 +491,7 @@ pub async fn list_drafts(
     tenant: &str,
     f: &DraftFilter<'_>,
 ) -> anyhow::Result<Vec<DraftSummaryRow>> {
-    sqlx::query_as::<_, DraftSummaryRow>(&format!(
+    sqlx::query_as::<_, DraftSummaryRow>(mako_service::sql::dynamic(format!(
         r"SELECT {SUMMARY_COLUMNS}
           FROM invoice_drafts
           WHERE tenant = $1
@@ -506,7 +506,7 @@ pub async fn list_drafts(
             AND ($10::TIMESTAMPTZ IS NULL OR (created_at, id) < ($10, $11))
           ORDER BY created_at DESC, id DESC
           LIMIT $12"
-    ))
+    )))
     .bind(tenant)
     .bind(f.status)
     .bind(f.malo_id)
@@ -562,7 +562,7 @@ pub async fn list_corrections(
     malo_id: Option<&str>,
     limit: i64,
 ) -> anyhow::Result<Vec<DraftSummaryRow>> {
-    sqlx::query_as::<_, DraftSummaryRow>(&format!(
+    sqlx::query_as::<_, DraftSummaryRow>(mako_service::sql::dynamic(format!(
         r"SELECT {SUMMARY_COLUMNS}
           FROM invoice_drafts
           WHERE tenant = $1
@@ -570,7 +570,7 @@ pub async fn list_corrections(
             AND ($2::TEXT IS NULL OR malo_id = $2)
           ORDER BY created_at DESC, id DESC
           LIMIT $3"
-    ))
+    )))
     .bind(tenant)
     .bind(malo_id)
     .bind(limit)
@@ -600,7 +600,7 @@ pub async fn list_undispatched_stale(
     stale_hours: i64,
     limit: i64,
 ) -> anyhow::Result<Vec<DraftSummaryRow>> {
-    sqlx::query_as::<_, DraftSummaryRow>(&format!(
+    sqlx::query_as::<_, DraftSummaryRow>(mako_service::sql::dynamic(format!(
         r"SELECT {SUMMARY_COLUMNS}
           FROM invoice_drafts
           WHERE tenant = $1
@@ -612,7 +612,7 @@ pub async fn list_undispatched_stale(
             )
           ORDER BY due_date ASC, created_at ASC
           LIMIT $3"
-    ))
+    )))
     .bind(tenant)
     .bind(i32::try_from(stale_hours).unwrap_or(48))
     .bind(limit)

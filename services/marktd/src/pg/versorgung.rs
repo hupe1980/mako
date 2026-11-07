@@ -152,7 +152,7 @@ async fn append_history_snapshot(
     malo_id: &MaloId,
     tenant: &str,
 ) -> Result<(), MdmError> {
-    sqlx::query(&format!(
+    sqlx::query(mako_service::sql::dynamic(format!(
         r#"INSERT INTO versorgungsstatus_history
            (malo_id, tenant, lieferstatus, zuordnungen, lieferende,
             msb_mp_id, nb_mp_id, eog_seit, last_process_id, version, valid_from)
@@ -160,7 +160,7 @@ async fn append_history_snapshot(
                   v.msb_mp_id, v.nb_mp_id, v.eog_seit, v.last_process_id, v.version, now()
            FROM versorgungsstatus v
            WHERE v.malo_id = $1 AND v.tenant = $2"#
-    ))
+    )))
     .bind(malo_id.as_ref())
     .bind(tenant)
     .execute(conn)
@@ -709,10 +709,10 @@ impl PgVersorgungsStatusRepository {
         malo_id: &MaloId,
         tenant: &str,
     ) -> Result<Option<VersorgungsStatusRecord>, MdmError> {
-        let opt = sqlx::query(&format!(
+        let opt = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT v.*, {ZUORDNUNGEN_JSON} FROM versorgungsstatus v
              WHERE v.malo_id = $1 AND v.tenant = $2"
-        ))
+        )))
         .bind(malo_id.as_ref())
         .bind(tenant)
         .fetch_optional(&self.pool)
@@ -833,10 +833,10 @@ impl PgVersorgungsStatusRepository {
                 .await
                 .map_err(internal)?;
 
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT v.*, {ZUORDNUNGEN_JSON} FROM versorgungsstatus v
              WHERE v.tenant = $1 ORDER BY v.malo_id LIMIT $2 OFFSET $3"
-        ))
+        )))
         .bind(tenant)
         .bind(limit)
         .bind(offset)

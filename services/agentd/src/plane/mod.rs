@@ -34,9 +34,10 @@ pub mod tools;
 pub mod vorschlag;
 pub mod witness;
 pub use runtime::{
-    Accepted, Activation, Admitted, AgentDecision, Anker, Answer, AnswerSentence, BewertungError,
-    Envelope, EraseError, HILFREICH, Hinweis, Plane, PlaneConfig, Reception, Route, Router,
-    Schritt, Stores, Urteil, VORSCHLAG, Vorschlag, VorschlagSchicksal,
+    Accepted, Activation, Admitted, AgentDecision, Anker, Answer, AnswerSentence, BILANZ_TAGE,
+    BewertungError, Bilanz, Envelope, EraseError, HILFREICH, Hinweis, Plane, PlaneConfig,
+    Reception, Route, Router, Schritt, Stores, Urteil, Urteile, VORSCHLAG, Vorschlag,
+    VorschlagSchicksal,
 };
 
 use std::collections::BTreeMap;

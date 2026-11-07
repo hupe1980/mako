@@ -31,7 +31,7 @@ mako-markt   = { workspace = true, features = ["marktd-client"] }
 mako-geli-gas = { path = "../../crates/mako-geli-gas" }
 rubo4e       = { workspace = true }
 axum         = { version = "0.8" }
-sqlx         = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal"] }
+sqlx         = { workspace = true, features = ["rust_decimal"] }
 tokio        = { version = "1", features = ["full"] }
 serde        = { workspace = true, features = ["derive"] }
 serde_json   = { workspace = true }

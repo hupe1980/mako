@@ -607,7 +607,7 @@ impl ProcessdMcpHandler {
         use sqlx::Row;
 
         let days = i32::try_from(p.days.unwrap_or(90)).unwrap_or(90);
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(mako_service::sql::dynamic(format!(
             r"SELECT initiator_is_affiliate,
                      COUNT(*) AS total,
                      COUNT(*) FILTER (WHERE state = 'completed') AS completed,
@@ -622,7 +622,7 @@ impl ProcessdMcpHandler {
                 AND started_at >= now() - make_interval(days => $2::int)
               GROUP BY initiator_is_affiliate",
             pids = crate::obs::worker::parity_pids_sql(),
-        ))
+        )))
         .bind(&self.state.tenant)
         .bind(days)
         .fetch_all(&self.state.pool)

@@ -76,7 +76,7 @@ impl Daemon for Accountingd {
             .context("create the ledger")?;
         if let Some(role) = mako_service::config::runtime_role(db)? {
             for grant in crate::ledger::runtime_grants(&role) {
-                sqlx::query(&grant)
+                sqlx::query(mako_service::sql::dynamic(grant))
                     .execute(pool)
                     .await
                     .context("grant the runtime role its ledger privileges")?;

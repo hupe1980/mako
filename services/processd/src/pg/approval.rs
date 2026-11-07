@@ -279,10 +279,10 @@ impl PgApprovalQueue {
         status: QueueStatus,
         decided_by: &str,
     ) -> Result<Option<ApprovalQueueEntry>, sqlx::Error> {
-        let opt = sqlx::query(&format!(
+        let opt = sqlx::query(mako_service::sql::dynamic(format!(
             "UPDATE approval_queue SET status = $3, decided_at = now(), decided_by = $4 \
              WHERE id = $1 AND tenant = $2 AND status = 'Pending' RETURNING {ENTRY_COLUMNS}"
-        ))
+        )))
         .bind(id)
         .bind(tenant)
         .bind(status.to_string())
@@ -322,11 +322,11 @@ impl PgApprovalQueue {
         limit: u32,
     ) -> Result<Vec<ApprovalQueueEntry>, sqlx::Error> {
         let status_str = status.map(|s| s.to_string());
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {ENTRY_COLUMNS} FROM approval_queue WHERE tenant = $1 \
              AND ($2::text IS NULL OR status = $2) AND ($3::text IS NULL OR marktrolle = $3) \
              ORDER BY expires_at ASC, created_at ASC, id ASC LIMIT $4"
-        ))
+        )))
         .bind(tenant)
         .bind(status_str)
         .bind(marktrolle)
@@ -341,9 +341,9 @@ impl PgApprovalQueue {
         id: Uuid,
         tenant: &str,
     ) -> Result<Option<ApprovalQueueEntry>, sqlx::Error> {
-        let opt = sqlx::query(&format!(
+        let opt = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {ENTRY_COLUMNS} FROM approval_queue WHERE id = $1 AND tenant = $2"
-        ))
+        )))
         .bind(id)
         .bind(tenant)
         .fetch_optional(&self.pool)

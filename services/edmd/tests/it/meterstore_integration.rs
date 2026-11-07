@@ -112,7 +112,6 @@ async fn setup() -> (
     // Builds both tables (reads + Typ-2) over one shared catalog/session; this
     // helper exercises the authoritative reads store.
     let (reads_store, _typ2_store, zsg_store, _cold) = build_stores(
-        pool.clone(),
         &url,
         &warehouse_uri,
         TieringConfig::default(),
@@ -255,7 +254,6 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
     // in a billing read, and vice versa.
     let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
     let (reads_store, typ2_store, zsg_store, _cold) = build_stores(
-        pool.clone(),
         &url,
         &warehouse_uri,
         TieringConfig::default(),
@@ -2533,7 +2531,6 @@ async fn a_substitute_is_filed_under_the_register_it_fills() {
 async fn erasure_unlinks_the_esa_typ2_store_as_well() {
     let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
     let (reads_store, typ2_store, _zsg_store, _cold) = build_stores(
-        pool.clone(),
         &url,
         &warehouse_uri,
         TieringConfig::default(),
@@ -3151,9 +3148,8 @@ async fn a_gas_zaehlerstand_round_trips_unconverted() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn both_kapitel_46_delivery_paths_reach_the_typ2_store() {
-    let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
+    let (_pool, url, warehouse_uri, _pg, _wh) = boot().await;
     let (_reads_store, typ2_store, _zsg_store, _cold) = build_stores(
-        pool.clone(),
         &url,
         &warehouse_uri,
         TieringConfig::default(),

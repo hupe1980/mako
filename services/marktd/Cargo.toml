@@ -49,7 +49,7 @@ futures            = { version = "0.3", default-features = false, features = ["s
 rust_decimal       = { workspace = true }
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
 prometheus         = "0.14"
-sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "rust_decimal"] }
+sqlx               = { workspace = true, features = ["rust_decimal"] }
 
 [dev-dependencies]
 tower          = "0.5"

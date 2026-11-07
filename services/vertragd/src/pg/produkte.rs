@@ -262,16 +262,18 @@ pub async fn produkt_am(
     komp_id: Uuid,
     am: Date,
 ) -> Result<Option<ProduktSlice>> {
-    Ok(sqlx::query_as::<_, ProduktSlice>(&format!(
-        "SELECT {SLICE_COLS} FROM komponenten_produkte
+    Ok(
+        sqlx::query_as::<_, ProduktSlice>(mako_service::sql::dynamic(format!(
+            "SELECT {SLICE_COLS} FROM komponenten_produkte
           WHERE komp_id = $1 AND gueltig_von <= $2
             AND (gueltig_bis IS NULL OR gueltig_bis > $2)
           LIMIT 1"
-    ))
-    .bind(komp_id)
-    .bind(am)
-    .fetch_optional(executor)
-    .await?)
+        )))
+        .bind(komp_id)
+        .bind(am)
+        .fetch_optional(executor)
+        .await?,
+    )
 }
 
 /// One product slice as a billing reader sees it, clipped to the period asked
@@ -317,8 +319,9 @@ pub async fn malo_slices(
     // took place, and a slice for it is a period `billingd` would price. The
     // list is shared with the buyer lookup — see
     // [`crate::pg::vertraege::KOMPONENTE_BILLABLE`].
-    Ok(sqlx::query_as::<_, MaloProduktSlice>(&format!(
-        "SELECT k.malo_id, k.lf_mp_id, k.sparte, p.product_code,
+    Ok(
+        sqlx::query_as::<_, MaloProduktSlice>(mako_service::sql::dynamic(format!(
+            "SELECT k.malo_id, k.lf_mp_id, k.sparte, p.product_code,
                  k.jahresverbrauch_kwh,
                  GREATEST(p.gueltig_von, $3) AS gueltig_von,
                  CASE WHEN p.gueltig_bis IS NULL OR p.gueltig_bis > $4
@@ -330,14 +333,15 @@ pub async fn malo_slices(
             AND daterange(p.gueltig_von, p.gueltig_bis, '[)')
                 && daterange($3::DATE, $4::DATE, '[)')
           ORDER BY p.gueltig_von",
-        komponente = crate::pg::vertraege::KOMPONENTE_BILLABLE,
-    ))
-    .bind(tenant)
-    .bind(malo_id)
-    .bind(von)
-    .bind(bis_exkl)
-    .fetch_all(pool)
-    .await?)
+            komponente = crate::pg::vertraege::KOMPONENTE_BILLABLE,
+        )))
+        .bind(tenant)
+        .bind(malo_id)
+        .bind(von)
+        .bind(bis_exkl)
+        .fetch_all(pool)
+        .await?,
+    )
 }
 
 /// A future slice whose § 41 Abs. 5 EnWG price-change notice is still owed.
@@ -408,13 +412,15 @@ pub async fn offene_preisanpassungen(
     tenant: &str,
     heute: Date,
 ) -> Result<Vec<AnzupassenderPreis>> {
-    Ok(sqlx::query_as::<_, AnzupassenderPreis>(&format!(
-        "{OFFENE_SQL} > $2 ORDER BY p.gueltig_von"
-    ))
-    .bind(tenant)
-    .bind(heute)
-    .fetch_all(pool)
-    .await?)
+    Ok(
+        sqlx::query_as::<_, AnzupassenderPreis>(mako_service::sql::dynamic(format!(
+            "{OFFENE_SQL} > $2 ORDER BY p.gueltig_von"
+        )))
+        .bind(tenant)
+        .bind(heute)
+        .fetch_all(pool)
+        .await?,
+    )
 }
 
 /// Supplier-initiated slices already in force whose notice never went out.
@@ -432,13 +438,15 @@ pub async fn unangekuendigt_wirksame(
     tenant: &str,
     heute: Date,
 ) -> Result<Vec<AnzupassenderPreis>> {
-    Ok(sqlx::query_as::<_, AnzupassenderPreis>(&format!(
-        "{OFFENE_SQL} <= $2 ORDER BY p.gueltig_von"
-    ))
-    .bind(tenant)
-    .bind(heute)
-    .fetch_all(pool)
-    .await?)
+    Ok(
+        sqlx::query_as::<_, AnzupassenderPreis>(mako_service::sql::dynamic(format!(
+            "{OFFENE_SQL} <= $2 ORDER BY p.gueltig_von"
+        )))
+        .bind(tenant)
+        .bind(heute)
+        .fetch_all(pool)
+        .await?,
+    )
 }
 
 /// Mark a slice's price-change notice as dispatched.

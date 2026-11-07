@@ -196,9 +196,9 @@ impl PgProcessProjectionRepository {
         process_id: Uuid,
         tenant: &str,
     ) -> Result<Option<ProcessProjection>, ObsError> {
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {PROJECTION_COLUMNS} FROM process_projections {GET_SQL}"
-        ))
+        )))
         .bind(process_id)
         .bind(require_tenant(tenant)?)
         .fetch_optional(&self.pool)
@@ -236,7 +236,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
 
     async fn query(&self, q: &ObsQuery) -> Result<Vec<ProcessProjection>, ObsError> {
         let tenant = require_tenant(q.tenant.as_deref().unwrap_or_default())?;
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {PROJECTION_COLUMNS}
               FROM process_projections
               WHERE ($1::text IS NULL OR state = $1)
@@ -248,7 +248,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
                 AND ($7::text IS NULL OR family = $7)
               ORDER BY last_event_at DESC
               LIMIT $8"
-        ))
+        )))
         .bind(q.state.map(ProcessState::as_str))
         .bind(q.pid.and_then(|p| i32::try_from(p).ok()))
         .bind(&q.partner_mp_id)
@@ -340,7 +340,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         now: OffsetDateTime,
         tenant: &str,
     ) -> Result<Vec<ProcessProjection>, ObsError> {
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {PROJECTION_COLUMNS}
               FROM process_projections
               WHERE state NOT IN ({TERMINAL_STATE_SQL})
@@ -349,7 +349,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
                 AND tenant = $2
               ORDER BY deadline_at ASC
               LIMIT $3"
-        ))
+        )))
         .bind(now)
         .bind(require_tenant(tenant)?)
         .bind(OVERDUE_LIMIT)
@@ -371,7 +371,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         limit: i64,
     ) -> Result<Vec<ProcessProjection>, ObsError> {
         let pids: Vec<i32> = pids.iter().filter_map(|p| i32::try_from(*p).ok()).collect();
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {PROJECTION_COLUMNS}
               FROM process_projections
               WHERE tenant = $1
@@ -383,7 +383,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
                         > (COALESCE($3::timestamptz, 'infinity'::timestamptz), $4::uuid))
               ORDER BY {FRIST_ORDER}, process_id
               LIMIT $5"
-        ))
+        )))
         .bind(require_tenant(tenant)?)
         .bind(&pids)
         .bind(after.and_then(|c| c.frist))
@@ -408,7 +408,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
     ) -> Result<crate::obs::repository::OpenCount, ObsError> {
         use sqlx::Row;
         let pids: Vec<i32> = pids.iter().filter_map(|p| i32::try_from(*p).ok()).collect();
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT count(*) AS offen,
                     count(*) FILTER (WHERE deadline_at >= $4 AND deadline_at < $5) AS faellig,
                     min(deadline_at) FILTER (WHERE deadline_at >= $4 AND deadline_at < $5)
@@ -418,7 +418,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
                 AND state NOT IN ({TERMINAL_STATE_SQL})
                 AND (cardinality($2::int[]) = 0 OR pid = ANY($2))
                 AND (cardinality($3::text[]) = 0 OR malo_id = ANY($3))"
-        ))
+        )))
         .bind(require_tenant(tenant)?)
         .bind(&pids)
         .bind(malos)

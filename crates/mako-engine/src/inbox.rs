@@ -111,7 +111,7 @@ pub trait InboxStore: Send + Sync {
 /// enough that a process that died mid-message does not strand the key until
 /// the retention purge. The BDEW `ReceptionAwareness` retry interval is minutes,
 /// so five of them is the wrong side of one retry rather than of ten.
-pub const CLAIM_LEASE: std::time::Duration = std::time::Duration::from_secs(300);
+pub const CLAIM_LEASE: std::time::Duration = std::time::Duration::from_mins(5);
 
 /// What [`InboxStore::claim`] found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

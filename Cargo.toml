@@ -115,7 +115,7 @@ license     = "MIT OR Apache-2.0"
 repository  = "https://github.com/hupe1980/mako"
 # No crate declares `documentation`: crates.io falls back to docs.rs on its own.
 homepage    = "https://hupe1980.github.io/mako"
-rust-version = "1.94.1"
+rust-version = "1.95"
 
 [workspace.dependencies]
 anyhow      = "1"
@@ -224,6 +224,9 @@ sepa             = { version = "0.9" }
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and
 # SKR mapping live in accountingd, never in the crate.
 doubleentry      = { version = "0.8.1" }
+# One sqlx for every service: PostgreSQL over rustls on aws-lc-rs, the provider
+# meterstore and doubleentry use, so the graph carries one TLS stack.
+sqlx             = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls-aws-lc-rs", "uuid", "time", "json", "macros", "migrate", "derive"] }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
 # The one consumer is `edmd` (kafka_ingest), for high-volume metering ingest;

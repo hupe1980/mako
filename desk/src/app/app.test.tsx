@@ -3,6 +3,8 @@ import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { vergessen } from "../data/verweigert";
+import { OHNE_WARUM, QUELLE_IDS } from "../inbox/model";
+import { QUELLEN } from "../inbox/quellen";
 import { SHORTCUTS } from "./keys";
 import { RolleProvider } from "./rollen";
 import { createDeskRouter } from "./router";
@@ -886,6 +888,8 @@ describe("the Desk", () => {
     wartend?: Record<string, unknown>;
     /** processd's answer to the decision, when it is not a plain 200. */
     entscheidung?: Response;
+    /** The skills agentd's catalog lists. */
+    katalog?: Record<string, unknown>[];
   }) {
     const freigabe = {
       id: "q-1",
@@ -923,7 +927,7 @@ describe("the Desk", () => {
         return new Response(null, { status: url.endsWith("/bewertung") ? 204 : 200 });
       }
       if (url === "/svc/agentd/api/v1/agents/catalog") {
-        return Response.json({ faehigkeiten: [] });
+        return Response.json({ faehigkeiten: opts.katalog ?? [] });
       }
       if (url === "/svc/agentd/api/v1/runs") {
         return Response.json([{ agent_name: "desk-assistant", run_id: "r-9" }], { status: 202 });
@@ -1229,6 +1233,14 @@ describe("the Desk", () => {
     antwort?: (url: string) => Response | undefined;
     /** The parked bookings accountingd lists. */
     geparkt?: Record<string, unknown>[];
+    /** agentd's `/vorschlaege` answer, when it is not the dispute's proposal. */
+    vorschlaege?: Record<string, unknown>;
+    /** The skills agentd's catalog lists. */
+    katalog?: Record<string, unknown>[];
+    /** Every run a question started, with its input. */
+    runs?: unknown[];
+    /** The answer each started run reads, by its run id (`r-w1`, `r-w2`, …). */
+    antworten?: Record<string, Record<string, unknown>>;
   }) {
     const disput = {
       id: "rc-1",
@@ -1276,9 +1288,19 @@ describe("the Desk", () => {
         return new Response(null, { status: 204 });
       }
       if (url.startsWith("/svc/agentd/api/v1/vorschlaege")) {
-        return Response.json({ disput: { "rc-1": opts.wartend ?? null } });
+        return Response.json(opts.vorschlaege ?? { disput: { "rc-1": opts.wartend ?? null } });
       }
-      if (url === "/svc/agentd/api/v1/agents/catalog") return Response.json({ faehigkeiten: [] });
+      if (url === "/svc/agentd/api/v1/agents/catalog")
+        return Response.json({ faehigkeiten: opts.katalog ?? [] });
+      if (url === "/svc/agentd/api/v1/runs" && init?.method === "POST") {
+        const runs = opts.runs ?? [];
+        runs.push(JSON.parse(String(init.body)));
+        return Response.json([{ agent_name: "desk-assistant", run_id: `r-w${runs.length}` }], {
+          status: 202,
+        });
+      }
+      const gelesen = /^\/svc\/agentd\/api\/v1\/runs\/(r-w\d+)\/antwort$/.exec(url);
+      if (gelesen) return Response.json(opts.antworten?.[gelesen[1] ?? ""] ?? null);
       if (url.startsWith("/svc/agentd/")) return Response.json([]);
       const m = JSON.parse(String(init?.body));
       const name = m.method === "tools/call" ? m.params.name : null;
@@ -1576,6 +1598,559 @@ describe("the Desk", () => {
       }),
     );
     localStorage.removeItem("mako-desk.rolle");
+  });
+
+  /** A parked booking accountingd lists, refused because its month is sealed. */
+  const geparktFixture = (key: string, beleg: string) => ({
+    key,
+    art: "RECHNUNG",
+    malo_id: "51238696012",
+    lf_mp_id: "9900357000004",
+    betrag_ct: 900,
+    buchungsdatum: "2031-01-31",
+    beleg,
+    code: 301,
+    meldung: "period sealed through 2031-01-31",
+    hinweis: "Die Periode ist festgeschrieben. Auf ein Datum im ersten offenen Monat neu buchen.",
+    vorschlag_datum: "2031-02-01",
+    seit: "2031-02-02T08:00:00Z",
+  });
+
+  /** The desk-assistant in agentd's catalog, with its record over the window. */
+  const assistentImKatalog = (bilanz: Record<string, unknown> | null) => ({
+    name: "desk-assistant",
+    titel: "Assistent im Desk",
+    zweck: "Beantwortet Fragen.",
+    version: "1.3.0",
+    digest: "d",
+    aktiv: bilanz !== null,
+    ausloeser: [],
+    modell: "anthropic/claude-sonnet-5",
+    liest: [{ werkzeug: "makod/get_process", wozu: "Die Prozesse." }],
+    nur_lesend: true,
+    mit_freigabe: 0,
+    bilanz,
+  });
+
+  const BILANZ = {
+    tage: 30,
+    laeufe: 17,
+    offen: 1,
+    abgeschlossen: { succeeded: 16 },
+    hilfreich: { ja: 6, nein: 1 },
+    vorschlag: { sent: 14, edited: 2, dismissed: 1 },
+  };
+
+  it("takes the proposal waiting on a geparkte Buchung into its decision, marked, sent only on the confirm", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    const posts: { url: string; body: unknown }[] = [];
+    const wartend = (
+      run: string,
+      vorschlag: Record<string, unknown> | null,
+      status = "succeeded",
+    ) => ({
+      run,
+      status,
+      disclosure: "AI-generated.",
+      saetze: [],
+      vorschlag,
+      schritte: [],
+      hilfreich: null,
+    });
+    const fetch = rechnungFetch({
+      posts,
+      geparkt: [
+        geparktFixture("rechnung:R-1", "R-1"),
+        geparktFixture("rechnung:R-2", "R-2"),
+        geparktFixture("rechnung:R-3", "R-3"),
+      ],
+      katalog: [assistentImKatalog(BILANZ)],
+      antwort: (url) =>
+        url.endsWith("/rebook") ? Response.json({ gebucht: true }, { status: 201 }) : undefined,
+      vorschlaege: {
+        buchung: {
+          "rechnung:R-1": wartend("r-b1", {
+            aktion: "neu_buchen",
+            buchungsdatum: "2031-02-03",
+            grund: null,
+            antwortcode: null,
+            befund: null,
+            begruendung: "Der Januar ist festgeschrieben; der erste offene Tag ist der 03.02.2031.",
+            quelle: "accountingd/get_parked_booking",
+            belegt: true,
+          }),
+          "rechnung:R-2": wartend("r-b2", {
+            aktion: "verwerfen",
+            buchungsdatum: null,
+            grund: "R-2 ist am 14.01.2031 bereits gebucht.",
+            antwortcode: null,
+            befund: null,
+            begruendung: "Das Hauptbuch führt R-2 mit demselben Betrag am 14.01.2031.",
+            quelle: "accountingd/list_ledger",
+            belegt: false,
+          }),
+          "rechnung:R-3": wartend("r-b3", null, "running"),
+        },
+      },
+    });
+    vi.stubGlobal("fetch", fetch);
+    await open("/heute");
+    const [erste, zweite, dritte] = await screen.findAllByRole("button", {
+      name: /Rechnung 9,00\s€ — Periode festgeschrieben/,
+    });
+    if (!erste || !zweite || !dritte) throw new Error("three parked bookings expected");
+    // Every booking on screen asked for in one read, never one per row.
+    await screen.findByText(/AI-generated\. Vorschlag: Neu buchen/);
+    const gelesen = fetch.mock.calls
+      .map(([u]) => String(u))
+      .filter((u) => u.startsWith("/svc/agentd/api/v1/vorschlaege"));
+    expect(new Set(gelesen)).toEqual(
+      new Set([
+        "/svc/agentd/api/v1/vorschlaege?disput=rc-1&buchung=rechnung%3AR-1,rechnung%3AR-2,rechnung%3AR-3",
+      ]),
+    );
+    expect(fetch.mock.calls.some(([u]) => u === "/svc/agentd/api/v1/runs")).toBe(false);
+
+    // Neu buchen: chosen, the assistant's date filled in and marked so, with
+    // its reason, its source and the record of its proposals.
+    fireEvent.click(erste);
+    const datum = (await screen.findByLabelText(/Neu buchen am/)) as HTMLInputElement;
+    await waitFor(() => expect(datum.value).toBe("2031-02-03"));
+    expect((screen.getByRole("radio", { name: "Neu buchen" }) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    expect(screen.getByText("Datum vom Assistenten vorgeschlagen.")).toBeTruthy();
+    expect(screen.getByText(/der erste offene Tag ist der 03\.02\.2031\./)).toBeTruthy();
+    expect(screen.getByText("Kundenkonten · geparkte Buchung")).toBeTruthy();
+    expect(screen.getByText("In 30 Tagen: 14 von 17 Vorschlägen übernommen")).toBeTruthy();
+    expect(posts).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Neu buchen …" }));
+    expect(posts).toEqual([]);
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt buchen" }));
+    await waitFor(() =>
+      expect(posts).toEqual([
+        {
+          url: "/svc/accountingd/api/v1/bookings/rechnung%3AR-1/rebook",
+          body: { buchungsdatum: "2031-02-03" },
+        },
+        { url: "/svc/agentd/api/v1/runs/r-b1/bewertung", body: { vorschlag: "sent" } },
+      ]),
+    );
+
+    // Verwerfen: the Grund filled in and marked; the unchecked Begründung
+    // says so. Edited by the person, it is recorded as changed.
+    fireEvent.click(zweite);
+    const grund = (await screen.findByRole("textbox", {
+      name: /Warum wird sie verworfen/,
+    })) as HTMLTextAreaElement;
+    await waitFor(() => expect(grund.value).toBe("R-2 ist am 14.01.2031 bereits gebucht."));
+    expect(screen.getByText(/Grund vom Assistenten vorgeschlagen/)).toBeTruthy();
+    expect(screen.getByText("nicht belegt")).toBeTruthy();
+    fireEvent.change(grund, { target: { value: "Doppelt erfasst, R-2 steht am 14.01.2031." } });
+    expect(screen.queryByText(/Grund vom Assistenten vorgeschlagen/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Verwerfen …" }));
+    expect(posts).toHaveLength(2);
+    fireEvent.click(await screen.findByRole("button", { name: "Jetzt verwerfen" }));
+    await waitFor(() =>
+      expect(posts.slice(2)).toEqual([
+        {
+          url: "/svc/accountingd/api/v1/bookings/rechnung%3AR-2/discard",
+          body: { grund: "Doppelt erfasst, R-2 steht am 14.01.2031." },
+        },
+        { url: "/svc/agentd/api/v1/runs/r-b2/bewertung", body: { vorschlag: "edited" } },
+      ]),
+    );
+
+    // Still being prepared: a quiet line, the service's own date kept.
+    fireEvent.click(dritte);
+    expect(await screen.findByText("Der Assistent prüft die Buchung …")).toBeTruthy();
+    expect((screen.getByLabelText(/Neu buchen am/) as HTMLInputElement).value).toBe("2031-02-01");
+    localStorage.removeItem("mako-desk.rolle");
+  });
+
+  it("answers „Warum?“ beside the item, from ? on the selected row or the button", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    const runs: { agent: string; input: Record<string, string> }[] = [];
+    const antwort = (run: string, text: string) => ({
+      run,
+      status: "succeeded",
+      disclosure: "AI-generated.",
+      saetze: [
+        { text, quelle: "accountingd/get_parked_booking", belegt: true },
+        {
+          text: "Gebucht wird sie am 01.02.2031.",
+          quelle: "accountingd/get_parked_booking",
+          belegt: false,
+        },
+      ],
+      vorschlag: null,
+      schritte: [{ quelle: "accountingd/get_parked_booking", fertig: true }],
+      hilfreich: null,
+    });
+    const fetch = rechnungFetch({
+      posts: [],
+      geparkt: [geparktFixture("rechnung:R-1", "R-1")],
+      vorschlaege: {},
+      runs,
+      antworten: {
+        "r-w1": antwort("r-w1", "Das Hauptbuch hat R-1 für den 31.01.2031 abgelehnt."),
+        "r-w2": antwort("r-w2", "Der Disput rc-1 wartet auf Ihre Entscheidung."),
+      },
+    });
+    vi.stubGlobal("fetch", fetch);
+    await open("/heute");
+    const buchung = await screen.findByRole("button", {
+      name: /Rechnung 9,00\s€ — Periode festgeschrieben/,
+    });
+    // Each row whose record the assistant reads offers it; the Prüfposten,
+    // whose record it does not, offers none.
+    const zeile = (el: HTMLElement) => el.closest("li") as HTMLElement;
+    expect(within(zeile(buchung)).getByRole("button", { name: "Warum?" })).toBeTruthy();
+    const posten = screen.getAllByRole("button", { name: /Befund AMOUNT_SPIKE/ })[0] as HTMLElement;
+    expect(within(zeile(posten)).queryByRole("button", { name: "Warum?" })).toBeNull();
+
+    act(() => buchung.focus());
+    fireEvent.keyDown(window, { key: "?", shiftKey: true });
+    const antwortFeld = await within(zeile(buchung)).findByRole("region", {
+      name: "Warum steht das hier?",
+    });
+    expect(
+      await within(antwortFeld).findByText("Das Hauptbuch hat R-1 für den 31.01.2031 abgelehnt."),
+    ).toBeTruthy();
+    expect(runs).toEqual([
+      {
+        agent: "desk-assistant",
+        event_type: "manual",
+        input: {
+          frage: "Warum steht das auf meiner Liste, und was entscheidet es?",
+          buchung: "rechnung:R-1",
+        },
+      },
+    ]);
+    // The disclosure first, every sentence with its source and its check, and „Hilfreich?".
+    expect(within(antwortFeld).getByText("AI-generated.")).toBeTruthy();
+    expect(within(antwortFeld).getAllByText("Kundenkonten · geparkte Buchung")).toHaveLength(2);
+    expect(within(antwortFeld).getAllByText("nicht belegt")).toHaveLength(1);
+    expect(within(antwortFeld).getByRole("group", { name: "Hilfreich?" })).toBeTruthy();
+    // ? again puts it away; asking again reads the same run.
+    fireEvent.keyDown(window, { key: "?", shiftKey: true });
+    await waitFor(() =>
+      expect(
+        within(zeile(buchung)).queryByRole("region", { name: "Warum steht das hier?" }),
+      ).toBeNull(),
+    );
+    fireEvent.keyDown(window, { key: "?", shiftKey: true });
+    expect(
+      await screen.findByText("Das Hauptbuch hat R-1 für den 31.01.2031 abgelehnt."),
+    ).toBeTruthy();
+    expect(runs).toHaveLength(1);
+
+    // The button asks about its own row, with that row's Anker.
+    const disput = screen.getByRole("button", { name: /Stadtwerke Musterstadt Netz/ });
+    fireEvent.click(within(zeile(disput)).getByRole("button", { name: "Warum?" }));
+    expect(await screen.findByText("Der Disput rc-1 wartet auf Ihre Entscheidung.")).toBeTruthy();
+    expect(runs[1]?.input).toEqual({
+      frage: "Warum steht das auf meiner Liste, und was entscheidet es?",
+      disput: "rc-1",
+    });
+    localStorage.removeItem("mako-desk.rolle");
+  });
+
+  it("offers „Warum?“ on every Heute source, or names why a source does not (SC-002)", async () => {
+    // One item from every source, read by the Rolle that reads it.
+    const zeilen = {
+      list_pending_approvals: {
+        freigaben: [
+          {
+            id: "q-1",
+            process_id: "p-1",
+            pid: 55001,
+            malo_id: "51238696012",
+            marktrolle: "NB",
+            grund: "Anmeldung eines verbundenen Lieferanten",
+            art: "eskaliert",
+            antwort: null,
+            codes_freigeben: null,
+            codes_ablehnen: null,
+            kann_freigeben: true,
+            kann_ablehnen: true,
+            status: "Pending",
+            expires_at: "2031-01-02T09:00:00Z",
+            created_at: "2031-01-01T08:00:00Z",
+            decided_by: null,
+            decided_at: null,
+          },
+        ],
+        count: 1,
+        saturated: false,
+      },
+      list_overdue_processes: {
+        overdue: [
+          {
+            process_id: "p-ue",
+            malo_id: null,
+            pid: 55001,
+            state: "Wartet",
+            family: "GPKE",
+            deadline_source: "GPKE Teil 2",
+            deadline_at: "2031-01-02T10:00:00Z",
+          },
+        ],
+        count: 1,
+        saturated: false,
+        limit: 500,
+      },
+      list_open_processes: {
+        prozesse: [{ process_id: "p-an", malo_id: null, pid: 55001, deadline_at: null }],
+        weiter: null,
+      },
+      list_anmeldungen: {
+        anmeldungen: [
+          {
+            kunden_id: "k-1",
+            malo_id: "51238696012",
+            name: null,
+            sparte: "STROM",
+            vertrags_nr: "V-1",
+          },
+        ],
+        gesamt: 1,
+      },
+      list_korrekturbedarf: {
+        korrekturbedarf: [
+          {
+            pruefmitteilung_id: "pm-1",
+            bilanzierungsgebiet_id: "BG-1",
+            period_from: "2031-01-01",
+            period_to: "2031-01-31",
+          },
+        ],
+      },
+      list_overdue_reading_orders: {
+        auftraege: [
+          {
+            id: "a-1",
+            malo_id: "51238696012",
+            ausfuehrt_bis: "2031-01-01",
+            status: "offen",
+            fehlschlag_grund: null,
+            anlass: "Turnusablesung",
+            frist: "2031-01-02T10:00:00Z",
+          },
+        ],
+        count: 1,
+        saturated: false,
+      },
+      list_disputes: {
+        disputes: [
+          {
+            id: "rc-1",
+            process_id: "p-inv",
+            pid: 31002,
+            sender_mp_id: "9900357000004",
+            rechnungsnummer: "NB-2031-0815",
+            received_at: "2031-01-01T08:00:00Z",
+            bo4e_version: "v202607",
+            frist: "2031-01-20T23:00:00Z",
+            abgesendet: false,
+            befunde: [],
+          },
+        ],
+        count: 1,
+        saturated: false,
+      },
+      list_review_queue: {
+        records: [
+          {
+            id: "b-1",
+            malo_id: "51238696012",
+            lf_mp_id: "9900357000004",
+            rechnungsnummer: "R-b-1",
+            category: "STROM",
+            period_from: "2031-01-01",
+            period_to: "2031-01-31",
+            total_brutto_eur: "119.00",
+            risk_band: "HELD",
+            risk_score: 60,
+            risk_findings: [{ code: "AMOUNT_SPIKE", weight: 40, message: "Befund AMOUNT_SPIKE" }],
+            created_at: "2031-02-01T08:00:00Z",
+          },
+        ],
+        count: 1,
+        saturated: false,
+      },
+      list_parked_bookings: {
+        buchungen: [geparktFixture("rechnung:R-1", "R-1")],
+        count: 1,
+        saturated: false,
+      },
+      partner_namen: { partner: [] },
+      kunden_zu_malos: { kunden: [] },
+    } as Record<string, unknown>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/svc/agentd/api/v1/hinweise")
+          return Response.json([
+            {
+              task: "t-h",
+              run: "r-h",
+              art: "deadline.breach",
+              skill: "deadline-alert-agent",
+              titel: "Fristen-Wächter",
+              text: "Ein Prozess nach der Frist.",
+              prioritaet: "normal",
+              faellig: null,
+              anker: [{ art: "process", wert: "p-h" }],
+            },
+          ]);
+        if (url === "/svc/agentd/api/v1/agents/catalog") return Response.json({ faehigkeiten: [] });
+        if (url.startsWith("/svc/agentd/")) return Response.json({});
+        const m = JSON.parse(String(init?.body));
+        const name = m.method === "tools/call" ? m.params.name : null;
+        const result = name ? { structuredContent: zeilen[name] ?? {} } : {};
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
+          headers: { "content-type": "application/json", "mcp-session-id": "s" },
+        });
+      }),
+    );
+    const bietet = new Map<string, boolean>();
+    for (const [rolle, quellen] of Object.entries(QUELLEN)) {
+      localStorage.setItem("mako-desk.rolle", rolle);
+      await open("/heute");
+      // Every source the Rolle reads has answered with its one item.
+      await waitFor(() => {
+        const da = new Set(
+          [...document.querySelectorAll("li[data-quelle]")].map((li) =>
+            li.getAttribute("data-quelle"),
+          ),
+        );
+        for (const q of [...quellen, "hinweise"]) expect(da).toContain(q);
+      });
+      for (const li of document.querySelectorAll<HTMLElement>("li[data-quelle]")) {
+        const q = li.getAttribute("data-quelle") ?? "";
+        const offen = within(li).queryAllByRole("button", { name: "Warum?" }).length > 0;
+        bietet.set(q, (bietet.get(q) ?? offen) && offen);
+      }
+      cleanup();
+    }
+    localStorage.removeItem("mako-desk.rolle");
+    for (const q of QUELLE_IDS) {
+      expect(bietet.has(q), `${q} appears on some Rolle's Heute`).toBe(true);
+      const warumNicht = OHNE_WARUM[q];
+      if (warumNicht) {
+        expect(warumNicht.length, `${q} names its reason`).toBeGreaterThan(20);
+        expect(bietet.get(q), `${q} is listed as not offering „Warum?“`).toBe(false);
+      } else {
+        expect(bietet.get(q), `${q} offers „Warum?“`).toBe(true);
+      }
+    }
+  });
+
+  it("shows on every proposal card one line of the assistant's proposal record", async () => {
+    const posts: { url: string; body: unknown }[] = [];
+    const fetch = freigabeFetch({
+      posts,
+      katalog: [assistentImKatalog(BILANZ)],
+      wartend: {
+        run: "r-7",
+        status: "succeeded",
+        disclosure: "AI-generated.",
+        saetze: [],
+        vorschlag: {
+          aktion: "ablehnen",
+          antwortcode: "A02",
+          begruendung: "Die MaLo nimmt nicht an der Marktkommunikation teil.",
+          quelle: "processd/get_queue_entry",
+          belegt: true,
+        },
+        schritte: [],
+        hilfreich: null,
+      },
+    });
+    vi.stubGlobal("fetch", fetch);
+    await open("/freigaben?id=q-1");
+    expect(await screen.findByText("In 30 Tagen: 14 von 17 Vorschlägen übernommen")).toBeTruthy();
+  });
+
+  it("shows each skill's 30-day record on the Beipackzettel, a share only from five verdicts", async () => {
+    const skill = (name: string, titel: string, bilanz: Record<string, unknown>) => ({
+      ...assistentImKatalog(bilanz),
+      name,
+      titel,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          faehigkeiten: [
+            skill("desk-assistant", "Assistent im Desk", BILANZ),
+            skill("billing-agent", "Rechnungseinwände", {
+              ...BILANZ,
+              laeufe: 3,
+              offen: 0,
+              hilfreich: { ja: 1, nein: 1 },
+              vorschlag: { sent: 1, dismissed: 2 },
+            }),
+            skill("eeg-agent", "EEG-Anlagen", {
+              ...BILANZ,
+              laeufe: 0,
+              offen: 0,
+              hilfreich: { ja: 0, nein: 0 },
+              vorschlag: {},
+            }),
+          ],
+        }),
+      ),
+    );
+    await open("/assistent");
+    const karte = async (titel: string) =>
+      (await screen.findByText(titel)).closest("section") as HTMLElement;
+    const record = (k: HTMLElement) =>
+      within(k).getByRole("region", { name: "Bilanz der letzten 30 Tage" });
+
+    const voll = record(await karte("Assistent im Desk"));
+    expect(within(voll).getByText("In 30 Tagen")).toBeTruthy();
+    expect(voll.textContent).toContain("17 · 1 laufen");
+    expect(within(voll).getByText(/^86\s%\shilfreich · 7 Bewertungen$/)).toBeTruthy();
+    expect(within(voll).getByText("14 von 17 Vorschlägen übernommen")).toBeTruthy();
+    expect(within(voll).getByText("14 übernommen · 2 angepasst · 1 verworfen")).toBeTruthy();
+
+    // Below five verdicts the count alone; with none, words — never 0 %.
+    const wenig = record(await karte("Rechnungseinwände"));
+    expect(within(wenig).getByText("2 Bewertungen")).toBeTruthy();
+    expect(within(wenig).getByText("3 Vorschläge entschieden")).toBeTruthy();
+    expect(wenig.textContent).not.toMatch(/%/);
+    const keine = record(await karte("EEG-Anlagen"));
+    expect(within(keine).getByText("Noch keine Bewertungen")).toBeTruthy();
+    expect(within(keine).getByText("Noch kein Vorschlag entschieden")).toBeTruthy();
+    expect(keine.textContent).not.toMatch(/%/);
+  });
+
+  it("shows the assistant's record as an Überblick tile that opens the Beipackzettel", async () => {
+    let bilanz: Record<string, unknown> = BILANZ;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/svc/agentd/api/v1/agents/catalog"
+          ? Response.json({ faehigkeiten: [assistentImKatalog(bilanz)] })
+          : new Response("{}", { status: 503 }),
+      ),
+    );
+    await open("/ueberblick");
+    const tile = await screen.findByRole("link", { name: /^Assistent: 86\s%/ });
+    expect(tile.getAttribute("href")).toBe("/assistent");
+    expect(tile.textContent).toContain("hilfreich · 7 Bewertungen in 30 Tagen");
+    expect(tile.textContent).toContain("14 von 17 Vorschlägen übernommen");
+    cleanup();
+
+    bilanz = { ...BILANZ, hilfreich: { ja: 2, nein: 0 }, vorschlag: {} };
+    await open("/ueberblick");
+    const wenig = await screen.findByRole("link", {
+      name: /^Assistent: 2 Bewertungen in 30 Tagen/,
+    });
+    expect(wenig.textContent).not.toMatch(/%/);
+    expect(wenig.textContent).toContain("Noch kein Vorschlag entschieden");
   });
 
   it("shows each skill's Beipackzettel from the catalog, the inactive ones on request", async () => {

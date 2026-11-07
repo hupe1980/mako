@@ -53,15 +53,13 @@ pub fn check(req: &AnlageUpsertRequest) -> Result<(), String> {
 
     // ── The fields each model cannot be settled without ──────────────────────
     match req.settlement_model.as_str() {
-        models::DIREKTVERMARKTUNG => {
-            if req.direktverm_aw_ct.is_none_or(|aw| aw <= Decimal::ZERO) {
-                return Err(
-                    "DIREKTVERMARKTUNG needs a positive direktverm_aw_ct: the Marktprämie \
+        models::DIREKTVERMARKTUNG if req.direktverm_aw_ct.is_none_or(|aw| aw <= Decimal::ZERO) => {
+            return Err(
+                "DIREKTVERMARKTUNG needs a positive direktverm_aw_ct: the Marktprämie \
                      is max(0, AW − Marktwert), so without an anzulegender Wert every \
                      month settles to EUR 0"
-                        .to_owned(),
-                );
-            }
+                    .to_owned(),
+            );
         }
         models::AUSSCHREIBUNG => {
             // Either column carries the AW for a tender plant — `zuschlagswert_ct`
@@ -87,14 +85,12 @@ pub fn check(req: &AnlageUpsertRequest) -> Result<(), String> {
                 );
             }
         }
-        models::MIETERSTROM => {
-            if req.mieter_zuschlag_ct.is_none() {
-                return Err(
-                    "MIETERSTROM needs mieter_zuschlag_ct (§21 Abs. 3 EEG 2023) — \
+        models::MIETERSTROM if req.mieter_zuschlag_ct.is_none() => {
+            return Err(
+                "MIETERSTROM needs mieter_zuschlag_ct (§21 Abs. 3 EEG 2023) — \
                      omitting it settles the plant as a plain Einspeisevergütung"
-                        .to_owned(),
-                );
-            }
+                    .to_owned(),
+            );
         }
         models::KWKG_ZUSCHLAG => {
             if req.kwk_foerderdauer_h.is_none() && req.kwk_anlagenart.is_none() {
@@ -116,10 +112,8 @@ pub fn check(req: &AnlageUpsertRequest) -> Result<(), String> {
                 );
             }
         }
-        models::FLEXIBILITAET => {
-            if req.flex_praemie_ct_kwh.is_none() {
-                return Err("FLEXIBILITAET needs flex_praemie_ct_kwh (§50b EEG 2023)".to_owned());
-            }
+        models::FLEXIBILITAET if req.flex_praemie_ct_kwh.is_none() => {
+            return Err("FLEXIBILITAET needs flex_praemie_ct_kwh (§50b EEG 2023)".to_owned());
         }
         _ => {}
     }

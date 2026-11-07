@@ -78,6 +78,17 @@ export const UEBERNEHMEN: Shortcut = {
 };
 
 /**
+ * `?` — Shift plus the key `/` sits on, whatever the layout: `e.key` is the
+ * character typed. Free of ⌘/, which opens this sheet.
+ */
+export const WARUM: Shortcut = {
+  keys: "?",
+  label: "Warum steht der Eintrag hier? Den Assistenten fragen",
+  group: "Listen",
+  match: (e) => !typing(e) && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === "?",
+};
+
+/**
  * Takes back the newest held decision. Not while the person types into a
  * field, where ⌘Z is the field's own undo; with nothing held it is left alone.
  */
@@ -106,6 +117,7 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "↵", label: "Zeile öffnen", group: "Listen" },
   NAECHSTE,
   VORIGE,
+  WARUM,
   FREIGEBEN,
   ABLEHNEN,
   UEBERNEHMEN,

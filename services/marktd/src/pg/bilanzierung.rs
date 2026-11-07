@@ -131,7 +131,7 @@ impl PgBilanzierungRepository {
                AND (bilanzierungsende IS NULL OR bilanzierungsende > $3) \
              ORDER BY bilanzierungsbeginn DESC LIMIT 1"
         );
-        let row = sqlx::query(&sql)
+        let row = sqlx::query(mako_service::sql::dynamic(sql))
             .bind(tenant)
             .bind(malo_id)
             .bind(at)
@@ -154,7 +154,7 @@ impl PgBilanzierungRepository {
             "SELECT {SELECT_COLS} FROM bilanzierungen \
              WHERE tenant = $1 AND malo_id = $2 ORDER BY bilanzierungsbeginn DESC"
         );
-        let rows = sqlx::query(&sql)
+        let rows = sqlx::query(mako_service::sql::dynamic(sql))
             .bind(tenant)
             .bind(malo_id)
             .fetch_all(&self.pool)

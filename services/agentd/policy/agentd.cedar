@@ -102,7 +102,7 @@ permit(principal, action == Action::"effect:perform", resource);
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing
 // at somebody else's endpoint is a configuration error this refuses rather than
 // calls. `context.args.server` is what makes this expressible without naming the
-// 157 granted tools one by one.
+// 159 granted tools one by one.
 //
 // **This list must cover every server the manifests grant.** A granted server
 // missing from it is not a narrower policy — it is a specialist that boots, runs
@@ -428,6 +428,17 @@ permit(
   action in [Action::"api:run.assess", Action::"api:run.assessments"],
   resource
 )
+when {
+  ["mako-operations", "gas-operations", "billing-operations",
+   "billing-compliance", "credit-control", "eeg-operations", "grid-operations",
+   "marktkommunikation", "metering", "netzbilanz", "regulatory"]
+    .containsAny(context.roles)
+};
+
+// What a capability's runs came to over a window — runs by their last
+// conclusion and each person's latest verdict per metric. It aggregates the
+// verdicts above, so it is read by the same people who give them.
+permit(principal, action == Action::"api:capability.track", resource)
 when {
   ["mako-operations", "gas-operations", "billing-operations",
    "billing-compliance", "credit-control", "eeg-operations", "grid-operations",

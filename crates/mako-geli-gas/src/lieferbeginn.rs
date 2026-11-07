@@ -212,13 +212,7 @@ pub fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentif
             }
         }
         44019 => return None,
-        44020 => {
-            if accepted {
-                44021
-            } else {
-                return None;
-            }
-        }
+        44020 if accepted => 44021,
         _ => return None,
     };
     Pruefidentifikator::new(code).ok()

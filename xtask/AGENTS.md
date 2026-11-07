@@ -6,7 +6,7 @@
 ## General
 
 - `xtask` is a binary crate — `anyhow` is acceptable here (no `thiserror` required).
-- MSRV still applies: 1.94. Do not use features introduced after 1.94.
+- MSRV still applies: 1.95. Do not use features introduced after 1.95.
 - Each task is a separate source file under `xtask/src/`. Add new tasks there and wire them into `main.rs` and `HELP`.
 
 ## Profile pipeline

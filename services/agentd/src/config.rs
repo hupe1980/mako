@@ -151,8 +151,8 @@ pub struct AgentdConfig {
     pub sweep_interval_secs: u64,
 
     /// `[vorschlaege]` — the desk assistant's proposal, computed once for every
-    /// open Freigabe (processd) and Rechnungsdisput (invoicd) so it is waiting
-    /// when a person opens it.
+    /// open Freigabe (processd), Rechnungsdisput (invoicd) and geparkte Buchung
+    /// (accountingd) so it is waiting when a person opens it.
     #[serde(default)]
     pub vorschlaege: VorschlaegeConfig,
 
@@ -214,8 +214,8 @@ pub struct VorschlaegeConfig {
     /// Default `true`.
     #[serde(default = "default_true")]
     pub automatisch: bool,
-    /// How often processd's open Freigaben and invoicd's open disputes are
-    /// read, in seconds (default 60). It bounds how long a new entry waits for
+    /// How often the open Freigaben, disputes and parked bookings are read, in
+    /// seconds (default 60). It bounds how long a new entry waits for
     /// its proposal run to start.
     #[serde(default = "default_sweep_interval_secs")]
     pub intervall_secs: u64,

@@ -133,13 +133,15 @@ pub async fn find_messstellenvertrag(
            AND vertragsbeginn <= $4
          ORDER BY vertragsbeginn DESC LIMIT 1"
     );
-    Ok(sqlx::query_as::<_, MessstellenvertragRow>(&sql)
-        .bind(tenant)
-        .bind(melo_id)
-        .bind(msb_mp_id)
-        .bind(at)
-        .fetch_optional(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, MessstellenvertragRow>(mako_service::sql::dynamic(sql))
+            .bind(tenant)
+            .bind(melo_id)
+            .bind(msb_mp_id)
+            .bind(at)
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 /// Create or replace the contract instance beginning on `input.vertragsbeginn`.

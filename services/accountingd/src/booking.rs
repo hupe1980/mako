@@ -460,41 +460,83 @@ pub async fn parked(
     .fetch_all(pool)
     .await
     .context("list parked drafts")?;
-    let first_open = ledger
-        .sealed_through()
-        .await?
-        .and_then(|d| d.next_day())
-        .map(|d| d.to_string());
+    let first_open = first_open_day(ledger).await?;
     let mut buchungen = Vec::with_capacity(rows.len());
     for row in rows {
-        let draft: PostEntry =
-            serde_json::from_value(row.get("entwurf")).context("decode parked draft")?;
-        let code = row
-            .get::<Option<i32>, _>("code")
-            .and_then(|c| u16::try_from(c).ok());
-        let seit: OffsetDateTime = row.get("created_at");
-        buchungen.push(GeparkteBuchung {
-            key: row.get("key"),
-            art: draft.entry_type,
-            malo_id: draft.malo_id,
-            lf_mp_id: draft.lf_mp_id,
-            betrag_ct: draft.amount_ct,
-            buchungsdatum: draft.booking_date.to_string(),
-            beleg: draft.document,
-            code,
-            meldung: row.get("meldung"),
-            hinweis: hinweis(code).to_owned(),
-            vorschlag_datum: (code == Some(301)).then(|| first_open.clone()).flatten(),
-            seit: seit
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default(),
-        });
+        buchungen.push(geparkt(&row, first_open.as_deref())?);
     }
     let saturated = count > i64::try_from(buchungen.len()).unwrap_or(i64::MAX);
     Ok(GeparkteBuchungen {
         buchungen,
         count,
         saturated,
+    })
+}
+
+/// One parked booking by its key; `None` when no parked draft has it.
+///
+/// # Errors
+///
+/// A database or ledger read failure.
+pub async fn parked_one(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+    key: &str,
+) -> anyhow::Result<Option<GeparkteBuchung>> {
+    let row = sqlx::query(
+        "SELECT key, entwurf, code, meldung, created_at FROM booking_drafts \
+         WHERE tenant = $1 AND key = $2 AND status = 'geparkt'",
+    )
+    .bind(tenant)
+    .bind(key)
+    .fetch_optional(pool)
+    .await
+    .context("read parked draft")?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let first_open = first_open_day(ledger).await?;
+    Ok(Some(geparkt(&row, first_open.as_deref())?))
+}
+
+/// The first day a booking is accepted on, as ISO text.
+async fn first_open_day(ledger: &PgLedger) -> anyhow::Result<Option<String>> {
+    Ok(ledger
+        .sealed_through()
+        .await?
+        .and_then(|d| d.next_day())
+        .map(|d| d.to_string()))
+}
+
+/// A `booking_drafts` row as the Desk shows it.
+fn geparkt(
+    row: &sqlx::postgres::PgRow,
+    first_open: Option<&str>,
+) -> anyhow::Result<GeparkteBuchung> {
+    let draft: PostEntry =
+        serde_json::from_value(row.get("entwurf")).context("decode parked draft")?;
+    let code = row
+        .get::<Option<i32>, _>("code")
+        .and_then(|c| u16::try_from(c).ok());
+    let seit: OffsetDateTime = row.get("created_at");
+    Ok(GeparkteBuchung {
+        key: row.get("key"),
+        art: draft.entry_type,
+        malo_id: draft.malo_id,
+        lf_mp_id: draft.lf_mp_id,
+        betrag_ct: draft.amount_ct,
+        buchungsdatum: draft.booking_date.to_string(),
+        beleg: draft.document,
+        code,
+        meldung: row.get("meldung"),
+        hinweis: hinweis(code).to_owned(),
+        vorschlag_datum: (code == Some(301))
+            .then(|| first_open.map(str::to_owned))
+            .flatten(),
+        seit: seit
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default(),
     })
 }
 

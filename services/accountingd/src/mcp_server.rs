@@ -65,6 +65,14 @@ pub struct AccountingdMcpState {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct NoParams {}
 
+/// Parameters of `get_parked_booking`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ParkedKeyParams {
+    /// The parked booking's key, as `list_parked_bookings` names it.
+    pub key: String,
+}
+
 /// Parameters of `list_parked_bookings`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1086,6 +1094,34 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?,
         ))
     }
+
+    #[tool(
+        description = "One parked booking by its key — the same fields `list_parked_bookings` lists: the Buchungsart, MaLo, amount, refused Buchungsdatum and Beleg, the refusal (`code`, `meldung`), what to do (`hinweis`) and, for a sealed month, the first open date (`vorschlag_datum`). An unknown or already resolved key is an error.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::booking::GeparkteBuchung>()
+    )]
+    async fn get_parked_booking(
+        &self,
+        Parameters(p): Parameters<ParkedKeyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let found = crate::booking::parked_one(
+            &self.state.ledger,
+            &self.state.pool,
+            &self.state.tenant,
+            &p.key,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let Some(b) = found else {
+            return Err(McpError::invalid_params(
+                format!("no parked booking {}", p.key),
+                None,
+            ));
+        };
+        Ok(CallToolResult::structured(
+            serde_json::to_value(b).map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
+    }
 }
 
 #[prompt_router]
@@ -1171,7 +1207,8 @@ pub fn tool_action(tool: &str) -> Option<&'static str> {
         "list_dunning"
         | "list_overdue"
         | "compute_bilanzielle_abgrenzung"
-        | "list_parked_bookings" => "read-books",
+        | "list_parked_bookings"
+        | "get_parked_booking" => "read-books",
         // The collection register: mandates, IBANs and the entries of a run.
         "list_sepa_collections" => "read-banking",
         // ── Writes ───────────────────────────────────────────────────────────

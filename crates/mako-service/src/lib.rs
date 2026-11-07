@@ -51,6 +51,7 @@ pub mod policy;
 pub mod schema_check;
 pub mod service;
 pub mod shutdown;
+pub mod sql;
 pub mod telemetry;
 pub mod webhook;
 

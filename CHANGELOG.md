@@ -33,6 +33,15 @@ History before this file is in `git log`.
   that writes it. The dev and o2c configs run accountingd as `accountingd_app`;
   **recreate the dev database volume** so `dev/init-db.sh` creates the role.
 
+- The assistant is in every decision: a parked booking gets a waiting proposal
+  like a Freigabe and a Rechnungsdisput — `neu_buchen` on the first open day,
+  or `verwerfen` when accountingd's ledger shows the same Beleg already booked
+  (`list_ledger` lines carry their `beleg`; MCP `get_parked_booking`). Every
+  Heute item with an Anker answers „Warum?" in place. agentd's catalog reports
+  each skill's last 30 days from agentplane's track record (`bilanz`), shown on
+  the Beipackzettel, beside every proposal and as an Überblick tile — a share
+  only from five verdicts.
+
 ### Changed
 
 - **Breaking:** accountingd's ledger is doubleentry 0.8.1 in schema `ledger`
@@ -45,6 +54,23 @@ History before this file is in `git log`.
   refusal answers `422` with code `ledger.<n>` (`409` for a reused key), an
   unavailable ledger `503`.
 - **Breaking:** `Daemon::migrate` takes the daemon's config.
+- **Breaking:** Rust **1.95** (meterstore 0.16's MSRV); `rust-toolchain.toml`,
+  the workspace `rust-version` and the builder image move with it.
+- sqlx **0.9**, one workspace dependency (rustls on aws-lc-rs, the provider
+  meterstore and doubleentry use). SQL built at runtime goes through
+  `mako_service::sql::dynamic`, the one `AssertSqlSafe`;
+  `cargo xtask check-dynamic-sql` holds every file to its listed count and
+  reason.
+- edmd on meterstore **0.16** (DataFusion 54, iceberg 0.11): meterstore opens
+  its own pool (`edmd-meterstore`, 10 connections — count it against
+  `max_connections`). A GDPR erasure commits edmd's own rows first and then
+  destroys the subject mapping in meterstore's transaction; a failure between
+  the two leaves the request recorded and re-running completes it.
+- agentd on agentplane 0.60: a skill's track record (runs by outcome, each
+  person's latest verdict per metric) under
+  `/api/v1/oversight/capabilities/{capability}/track-record`, granted to the
+  roles that give verdicts. **Recreate an existing agentd PostgreSQL store**:
+  agentplane adds two tables.
 - accountingd: an Abschlag Verrechnung reads which advances were received
   before its own credit is booked, so an unpaid advance is no longer stamped
   as absorbed; every money amount in an event or MCP answer is formatted from

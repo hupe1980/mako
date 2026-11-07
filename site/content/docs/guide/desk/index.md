@@ -99,6 +99,15 @@ what starts it — a question or an event — which model it uses or that it use
 none, and which services it may read, each tool's reason on hover. Every skill
 only reads: none can send a market message, book or change master data.
 
+Each active skill's card also carries its record over the last 30 days, as
+agentd counts it: how many runs it made, how often a person found its answer
+„hilfreich", and what became of its proposals — **übernommen** (sent as
+proposed), **angepasst** (changed before sending) and **verworfen**. A share
+is shown only from five verdicts up; below that the card gives the count alone
+(„2 Bewertungen"), and a skill nobody has rated yet says „Noch keine
+Bewertungen", never 0 %. The record informs your judgement of a proposal; it
+never decides one.
+
 [![The Assistent page: one card per skill](assistent-light.png)](assistent-light.png)
 [![The Assistent page: one card per skill](assistent-dark.png)](assistent-dark.png)
 
@@ -129,7 +138,9 @@ at the top of the decision; <kbd>U</kbd> or „In die Entscheidung übernehmen"
 fills the form and sends nothing; you check it and send it yourself. Where it
 has not proposed one, ask it „Was schlägst du vor?". Whether you sent the proposal as it was, changed it
 or dismissed it is kept beside the assistant's run, which is how its proposals
-are measured.
+are measured — and every proposal card, on a Freigabe, a Rechnungsdisput or a
+geparkte Buchung, ends with one line of that record: „In 30 Tagen: 14 von 17
+Vorschlägen übernommen" (from five decided proposals; below, the count alone).
 
 [![A Freigabe with the assistant's proposal taken into the form, unsent](freigaben-light.png)](freigaben-light.png)
 [![A Freigabe with the assistant's proposal taken into the form, unsent](freigaben-dark.png)](freigaben-dark.png)
@@ -146,8 +157,8 @@ market message is never held: it asks first and goes at once.
 ## Überblick
 
 A few numbers per role for whoever answers for it — each one as its service
-returns it, never a share or sum the Desk works out, and each tile opens the
-list it counts. A tile turns red only where the service marks a breach; a
+returns it, never a sum the Desk works out, and each tile opens the list it
+counts. A tile turns red only where the service marks a breach; a
 number the service capped shows as a floor („500+").
 
 **Fristen überschritten** lists every open process past its Antwortfrist, as
@@ -157,6 +168,11 @@ the Prozessüberwachung has it, each with the Festlegung its deadline came from.
 take or deliver and lists the most recent. The Lieferant also sees
 **Rechnungsprüfung**, **Rechnungsdispute** and **Geparkte Buchungen**, the Messstelle **Ableseaufträge
 überfällig** — each the same read as its row in Heute, which a click opens.
+
+Every Rolle sees **Assistent**: the share of the desk-assistant's answers
+people found „hilfreich" over the last 30 days — the ratio of agentd's two
+counts, and only from five verdicts; below, the count — with what became of
+its proposals beneath. It opens the Beipackzettel.
 
 [![The Überblick](ueberblick-light.png)](ueberblick-light.png)
 [![The Überblick](ueberblick-dark.png)](ueberblick-dark.png)
@@ -207,6 +223,19 @@ where the ledger names one; **Verwerfen** drops it with the Grund you give.
 Both are final and recorded under your name, so each asks once more first; a
 refusal is shown in the ledger's words.
 
+The assistant proposes one of the two for every geparkte Buchung, once, as it
+is parked: **Verwerfen** when the customer's account already carries a
+movement with the same Beleg and amount — the Grund names that Beleg and its
+booking date — otherwise **Neu buchen** on the first open day the
+Kundenkonten name. The proposal waits under the row; opening the decision
+takes it in at once — the action chosen, the date or the Grund filled in and
+marked as the assistant's, its one sentence why beside it with the read it
+rests on and „nicht belegt" where that read does not carry it. Nothing is
+booked until you confirm, and a Grund you keep is recorded as yours. While the
+proposal is still being prepared the decision says so quietly; where the
+reads do not settle it, none is shown and the service's own first open day
+stays filled in.
+
 A Korrekturbedarf opens nothing yet: the
 Desk has no Netzentgelte view.
 
@@ -218,6 +247,18 @@ under that item, „Hilfreich?" beside it while the item has focus; one no item
 carries is an item of its own. <kbd>J</kbd> and
 <kbd>K</kbd> or the arrows move, <kbd>↵</kbd> opens, and <kbd>⌘J</kbd> asks the
 assistant about the item you are on.
+
+**Warum?** — <kbd>?</kbd> on the selected row, or the small button that shows
+on it — asks the assistant „Warum steht das auf meiner Liste, und was
+entscheidet es?" about that item and answers under it, without leaving Heute:
+at most five sentences, each with its source and its check, „AI-generated."
+first and „Hilfreich?" beneath; <kbd>?</kbd> again puts it away. It is offered
+wherever the assistant reads the record that put the item there — a Freigabe,
+a process, an Anmeldung, a Rechnungsdisput, a geparkte Buchung, a customer, a
+Hinweis. A Korrekturbedarf, an overdue reading order and an invoice under
+review do not offer it: the assistant reads neither the Netzentgelte, the
+reading orders nor the Abrechnung's risk check, so it would answer about
+something else. While the assistant is unreachable, „Warum?" is not offered.
 
 Under the list each source says how many it returned, or why it did not
 answer — one unreachable service never empties Heute. As Lieferant the

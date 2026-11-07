@@ -267,9 +267,9 @@ impl PgMsbRahmenvertragGasRepository {
         tenant: &str,
         id: Uuid,
     ) -> Result<Option<MsbRahmenvertragGas>, MdmError> {
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM msb_rahmenvertraege_gas WHERE tenant = $1 AND id = $2"
-        ))
+        )))
         .bind(tenant)
         .bind(id)
         .fetch_optional(&self.pool)
@@ -287,14 +287,14 @@ impl PgMsbRahmenvertragGasRepository {
         msb_mp_id: Option<&str>,
         status: Option<MsbRvGasStatus>,
     ) -> Result<Vec<MsbRahmenvertragGas>, MdmError> {
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM msb_rahmenvertraege_gas \
              WHERE tenant = $1 \
                AND ($2::text IS NULL OR msb_mp_id = $2) \
                AND ($3::text IS NULL OR status = $3) \
              ORDER BY valid_from DESC \
              LIMIT 500"
-        ))
+        )))
         .bind(tenant)
         .bind(msb_mp_id)
         .bind(status.map(MsbRvGasStatus::as_str))

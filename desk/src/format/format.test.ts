@@ -1,4 +1,11 @@
 import { describe, expect, it } from "vitest";
+import {
+  formatAnteil,
+  hilfreichText,
+  MINDEST_URTEILE,
+  vorschlagAufschluesselung,
+  vorschlagText,
+} from "./bilanz";
 import type { BusinessDate, Decimal, Instant } from "./brands";
 import { formatBusinessDate, formatInstant, formatInstantUtc } from "./date";
 import { band, distance, seit } from "./frist";
@@ -86,5 +93,40 @@ describe("the Frist band", () => {
     expect(band("2026-04-04T21:00:00Z" as Instant, now)).toBe("woche");
     expect(band("2026-04-05T22:30:00Z" as Instant, now)).toBe("spaeter");
     expect(band(null, now)).toBe("ohne");
+  });
+});
+
+describe("a skill's record (M74 FR-006: a share only from five verdicts)", () => {
+  it("sets the threshold at five", () => {
+    expect(MINDEST_URTEILE).toBe(5);
+  });
+
+  it("says a share of „hilfreich“ only from five verdicts, the count below, words for none", () => {
+    expect(hilfreichText({ ja: 0, nein: 0 })).toBe("Noch keine Bewertungen");
+    expect(hilfreichText({ ja: 1, nein: 0 })).toBe("1 Bewertung");
+    expect(hilfreichText({ ja: 1, nein: 1 })).toBe("2 Bewertungen");
+    expect(hilfreichText({ ja: 4, nein: 0 })).toBe("4 Bewertungen");
+    expect(hilfreichText({ ja: 5, nein: 0 })).toMatch(/^100\s%\shilfreich · 5 Bewertungen$/);
+    expect(hilfreichText({ ja: 6, nein: 1 })).toMatch(/^86\s%\shilfreich · 7 Bewertungen$/);
+    // Five verdicts all „nein“ is a real share, and shown as one.
+    expect(hilfreichText({ ja: 0, nein: 5 })).toMatch(/^0\s%\shilfreich · 5 Bewertungen$/);
+  });
+
+  it("states the proposals taken as „n von m“ only from five decided", () => {
+    expect(vorschlagText({})).toBe("Noch kein Vorschlag entschieden");
+    expect(vorschlagText({ dismissed: 1 })).toBe("1 Vorschlag entschieden");
+    expect(vorschlagText({ sent: 2, edited: 2 })).toBe("4 Vorschläge entschieden");
+    expect(vorschlagText({ sent: 14, edited: 2, dismissed: 1 })).toBe(
+      "14 von 17 Vorschlägen übernommen",
+    );
+    expect(vorschlagText({ edited: 5 })).toBe("0 von 5 Vorschlägen übernommen");
+    expect(vorschlagAufschluesselung({ sent: 1234, dismissed: 1 })).toBe(
+      "1.234 übernommen · 0 angepasst · 1 verworfen",
+    );
+  });
+
+  it("rounds a share to a whole percent in German", () => {
+    expect(formatAnteil(1, 3)).toMatch(/^33\s%$/);
+    expect(formatAnteil(2, 3)).toMatch(/^67\s%$/);
   });
 });

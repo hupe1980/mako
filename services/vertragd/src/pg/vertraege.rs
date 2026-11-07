@@ -680,34 +680,36 @@ pub async fn fetch_vertrag_by_malo(
     // the § 40 Abs. 1 facts *and* the BG-7 recipient on, so a narrower list
     // here than the one that decides whether a period is priced produced
     // exactly the document that has a price and no addressee.
-    let vertrag: Option<VersorgungsvertragRow> = sqlx::query_as(&format!(
-        "SELECT v.* FROM versorgungsvertraege v
+    let vertrag: Option<VersorgungsvertragRow> =
+        sqlx::query_as(mako_service::sql::dynamic(format!(
+            "SELECT v.* FROM versorgungsvertraege v
          JOIN vertragskomponenten k ON k.vertrag_id = v.id
          WHERE k.malo_id=$1 AND v.tenant=$2
            AND v.status IN {VERTRAG_BILLABLE}
            AND k.status IN {KOMPONENTE_BILLABLE}
          ORDER BY v.vertragsbeginn DESC LIMIT 1"
-    ))
-    .bind(malo_id)
-    .bind(tenant)
-    .fetch_optional(pool)
-    .await?;
+        )))
+        .bind(malo_id)
+        .bind(tenant)
+        .fetch_optional(pool)
+        .await?;
     let Some(vertrag) = vertrag else {
         return Ok(None);
     };
     // The same status filter as the contract lookup. Without it a later
     // ABGELEHNT/STORNIERT retry row for the same MaLo won the ORDER BY and fed
     // billingd the § 40 facts of a component that never went into supply.
-    let komponente: Option<VertragskomponenteRow> = sqlx::query_as(&format!(
-        "SELECT * FROM vertragskomponenten
+    let komponente: Option<VertragskomponenteRow> =
+        sqlx::query_as(mako_service::sql::dynamic(format!(
+            "SELECT * FROM vertragskomponenten
          WHERE vertrag_id=$1 AND malo_id=$2
            AND status IN {KOMPONENTE_BILLABLE}
          ORDER BY created_at DESC LIMIT 1"
-    ))
-    .bind(vertrag.id)
-    .bind(malo_id)
-    .fetch_optional(pool)
-    .await?;
+        )))
+        .bind(vertrag.id)
+        .bind(malo_id)
+        .fetch_optional(pool)
+        .await?;
     Ok(komponente.map(|k| (vertrag, k)))
 }
 
@@ -864,12 +866,12 @@ pub async fn update_vertrag_status(
     // A terminal contract may still progress between terminal states
     // (GEKÜNDIGT → ABGELAUFEN once every component has ended), but it never
     // returns to a live one.
-    sqlx::query(&format!(
+    sqlx::query(mako_service::sql::dynamic(format!(
         "UPDATE versorgungsvertraege SET status=$1, updated_at=now(),
          completed_at = CASE WHEN $1 IN ('ABGELAUFEN','STORNIERT') THEN now() ELSE completed_at END
          WHERE id=$2 AND tenant=$3
            AND (status NOT IN {VERTRAG_TERMINAL} OR $1 IN {VERTRAG_TERMINAL})"
-    ))
+    )))
     .bind(status)
     .bind(id)
     .bind(tenant)
@@ -892,14 +894,14 @@ pub async fn update_komponente_status(
 ) -> Result<()> {
     // The rejection detail is written only by a rejection. Overwriting it with
     // NULL on every later update erased the ERC code the customer was told.
-    sqlx::query(&format!(
+    sqlx::query(mako_service::sql::dynamic(format!(
         "UPDATE vertragskomponenten SET status=$1, updated_at=now(),
          mako_process_id=COALESCE($2,mako_process_id),
          malo_id=COALESCE($3,malo_id),
          abgelehnt_erc=COALESCE($4,abgelehnt_erc),
          abgelehnt_reason=COALESCE($5,abgelehnt_reason)
          WHERE id=$6 AND status NOT IN {KOMPONENTE_TERMINAL}"
-    ))
+    )))
     .bind(status)
     .bind(mako_process_id)
     .bind(malo_id)
@@ -929,13 +931,13 @@ pub async fn schedule_lieferende(
     id: Uuid,
     lieferende: Date,
 ) -> Result<()> {
-    sqlx::query(&format!(
+    sqlx::query(mako_service::sql::dynamic(format!(
         "UPDATE vertragskomponenten
          SET lieferende = $2,
              status = CASE WHEN $2 < heute() THEN 'BEENDET' ELSE status END,
              updated_at = now()
          WHERE id=$1 AND status NOT IN {KOMPONENTE_TERMINAL}"
-    ))
+    )))
     .bind(id)
     .bind(lieferende)
     .execute(executor)

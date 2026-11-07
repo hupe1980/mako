@@ -75,9 +75,9 @@ impl PgPartnerRepository {
 
     /// Return a partner by their 13-digit `MarktpartnerId`.
     pub async fn find(&self, id: &MarktpartnerId) -> Result<Option<PartnerRecord>, MdmError> {
-        let row: Option<PgRow> = sqlx::query(&format!(
+        let row: Option<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM partners WHERE mp_id = $1"
-        ))
+        )))
         .bind(id.as_ref())
         .fetch_optional(&self.pool)
         .await
@@ -88,9 +88,9 @@ impl PgPartnerRepository {
 
     /// List all partners.
     pub async fn list(&self) -> Result<Vec<PartnerRecord>, MdmError> {
-        let rows: Vec<PgRow> = sqlx::query(&format!(
+        let rows: Vec<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM partners ORDER BY mp_id"
-        ))
+        )))
         .fetch_all(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;

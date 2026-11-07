@@ -201,8 +201,9 @@ impl Daemon for Agentd {
                 .await
                 .context("connect MCP tool transports")?;
 
-        // The proposal tick reads processd's queue and invoicd's disputes over
-        // the transport the manifests' grants on those servers already use.
+        // The proposal tick reads processd's queue, invoicd's disputes and
+        // accountingd's parked bookings over the transport the manifests'
+        // grants on those servers already use.
         let vorschlag_quellen: Vec<(
             crate::plane::vorschlag::Art,
             Arc<dyn agentplane::tools::ToolClient>,
@@ -505,7 +506,7 @@ impl Daemon for Agentd {
             policy: policy_for_routes,
         });
 
-        // ── The proposal waiting on every Freigabe and Disput ───────────────
+        // ── The proposal waiting on every Freigabe, Disput and Buchung ──────
         let ohne: Vec<&str> = crate::plane::vorschlag::Art::ALLE
             .into_iter()
             .filter(|art| vorschlag_quellen.iter().all(|(a, _)| a != art))

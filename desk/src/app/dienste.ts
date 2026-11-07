@@ -45,6 +45,8 @@ const WERKZEUG: Record<string, string> = {
   get_receipt: "Rechnung",
   get_check_result: "Prüfbefunde",
   list_parked_bookings: "geparkte Buchungen",
+  get_parked_booking: "geparkte Buchung",
+  list_ledger: "Kontoauszug",
 };
 
 /** The service a `server/tool` reference reaches, as an operator knows it. */

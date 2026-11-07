@@ -1,16 +1,18 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
-import { NAECHSTE, UEBERNEHMEN, VORIGE } from "../app/keys";
+import { Button as AriaButton } from "react-aria-components";
+import { NAECHSTE, UEBERNEHMEN, VORIGE, WARUM } from "../app/keys";
 import { useRolle } from "../app/rollen";
 import { AKTION, type Answer, type Hinweis } from "../data/agent";
 import { FristUhr } from "../design/FristUhr";
 import { Icon, type IconName } from "../design/Icon";
 import { EmptyState, Panel } from "../design/Panel";
+import type { BusinessDate } from "../format/brands";
 import { formatCount } from "../format/count";
-import { epochMs } from "../format/date";
+import { epochMs, formatBusinessDate } from "../format/date";
 import { BAENDER, type Band, band, useNow } from "../format/frist";
-import type { Eintrag, QuelleId, Stand } from "../inbox/model";
+import { type Eintrag, type QuelleId, type Stand, warumAnker } from "../inbox/model";
 import { alsEintrag, useBenannt, useHinweise, useQuellen, useVorschlaege } from "../inbox/quellen";
 import { Bewertung } from "./Bewertung";
 import { GeparktEntscheiden } from "./Buchungen";
@@ -18,6 +20,7 @@ import { Fragen } from "./Fragen";
 import { Entscheiden } from "./Freigaben";
 import { Lage } from "./Lage";
 import { DisputEntscheiden, PruefpostenEntscheiden } from "./Rechnungen";
+import { Warum } from "./Warum";
 
 /** What a row's glyph says about where it came from. */
 const GLYPH: Record<QuelleId, IconName> = {
@@ -76,7 +79,7 @@ function HinweisZeile({ h }: { h: Hinweis }) {
 }
 
 /**
- * The proposal waiting on a Freigabe or a Disput, one line under its row:
+ * The proposal waiting on a Freigabe, a Disput or a geparkte Buchung, one line under its row:
  * model-written, so set apart and carrying the disclosure; `U` takes it into
  * the decision.
  */
@@ -98,6 +101,9 @@ function VorschlagZeile({ a, befund }: { a: Answer; befund?: string | undefined 
         <span className="font-semibold text-ai">
           {a.disclosure} Vorschlag: {AKTION[v.aktion]}
           {v.antwortcode && <span className="ml-1 font-mono">{v.antwortcode}</span>}
+          {v.aktion === "neu_buchen" && v.buchungsdatum && (
+            <span className="ml-1">am {formatBusinessDate(v.buchungsdatum as BusinessDate)}</span>
+          )}
           {befund && <span className="ml-1 font-normal">wegen {befund}</span>}
           {" — "}
         </span>
@@ -126,6 +132,8 @@ function Zeile({
   sofort,
   aktiv,
   offen,
+  warum,
+  onWarum,
   index,
   onFocus,
   onOeffnen,
@@ -134,13 +142,17 @@ function Zeile({
 }: {
   e: Eintrag;
   hinweise: Hinweis[];
-  /** The proposal waiting on a Freigabe or Disput row. */
+  /** The proposal waiting on a Freigabe, Disput or geparkte Buchung row. */
   vorschlag: Answer | undefined;
   /** `U` opened the decision: take the proposal into it. */
   sofort: boolean;
   aktiv: boolean;
   /** The item's decision is open under it. */
   offen: boolean;
+  /** „Warum?" is answered under it. */
+  warum: boolean;
+  /** Ask „Warum?" — absent where the item does not offer it. */
+  onWarum: (() => void) | null;
   index: number;
   onFocus: (i: number) => void;
   onOeffnen: (id: string | null) => void;
@@ -150,54 +162,78 @@ function Zeile({
   const router = useRouter();
   const ai = e.quelle === "hinweise";
   const entscheidbar = Boolean(e.freigabe || e.disput || e.pruefposten || e.geparkt);
+  const anker = warumAnker(e);
   return (
-    <li className="border-b border-separator last:border-b-0">
-      <button
-        type="button"
-        ref={(el) => {
-          zeilen.current[index] = el;
-        }}
-        tabIndex={aktiv ? 0 : -1}
-        aria-expanded={entscheidbar ? offen : undefined}
-        onFocus={() => onFocus(index)}
-        onClick={() => {
-          // A Freigabe, a Disput, a Prüfposten and a geparkte Buchung are decided here;
-          // everything else opens its view.
-          if (entscheidbar) onOeffnen(offen ? null : e.id);
-          else if (e.ziel) router.navigate(e.ziel);
-        }}
-        className={`focus-ring flex w-full cursor-default items-start gap-4 border-0 px-5 py-3 text-left outline-none data-[aktiv=true]:bg-fill hover:bg-fill ${ai ? "bg-ai-fill" : "bg-transparent"}`}
+    <li data-quelle={e.quelle} className="border-b border-separator last:border-b-0">
+      <div
         data-aktiv={aktiv}
+        className={`group flex items-start hover:bg-fill data-[aktiv=true]:bg-fill ${ai ? "bg-ai-fill" : ""}`}
       >
-        <span
-          className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full ${ai ? "bg-ai-fill text-ai" : "bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-accent"}`}
+        <button
+          type="button"
+          ref={(el) => {
+            zeilen.current[index] = el;
+          }}
+          tabIndex={aktiv ? 0 : -1}
+          aria-expanded={entscheidbar ? offen : undefined}
+          onFocus={() => onFocus(index)}
+          onClick={() => {
+            // A Freigabe, a Disput, a Prüfposten and a geparkte Buchung are decided here;
+            // everything else opens its view.
+            if (entscheidbar) onOeffnen(offen ? null : e.id);
+            else if (e.ziel) router.navigate(e.ziel);
+          }}
+          className={`focus-ring flex min-w-0 flex-1 cursor-default items-start gap-4 border-0 bg-transparent py-3 text-left outline-none ${onWarum ? "pr-3 pl-5" : "px-5"}`}
         >
-          <Icon name={GLYPH[e.quelle]} size={16} />
-        </span>
-        <span className="min-w-0 flex-1">
           <span
-            className={`block truncate text-callout font-medium text-text ${e.kennung ? "font-mono" : ""}`}
+            className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full ${ai ? "bg-ai-fill text-ai" : "bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-accent"}`}
           >
-            {e.titel}
+            <Icon name={GLYPH[e.quelle]} size={16} />
           </span>
-          <span className={`block text-body ${ai ? "text-text italic" : "text-text-2"}`}>
-            {e.grund}
+          <span className="min-w-0 flex-1">
+            <span
+              className={`block truncate text-callout font-medium text-text ${e.kennung ? "font-mono" : ""}`}
+            >
+              {e.titel}
+            </span>
+            <span className={`block text-body ${ai ? "text-text italic" : "text-text-2"}`}>
+              {e.grund}
+            </span>
+            {e.detail && (
+              <span className="block truncate font-mono text-caption text-text-2">{e.detail}</span>
+            )}
           </span>
-          {e.detail && (
-            <span className="block truncate font-mono text-caption text-text-2">{e.detail}</span>
-          )}
-        </span>
-        <span className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
-          {e.frist ? (
-            <FristUhr due={e.frist} />
-          ) : (
-            <span className="text-body text-text-2">keine Frist</span>
-          )}
-          {entscheidbar && (
-            <span className="text-caption text-accent">{offen ? "schließen" : "entscheiden"}</span>
-          )}
-        </span>
-      </button>
+          <span className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
+            {e.frist ? (
+              <FristUhr due={e.frist} />
+            ) : (
+              <span className="text-body text-text-2">keine Frist</span>
+            )}
+            {entscheidbar && (
+              <span className="text-caption text-accent">
+                {offen ? "schließen" : "entscheiden"}
+              </span>
+            )}
+          </span>
+        </button>
+        {onWarum && (
+          <AriaButton
+            onPress={onWarum}
+            excludeFromTabOrder={!aktiv}
+            aria-expanded={warum}
+            aria-keyshortcuts="?"
+            className={`focus-ring mt-3.5 mr-4 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-ai-border px-2 text-caption font-medium text-ai transition-opacity data-[hovered]:bg-ai-fill ${warum ? "bg-ai-fill opacity-100" : "opacity-0 group-hover:opacity-100 group-data-[aktiv=true]:opacity-100 data-[focus-visible]:opacity-100"}`}
+          >
+            <Icon name="sparkle" size={11} />
+            Warum?
+          </AriaButton>
+        )}
+      </div>
+      {warum && anker && (
+        <div className="pr-5 pb-3 pl-[4.25rem]">
+          <Warum anker={anker} />
+        </div>
+      )}
       {vorschlag && !offen && (
         <div className="pr-5 pb-3 pl-[4.25rem]">
           <VorschlagZeile
@@ -227,7 +263,9 @@ function Zeile({
           {e.freigabe && <Entscheiden f={e.freigabe} onDone={onEntschieden} sofort={sofort} />}
           {e.disput && <DisputEntscheiden d={e.disput} onDone={onEntschieden} sofort={sofort} />}
           {e.pruefposten && <PruefpostenEntscheiden r={e.pruefposten} onDone={onEntschieden} />}
-          {e.geparkt && <GeparktEntscheiden b={e.geparkt} onDone={onEntschieden} />}
+          {e.geparkt && (
+            <GeparktEntscheiden b={e.geparkt} onDone={onEntschieden} vorschlag={vorschlag} />
+          )}
         </div>
       )}
     </li>
@@ -258,8 +296,9 @@ function Quellenzeile({ staende, agent }: { staende: Stand[]; agent: string | nu
 
 /**
  * Heute: everything that waits on a person in the Rolle worn, one list in
- * Frist bands. The agent's Hinweise sit under the item they concern; `⌘J`
- * asks the assistant about the item in focus (FR-006, FR-007, FR-031).
+ * Frist bands. The agent's Hinweise sit under the item they concern; `?`
+ * asks the assistant why the selected item waits and answers beside it, `⌘J`
+ * asks it anything about the item in focus (FR-006, FR-007, FR-031; M74 FR-004).
  */
 export function HeuteView() {
   const { rolle } = useRolle();
@@ -272,6 +311,7 @@ export function HeuteView() {
   const [aktiv, setAktiv] = useState(0);
   const [offen, setOffen] = useState<string | null>(null);
   const [sofort, setSofort] = useState<string | null>(null);
+  const [warum, setWarum] = useState<string | null>(null);
   const client = useQueryClient();
   const zeilen = useRef<(HTMLButtonElement | null)[]>([]);
   const sichtbar = eintraege.slice(0, SICHTBAR);
@@ -279,16 +319,23 @@ export function HeuteView() {
   const vorschlaege = useVorschlaege({
     freigabe: sichtbar.flatMap((e) => (e.freigabe ? [e.freigabe.id] : [])),
     disput: sichtbar.flatMap((e) => (e.disput ? [e.disput.id] : [])),
+    buchung: sichtbar.flatMap((e) => (e.geparkt ? [e.geparkt.key] : [])),
   });
   const wartend = (e: Eintrag | undefined) =>
     e?.freigabe
       ? vorschlaege.freigabe.get(e.freigabe.id)
       : e?.disput
         ? vorschlaege.disput.get(e.disput.id)
-        : undefined;
-  const bereit = [...vorschlaege.freigabe.values(), ...vorschlaege.disput.values()].filter(
-    (a) => a.vorschlag,
-  ).length;
+        : e?.geparkt
+          ? vorschlaege.buchung.get(e.geparkt.key)
+          : undefined;
+  const bereit = [
+    ...vorschlaege.freigabe.values(),
+    ...vorschlaege.disput.values(),
+    ...vorschlaege.buchung.values(),
+  ].filter((a) => a.vorschlag).length;
+  // „Warum?" needs the assistant: while agentd is unreachable it is not offered.
+  const fragbar = (e: Eintrag) => !agentFehler && warumAnker(e) !== null;
 
   const gruppen = BAENDER.map(({ band: b, titel }) => ({
     b,
@@ -306,6 +353,12 @@ export function HeuteView() {
       // U on a Freigabe or Disput row opens its decision with the proposal
       // taken in; once the decision is open, the form answers U itself.
       const fokussiert = sichtbar[aktiv];
+      // ? asks why the selected item waits, and asks it away again.
+      if (WARUM.match?.(ev) && fokussiert && fragbar(fokussiert)) {
+        ev.preventDefault();
+        setWarum(warum === fokussiert.id ? null : fokussiert.id);
+        return;
+      }
       if (UEBERNEHMEN.match?.(ev) && fokussiert && offen !== fokussiert.id) {
         if (!wartend(fokussiert)?.vorschlag) return;
         ev.preventDefault();
@@ -383,6 +436,8 @@ export function HeuteView() {
                   sofort={sofort === e.id}
                   aktiv={i === aktiv}
                   offen={offen === e.id}
+                  warum={warum === e.id && fragbar(e)}
+                  onWarum={fragbar(e) ? () => setWarum(warum === e.id ? null : e.id) : null}
                   index={i}
                   onFocus={setAktiv}
                   onOeffnen={(id) => {
@@ -420,8 +475,8 @@ export function HeuteView() {
       <Quellenzeile staende={staende} agent={agentFehler} />
       <p className="m-0 px-1 text-caption text-text-2">
         J K oder ↑↓ wählen · ↵ öffnet, Freigaben, Dispute, Prüfposten und geparkte Buchungen werden
-        hier entschieden (A / R, U übernimmt den Vorschlag) · ⌘J fragt den Assistenten zum gewählten
-        Eintrag
+        hier entschieden (A / R, U übernimmt den Vorschlag) · ? fragt, warum der gewählte Eintrag
+        hier steht · ⌘J fragt den Assistenten zum gewählten Eintrag
       </p>
     </div>
   );

@@ -101,8 +101,7 @@ impl PgCorrelationIndex {
         erp_order_id: &str,
     ) -> Result<Option<CorrelationEntry>, MdmError> {
         let row: Option<PgRow> = sqlx::query(
-            &format!("SELECT {SELECT_COLS} FROM process_correlation WHERE erp_order_id = $1 ORDER BY initiated_at DESC LIMIT 1")
-        )
+            mako_service::sql::dynamic(format!("SELECT {SELECT_COLS} FROM process_correlation WHERE erp_order_id = $1 ORDER BY initiated_at DESC LIMIT 1")))
         .bind(erp_order_id)
         .fetch_optional(&self.pool)
         .await
@@ -116,9 +115,9 @@ impl PgCorrelationIndex {
         &self,
         process_id: Uuid,
     ) -> Result<Option<CorrelationEntry>, MdmError> {
-        let row: Option<PgRow> = sqlx::query(&format!(
+        let row: Option<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM process_correlation WHERE process_id = $1"
-        ))
+        )))
         .bind(process_id)
         .fetch_optional(&self.pool)
         .await
@@ -130,13 +129,13 @@ impl PgCorrelationIndex {
     /// Return correlations matching the filter.
     pub async fn list(&self, filter: CorrelationFilter) -> Result<Vec<CorrelationEntry>, MdmError> {
         let status_str = filter.status.map(|s| s.to_string());
-        let rows: Vec<PgRow> = sqlx::query(&format!(
+        let rows: Vec<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM process_correlation
                  WHERE ($1::text IS NULL OR erp_order_id = $1)
                    AND ($2::text IS NULL OR malo_id = $2)
                    AND ($3::text IS NULL OR status = $3)
                  ORDER BY initiated_at DESC LIMIT 200"
-        ))
+        )))
         .bind(filter.erp_order_id)
         .bind(filter.malo_id.as_deref())
         .bind(status_str)

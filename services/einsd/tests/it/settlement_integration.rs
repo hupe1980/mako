@@ -238,7 +238,7 @@ async fn seed_plant(pool: &PgPool, tr_id: &str, tenant: &str, extra_cols: &str, 
                  'SOLAR_AUFDACH', 8.11, 'VERGUETUNG', '2044-12-31',
                  'EB-1'{extra_vals})"
     );
-    sqlx::query(&sql)
+    sqlx::query(mako_service::sql::dynamic(sql))
         .bind(tr_id)
         .bind(tenant)
         .execute(pool)

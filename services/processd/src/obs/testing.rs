@@ -51,7 +51,7 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
             .cloned()
             .collect();
 
-        results.sort_by(|a, b| b.last_event_at.cmp(&a.last_event_at));
+        results.sort_by_key(|r| std::cmp::Reverse(r.last_event_at));
         results.truncate(q.limit as usize);
         Ok(results)
     }

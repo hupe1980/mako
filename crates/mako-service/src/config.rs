@@ -792,10 +792,8 @@ fn resolve_dict(dict: &mut figment::value::Dict) -> Result<(), EnvRefError> {
 fn resolve_value(value: &mut figment::value::Value) -> Result<(), EnvRefError> {
     use figment::value::Value;
     match value {
-        Value::String(_, s) => {
-            if s.starts_with("env:") {
-                *s = resolve_env(s)?;
-            }
+        Value::String(_, s) if s.starts_with("env:") => {
+            *s = resolve_env(s)?;
         }
         Value::Dict(_, d) => resolve_dict(d)?,
         Value::Array(_, items) => {

@@ -646,9 +646,9 @@ pub async fn fetch_collection_entry(
     entry_id: Uuid,
     tenant: &str,
 ) -> anyhow::Result<Option<CollectionEntryRow>> {
-    sqlx::query_as::<_, CollectionEntryRow>(&format!(
+    sqlx::query_as::<_, CollectionEntryRow>(mako_service::sql::dynamic(format!(
         "{COLLECTION_ENTRY_SELECT} WHERE ce.entry_id = $1 AND ce.tenant = $2"
-    ))
+    )))
     .bind(entry_id)
     .bind(tenant)
     .fetch_optional(pool)
@@ -665,10 +665,10 @@ pub async fn find_collection_entry_by_e2e(
     tenant: &str,
     end_to_end_id: &str,
 ) -> anyhow::Result<Option<CollectionEntryRow>> {
-    sqlx::query_as::<_, CollectionEntryRow>(&format!(
+    sqlx::query_as::<_, CollectionEntryRow>(mako_service::sql::dynamic(format!(
         "{COLLECTION_ENTRY_SELECT} WHERE ce.tenant = $1 AND ce.end_to_end_id = $2 \
          ORDER BY r.collection_date DESC LIMIT 1"
-    ))
+    )))
     .bind(tenant)
     .bind(end_to_end_id)
     .fetch_optional(pool)
@@ -1496,6 +1496,8 @@ pub struct LedgerLine {
     pub entry_id: Uuid,
     /// The Buchungsart (doubleentry `kind`), e.g. `RECHNUNG`, `ZAHLUNG`.
     pub entry_type: Option<String>,
+    /// The Beleg the booking cites — a Rechnungsnummer, a bank reference.
+    pub beleg: Option<String>,
     /// `"D"` (debit — increases the receivable) or `"C"` (credit).
     pub side: &'static str,
     /// The movement in minor units (always positive; `side` carries the sign).
@@ -1574,6 +1576,9 @@ pub async fn list_ledger(
             LedgerLine {
                 entry_id,
                 entry_type: described.get(&entry_id).map(|(art, _)| art.clone()),
+                beleg: described
+                    .get(&entry_id)
+                    .and_then(|(_, beleg)| beleg.clone()),
                 side,
                 amount_ct: ct(line.amount),
                 signed_ct: signed,
@@ -2763,7 +2768,9 @@ async fn phase_candidates(
             {ABS3_GATES}
           ORDER BY dc.issued_at"
     );
-    let mut q = sqlx::query(&sql).bind(tenant).bind(threshold_ct);
+    let mut q = sqlx::query(mako_service::sql::dynamic(sql))
+        .bind(tenant)
+        .bind(threshold_ct);
     for b in extra_binds {
         q = q.bind(*b);
     }

@@ -533,7 +533,6 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     // registry), `esa_typ2_reads` (non-authoritative ESA stream) and
     // `meter_readings` (the Zählerstandsgang — register values at instants).
     let (reads_store, typ2_store, zsg_store, reads_cold) = build_stores(
-        pool.clone(),
         &database_url,
         &warehouse_uri,
         tiering,

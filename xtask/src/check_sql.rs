@@ -409,12 +409,25 @@ fn call_sites(src: &str) -> Vec<(usize, Fragment)> {
             while src[i..].starts_with(char::is_whitespace) {
                 i += 1;
             }
-            // `&format!(<literal>, …)` — the literal is the statement, its
+            // `sql::dynamic(…)` is the runtime-built statement's assertion, not
+            // the statement: read what it wraps.
+            for wrapper in ["mako_service::sql::dynamic(", "crate::sql::dynamic("] {
+                if src[i..].starts_with(wrapper) {
+                    i += wrapper.len();
+                    while src[i..].starts_with(char::is_whitespace) {
+                        i += 1;
+                    }
+                }
+            }
+            // `format!(<literal>, …)` — the literal is the statement, its
             // `{NAME}` captures resolved from the crate's constants. A capture
             // can also be bound by a trailing `name = path::CONST` argument,
             // which is the same constant reached by its path.
-            if src[i..].starts_with("&format!") {
-                let mut j = i + "&format!".len();
+            let format_call = ["&format!", "format!"]
+                .into_iter()
+                .find(|f| src[i..].starts_with(f));
+            if let Some(f) = format_call {
+                let mut j = i + f.len();
                 while src[j..].starts_with(char::is_whitespace) {
                     j += 1;
                 }

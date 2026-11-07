@@ -5,8 +5,8 @@
 //! decision instead of once per look costs one model run per entry, and the
 //! person starts from a checked answer rather than an empty form.
 //!
-//! Two kinds of decision get one ([`Art`]): processd's Freigaben and
-//! invoicd's Rechnungsdispute. The tick reads each kind's open list and admits
+//! Three kinds of decision get one ([`Art`]): processd's Freigaben,
+//! invoicd's Rechnungsdispute and accountingd's parked bookings. The tick reads each kind's open list and admits
 //! one desk-assistant run per entry ([`Plane::vorschlag_zulassen`]). It is a
 //! pull, not an event: the owning service's list is already the durable
 //! record, so an entry a tick missed is admitted by the next one, and
@@ -46,11 +46,14 @@ pub enum Art {
     Freigabe,
     /// An invoicd Rechnungsdisput: close it, or let the refusal stand.
     Disput,
+    /// An accountingd parked booking: book it anew on an open date, or
+    /// discard it with a reason.
+    Buchung,
 }
 
 impl Art {
     /// Every kind, in the order the tick reads them.
-    pub const ALLE: [Self; 2] = [Self::Freigabe, Self::Disput];
+    pub const ALLE: [Self; 3] = [Self::Freigabe, Self::Disput, Self::Buchung];
 
     /// The Anker key: the run input's field, and the `vorschlaege` query's.
     #[must_use]
@@ -58,6 +61,7 @@ impl Art {
         match self {
             Self::Freigabe => "freigabe",
             Self::Disput => "disput",
+            Self::Buchung => "buchung",
         }
     }
 
@@ -67,6 +71,7 @@ impl Art {
         match self {
             Self::Freigabe => "processd",
             Self::Disput => "invoicd",
+            Self::Buchung => "accountingd",
         }
     }
 
@@ -76,6 +81,7 @@ impl Art {
         match self {
             Self::Freigabe => &["freigeben", "ablehnen"],
             Self::Disput => &["beilegen", "aufrechterhalten"],
+            Self::Buchung => &["neu_buchen", "verwerfen"],
         }
     }
 
@@ -96,6 +102,19 @@ impl Art {
                 "freigaben",
             ),
             Self::Disput => ("list_disputes", serde_json::json!({}), "disputes"),
+            Self::Buchung => (
+                "list_parked_bookings",
+                serde_json::json!({ "limit": SEITE }),
+                "buchungen",
+            ),
+        }
+    }
+
+    /// The field an entry of the listing is identified by.
+    const fn id_feld(self) -> &'static str {
+        match self {
+            Self::Freigabe | Self::Disput => "id",
+            Self::Buchung => "key",
         }
     }
 }
@@ -114,7 +133,7 @@ pub fn eintraege(art: Art, output: &Value) -> (Vec<String>, bool) {
         .as_array()
         .map(|a| {
             a.iter()
-                .filter_map(|f| f["id"].as_str())
+                .filter_map(|f| f[art.id_feld()].as_str())
                 .filter(|id| !id.is_empty())
                 .map(str::to_owned)
                 .collect()
@@ -193,6 +212,23 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_parked_booking_is_read_by_its_key() {
+        let out = serde_json::json!({
+            "buchungen": [{ "key": "rechnung:1" }, { "key": "" }, {}],
+            "saturated": true
+        });
+        assert_eq!(
+            eintraege(Art::Buchung, &out),
+            (vec!["rechnung:1".to_owned()], true)
+        );
+        assert_eq!(Art::von_aktion("neu_buchen"), Some(Art::Buchung));
+        assert_eq!(
+            ereignis(Art::Buchung, "rechnung:1"),
+            "vorschlag:buchung:rechnung:1"
+        );
+    }
 
     #[test]
     fn the_entry_ids_are_read_off_each_kinds_listing() {

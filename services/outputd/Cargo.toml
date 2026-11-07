@@ -21,7 +21,7 @@ test = false
 [dependencies]
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
 axum         = { version = "0.8" }
-sqlx         = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json"] }
+sqlx         = { workspace = true }
 tokio        = { version = "1", features = ["full"] }
 serde        = { workspace = true, features = ["derive"] }
 serde_json   = { workspace = true }

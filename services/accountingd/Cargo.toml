@@ -27,7 +27,7 @@ mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 axum         = { version = "0.8" }
-sqlx         = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal"] }
+sqlx         = { workspace = true, features = ["rust_decimal"] }
 tokio        = { version = "1", features = ["full"] }
 serde        = { workspace = true, features = ["derive"] }
 serde_json   = { workspace = true }
@@ -51,7 +51,7 @@ mako-service = { workspace = true, features = ["testing"] }
 toml       = "0.8"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal", "migrate", "macros"] }
+sqlx = { workspace = true, features = ["rust_decimal"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 

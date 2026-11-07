@@ -104,9 +104,9 @@ impl PgNbContractRepository {
         contract_id: &str,
         tenant: &str,
     ) -> Result<Option<NbContractRecord>, MdmError> {
-        let row: Option<PgRow> = sqlx::query(&format!(
+        let row: Option<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM nb_contracts WHERE contract_id = $1 AND tenant = $2"
-        ))
+        )))
         .bind(contract_id)
         .bind(tenant)
         .fetch_optional(&self.pool)
@@ -126,7 +126,7 @@ impl PgNbContractRepository {
         date: time::Date,
         tenant: &str,
     ) -> Result<Option<NbContractRecord>, MdmError> {
-        let row: Option<PgRow> = sqlx::query(&format!(
+        let row: Option<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             r#"SELECT {SELECT_COLS} FROM nb_contracts
                WHERE malo_id = $1
                  AND valid_from <= $2
@@ -134,7 +134,7 @@ impl PgNbContractRepository {
                  AND tenant = $3
                ORDER BY valid_from DESC
                LIMIT 1"#
-        ))
+        )))
         .bind(malo_id)
         .bind(date)
         .bind(tenant)
@@ -151,11 +151,11 @@ impl PgNbContractRepository {
         nb_mp_id: &str,
         tenant: &str,
     ) -> Result<Vec<NbContractRecord>, MdmError> {
-        let rows: Vec<PgRow> = sqlx::query(&format!(
+        let rows: Vec<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             r#"SELECT {SELECT_COLS} FROM nb_contracts
                WHERE nb_mp_id = $1 AND tenant = $2
                ORDER BY malo_id, valid_from"#
-        ))
+        )))
         .bind(nb_mp_id)
         .bind(tenant)
         .fetch_all(&self.pool)

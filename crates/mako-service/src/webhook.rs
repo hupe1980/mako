@@ -68,7 +68,7 @@ const VERSION: &str = "v1";
 /// Five minutes each way, as the spec recommends. Both directions matter: too
 /// old is a replay, and too far in the future is a sender whose clock is wrong
 /// in a way that would let a captured request stay valid past the window.
-pub const TOLERANCE: std::time::Duration = std::time::Duration::from_secs(300);
+pub const TOLERANCE: std::time::Duration = std::time::Duration::from_mins(5);
 
 /// A verified message id, for the receiver to deduplicate on.
 ///

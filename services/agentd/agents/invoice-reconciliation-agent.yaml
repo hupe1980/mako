@@ -235,7 +235,8 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: >-
-        The ledger entries behind that balance.
+        A customer account's ledger movements, newest first, each with its
+        Beleg, and the balance the window opens at.
 
     - ref: tool://billingd/get_billing_record
       mutates: false

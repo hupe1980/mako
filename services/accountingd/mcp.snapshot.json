@@ -41,6 +41,111 @@
     "outputSchema": null
   },
   {
+    "name": "get_parked_booking",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "key"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The parked booking's key, as `list_parked_bookings` names it.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "key",
+        "art",
+        "malo_id",
+        "lf_mp_id",
+        "betrag_ct",
+        "buchungsdatum",
+        "beleg",
+        "code",
+        "meldung",
+        "hinweis",
+        "vorschlag_datum",
+        "seit"
+      ],
+      "properties": {
+        "key": {
+          "description": "The draft's key — what rebook and discard name.",
+          "type": "string"
+        },
+        "art": {
+          "description": "The Buchungsart.",
+          "type": "string"
+        },
+        "malo_id": {
+          "description": "The Marktlokation.",
+          "type": "string"
+        },
+        "lf_mp_id": {
+          "description": "The Lieferant's MP-ID.",
+          "type": "string"
+        },
+        "betrag_ct": {
+          "description": "Signed amount in minor units (positive: the customer owes).",
+          "type": "integer",
+          "format": "int64"
+        },
+        "buchungsdatum": {
+          "description": "The booking date the ledger refused.",
+          "type": "string",
+          "format": "date"
+        },
+        "beleg": {
+          "description": "The Beleg, when the draft cites one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "code": {
+          "description": "doubleentry's rejection code; `None` for a refusal accountingd made.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "meldung": {
+          "description": "The refusal in words.",
+          "type": "string"
+        },
+        "hinweis": {
+          "description": "What the operator can do about it, in words.",
+          "type": "string"
+        },
+        "vorschlag_datum": {
+          "description": "The first date a rebooking is accepted on, when the refusal is a\nsealed period (`301`) — the day after the last seal.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "seit": {
+          "description": "When the draft was staged (RFC 3339).",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
     "name": "get_vorauszahlung",
     "annotations": {
       "readOnlyHint": true,

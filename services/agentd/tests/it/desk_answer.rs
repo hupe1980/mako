@@ -120,6 +120,8 @@ async fn a_question_is_answered_in_sentences_each_checked_against_its_call() {
             "aktion": "ablehnen",
             "antwortcode": "A02",
             "befund": null,
+            "buchungsdatum": null,
+            "grund": null,
             "begruendung": "Die Frist endet am 05.11.2026 um 11:00 Uhr.",
             "quelle": "makod/get_process"
         }})),
@@ -236,6 +238,31 @@ async fn a_question_is_answered_in_sentences_each_checked_against_its_call() {
         .await
         .expect("a proposal's fate is assessable");
     assert_eq!(read("erika").await, Some(true));
+
+    // The catalog's record is agentplane's, to the count: one run, each
+    // reader's standing verdict, and the proposal's fate.
+    let bilanz = plane
+        .bilanz(
+            "desk-assistant",
+            time::OffsetDateTime::now_utc() + time::Duration::seconds(1),
+        )
+        .await
+        .expect("an activated skill has a record");
+    assert_eq!(bilanz.tage, agentd::plane::BILANZ_TAGE);
+    assert_eq!(bilanz.laeufe, 1);
+    assert_eq!(
+        bilanz.hilfreich,
+        agentd::plane::Urteile { ja: 1, nein: 1 },
+        "erika's later verdict replaced her first"
+    );
+    assert_eq!(bilanz.vorschlag.get("edited"), Some(&1));
+    assert!(
+        plane
+            .bilanz("no-such-skill", time::OffsetDateTime::now_utc())
+            .await
+            .is_none(),
+        "a skill not activated here has no record"
+    );
 
     assert!(
         plane

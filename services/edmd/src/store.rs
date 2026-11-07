@@ -282,6 +282,10 @@ impl Default for TieringConfig {
 /// tables live in — edmd invariants, so they are fixed here rather than in config.
 const CATALOG_NAME: &str = "meterstore";
 const CATALOG_NAMESPACE: &str = "metering";
+/// meterstore's own pool (hot tier and subject registry), counted against the
+/// server's `max_connections` beside edmd's business pool and the catalog's.
+const METERSTORE_POOL_MAX: u32 = 10;
+
 /// The `SqlCatalog`'s own metadata pool, bound small: this single catalog (shared
 /// by every table) plus edmd's main pool and meterstore's hot tier must not
 /// exhaust PostgreSQL's connection slots (the `SqlCatalog` default is 10).
@@ -305,7 +309,6 @@ const CATALOG_POOL_MAX: u32 = 4;
 /// `warehouse_uri`'s scheme) is built by `meterstore` itself — edmd wires none of
 /// the Iceberg catalog stack directly. Returns `(reads, typ2, zsg, cold)`.
 pub async fn build_stores(
-    pool: PgPool,
     database_url: &str,
     warehouse_uri: &str,
     tiering: TieringConfig,
@@ -324,16 +327,27 @@ pub async fn build_stores(
     .build()
     .await?;
     let cold = cold_tier.cold();
+    // meterstore owns its pool: `Database` applies its TLS rule and frees a
+    // dropped lease's advisory lock at check-in, and no sqlx type crosses its
+    // API. Sized on its own, beside edmd's business pool and the catalog's.
+    let database = meterstore::Database::connect_with(
+        database_url,
+        &meterstore::DatabaseOptions::new()
+            .max_connections(METERSTORE_POOL_MAX)
+            .application_name(Some("edmd-meterstore".to_owned())),
+    )
+    .await?;
     // One hot tier serves every table: `PostgresHot` takes the table as a method
     // argument, so a single handle over one pool covers both.
-    let hot = Arc::new(PostgresHot::new(pool.clone()).ddl_lock_timeout(tiering.ddl_lock_timeout));
+    let hot =
+        Arc::new(PostgresHot::new(database.clone()).ddl_lock_timeout(tiering.ddl_lock_timeout));
 
     // `meter_reads` is authoritative and carries the GDPR subject registry;
     // `esa_typ2_reads` is the non-authoritative ESA stream (never billed).
     use meterstore::config::TimeModel;
     // One registry for the three tables, as the model requires: they enrol the
     // same `(tenant, MaLo)` identifier, so one erasure must unlink all of them.
-    let registry = subject_registry(&pool, erasure_keys)?;
+    let registry = subject_registry(&database, erasure_keys)?;
     let reads = table_builder(
         &cold,
         &hot,
@@ -408,16 +422,19 @@ pub async fn build_stores(
 /// destroyed is back. `keys[0]` writes new tombstones and every key is checked,
 /// so rotation is additive — a retired key keeps recognising the erasures it
 /// recorded, which is why it can never simply be dropped.
-fn subject_registry(pool: &PgPool, erasure_keys: &[Vec<u8>]) -> anyhow::Result<SubjectRegistry> {
+fn subject_registry(
+    database: &meterstore::Database,
+    erasure_keys: &[Vec<u8>],
+) -> anyhow::Result<SubjectRegistry> {
     if erasure_keys.is_empty() {
         tracing::warn!(
             "edmd: no [privacy] erasure_secret — an Art. 17 erasure can be undone by the \
              next delivery for the same MaLo, because nothing records that it happened"
         );
-        return Ok(SubjectRegistry::new(pool.clone()));
+        return Ok(SubjectRegistry::new(database.clone()));
     }
     let refs: Vec<&[u8]> = erasure_keys.iter().map(Vec::as_slice).collect();
-    Ok(SubjectRegistry::with_erasure_keys(pool.clone(), &refs)?)
+    Ok(SubjectRegistry::with_erasure_keys(database.clone(), &refs)?)
 }
 
 /// from the newest contributing delivery on read (§4.2) — declaring them here is
@@ -903,7 +920,7 @@ impl MeterStoreTimeSeriesRepository {
             .values()
             .flat_map(|r| series_to_reads(r, &q.tenant))
             .collect();
-        out.sort_by(|a, b| a.dtm_from.cmp(&b.dtm_from));
+        out.sort_by_key(|a| a.dtm_from);
         Ok(out)
     }
 }
@@ -989,7 +1006,7 @@ async fn read_all_channels(
         .flat_map(|r| series_to_reads(r, tenant))
         .collect();
     // Callers assume chronological order; the map is register-major.
-    out.sort_by(|a, b| a.dtm_from.cmp(&b.dtm_from));
+    out.sort_by_key(|a| a.dtm_from);
     Ok(out)
 }
 
@@ -2173,7 +2190,7 @@ impl Typ2Repository for MeterStoreTyp2Repository {
             .collect();
         // Callers read a delivery, which is chronological; the map is
         // register-major.
-        out.sort_by(|a, b| a.dtm_from.cmp(&b.dtm_from));
+        out.sort_by_key(|a| a.dtm_from);
         Ok(out)
     }
 }

@@ -43,7 +43,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "deadline-alert-agent",
@@ -64,14 +65,15 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "desk-assistant",
       "titel": "Assistent im Desk",
       "zweck": "Beantwortet eine Frage zum Kunden, zur Marktlokation, zum Prozess oder zur Entscheidung auf dem Bildschirm, jeden Satz mit seiner Quelle.",
-      "version": "1.2.0",
-      "digest": "aace2a26c6d893c9efcd82df6db6b93a87f9da9119e482b1e19ee4d13f2c7ced",
+      "version": "1.3.0",
+      "digest": "52711163b6b8a61f37556b76315eba97fbe9f20b3150c464fcfebeefe00c2ee9",
       "ausloeser": [],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -100,12 +102,21 @@
           "wozu": "The invoic-checker findings of a receipt, each with its kind and sentence — the grounds a dispute rests on."
         },
         {
+          "werkzeug": "accountingd/get_parked_booking",
+          "wozu": "A booking the ledger refused: its Buchungsart, amount, Beleg, the refusal and the first open date to book it on."
+        },
+        {
+          "werkzeug": "accountingd/list_ledger",
+          "wozu": "A customer account's ledger movements, newest first, each with its Beleg, and the balance the window opens at."
+        },
+        {
           "werkzeug": "processd/list_open_processes",
           "wozu": "Open processes on given MaLos, the earliest Frist first, each with the Festlegung its deadline came from."
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "billing-agent",
@@ -157,7 +168,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "netzbilanz-agent",
@@ -203,14 +215,15 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "invoice-reconciliation-agent",
       "titel": "Zahlungsavise abgleichen",
       "zweck": "Ordnet eingehende Zahlungsavise offenen Rechnungen zu und nennt den nächsten Schritt bei Abweisungen.",
       "version": "2.0.0",
-      "digest": "332a0c760a0957f1b52c15a76bc3de8e433940ec508cfaaeb89801a79ff1d566",
+      "digest": "c8df02782033abd21927102ba66292e11ff69b483e23eb7e3d099f65437cfbc4",
       "ausloeser": [
         "de.invoic.payment.overdue",
         "de.invoic.receipt.*"
@@ -235,7 +248,7 @@
         },
         {
           "werkzeug": "accountingd/list_ledger",
-          "wozu": "The ledger entries behind that balance."
+          "wozu": "A customer account's ledger movements, newest first, each with its Beleg, and the balance the window opens at."
         },
         {
           "werkzeug": "billingd/get_billing_record",
@@ -243,7 +256,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "billing-anomaly-agent",
@@ -282,7 +296,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "billing-regulatory-guard-agent",
@@ -317,7 +332,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "jahresabrechnung-agent",
@@ -358,7 +374,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "eeg-agent",
@@ -390,7 +407,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "eeg-compliance-agent",
@@ -429,7 +447,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "payment-reconciliation-agent",
@@ -466,7 +485,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "compliance-agent",
@@ -501,7 +521,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "msb-history-agent",
@@ -544,7 +565,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "meter-data-agent",
@@ -572,7 +594,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "grid-anomaly-agent",
@@ -600,7 +623,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "tariff-optimization-agent",
@@ -640,7 +664,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "vertragd-agent",
@@ -695,7 +720,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "productd-agent",
@@ -736,7 +762,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "processd-agent",
@@ -781,7 +808,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "sperrd-agent",
@@ -818,7 +846,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "portald-agent",
@@ -868,7 +897,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "regulatory-reporting-agent",
@@ -901,7 +931,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "replacement-value-agent",
@@ -929,7 +960,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "mabis-agent",
@@ -974,7 +1006,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "smgw-diagnostics-agent",
@@ -1014,7 +1047,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "vpp-billing-agent",
@@ -1042,7 +1076,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "gabi-gas-agent",
@@ -1056,7 +1091,8 @@
       "modell": null,
       "liest": [],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     },
     {
       "name": "einsd-batch-agent",
@@ -1105,7 +1141,8 @@
         }
       ],
       "nur_lesend": true,
-      "mit_freigabe": 0
+      "mit_freigabe": 0,
+      "bilanz": null
     }
   ]
 }

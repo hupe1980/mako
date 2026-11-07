@@ -106,8 +106,9 @@ pub async fn find_active_aggregatorvertrag(
     sr_id: &str,
     on_date: Date,
 ) -> Result<Option<AggregatorvertragRow>> {
-    Ok(sqlx::query_as::<_, AggregatorvertragRow>(&format!(
-        r"SELECT {AGG_COLS}
+    Ok(
+        sqlx::query_as::<_, AggregatorvertragRow>(mako_service::sql::dynamic(format!(
+            r"SELECT {AGG_COLS}
           FROM aggregatorvertraege
           WHERE tenant = $1
             AND sr_id  = $2
@@ -115,12 +116,13 @@ pub async fn find_active_aggregatorvertrag(
             AND (vertragsende IS NULL OR vertragsende > $3)
           ORDER BY vertragsbeginn DESC
           LIMIT 1"
-    ))
-    .bind(tenant)
-    .bind(sr_id)
-    .bind(on_date)
-    .fetch_optional(pool)
-    .await?)
+        )))
+        .bind(tenant)
+        .bind(sr_id)
+        .bind(on_date)
+        .fetch_optional(pool)
+        .await?,
+    )
 }
 
 /// Every Aggregatorvertrag for a tenant, newest validity first.
@@ -132,13 +134,15 @@ pub async fn list_aggregatorvertraege(
     pool: &PgPool,
     tenant: &str,
 ) -> Result<Vec<AggregatorvertragRow>> {
-    Ok(sqlx::query_as::<_, AggregatorvertragRow>(&format!(
-        r"SELECT {AGG_COLS}
+    Ok(
+        sqlx::query_as::<_, AggregatorvertragRow>(mako_service::sql::dynamic(format!(
+            r"SELECT {AGG_COLS}
           FROM aggregatorvertraege
           WHERE tenant = $1
           ORDER BY sr_id, vertragsbeginn DESC"
-    ))
-    .bind(tenant)
-    .fetch_all(pool)
-    .await?)
+        )))
+        .bind(tenant)
+        .fetch_all(pool)
+        .await?,
+    )
 }

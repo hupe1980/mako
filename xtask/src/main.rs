@@ -46,6 +46,8 @@ Commands:
   check-bo4e-attributes Refuse a ZusatzAttribut that is not `mako:`-namespaced and registered
   check-ledger-drafts   Refuse an accountingd ledger write outside a booking draft, and a
                         cent amount formatted through f64
+  check-dynamic-sql     Refuse AssertSqlSafe outside mako_service::sql, and a runtime-built
+                        SQL site no reason covers
   check-request-bodies  No body reaches a handler past `mako_service::Json`'s unknown-key
                         refusal unlisted (a flatten, an untagged/tagged enum, `Lenient`,
                         `axum::Json`), and a BO4E document in one is a `Bo4e<T>`
@@ -158,6 +160,7 @@ mod check_controls_consulted;
 mod check_crate_lints;
 mod check_db_suites;
 mod check_desk;
+mod check_dynamic_sql;
 mod check_error_tuples;
 mod check_event_payloads;
 mod check_event_verlauf;
@@ -222,6 +225,7 @@ fn main() {
         Some("check-publish-order") => check_publish_order::check_publish_order(),
         Some("check-bo4e-attributes") => check_bo4e_attributes(),
         Some("check-ledger-drafts") => check_ledger_drafts(),
+        Some("check-dynamic-sql") => check_dynamic_sql(),
         Some("check-request-bodies") => check_request_bodies(),
         Some("check-bo4e-discriminants") => check_bo4e_discriminants(),
         Some("check-bo4e-examples") => check_bo4e_examples(),
@@ -514,6 +518,13 @@ fn check_bo4e_discriminants() {
 fn check_bo4e_examples() {
     let (workspace_root, _) = workspace_info();
     if !check_bo4e_examples::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_dynamic_sql() {
+    let (workspace_root, _) = workspace_info();
+    if !check_dynamic_sql::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

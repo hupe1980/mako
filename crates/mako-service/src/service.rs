@@ -285,7 +285,7 @@ async fn migrate_as_owner<D: Daemon>(
     }
     if let Some(role) = crate::config::runtime_role(db)? {
         for grant in public_grants(&role) {
-            sqlx::query(&grant)
+            sqlx::query(crate::sql::dynamic(grant))
                 .execute(pool)
                 .await
                 .context("grant the runtime role the service schema")?;

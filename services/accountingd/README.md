@@ -25,7 +25,7 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 | **Bank import** | camt.052/053/054 and a flat JSON import; only `BOOK` entries post, deduplicated on the bank reference |
 | **Dunning** | Mahnstufe 1→3, then Sperrandrohung → Sperrankündigung → Sperrauftrag (ORDERS 17115 via `makod`) → Entsperrauftrag (17117); Mahnsperren and Forderungseinwände are recorded acts |
 | **Events** | `de.accounting.*` through the transactional outbox to `erp_webhook_url` |
-| **MCP** | 15 tools at `/mcp`, each authorized as its REST twin; the contract is pinned by `mcp.snapshot.json` |
+| **MCP** | 16 tools at `/mcp`, each authorized as its REST twin; the contract is pinned by `mcp.snapshot.json` |
 | **Metrics** | `GET /accountingd/metrics` (the runner owns `/metrics`) |
 
 ## Routes

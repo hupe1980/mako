@@ -165,7 +165,7 @@ impl SweepOutcome {
 /// open past its Frist and still owes the answer. Excluding them would also
 /// disagree with `list_overdue_processes`, which does not.
 pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<SweepOutcome, sqlx::Error> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(mako_service::sql::dynamic(format!(
         r"SELECT process_id, pid, family, workflow_name, malo_id, partner_mp_id,
                  deadline_at, deadline_source, deadline_risk, tenant
           FROM process_projections
@@ -177,7 +177,7 @@ pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<SweepOutcome, sqlx::E
           ORDER BY deadline_at ASC
           LIMIT $3",
         terminal = crate::obs::pg::TERMINAL_STATE_SQL,
-    ))
+    )))
     .bind(i32::try_from(rt.deadline_warn_hours).unwrap_or(24))
     .bind(require_tenant(&rt.tenant)?)
     .bind(DEADLINE_ALERT_LIMIT)
@@ -300,7 +300,7 @@ pub fn parity_pids_sql() -> String {
 pub async fn sweep_parity(rt: &WorkerRuntime) -> Result<bool, sqlx::Error> {
     use crate::obs::domain::{ParityComparison, ParityGroup};
 
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(mako_service::sql::dynamic(format!(
         r"SELECT initiator_is_affiliate,
                  COUNT(*) AS total,
                  COUNT(*) FILTER (WHERE state = 'completed') AS completed,
@@ -315,7 +315,7 @@ pub async fn sweep_parity(rt: &WorkerRuntime) -> Result<bool, sqlx::Error> {
             AND started_at >= now() - make_interval(days => $2::int)
           GROUP BY initiator_is_affiliate",
         pids = parity_pids_sql(),
-    ))
+    )))
     .bind(&rt.tenant)
     .bind(rt.parity_window_days)
     .fetch_all(&rt.pool)

@@ -63,9 +63,9 @@ impl PgSubscriptionRepository {
 
     /// Return a subscription by subscriber ID.
     pub async fn find(&self, subscriber_id: &str) -> Result<Option<Subscription>, MdmError> {
-        let row: Option<PgRow> = sqlx::query(&format!(
+        let row: Option<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM subscriptions WHERE subscriber_id = $1"
-        ))
+        )))
         .bind(subscriber_id)
         .fetch_optional(&self.pool)
         .await
@@ -99,9 +99,9 @@ impl PgSubscriptionRepository {
 
     /// List all active subscriptions.
     pub async fn list_active(&self) -> Result<Vec<Subscription>, MdmError> {
-        let rows: Vec<PgRow> = sqlx::query(&format!(
+        let rows: Vec<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {SELECT_COLS} FROM subscriptions WHERE active = true ORDER BY subscriber_id"
-        ))
+        )))
         .fetch_all(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
@@ -124,13 +124,13 @@ impl PgSubscriptionRepository {
     ) -> Result<Vec<Subscription>, MdmError> {
         // Push role and sparte filters to SQL; wildcard event_type matching
         // stays in Rust because it requires prefix-glob logic.
-        let rows: Vec<PgRow> = sqlx::query(&format!(
+        let rows: Vec<PgRow> = sqlx::query(mako_service::sql::dynamic(format!(
             r#"SELECT {SELECT_COLS} FROM subscriptions
                WHERE active = true
                  AND ($1::text IS NULL OR roles = '{{}}' OR $1 = ANY(roles))
                  AND ($2::text IS NULL OR sparten = '{{}}' OR $2 = ANY(sparten))
                ORDER BY subscriber_id"#
-        ))
+        )))
         .bind(role)
         .bind(sparte)
         .fetch_all(&self.pool)

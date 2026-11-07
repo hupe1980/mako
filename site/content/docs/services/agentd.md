@@ -6,7 +6,7 @@ weight = 38
 `agentd` is the **AI automation layer**. It connects language models to
 [the production services](@/docs/services/_index.md) over MCP for analysis and
 decision support. Every specialist is a **declarative manifest** run by
-[agentplane](https://github.com/hupe1980/agentplane) 0.57, a journal-first
+[agentplane](https://github.com/hupe1980/agentplane) 0.60, a journal-first
 durable agent runtime: every model call and tool call is a journaled effect, so a
 run resumes after a crash and replays for audit. As an MCP client it offers
 protocol revision `2026-07-28` (`server/discover`), falls back to the
@@ -28,15 +28,15 @@ Port: **`:9580`**
 |---|---|
 | `POST /webhook` | Inbound CloudEvent trigger (Standard Webhooks-verified). Admits durably, then answers `202` with the run ids |
 | `GET /api/v1/hinweise` | The open worklist rows the caller's roles may answer, each with the skill that opened it, its title, the row's text, priority, due instant and Anker — the run's case's `malo`/`melo`/`process` key. Read under the worklist's verb; the Desk's Hinweise |
-| `GET /api/v1/vorschlaege?freigabe=<id>,…&disput=<id>,…` | Each Freigabe's and Rechnungsdisput's waiting proposal, under its kind — its run's answer (`running`, or concluded with the checked `vorschlag`), or `null` where none was admitted; at most 100 ids. Starts no run. `api:run.read` |
+| `GET /api/v1/vorschlaege?freigabe=<id>,…&disput=<id>,…&buchung=<key>,…` | Each Freigabe's, Rechnungsdisput's and geparkte Buchung's waiting proposal, under its kind — its run's answer (`running`, or concluded with the checked `vorschlag`), or `null` where none was admitted; at most 100 ids. Starts no run. `api:run.read` |
 | `GET /api/v1/runs/{run}/antwort` | The answer sentence by sentence, each with its cited call and `belegt` (Belegprüfung); the run's `schritte` (also while running); a `vorschlag` on a Freigabe; the reader's `hilfreich`. Read under `api:run.read` |
 | `POST /api/v1/runs/{run}/bewertung` | `{hilfreich, begruendung?}` or `{vorschlag: sent\|edited\|dismissed}`, recorded as an assessment beside the concluded run under the caller's name; a later one replaces it. `204`, `409` while running. `api:run.assess` |
 | `POST /api/v1/runs` | Start a specialist by hand (OIDC JWT **and** Cedar `api:run.start`; honours `Idempotency-Key`). Admits durably, then answers `202` with the run ids; an unknown body field is `422` |
 | `POST /api/v1/erasure` | Destroy a case wrapping key and/or forget a memory subject (OIDC + `api:erasure.execute`; reason required). `409` when a case is named and no `[keyring]` is configured; a key-service or memory-store failure is a `500` carrying an `error_id` |
 | `GET /api/v1/agents` | Activated specialists and subscriptions. OIDC + `api:agent.list`; version and digest are in `/api/v1/agents/catalog` |
-| `GET /api/v1/agents/catalog` | Every specialist compiled into this binary, as the Desk's Beipackzettel shows it: `titel` and `zweck` (the manifest's `mako.de/` annotations), whether it is active here, what starts it, its model or none, every tool it may call with the reason, `nur_lesend`. OIDC + `api:agent.list` |
+| `GET /api/v1/agents/catalog` | Every specialist compiled into this binary, as the Desk's Beipackzettel shows it: `titel` and `zweck` (the manifest's `mako.de/` annotations), whether it is active here, what starts it, its model or none, every tool it may call with the reason, `nur_lesend`, and `bilanz` — the last 30 days from agentplane's track record: runs, open runs, outcomes, „hilfreich" verdicts (`ja`/`nein`) and what became of its proposals (`sent`/`edited`/`dismissed`); `null` for a skill not activated here. OIDC + `api:agent.list` |
 | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
-| `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, breached obligations, event delivery (OIDC required) |
+| `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, breached obligations, event delivery, and a skill's track record over a window — runs by outcome and each person's latest verdict per metric (`capabilities/{capability}/track-record`, `api:capability.track`) (OIDC required) |
 | `GET /health/live` · `GET /health/ready` · `GET /metrics` | Liveness, readiness, agentplane instruments (from the `mako_service` runner) |
 
 ---
@@ -225,11 +225,12 @@ a restart or a second instance starts none — and the Desk reads the result at
 |---|---|---|
 | Freigabe | processd `list_pending_approvals` | `freigeben` / `ablehnen` with a code of its tree |
 | Rechnungsdisput | invoicd `list_disputes` | `beilegen` / `aufrechterhalten` with its `befund`, belegt only when the cited `get_check_result` names it |
+| geparkte Buchung | accountingd `list_parked_bookings` | `neu_buchen` with a `buchungsdatum` the cited `get_parked_booking` names (its first open day), or `verwerfen` with a `grund` when `list_ledger` shows the same Beleg and amount already booked |
 | billingd Prüfposten | — | none: releasing a held invoice overrides a deterministic check, and a model reading the same findings adds no evidence |
 
 `automatisch = false` leaves the proposal to a person's question. It needs the
-`processd` and `invoicd` MCP servers and the `desk-assistant` activated; the
-startup log names what is missing.
+`processd`, `invoicd` and `accountingd` MCP servers and the `desk-assistant`
+activated; the startup log names what is missing.
 
 Controls on that surface:
 
@@ -409,7 +410,7 @@ The `plane::` suite parses every manifest and refuses:
 outside the backticks, no negation, a tool-shaped backticked name — because a
 procedure naming an ungranted tool does not crash: agentplane reports the unknown
 tool to the model, which improvises. Run both ways, it holds the grants and the
-procedure to the **same set** — 157 grants across 29 manifests.
+procedure to the **same set** — 159 grants across 29 manifests.
 
 ---
 
@@ -427,7 +428,7 @@ graph TB
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 11 services, 168 tools"]
+    subgraph tools ["MCP Tools — 11 services, 169 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · processd"]
         T3["einsd · netzbilanzd · ..."]

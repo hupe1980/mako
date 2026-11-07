@@ -41,17 +41,41 @@ export interface Eintrag {
   geparkt?: GeparkteBuchung;
 }
 
-export type QuelleId =
-  | "freigaben"
-  | "ueberfaellig"
-  | "anmeldungen"
-  | "nicht_uebermittelt"
-  | "korrekturbedarf"
-  | "ableseauftraege"
-  | "dispute"
-  | "pruefposten"
-  | "geparkt"
-  | "hinweise";
+/** Every source Heute reads, in no particular order. */
+export const QUELLE_IDS = [
+  "freigaben",
+  "ueberfaellig",
+  "anmeldungen",
+  "nicht_uebermittelt",
+  "korrekturbedarf",
+  "ableseauftraege",
+  "dispute",
+  "pruefposten",
+  "geparkt",
+  "hinweise",
+] as const;
+
+export type QuelleId = (typeof QUELLE_IDS)[number];
+
+/**
+ * The sources whose items do not offer „Warum?", each with why. „Warum?" asks
+ * the desk-assistant why an item waits, and it can only answer from the record
+ * that put the item there — so a source whose record it does not read would
+ * get an answer about something else, said with the same confidence.
+ */
+export const OHNE_WARUM: Partial<Record<QuelleId, string>> = {
+  korrekturbedarf:
+    "Ein Bilanzierungsgebiet ist kein Anker des Assistenten, und die Netzbilanzierung liest er nicht.",
+  ableseauftraege:
+    "Der Assistent liest keine Ableseaufträge; zur MaLo nennte er Prozesse, nicht den Auftrag.",
+  pruefposten:
+    "Der Assistent liest die Rechnungsprüfung nicht; zur MaLo nennte er nicht, warum die Rechnung angehalten ist.",
+};
+
+/** The Anker „Warum?" asks about for an item, or null where it is not offered. */
+export function warumAnker(e: Eintrag): Anker | null {
+  return OHNE_WARUM[e.quelle] ? null : e.anker;
+}
 
 /** One source's answer this refresh. */
 export interface Stand {

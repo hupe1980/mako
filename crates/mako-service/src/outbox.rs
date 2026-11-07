@@ -166,12 +166,12 @@ impl Default for OutboxConfig {
             max_attempts: 5,
             backoff: vec![
                 Duration::from_secs(30),
-                Duration::from_secs(300),
-                Duration::from_secs(1800),
-                Duration::from_secs(7200),
+                Duration::from_mins(5),
+                Duration::from_mins(30),
+                Duration::from_hours(2),
             ],
-            lease: Duration::from_secs(120),
-            retention: Duration::from_secs(30 * 24 * 3600),
+            lease: Duration::from_mins(2),
+            retention: Duration::from_hours(720),
         }
     }
 }
@@ -256,7 +256,7 @@ impl OutboxWorker {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Prune delivered rows hourly so the table stays small. Skip the immediate
         // first tick — nothing is old enough at startup.
-        let mut prune = tokio::time::interval(Duration::from_secs(3600));
+        let mut prune = tokio::time::interval(Duration::from_hours(1));
         prune.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         prune.reset();
         let mut listener = match sqlx::postgres::PgListener::connect_with(&self.pool).await {
@@ -550,9 +550,9 @@ mod tests {
             c.backoff,
             vec![
                 Duration::from_secs(30),
-                Duration::from_secs(300),
-                Duration::from_secs(1800),
-                Duration::from_secs(7200),
+                Duration::from_mins(5),
+                Duration::from_mins(30),
+                Duration::from_hours(2),
             ]
         );
     }

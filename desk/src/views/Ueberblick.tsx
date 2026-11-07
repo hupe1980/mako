@@ -3,6 +3,15 @@ import { DIENST } from "../app/dienste";
 import { ROLLEN, useRolle } from "../app/rollen";
 import { call, type Service, ServiceUnavailable } from "../data/mcp";
 import { Tile, type TileState } from "../design/Tile";
+import {
+  formatAnteil,
+  formatBewertungen,
+  hilfreichText,
+  MINDEST_URTEILE,
+  vorschlagText,
+} from "../format/bilanz";
+import { formatCount } from "../format/count";
+import { DESK_ASSISTANT, useKatalog } from "./Bilanz";
 import { useDeadLetters } from "./DeadLetters";
 import { Hinweise } from "./Hinweise";
 
@@ -158,6 +167,40 @@ function AbleseauftraegeTile() {
 }
 
 /**
+ * The assistant's record as agentd's catalog states it: how often a person
+ * found its answers „hilfreich" — a share only from five verdicts, the count
+ * below — and what became of its proposals. It opens the Beipackzettel.
+ */
+function AssistentTile() {
+  const q = useKatalog();
+  const b = q.data?.find((f) => f.name === DESK_ASSISTANT)?.bilanz;
+  const state = ((): TileState => {
+    if (q.isError) return { kind: "failed", service: DIENST.agentd };
+    if (!q.data) return { kind: "loading" };
+    if (!b) return { kind: "wert", zeilen: ["Nicht aktiviert"] };
+    const fenster = `in ${formatCount(b.tage)} Tagen`;
+    const n = b.hilfreich.ja + b.hilfreich.nein;
+    const vorschlag = vorschlagText(b.vorschlag);
+    return n >= MINDEST_URTEILE
+      ? {
+          kind: "wert",
+          wert: formatAnteil(b.hilfreich.ja, n),
+          zeilen: [`hilfreich · ${formatBewertungen(n)} ${fenster}`, vorschlag],
+        }
+      : { kind: "wert", zeilen: [`${hilfreichText(b.hilfreich)} ${fenster}`, vorschlag] };
+  })();
+  return (
+    <Tile
+      label="Assistent"
+      source={DIENST.agentd}
+      href="/assistent"
+      state={state}
+      ziel="Beipackzettel öffnen"
+    />
+  );
+}
+
+/**
  * Überblick: a few numbers for whoever answers for the Rolle — each one a
  * service's own figure, each opening the list it counts.
  */
@@ -185,6 +228,7 @@ export function UeberblickView() {
           </>
         )}
         {rolle === "messstelle" && <AbleseauftraegeTile />}
+        <AssistentTile />
       </div>
     </div>
   );

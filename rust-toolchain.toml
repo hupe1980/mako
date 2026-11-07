@@ -2,7 +2,7 @@
 # Pinned to the declared MSRV, so every developer and every CI job compiles on
 # exactly the same toolchain — the pin is the MSRV check.
 #
-# 1.94 is set by `iceberg` (the edmd Iceberg cold tier), which declares
-# `rust-version = "1.94"` — the highest of any dependency.
-channel    = "1.94"
+# 1.95 is set by `meterstore` (edmd's hot/cold store), which declares
+# `rust-version = "1.95"` — the highest of any dependency.
+channel    = "1.95"
 components = ["rustfmt", "clippy"]

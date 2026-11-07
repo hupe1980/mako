@@ -132,7 +132,7 @@ or take a published code.
 ## Toolchain and Edition
 
 - Rust edition: **2024** (all crates)
-- Toolchain: **1.94** (pinned in `rust-toolchain.toml` — do not change to `stable`)
+- Toolchain: **1.95** (pinned in `rust-toolchain.toml` — do not change to `stable`)
 - Components: `rustfmt`, `clippy`
 
 ---
@@ -199,7 +199,7 @@ a cutover.
 
 ### Async
 - All async code targets **Tokio** (version 1).
-- Use async-fn-in-trait (AFIT) — stabilised at Rust 1.75, available on MSRV 1.94.
+- Use async-fn-in-trait (AFIT) — stabilised at Rust 1.75, available on MSRV 1.95.
 - Do not use `tokio::runtime::Handle::try_current()` as a runtime-detection backdoor.
 
 ### Types

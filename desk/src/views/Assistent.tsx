@@ -1,12 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { Switch } from "react-aria-components";
-import { dienstVon } from "../app/dienste";
-import { useRolle } from "../app/rollen";
-import { type Faehigkeit, katalog } from "../data/agent";
+import { DIENST, dienstVon } from "../app/dienste";
+import type { Bilanz, Faehigkeit } from "../data/agent";
 import { Icon } from "../design/Icon";
 import { EmptyState, Notice, Panel } from "../design/Panel";
+import {
+  entschieden,
+  hilfreichText,
+  vorschlagAufschluesselung,
+  vorschlagText,
+} from "../format/bilanz";
 import { formatCount } from "../format/count";
+import { useKatalog } from "./Bilanz";
 
 function Merkmal({ ok, children }: { ok: boolean; children: ReactNode }) {
   return (
@@ -36,6 +41,40 @@ function modell(m: string | null): string {
   if (!m) return "regelbasiert, kein Modell";
   const [anbieter, name] = m.split("/");
   return name ? `${name} · ${anbieter}` : m;
+}
+
+/**
+ * What the skill's runs came to in agentd's window: how many ran, how often a
+ * person found the answer „hilfreich", what became of its proposals — the
+ * record a person weighs a proposal by, as agentd counted it.
+ */
+function Record({ b }: { b: Bilanz }) {
+  const n = entschieden(b.vorschlag);
+  return (
+    <section aria-label={`Bilanz der letzten ${formatCount(b.tage)} Tage`}>
+      <h3 className="m-0 mb-1.5 text-caption font-semibold tracking-wide text-text-2 uppercase">
+        In {formatCount(b.tage)} Tagen
+      </h3>
+      <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-body">
+        <dt className="text-text-2">Läufe</dt>
+        <dd className="m-0 text-text tabular-nums">
+          {formatCount(b.laeufe)}
+          {b.offen > 0 && <span className="text-text-2"> · {formatCount(b.offen)} laufen</span>}
+        </dd>
+        <dt className="text-text-2">Hilfreich</dt>
+        <dd className="m-0 text-text">{hilfreichText(b.hilfreich)}</dd>
+        <dt className="text-text-2">Vorschläge</dt>
+        <dd className="m-0 text-text">
+          {vorschlagText(b.vorschlag)}
+          {n > 0 && (
+            <span className="block text-caption text-text-2">
+              {vorschlagAufschluesselung(b.vorschlag)}
+            </span>
+          )}
+        </dd>
+      </dl>
+    </section>
+  );
 }
 
 function Karte({ f }: { f: Faehigkeit }) {
@@ -84,6 +123,11 @@ function Karte({ f }: { f: Faehigkeit }) {
           </>
         )}
       </dl>
+      {f.bilanz && (
+        <div className="border-t border-separator pt-3">
+          <Record b={f.bilanz} />
+        </div>
+      )}
       <p className="m-0 mt-auto font-mono text-caption text-text-2">
         {f.name} · v{f.version ?? "?"}
       </p>
@@ -93,17 +137,13 @@ function Karte({ f }: { f: Faehigkeit }) {
 
 /**
  * Assistent: the Beipackzettel of every skill — what it is for, what it may
- * read, where its model runs, whether it can change anything — read off the
- * manifests agentd runs, so the page cannot disagree with them.
+ * read, where its model runs, whether it can change anything, and how its
+ * last 30 days went — read off the manifests agentd runs and the record it
+ * keeps, so the page cannot disagree with them.
  */
 export function AssistentView() {
-  const { rolle } = useRolle();
   const [nurAktive, setNurAktive] = useState(true);
-  const list = useQuery({
-    queryKey: [rolle, "agentd", "katalog"],
-    queryFn: katalog,
-    staleTime: 300_000,
-  });
+  const list = useKatalog();
   const shown = (list.data ?? []).filter((f) => !nurAktive || f.aktiv);
   const alleLesen = (list.data ?? []).every((f) => f.nur_lesend);
 
@@ -113,8 +153,8 @@ export function AssistentView() {
         <div className="flex-1">
           <h1 className="m-0 text-large font-bold tracking-tight">Assistent</h1>
           <p className="m-0 mt-1 text-callout text-text-2">
-            Was jede Fähigkeit liest, womit sie denkt und was sie tun darf — aus ihrer geprüften
-            Beschreibung.
+            Was jede Fähigkeit liest, womit sie denkt, was sie tun darf und wie oft sie half — aus
+            ihrer geprüften Beschreibung und dem, was der {DIENST.agentd} über ihre Läufe festhält.
           </p>
         </div>
         <Switch

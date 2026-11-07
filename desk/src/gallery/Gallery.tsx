@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { ROLLEN, type Rolle } from "../app/rollen";
+import type { Answer, Bilanz, Vorschlag } from "../data/agent";
 import type { GeparkteBuchung } from "../data/gen/accountingd";
 import { Abgelehnt } from "../data/rechnung";
 import { AiNote } from "../design/AiNote";
@@ -14,6 +15,7 @@ import { Tile } from "../design/Tile";
 import type { BusinessDate, Instant } from "../format/brands";
 import { epochMs } from "../format/date";
 import { GeparktEntscheiden } from "../views/Buchungen";
+import { WarumAntwort } from "../views/Warum";
 
 // Every control in every state, in both appearances side by side: the Desk's
 // visual regression fixture, and the page a design change is reviewed on.
@@ -34,6 +36,66 @@ const GEPARKT: GeparkteBuchung = {
   hinweis: "Die Periode ist festgeschrieben. Auf ein Datum im ersten offenen Monat neu buchen.",
   vorschlag_datum: "2026-11-01" as BusinessDate,
   seit: at("2026-11-03T07:00:00Z"),
+};
+
+const BILANZ: Bilanz = {
+  tage: 30,
+  laeufe: 17,
+  offen: 1,
+  abgeschlossen: { succeeded: 16 },
+  hilfreich: { ja: 6, nein: 1 },
+  vorschlag: { sent: 14, edited: 2, dismissed: 1 },
+};
+
+/** A proposal agentd prepared, as `/vorschlaege` answers it. */
+const wartend = (run: string, v: Vorschlag | null, status = "succeeded"): Answer => ({
+  run,
+  status,
+  disclosure: "AI-generated.",
+  saetze: [],
+  vorschlag: v,
+  schritte: [],
+  hilfreich: null,
+});
+
+const NEU_BUCHEN = wartend("r-g1", {
+  aktion: "neu_buchen",
+  buchungsdatum: "2026-11-01",
+  grund: null,
+  antwortcode: null,
+  befund: null,
+  begruendung: "Der Oktober ist festgeschrieben; der erste offene Tag ist der 01.11.2026.",
+  quelle: "accountingd/get_parked_booking",
+  belegt: true,
+});
+
+const VERWERFEN = wartend("r-g2", {
+  aktion: "verwerfen",
+  buchungsdatum: null,
+  grund: "R-2026-0815 ist am 14.10.2026 bereits gebucht.",
+  antwortcode: null,
+  befund: null,
+  begruendung: "Das Konto führt R-2026-0815 mit 9,00 € am 14.10.2026.",
+  quelle: "accountingd/list_ledger",
+  belegt: false,
+});
+
+const WARUM_ANTWORT = {
+  ...wartend("r-w", null),
+  saetze: [
+    {
+      text: "Das Hauptbuch hat die Rechnung R-2026-0815 für den 31.10.2026 abgelehnt.",
+      quelle: "accountingd/get_parked_booking",
+      belegt: true,
+    },
+    {
+      text: "Neu gebucht werden kann sie ab dem 01.11.2026.",
+      quelle: "accountingd/get_parked_booking",
+      belegt: false,
+    },
+    { text: "Entscheiden Sie: neu buchen oder verwerfen.", quelle: null, belegt: false },
+  ],
+  schritte: [{ quelle: "accountingd/get_parked_booking", fertig: true }],
 };
 
 function Specimen({ title, children }: { title: string; children: ReactNode }) {
@@ -119,6 +181,7 @@ function Specimens() {
         <Kbd>K</Kbd>
         <Kbd>Space</Kbd>
         <Kbd>⌃1</Kbd>
+        <Kbd>?</Kbd>
       </Specimen>
 
       <Specimen title="Rollen">
@@ -160,10 +223,75 @@ function Specimens() {
             href="/prozess"
             state={{ kind: "failed", service: "Marktkommunikation" }}
           />
+          <Tile
+            label="Assistent"
+            source="Assistent"
+            href="/assistent"
+            ziel="Beipackzettel öffnen"
+            state={{
+              kind: "wert",
+              wert: "86 %",
+              zeilen: ["hilfreich · 7 Bewertungen in 30 Tagen", "14 von 17 Vorschlägen übernommen"],
+            }}
+          />
+          <Tile
+            label="Assistent"
+            source="Assistent"
+            href="/assistent"
+            ziel="Beipackzettel öffnen"
+            state={{
+              kind: "wert",
+              zeilen: ["2 Bewertungen in 30 Tagen", "Noch kein Vorschlag entschieden"],
+            }}
+          />
+        </div>
+      </Specimen>
+
+      <Specimen title="Warum?">
+        <div className="grid w-full gap-3">
+          <WarumAntwort stand={{ kind: "liest", schritte: [] }} />
+          <WarumAntwort
+            stand={{
+              kind: "liest",
+              schritte: [
+                { quelle: "accountingd/get_parked_booking", fertig: true },
+                { quelle: "accountingd/list_ledger", fertig: false },
+              ],
+            }}
+          />
+          <WarumAntwort stand={{ kind: "antwort", a: WARUM_ANTWORT }} />
+          <WarumAntwort
+            stand={{ kind: "antwort", a: { ...WARUM_ANTWORT, status: "failed" } }}
+            onNochmal={() => undefined}
+          />
+          <WarumAntwort
+            stand={{
+              kind: "fehler",
+              text: "Der Assistent ist nicht erreichbar. Alles andere im Desk funktioniert weiter.",
+            }}
+          />
         </div>
       </Specimen>
       <Specimen title="Geparkte Buchung">
         <div className="grid w-full gap-3">
+          <GeparktEntscheiden
+            b={GEPARKT}
+            onDone={() => undefined}
+            vorschlag={NEU_BUCHEN}
+            bilanz={BILANZ}
+          />
+          <GeparktEntscheiden
+            b={GEPARKT}
+            onDone={() => undefined}
+            vorschlag={VERWERFEN}
+            bilanz={{ ...BILANZ, vorschlag: { sent: 2 } }}
+          />
+          <GeparktEntscheiden
+            b={GEPARKT}
+            onDone={() => undefined}
+            vorschlag={wartend("r-g3", null, "running")}
+            bilanz={BILANZ}
+          />
           <GeparktEntscheiden b={GEPARKT} onDone={() => undefined} />
           <GeparktEntscheiden
             b={GEPARKT}

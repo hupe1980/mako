@@ -4435,7 +4435,10 @@ async fn the_runtime_role_cannot_change_the_journal() {
         .await
         .unwrap();
     for grant in accountingd::ledger::runtime_grants("accountingd_app") {
-        sqlx::query(&grant).execute(&owner).await.unwrap();
+        sqlx::query(mako_service::sql::dynamic(grant))
+            .execute(&owner)
+            .await
+            .unwrap();
     }
 
     let app_url = url.replace("postgres:postgres@", "accountingd_app:app@");
@@ -4477,4 +4480,52 @@ async fn the_runtime_role_cannot_change_the_journal() {
     .unwrap();
     assert_eq!(owned, 0, "the runtime role owns no ledger table");
     assert!(app.audit().await.is_ok(), "the books still audit clean");
+}
+
+/// A ledger line names the Beleg its booking cites, so a duplicate shows from
+/// the ledger read itself (M74).
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_ledger_line_carries_its_beleg() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq_malo();
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "RECHNUNG",
+        900,
+        &uniq("ce"),
+        None,
+        Some("RE-2026-0815"),
+        date!(2026 - 03 - 02),
+        date!(2026 - 03 - 02),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let window = pg::list_ledger(
+        &ledger,
+        &pool,
+        TENANT,
+        "LF1",
+        &malo,
+        &doubleentry::BalanceQuery::all(),
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(window.lines[0].beleg.as_deref(), Some("RE-2026-0815"));
+    let parked = accountingd::booking::parked_one(&ledger, &pool, TENANT, "no-such-key")
+        .await
+        .unwrap();
+    assert!(parked.is_none(), "an unknown key is not a parked booking");
 }

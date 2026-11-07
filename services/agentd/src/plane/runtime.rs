@@ -425,6 +425,10 @@ pub struct Vorschlag {
     /// For a Disput: the checker finding the proposal rests on, by its `art`
     /// as invoicd names it (`TariffDeviation`, …).
     pub befund: Option<String>,
+    /// For a Buchung `neu_buchen`: the date to book on, ISO.
+    pub buchungsdatum: Option<String>,
+    /// For a Buchung `verwerfen`: the reason the booking is dropped.
+    pub grund: Option<String>,
     pub begruendung: String,
     /// The call the Begründung rests on, `server/tool`.
     pub quelle: Option<String>,
@@ -461,6 +465,53 @@ pub const HILFREICH: &str = "hilfreich";
 
 /// The metric what became of a proposed decision is recorded under.
 pub const VORSCHLAG: &str = "vorschlag";
+
+/// The window a skill's record covers.
+pub const BILANZ_TAGE: u32 = 30;
+
+/// What a skill's runs admitted in the last [`BILANZ_TAGE`] days came to —
+/// agentplane's track record, never a count of mako's own.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Bilanz {
+    /// The window, in days.
+    pub tage: u32,
+    /// Runs admitted.
+    pub laeufe: u64,
+    /// Runs still working.
+    pub offen: u64,
+    /// Concluded runs by outcome.
+    pub abgeschlossen: std::collections::BTreeMap<String, u64>,
+    /// „Hilfreich?" verdicts: `ja`, `nein`.
+    pub hilfreich: Urteile,
+    /// What became of the proposals, by `sent` / `edited` / `dismissed`.
+    pub vorschlag: std::collections::BTreeMap<String, u64>,
+}
+
+/// Yes/no verdicts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Urteile {
+    pub ja: u64,
+    pub nein: u64,
+}
+
+impl From<&agentplane::core::Track> for Bilanz {
+    fn from(t: &agentplane::core::Track) -> Self {
+        let metric = |m: &str| t.metrics.get(m);
+        Self {
+            tage: BILANZ_TAGE,
+            laeufe: t.admitted,
+            offen: t.open(),
+            abgeschlossen: t.outcomes.clone(),
+            hilfreich: metric(HILFREICH).map_or_else(Urteile::default, |m| Urteile {
+                ja: m.passed,
+                nein: m.failed,
+            }),
+            vorschlag: metric(VORSCHLAG)
+                .map(|m| m.labels.clone())
+                .unwrap_or_default(),
+        }
+    }
+}
 
 /// What a person says about a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1234,6 +1285,25 @@ impl Plane {
                 Err(BewertungError::NichtBewertbar(why))
             }
             Err(e) => Err(BewertungError::Journal(e.to_string())),
+        }
+    }
+
+    /// What `name`'s runs admitted in the [`BILANZ_TAGE`] days before `bis`
+    /// came to, from agentplane's track record; `None` for a skill not
+    /// activated here, or a journal that could not be read.
+    pub async fn bilanz(&self, name: &str, bis: time::OffsetDateTime) -> Option<Bilanz> {
+        let route = self.router.routes.iter().find(|r| r.name == name)?;
+        let seit = bis - time::Duration::days(i64::from(BILANZ_TAGE));
+        match self
+            .runtime
+            .track_record(&route.capability, seit..bis)
+            .await
+        {
+            Ok(record) => Some(Bilanz::from(&record.total())),
+            Err(e) => {
+                tracing::warn!(skill = name, error = %e, "agentd: track record unreadable");
+                None
+            }
         }
     }
 
@@ -2020,6 +2090,15 @@ fn vorschlag(
         .as_str()
         .filter(|b| !b.is_empty())
         .map(str::to_owned);
+    let text = |field: &str| {
+        raw[field]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+    };
+    let buchungsdatum = text("buchungsdatum");
+    let grund = text("grund");
     let satz = super::beleg::Satz {
         text: raw["begruendung"].as_str()?.to_owned(),
         cites: raw["quelle"].as_str().map(str::to_owned),
@@ -2032,12 +2111,22 @@ fn vorschlag(
         super::vorschlag::Art::Disput => befund
             .as_deref()
             .is_some_and(|b| step.is_some_and(|o| nennt(o, b))),
+        // A rebooking's date is one the cited read names — the service's first
+        // open day — and a discard carries its reason.
+        super::vorschlag::Art::Buchung => match aktion {
+            "neu_buchen" => buchungsdatum
+                .as_deref()
+                .is_some_and(|d| step.is_some_and(|o| nennt(o, d))),
+            _ => grund.is_some(),
+        },
     };
     let belegt = super::beleg::belegt(&satz, step) && befund_belegt;
     Some(Vorschlag {
         aktion: aktion.to_owned(),
         antwortcode,
         befund,
+        buchungsdatum,
+        grund,
         begruendung: satz.text,
         quelle: satz.cites,
         belegt,
@@ -2123,5 +2212,47 @@ mod vorschlag_tests {
             "a finding the read does not name"
         );
         assert!(!v(None).belegt, "no finding at all");
+    }
+
+    /// A rebooking is belegt only on the date the cited read names; a discard
+    /// only with its reason.
+    #[test]
+    fn a_booking_proposal_rests_on_the_date_or_the_reason() {
+        let parked = json!({
+            "key": "rechnung:1",
+            "buchungsdatum": "2026-01-20",
+            "vorschlag_datum": "2026-02-01",
+        });
+        let outputs = std::collections::BTreeMap::from([(
+            "accountingd/get_parked_booking".to_owned(),
+            &parked,
+        )]);
+        let v = |aktion: &str, datum: Option<&str>, grund: Option<&str>| {
+            vorschlag(
+                &json!({
+                    "aktion": aktion,
+                    "antwortcode": null,
+                    "befund": null,
+                    "buchungsdatum": datum,
+                    "grund": grund,
+                    "begruendung": "Der Januar ist festgeschrieben.",
+                    "quelle": "accountingd/get_parked_booking",
+                }),
+                &outputs,
+            )
+            .expect("well-formed")
+        };
+        let neu = v("neu_buchen", Some("2026-02-01"), None);
+        assert!(neu.belegt);
+        assert_eq!(neu.buchungsdatum.as_deref(), Some("2026-02-01"));
+        assert!(
+            !v("neu_buchen", Some("2026-03-01"), None).belegt,
+            "a date the read does not name"
+        );
+        assert!(
+            !v("verwerfen", None, None).belegt,
+            "a discard without its reason"
+        );
+        assert!(v("verwerfen", None, Some("RE-1 ist gebucht")).belegt);
     }
 }

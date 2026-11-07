@@ -426,7 +426,7 @@ pub async fn answer(
     }
 }
 
-/// `?freigabe=<id>,…&disput=<id>,…` — the entries, per kind, whose waiting
+/// `?freigabe=<id>,…&disput=<id>,…&buchung=<key>,…` — the entries, per kind, whose waiting
 /// proposal is asked for.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -435,6 +435,8 @@ pub struct VorschlaegeQuery {
     pub freigabe: Option<String>,
     #[serde(default)]
     pub disput: Option<String>,
+    #[serde(default)]
+    pub buchung: Option<String>,
 }
 
 /// Ids per request — the most rows Heute shows at once.
@@ -446,7 +448,7 @@ pub type Vorschlaege = std::collections::BTreeMap<
     std::collections::BTreeMap<String, Option<crate::plane::Answer>>,
 >;
 
-/// `GET /api/v1/vorschlaege?freigabe=<id>,…&disput=<id>,…` — each entry's
+/// `GET /api/v1/vorschlaege?freigabe=<id>,…&disput=<id>,…&buchung=<key>,…` — each entry's
 /// waiting proposal, under its kind: its run's answer (`running`, or
 /// concluded with its checked `vorschlag`), or `null` where none was
 /// admitted. Read under the verb a run's answer is; it never starts a run.
@@ -470,6 +472,7 @@ pub async fn vorschlaege(
     let gefragt = [
         (Art::Freigabe, ids(q.freigabe.as_deref())),
         (Art::Disput, ids(q.disput.as_deref())),
+        (Art::Buchung, ids(q.buchung.as_deref())),
     ];
     let n: usize = gefragt.iter().map(|(_, i)| i.len()).sum();
     if n > VORSCHLAEGE_MAX {
@@ -702,16 +705,17 @@ pub async fn agents_catalog(
     if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::AGENT_LIST) {
         return refused.into_response();
     }
-    let active: Vec<String> = state
-        .plane
-        .router()
-        .routes()
-        .iter()
-        .map(|r| r.name.to_owned())
-        .collect();
-    let faehigkeiten: Vec<Faehigkeit> = crate::builtin::all()
-        .map(|def| faehigkeit(def, active.iter().any(|n| n == def.name)))
-        .collect();
+    let routes = state.plane.router().routes();
+    let bis = time::OffsetDateTime::now_utc();
+    let mut faehigkeiten = Vec::new();
+    for def in crate::builtin::all() {
+        let aktiv = routes.iter().any(|r| r.name == def.name);
+        let mut f = faehigkeit(def, aktiv);
+        if aktiv {
+            f.bilanz = state.plane.bilanz(def.name, bis).await;
+        }
+        faehigkeiten.push(f);
+    }
     Json(Katalog { faehigkeiten }).into_response()
 }
 
@@ -745,6 +749,9 @@ pub struct Faehigkeit {
     pub nur_lesend: bool,
     /// Grants that stop for a person's approval.
     pub mit_freigabe: usize,
+    /// The last 30 days, for an activated skill; `None` when it is not
+    /// activated here or the journal could not be read.
+    pub bilanz: Option<crate::plane::Bilanz>,
 }
 
 /// One tool a specialist may call.
@@ -793,6 +800,7 @@ fn faehigkeit(def: &crate::builtin::Specialist, aktiv: bool) -> Faehigkeit {
             .collect(),
         nur_lesend: tools.iter().all(|t| !t.mutates),
         mit_freigabe: tools.iter().filter(|t| t.requires_approval).count(),
+        bilanz: None,
     }
 }
 
@@ -906,7 +914,7 @@ mod tests {
         );
         assert!(desk.nur_lesend);
         assert!(desk.modell.is_some());
-        assert_eq!(desk.liest.len(), 7);
+        assert_eq!(desk.liest.len(), 9);
         assert!(
             desk.liest
                 .iter()

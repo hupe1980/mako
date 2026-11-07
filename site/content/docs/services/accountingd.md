@@ -1067,7 +1067,7 @@ service](@/docs/architecture/_index.md#what-metrics-carries-on-every-service).
 
 ## MCP server
 
-`accountingd` exposes **15 tools** at `/mcp` (Streamable HTTP 2025-11-25), the
+`accountingd` exposes **16 tools** at `/mcp` (Streamable HTTP 2025-11-25), the
 contract pinned by `services/accountingd/mcp.snapshot.json`. Every
 tool is authorized by `mcp_server::tool_action` against the Cedar action its
 REST twin enforces; a tool without a mapping is refused. An `[mcp]` key
@@ -1084,6 +1084,7 @@ authorizes as `User::"<key name>"` with the roles its `roles` list declares.
 | `list_overdue` | Overdue accounts | `read-books` |
 | `compute_bilanzielle_abgrenzung` | pRAP/aRAP for the HGB § 250 period close | `read-books` |
 | `list_parked_bookings` | Bookings the ledger refused for good, with what to do — typed (`outputSchema`), read by the Desk | `read-books` |
+| `get_parked_booking` | One parked booking by its key — what the assistant's proposal on it reads | `read-books` |
 | `list_sepa_collections` | Collections and their status | `read-banking` |
 | `update_abschlag` | Change the monthly advance | `write-account` |
 | `import_payments` | Flat bank-export import | `import-payments` |

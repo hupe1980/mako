@@ -8,7 +8,7 @@ import { ROLLEN, type Rolle, useRolle } from "../app/rollen";
 import { type Answer, type Hinweis, hinweise, type VorschlagArt, vorschlaege } from "../data/agent";
 import { abgelehntWeil, buchungsart } from "../data/buchung";
 import { call, ServiceUnavailable } from "../data/mcp";
-import type { BusinessDate, Decimal, Instant } from "../format/brands";
+import type { Decimal, Instant } from "../format/brands";
 import { formatBusinessDate, formatInstant } from "../format/date";
 import { formatCent, formatEuro } from "../format/money";
 import { ANMELDUNG_PIDS } from "../views/Lage";
@@ -102,7 +102,7 @@ function useUeberfaellig(aktiv: boolean): Stand {
     grund: p.deadline_source ?? p.family,
     frist: p.deadline_at ?? null,
     bezug: [p.process_id, ...(p.malo_id ? [p.malo_id] : [])],
-    anker: p.malo_id ? { malo: p.malo_id } : null,
+    anker: p.malo_id ? { malo: p.malo_id } : { process: p.process_id },
     ziel: { to: "/prozess", search: { key: p.malo_id ?? p.process_id } },
   }));
   return stand("ueberfaellig", "Überfällige Prozesse", q, eintraege, q.data?.saturated ?? false);
@@ -131,7 +131,7 @@ function useAnmeldungen(aktiv: boolean): Stand {
       grund: "Anmeldung wartet auf den Netzbetreiber",
       frist: p.deadline_at ?? null,
       bezug: [p.process_id, ...(p.malo_id ? [p.malo_id] : [])],
-      anker: p.malo_id ? { malo: p.malo_id } : null,
+      anker: p.malo_id ? { malo: p.malo_id } : { process: p.process_id },
       ziel: { to: "/prozess", search: { key: id } },
     };
   });
@@ -317,7 +317,7 @@ function useGeparkt(aktiv: boolean): Stand {
     grund: `${buchungsart(b.art)} ${formatCent(b.betrag_ct)} — ${abgelehntWeil(b.code)}`,
     frist: null,
     bezug: [b.malo_id],
-    anker: { malo: b.malo_id },
+    anker: { buchung: b.key },
     ziel: null,
     geparkt: b,
   }));
@@ -340,17 +340,18 @@ export function useHinweise(): { hinweise: Hinweis[]; fehler: string | null } {
 export type Wartend = Record<VorschlagArt, Map<string, Answer>>;
 
 /**
- * The proposals waiting on the Freigaben and Dispute on screen, in one read.
- * Polled while one is still being prepared or not yet admitted; quiet once
- * each has its answer. A failure shows no proposal — the decision stands on
- * its own.
+ * The proposals waiting on the Freigaben, Dispute and geparkte Buchungen on
+ * screen, in one read. Polled while one is still being prepared or not yet
+ * admitted; quiet once each has its answer. A failure shows no proposal — the
+ * decision stands on its own.
  */
 export function useVorschlaege(ids: Partial<Record<VorschlagArt, string[]>>): Wartend {
+  const { rolle } = useRolle();
   const gefragt = (Object.entries(ids) as [VorschlagArt, string[]][]).filter(
     ([, v]) => v.length > 0,
   );
   const q = useQuery({
-    queryKey: ["agentd", "vorschlaege", gefragt],
+    queryKey: [rolle, "agentd", "vorschlaege", gefragt],
     queryFn: () => vorschlaege(ids),
     enabled: gefragt.length > 0,
     retry: false,
@@ -363,8 +364,8 @@ export function useVorschlaege(ids: Partial<Record<VorschlagArt, string[]>>): Wa
       return offen ? 15_000 : false;
     },
   });
-  const m: Wartend = { freigabe: new Map(), disput: new Map() };
-  for (const art of ["freigabe", "disput"] as const)
+  const m: Wartend = { freigabe: new Map(), disput: new Map(), buchung: new Map() };
+  for (const art of ["freigabe", "disput", "buchung"] as const)
     for (const [id, a] of Object.entries(q.data?.[art] ?? {})) if (a) m[art].set(id, a);
   return m;
 }
@@ -373,6 +374,7 @@ export function useVorschlaege(ids: Partial<Record<VorschlagArt, string[]>>): Wa
 export function alsEintrag(h: Hinweis): Eintrag {
   const ziel = h.anker.find((a) => a.art !== "process")?.wert ?? h.anker[0]?.wert;
   const malo = h.anker.find((a) => a.art === "malo")?.wert;
+  const prozess = h.anker.find((a) => a.art === "process")?.wert;
   return {
     id: `hinweis:${h.task}`,
     quelle: "hinweise",
@@ -382,7 +384,7 @@ export function alsEintrag(h: Hinweis): Eintrag {
     grund: h.text,
     frist: (h.faellig as Instant | null) ?? null,
     bezug: h.anker.map((a) => a.wert),
-    anker: malo ? { malo } : null,
+    anker: malo ? { malo } : prozess ? { process: prozess } : null,
     ziel: { to: "/prozess", search: { key: ziel ?? "" } },
   };
 }
@@ -412,8 +414,9 @@ export function useBenannt(eintraege: Eintrag[], aktiv: boolean): Eintrag[] {
       titel: k.name,
       kennung: false,
       detail: [e.titel, e.detail, k.kunden_nr].filter(Boolean).join(" · "),
+      // A decision keeps its own Anker; the assistant reads the customer from it.
       anker:
-        e.anker && ("freigabe" in e.anker || "disput" in e.anker)
+        e.anker && ("freigabe" in e.anker || "disput" in e.anker || "buchung" in e.anker)
           ? e.anker
           : { kunde: k.kunden_id },
       ziel:
