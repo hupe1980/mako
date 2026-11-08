@@ -9,7 +9,7 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
-## [0.29.0] — unreleased
+## [0.29.0] — 2026-11-08
 
 ### Added
 
