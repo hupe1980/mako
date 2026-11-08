@@ -2,6 +2,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { Button as AriaButton } from "react-aria-components";
+import { entscheidbar, fokussieren, gefunden } from "../app/aktionen";
+import { Entscheidungsstand } from "../app/Entscheidungsstand";
 import { NAECHSTE, UEBERNEHMEN, VORIGE, WARUM } from "../app/keys";
 import { useRolle } from "../app/rollen";
 import { AKTION, type Answer, type Hinweis } from "../data/agent";
@@ -161,7 +163,7 @@ function Zeile({
 }) {
   const router = useRouter();
   const ai = e.quelle === "hinweise";
-  const entscheidbar = Boolean(e.freigabe || e.disput || e.pruefposten || e.geparkt);
+  const ding = entscheidbar(e);
   const anker = warumAnker(e);
   return (
     <li data-quelle={e.quelle} className="border-b border-separator last:border-b-0">
@@ -175,12 +177,12 @@ function Zeile({
             zeilen.current[index] = el;
           }}
           tabIndex={aktiv ? 0 : -1}
-          aria-expanded={entscheidbar ? offen : undefined}
+          aria-expanded={ding ? offen : undefined}
           onFocus={() => onFocus(index)}
           onClick={() => {
             // A Freigabe, a Disput, a Prüfposten and a geparkte Buchung are decided here;
             // everything else opens its view.
-            if (entscheidbar) onOeffnen(offen ? null : e.id);
+            if (ding) onOeffnen(offen ? null : e.id);
             else if (e.ziel) router.navigate(e.ziel);
           }}
           className={`focus-ring flex min-w-0 flex-1 cursor-default items-start gap-4 border-0 bg-transparent py-3 text-left outline-none ${onWarum ? "pr-3 pl-5" : "px-5"}`}
@@ -209,7 +211,8 @@ function Zeile({
             ) : (
               <span className="text-body text-text-2">keine Frist</span>
             )}
-            {entscheidbar && (
+            {ding && <Entscheidungsstand ding={ding} fehlschlag={!offen} />}
+            {ding && (
               <span className="text-caption text-accent">
                 {offen ? "schließen" : "entscheiden"}
               </span>
@@ -258,7 +261,7 @@ function Zeile({
           ))}
         </div>
       )}
-      {offen && entscheidbar && (
+      {offen && ding && (
         <div className="flex flex-col gap-3 border-t border-separator bg-fill/40 px-5 py-4">
           {e.freigabe && <Entscheiden f={e.freigabe} onDone={onEntschieden} sofort={sofort} />}
           {e.disput && <DisputEntscheiden d={e.disput} onDone={onEntschieden} sofort={sofort} />}
@@ -312,6 +315,8 @@ export function HeuteView() {
   const [offen, setOffen] = useState<string | null>(null);
   const [sofort, setSofort] = useState<string | null>(null);
   const [warum, setWarum] = useState<string | null>(null);
+  // A row the person has focused is what ⌘K opens on; before that, none is.
+  const [gefokust, setGefokust] = useState(false);
   const client = useQueryClient();
   const zeilen = useRef<(HTMLButtonElement | null)[]>([]);
   const sichtbar = eintraege.slice(0, SICHTBAR);
@@ -381,6 +386,9 @@ export function HeuteView() {
   });
 
   const fokus = sichtbar[aktiv];
+  const imBlick = gefokust && fokus ? gefunden(fokus) : null;
+  useEffect(() => fokussieren(imBlick));
+  useEffect(() => () => fokussieren(null), []);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
@@ -439,7 +447,10 @@ export function HeuteView() {
                   warum={warum === e.id && fragbar(e)}
                   onWarum={fragbar(e) ? () => setWarum(warum === e.id ? null : e.id) : null}
                   index={i}
-                  onFocus={setAktiv}
+                  onFocus={(i) => {
+                    setAktiv(i);
+                    setGefokust(true);
+                  }}
                   onOeffnen={(id) => {
                     setSofort(null);
                     setOffen(id);
@@ -476,7 +487,7 @@ export function HeuteView() {
       <p className="m-0 px-1 text-caption text-text-2">
         J K oder ↑↓ wählen · ↵ öffnet, Freigaben, Dispute, Prüfposten und geparkte Buchungen werden
         hier entschieden (A / R, U übernimmt den Vorschlag) · ? fragt, warum der gewählte Eintrag
-        hier steht · ⌘J fragt den Assistenten zum gewählten Eintrag
+        hier steht · ⌘J fragt den Assistenten zum gewählten Eintrag · ⌘K listet seine Aktionen
       </p>
     </div>
   );

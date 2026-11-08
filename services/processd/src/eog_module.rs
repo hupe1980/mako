@@ -208,13 +208,6 @@ async fn handle_gap_detected(
         );
         return Ok(());
     }
-    // Command + PID by Sparte: Strom rides gpke.eog.anmelden (55013), Gas rides
-    // geli.eog.anmelden (44013). Both spawn a GNB-initiator EoG process in makod.
-    let (eog_command, eog_pid) = match sparte {
-        mako_markt::domain::Sparte::Gas => (mako_markt::commands::GELI_EOG_ANMELDEN, 44013),
-        mako_markt::domain::Sparte::Strom => (mako_markt::commands::GPKE_EOG_ANMELDEN, 55013),
-    };
-
     // Resolve the Grundversorger (§36 Abs. 2 Feststellung).
     let gv = match marktd.get_grundversorger(nb_mp_id, sparte).await {
         Ok(Some(gv)) => gv,
@@ -243,18 +236,14 @@ async fn handle_gap_detected(
         _ => mako_fristen::heute(),
     };
 
-    let cmd = ForwardCommand {
-        marktrolle: None,
-        command: eog_command.to_owned(),
-        malo_id: Some(malo_id.to_owned()),
-        melo_id: None,
-        payload: serde_json::json!({
-            "malo_id":           malo_id,
-            "gv_mp_id":          gv.gv_mp_id,
-            "process_date":      zuordnungsbeginn.to_string(),
-            "transaktionsgrund": cfg.default_transaktionsgrund,
-        }),
-    };
+    let cmd = eog_anmelden_command(
+        sparte,
+        malo_id,
+        &gv.gv_mp_id,
+        zuordnungsbeginn,
+        &cfg.default_transaktionsgrund,
+    );
+    let (eog_command, eog_pid) = (cmd.command.clone(), eog_pid(sparte));
     makod
         .post_command(&format!("processd-eog-{tenant}-{malo_id}"), &cmd)
         .await
@@ -283,6 +272,68 @@ async fn handle_gap_detected(
         "processd EoG: dispatched EoG anmelden"
     );
     Ok(())
+}
+
+/// The PID the EoG command of `sparte` sends: 55013 (Strom) or 44013 (Gas).
+#[must_use]
+pub const fn eog_pid(sparte: mako_markt::domain::Sparte) -> u32 {
+    match sparte {
+        mako_markt::domain::Sparte::Gas => 44013,
+        mako_markt::domain::Sparte::Strom => 55013,
+    }
+}
+
+/// The makod command that assigns `malo_id` to the Grundversorger `gv_mp_id`
+/// from `zuordnungsbeginn` — `gpke.eog.anmelden` (55013) for Strom,
+/// `geli.eog.anmelden` (44013) for Gas.
+///
+/// The payload is built from the command's own type in `mako-markt`, the one
+/// makod reads it as, so the two cannot disagree on a key. It names the
+/// Marktlokation, the E/G, the dates and the Grund — makod reads the
+/// Marktlokation's Stammdaten from marktd itself.
+///
+/// The Gas Bilanzierungsbeginn is the Zuordnungsbeginn: „Eine Zuordnung einer
+/// Marktlokation durch den Netzbetreiber zur Ersatz-/Grundversorgung … ist
+/// sowohl in die Zukunft als auch in die Vergangenheit für Netznutzung und
+/// Bilanzierung möglich" (GeLi Gas 3.0 Kap. 3.3.1), so the Bilanzierung of the
+/// E/G begins with its Zuordnung rather than at the next Monatserster the
+/// Asynchronmodell of Kap. 4.6 sets for a Lieferantenwechsel.
+#[must_use]
+pub fn eog_anmelden_command(
+    sparte: mako_markt::domain::Sparte,
+    malo_id: &str,
+    gv_mp_id: &str,
+    zuordnungsbeginn: time::Date,
+    transaktionsgrund: &str,
+) -> ForwardCommand {
+    let (command, payload) = match sparte {
+        mako_markt::domain::Sparte::Strom => (
+            mako_markt::commands::GPKE_EOG_ANMELDEN,
+            serde_json::to_value(mako_markt::commands::GpkeEogAnmelden {
+                malo_id: malo_id.to_owned(),
+                gv_mp_id: gv_mp_id.to_owned(),
+                process_date: zuordnungsbeginn.to_string(),
+                transaktionsgrund: transaktionsgrund.to_owned(),
+            }),
+        ),
+        mako_markt::domain::Sparte::Gas => (
+            mako_markt::commands::GELI_EOG_ANMELDEN,
+            serde_json::to_value(mako_markt::commands::GeliEogAnmelden {
+                malo_id: malo_id.to_owned(),
+                gv_mp_id: gv_mp_id.to_owned(),
+                process_date: zuordnungsbeginn.to_string(),
+                bilanzierungsbeginn: zuordnungsbeginn.to_string(),
+                transaktionsgrund: transaktionsgrund.to_owned(),
+            }),
+        ),
+    };
+    ForwardCommand {
+        marktrolle: None,
+        command: command.to_owned(),
+        malo_id: Some(malo_id.to_owned()),
+        melo_id: None,
+        payload: payload.expect("a struct of strings serialises"),
+    }
 }
 
 /// EoG began (marktd recorded the fallback supply): promote the case.

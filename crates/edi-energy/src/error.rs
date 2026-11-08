@@ -285,6 +285,25 @@ pub enum Error {
         /// The configured limit.
         limit: usize,
     },
+
+    /// A `DTM` in DE 2379 format `303` (`CCYYMMDDHHMMZZZ`) was handed a value
+    /// that is not a minute-precise UTC instant — typically a bare `CCYYMMDD`.
+    ///
+    /// The builder refuses rather than padding it to `0000`: a process date
+    /// is the UTC instant at which the German day begins (Allgemeine
+    /// Festlegungen V6.1d Kap. 3.1 — `2300`/`2200` in Strom, `0500`/`0400` in
+    /// Gas), and UTC midnight is neither. Convert the date first —
+    /// `mako_fristen::tagesbeginn_utc` is that conversion.
+    #[error(
+        "DTM+{qualifier} is format 303 and needs a CCYYMMDDHHMM UTC instant (optionally `+00`), \
+         got {value:?}; a calendar date must be converted to the instant its day begins first"
+    )]
+    DtmNotAnInstant {
+        /// DE 2005 of the refused `DTM`.
+        qualifier: String,
+        /// The value it was handed.
+        value: String,
+    },
 }
 
 #[cfg(feature = "diagnostics")]
@@ -313,6 +332,7 @@ impl miette::Diagnostic for Error {
             Error::InterchangeRefMismatch { .. } => "edi-energy::interchange-ref-mismatch",
             Error::InterchangePartyMismatch { .. } => "edi-energy::interchange-party-mismatch",
             Error::TooManyMessages { .. } => "edi-energy::too-many-messages",
+            Error::DtmNotAnInstant { .. } => "edi-energy::dtm-not-an-instant",
         };
         Some(Box::new(code))
     }

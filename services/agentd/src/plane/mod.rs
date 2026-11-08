@@ -29,6 +29,7 @@ pub mod policy;
 pub mod providers;
 pub mod readiness;
 pub mod runtime;
+pub mod schritte;
 pub mod sweep;
 pub mod tools;
 pub mod vorschlag;
@@ -36,7 +37,7 @@ pub mod witness;
 pub use runtime::{
     Accepted, Activation, Admitted, AgentDecision, Anker, Answer, AnswerSentence, BILANZ_TAGE,
     BewertungError, Bilanz, Envelope, EraseError, HILFREICH, Hinweis, Plane, PlaneConfig,
-    Reception, Route, Router, Schritt, Stores, Urteil, Urteile, VORSCHLAG, Vorschlag,
+    Reception, Route, Router, Schritt, StoppError, Stores, Urteil, Urteile, VORSCHLAG, Vorschlag,
     VorschlagSchicksal,
 };
 

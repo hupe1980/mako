@@ -7,6 +7,7 @@
 //! | `GET` | `/api/v1/versorgung/{malo_id}` | `Option<VersorgungsStatusRecord>` |
 //! | `GET` | `/api/v1/malos/{malo_id}` | `Option<MaloTypedFields>` |
 //! | `GET` | `/api/v1/malos/{malo_id}/grid` | `Option<MaloGridRecord>` |
+//! | `GET` | `/api/v1/malos/{malo_id}/utilmd-stammdaten?stichtag=…` | `Option<MaloUtilmdStammdaten>` |
 //! | `GET` | `/api/v1/partners/{mp_id}` | `bool` (partner known) / `Option<PartnerEdi>` |
 //! | `GET` | `/api/v1/preisblaetter/{nb_mp_id}?date=…` | `Option<PreisblattNetznutzung>` |
 //! | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}?date=…` | `Option<PreisblattMessung>` |
@@ -1118,6 +1119,44 @@ impl MarktdClient {
         let resp = self
             .client
             .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/malos/{malo_id}/utilmd-stammdaten?stichtag=YYYY-MM-DD` —
+    /// the UTILMD Stammdaten of a Marktlokation on `stichtag`, as marktd holds
+    /// them.
+    ///
+    /// `None` on 404: marktd holds no Marktlokation of that ID. A fact marktd
+    /// does not hold is `None` inside the record, never filled.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on network or non-404 HTTP errors,
+    /// [`MarktdClientError::Deserialization`] on a body that is not the record.
+    pub async fn get_utilmd_stammdaten(
+        &self,
+        malo_id: &str,
+        stichtag: time::Date,
+    ) -> Result<Option<crate::utilmd_stammdaten::MaloUtilmdStammdaten>, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/malos/{}/utilmd-stammdaten",
+            self.base_url, malo_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("stichtag", stichtag.to_string())])
             .bearer_auth(self.api_key.expose_secret())
             .send()
             .await?;

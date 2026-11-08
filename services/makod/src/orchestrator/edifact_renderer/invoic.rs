@@ -95,7 +95,8 @@ pub(super) fn render_remadv(
     let doc_date = p
         .get("document_date")
         .and_then(|v| v.as_str())
-        .map(normalise_date);
+        .map(|d| dokumentdatum_303(mt, d))
+        .transpose()?;
     let message_ref = p
         .get("message_ref")
         .and_then(|v| v.as_str())
@@ -137,7 +138,9 @@ pub(super) fn render_remadv(
             rechnungsnummer: field("rechnungsnummer"),
             faelliger_betrag: field("faelliger_betrag"),
             ueberweisungsbetrag: field("ueberweisungsbetrag"),
-            rechnungsdatum: normalise_date(&field("rechnungsdatum")),
+            // `SG5 DTM+137` is `303`: the invoice's own document date, a
+            // calendar date becoming the instant that German day begins.
+            rechnungsdatum: dokumentdatum_303(mt, &field("rechnungsdatum"))?,
         });
     }
     // `SG10 DLI` + `SG12 AJT` — the Positionsebene. `invoicd` puts every

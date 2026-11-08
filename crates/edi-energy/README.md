@@ -47,11 +47,12 @@ let bytes = UtilmdBuilder::new(Release::new("S2.2"))
     .pruefidentifikator(Pruefidentifikator::new(55001)?)
     .sender("4012345000023")
     .receiver("9900357000004")
-    .document_date("20261001")
+    .document_date("202610010800")   // DTM+137 — a UTC instant
     // `IDE+24` DE 7402 is a **Vorgangsnummer**, never a Lokations-ID.
     .transaction("VORGANG-0001")
-    // `SG4 DTM+92` „Datum Vertragsbeginn" — the Anmeldung's process date.
-    .date(dtm::BEGINN_ZUM, "20261101")
+    // `SG4 DTM+92` „Datum Vertragsbeginn" — the Anmeldung's process date: the
+    // UTC instant 01.11.2026 00:00 MEZ begins at (mako_fristen::tagesbeginn_utc).
+    .date(dtm::BEGINN_ZUM, "202610312300")
     .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(transaktionsgrund::WECHSEL))
     // `SG8 SEQ+Z79` Produktpaket — Muss on an Anmeldung: without a Bilanzkreis
     // the NB cannot assign the Marktlokation (UTILMD AHB Strom 2.2 Kap. 5.3).

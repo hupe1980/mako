@@ -788,280 +788,35 @@ pub async fn ingest_webhook(
             StatusCode::OK.into_response()
         }
 
-        // ── EEG Einspeisevergütung (einsd) ────────────────────────────────────
-        // de.eeg.verguetung.berechnet: fixed-rate EEG settlement → EEG_GUTSCHRIFT credit.
-        // When cfg.eeg.auto_payout = true: also auto-generates pain.001 SEPA Credit Transfer
-        // (SCT Inst or SCT CORE per cfg.eeg.sepa_instant) for immediate payout to plant operator.
+        // ── EEG settlement receipts (einsd) ──────────────────────────────────
+        // de.eeg.verguetung.berechnet  → EEG_GUTSCHRIFT, paid out when
+        //                                [eeg] auto_payout = true
+        // de.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE
+        // Both book what the receipt changes its chain by, never a correction's
+        // whole amount again — see `crate::eeg_auszahlung`.
         mako_events::eeg::VERGUETUNG_BERECHNET => {
-            // The Marktlokation comes from `data.malo_id`, never from `subject`:
-            // einsd sets the CloudEvent subject to the **Technische Ressource**
-            // (`tr_id`) and carries the MaLo in the payload. Reading `subject`
-            // opened a phantom Kontokorrent keyed on a TR-ID, so the plant's real
-            // account never saw the credit — balance, aging, Verzug and every
-            // Mahnwesen decision were computed without it, and the IBAN lookup
-            // `WHERE malo_id = $1` missed, silently skipping the SEPA payout.
-            let Some(malo_id) = data
-                .and_then(|d| d.get("malo_id"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-            else {
-                tracing::error!(
-                    ce_type = %ce_type,
-                    "EEG settlement event carries no data.malo_id — refusing rather \
-                     than booking the credit against an account keyed on nothing"
-                );
-                return ApiError::unprocessable("EEG settlement event carries no data.malo_id")
-                    .into_response();
-            };
-            let tr_id = data
-                .and_then(|d| d.get("tr_id"))
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
-            let billing_year: i16 = data
-                .and_then(|d| d.get("billing_year"))
-                .and_then(|v| v.as_i64())
-                .map(|y| y as i16)
-                .unwrap_or_else(|| today.year() as i16);
-            let billing_month: i16 = data
-                .and_then(|d| d.get("billing_month"))
-                .and_then(|v| v.as_i64())
-                .map(|m| m as i16)
-                .unwrap_or_else(|| today.month() as i16);
-            // Bank fields forwarded by einsd (added in NBA #8 hard cut)
-            let bank_iban = data
-                .and_then(|d| d.get("bank_iban"))
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
-            let bank_bic = data
-                .and_then(|d| d.get("bank_bic"))
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
-            let zahlungsempfaenger = data
-                .and_then(|d| d.get("zahlungsempfaenger"))
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
-
-            let amount_ct: i64 = data
-                .and_then(|d| d.get("settlement_eur"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| {
-                    use rust_decimal::Decimal;
-                    use std::str::FromStr;
-                    Decimal::from_str(s).ok().map(|d| {
-                        -(d * Decimal::from(100))
-                            .round_dp_with_strategy(
-                                0,
-                                rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                            )
-                            .to_string()
-                            .parse::<i64>()
-                            .unwrap_or(0)
-                    })
-                })
-                .unwrap_or(0);
-            // A nil account is not "nothing to do" — the entry below is posted
-            // against this row, so a failed upsert has to earn a redelivery
-            // rather than a 200 for a credit that was never booked.
-            let account_id = match upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await {
-                Ok(id) => id,
-                Err(e) => {
-                    return ApiError::internal(e.context(format!(
-                        "account upsert for MaLo {malo_id} — returning 500 so the sender redelivers"
-                    )))
-                    .into_response();
-                }
-            };
-            if amount_ct != 0 {
-                if let Err(e) = crate::pg::post_entry(
-                    &ledger,
-                    &pool,
-                    &cfg.tenant,
-                    malo_id,
-                    &cfg.tenant,
-                    "EEG_GUTSCHRIFT",
-                    amount_ct,
-                    &ce_id,
-                    Some(&ce_id),
-                    tr_id.as_deref(),
-                    today,
-                    today,
-                    Some("EEG Einspeisevergütung §21 EEG"),
-                    None,
-                )
-                .await
-                {
-                    return ledger_failure(e.context(format!(
-                        "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
-                    )))
-                    .into_response();
-                }
-
-                // ── SCT Inst / SCT CORE auto-payout ─────────────────────────────
-                // Created INLINE, not in a detached task: a spawn would ACK the CE
-                // 200 and swallow any payout failure, leaving a booked credit with
-                // no payout order and no redelivery. Inline, the order creation is
-                // part of the request; both the credit and the order are idempotent
-                // (by CE id / EndToEndId), so a failure is
-                // logged and safely retried on redelivery or via POST /eeg/payouts/run.
-                if cfg.eeg.auto_payout {
-                    // Creditor IBAN: CE-supplied bank_iban first, else the account's
-                    // stored zahlungsinformation.
-                    let creditor = match bank_iban.clone() {
-                        Some(iban) => Some((
-                            iban,
-                            zahlungsempfaenger
-                                .clone()
-                                .unwrap_or_else(|| "EEG Einspeiser".to_owned()),
-                        )),
-                        None => {
-                            let zi: Option<serde_json::Value> = sqlx::query(
-                                "SELECT zahlungsinformation FROM accounts \
-                                 WHERE malo_id = $1 AND tenant = $2",
-                            )
-                            .bind(malo_id)
-                            .bind(&cfg.tenant)
-                            .fetch_optional(&pool)
-                            .await
-                            .ok()
-                            .flatten()
-                            .and_then(|r| {
-                                use sqlx::Row;
-                                r.try_get("zahlungsinformation").unwrap_or(None)
-                            });
-                            zi.as_ref()
-                                .and_then(|z| z.get("bankverbindung"))
-                                .and_then(|b| b.get("iban"))
-                                .and_then(|v| v.as_str())
-                                .map(str::to_owned)
-                                .map(|iban| {
-                                    let name = zi
-                                        .as_ref()
-                                        .and_then(|z| z.get("kontoinhaber"))
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("EEG Einspeiser")
-                                        .to_owned();
-                                    (iban, name)
-                                })
-                        }
-                    };
-                    let _ = bank_bic; // carried in pain.001 only when present in the CE
-
-                    if let Some((creditor_iban, creditor_name)) = creditor {
-                        // `Cdtr/PstlAdr` — the plant operator's own address.
-                        // BO4E's Zahlungsinformation COM carries no address, so
-                        // it comes from the account's master data.
-                        let creditor_address =
-                            crate::pg::fetch_account_by_id(&pool, account_id, &cfg.tenant)
-                                .await
-                                .ok()
-                                .flatten()
-                                .map(|a| a.postal_address())
-                                .unwrap_or_default();
-                        create_eeg_payout_order(
-                            &cfg,
-                            &pool,
-                            EegPayoutParams {
-                                malo_id,
-                                account_id,
-                                amount_ct: amount_ct.unsigned_abs() as i64,
-                                creditor_iban: &creditor_iban,
-                                creditor_name: &creditor_name,
-                                creditor_address,
-                                tr_id: tr_id.as_deref(),
-                                billing_year,
-                                billing_month,
-                                source_ce_id: Some(&ce_id),
-                            },
-                        )
-                        .await;
-                    } else {
-                        tracing::info!(
-                            malo_id,
-                            "accountingd: auto_payout=true but no creditor IBAN available — \
-                             set bank_iban in the EEG plant record or PUT zahlungsinformation"
-                        );
-                    }
-                }
-            }
-            StatusCode::OK.into_response()
+            ingest_eeg_beleg(
+                &pool,
+                &ledger,
+                &cfg,
+                &ce,
+                ce_id,
+                crate::eeg_auszahlung::Art::Verguetung,
+                today,
+            )
+            .await
         }
-
-        // ── EEG Direktvermarktung Marktprämie (einsd) ─────────────────────────
-        // de.eeg.marktpraemie.berechnet: Direktvermarktung / Ausschreibung settlement.
-        // Gleitende Marktprämie (§20 EEG) + Managementprämie → EEG_MARKTPRAEMIE credit.
         mako_events::eeg::MARKTPRAEMIE_BERECHNET => {
-            // The Marktlokation comes from `data.malo_id`, never from `subject`:
-            // einsd sets the CloudEvent subject to the **Technische Ressource**
-            // (`tr_id`) and carries the MaLo in the payload. Reading `subject`
-            // opened a phantom Kontokorrent keyed on a TR-ID, so the plant's real
-            // account never saw the credit — balance, aging, Verzug and every
-            // Mahnwesen decision were computed without it, and the IBAN lookup
-            // `WHERE malo_id = $1` missed, silently skipping the SEPA payout.
-            let Some(malo_id) = data
-                .and_then(|d| d.get("malo_id"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-            else {
-                tracing::error!(
-                    ce_type = %ce_type,
-                    "EEG settlement event carries no data.malo_id — refusing rather \
-                     than booking the credit against an account keyed on nothing"
-                );
-                return ApiError::unprocessable("EEG settlement event carries no data.malo_id")
-                    .into_response();
-            };
-            let amount_ct: i64 = data
-                .and_then(|d| d.get("settlement_eur"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| {
-                    use rust_decimal::Decimal;
-                    use std::str::FromStr;
-                    Decimal::from_str(s).ok().map(|d| {
-                        -(d * Decimal::from(100))
-                            .round_dp_with_strategy(
-                                0,
-                                rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                            )
-                            .to_string()
-                            .parse::<i64>()
-                            .unwrap_or(0)
-                    })
-                })
-                .unwrap_or(0);
-            if !malo_id.is_empty() && amount_ct != 0 {
-                // The entry below is posted against this row: swallowing a
-                // failed upsert would answer 200 for a payment never booked.
-                if let Err(e) = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await {
-                    return ApiError::internal(e.context(format!(
-                        "account upsert for MaLo {malo_id} — returning 500 so the sender redelivers"
-                    )))
-                    .into_response();
-                }
-                if let Err(e) = crate::pg::post_entry(
-                    &ledger,
-                    &pool,
-                    &cfg.tenant,
-                    malo_id,
-                    &cfg.tenant,
-                    "EEG_MARKTPRAEMIE",
-                    amount_ct,
-                    &ce_id,
-                    Some(&ce_id),
-                    None,
-                    today,
-                    today,
-                    Some("EEG Direktvermarktung Marktprämie §20 EEG"),
-                    None,
-                )
-                .await
-                {
-                    return ledger_failure(e.context(format!(
-                        "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
-                    )))
-                    .into_response();
-                }
-            }
-            StatusCode::OK.into_response()
+            ingest_eeg_beleg(
+                &pool,
+                &ledger,
+                &cfg,
+                &ce,
+                ce_id,
+                crate::eeg_auszahlung::Art::Marktpraemie,
+                today,
+            )
+            .await
         }
 
         _ => {
@@ -1069,6 +824,235 @@ pub async fn ingest_webhook(
             StatusCode::OK.into_response()
         }
     }
+}
+
+/// An EEG settlement receipt CloudEvent, read into a [`crate::eeg_auszahlung::Beleg`].
+///
+/// Every field the chain rules need is required: a receipt without its
+/// plant, billing month, receipt id or issue time cannot be placed in its
+/// chain, and one without an amount cannot be booked — each is refused rather
+/// than defaulted (a defaulted month books the receipt into the wrong chain).
+fn eeg_beleg_aus(
+    ce: &serde_json::Value,
+    ce_id: &str,
+    art: crate::eeg_auszahlung::Art,
+    account_id: uuid::Uuid,
+) -> Result<crate::eeg_auszahlung::Beleg, String> {
+    use rust_decimal::prelude::ToPrimitive as _;
+    let data = ce.get("data").ok_or("the event carries no data")?;
+    let text = |k: &str| {
+        data.get(k)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let pflicht = |k: &str| text(k).ok_or_else(|| format!("data.{k} is missing"));
+    let uuid = |k: &str| -> Result<Option<uuid::Uuid>, String> {
+        match data.get(k) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(v) => v
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .map(Some)
+                .ok_or_else(|| format!("data.{k} is not a UUID")),
+        }
+    };
+    let smallint = |k: &str| {
+        data.get(k)
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|v| i16::try_from(v).ok())
+            .ok_or_else(|| format!("data.{k} is missing or not a year/month"))
+    };
+    let billing_month = smallint("billing_month")?;
+    if !(1..=12).contains(&billing_month) {
+        return Err("data.billing_month must be 1–12".into());
+    }
+    let settlement: rust_decimal::Decimal = pflicht("settlement_eur")?
+        .parse()
+        .map_err(|_| "data.settlement_eur is not a decimal amount".to_owned())?;
+    // EUR → ct, kaufmännisch (DIN 1333).
+    let anspruch_ct = (settlement * rust_decimal::Decimal::ONE_HUNDRED)
+        .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        .to_i64()
+        .ok_or("data.settlement_eur is out of range")?;
+    let beleg_zeit = ce
+        .get("time")
+        .and_then(|v| v.as_str())
+        .and_then(|t| {
+            time::OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339).ok()
+        })
+        .ok_or("the event carries no RFC 3339 time — the receipt cannot be ordered in its chain")?;
+    Ok(crate::eeg_auszahlung::Beleg {
+        source_ce_id: ce_id.to_owned(),
+        art,
+        receipt_id: uuid("receipt_id")?.ok_or("data.receipt_id is missing")?,
+        korrektur_von: uuid("korrektur_von")?,
+        tr_id: pflicht("tr_id")?,
+        malo_id: pflicht("malo_id")?,
+        account_id,
+        billing_year: smallint("billing_year")?,
+        billing_month,
+        anspruch_ct,
+        beleg_zeit,
+        bank_iban: text("bank_iban"),
+        zahlungsempfaenger: text("zahlungsempfaenger"),
+    })
+}
+
+/// `de.eeg.verguetung.berechnet` / `de.eeg.marktpraemie.berechnet`: record the
+/// receipt in its chain, book what it changes the chain by, and — for a
+/// Vergütung under `[eeg] auto_payout` — pay what the chain has outstanding.
+///
+/// Every failure answers an error so the sender redelivers: a refused payload
+/// `422` (einsd dead-letters it), anything else `500`. A redelivery is safe —
+/// the receipt, its booking and the payout are each idempotent — so a payout
+/// that could not be ordered is retried with the event, and
+/// `POST /api/v1/eeg/payouts/run` pays the same outstanding difference.
+async fn ingest_eeg_beleg(
+    pool: &PgPool,
+    ledger: &crate::ledger::PgLedger,
+    cfg: &AccountingdConfig,
+    ce: &serde_json::Value,
+    ce_id: String,
+    art: crate::eeg_auszahlung::Art,
+    today: time::Date,
+) -> axum::response::Response {
+    // The Marktlokation comes from `data.malo_id`, never from `subject`: einsd
+    // sets the subject to the Technische Ressource (`tr_id`). Keyed on the
+    // subject, the credit would open a phantom Kontokorrent the plant's real
+    // account never sees.
+    let Some(malo_id) = ce
+        .get("data")
+        .and_then(|d| d.get("malo_id"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    else {
+        return ApiError::unprocessable("EEG settlement event carries no data.malo_id")
+            .into_response();
+    };
+    let account_id = match upsert_account(pool, malo_id, &cfg.tenant, &cfg.tenant).await {
+        Ok(id) => id,
+        Err(e) => {
+            return ApiError::internal(e.context(format!(
+                "account upsert for MaLo {malo_id} — returning 500 so the sender redelivers"
+            )))
+            .into_response();
+        }
+    };
+    let beleg = match eeg_beleg_aus(ce, &ce_id, art, account_id) {
+        Ok(b) => b,
+        Err(m) => return ApiError::unprocessable(m).into_response(),
+    };
+
+    // The receipt and its staged booking commit together.
+    let erfasst = async {
+        let mut tx = pool.begin().await?;
+        let e = crate::eeg_auszahlung::erfasse(
+            &mut tx,
+            ledger,
+            &cfg.tenant,
+            &cfg.tenant,
+            &beleg,
+            today,
+        )
+        .await?;
+        tx.commit().await?;
+        anyhow::Ok(e)
+    }
+    .await;
+    let erfasst = match erfasst {
+        Ok(e) => e,
+        Err(e) => return ledger_failure(e.context("record EEG receipt")).into_response(),
+    };
+    if erfasst.gutschrift_delta_ct != 0 {
+        let booked = match crate::booking::book(ledger, pool, &cfg.tenant, &ce_id).await {
+            Ok(crate::booking::Booked::Gebucht { .. }) => Ok(()),
+            Ok(_) => Err(anyhow::anyhow!(
+                "booking {ce_id} is parked; clear it in the parked list"
+            )),
+            Err(e) => Err(anyhow::Error::from(e)),
+        };
+        if let Err(e) = booked {
+            return ledger_failure(e.context(format!(
+                "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
+            )))
+            .into_response();
+        }
+    }
+
+    if art == crate::eeg_auszahlung::Art::Verguetung && cfg.eeg.auto_payout {
+        match zahle_eeg_kette(
+            pool,
+            cfg,
+            &beleg.tr_id,
+            beleg.billing_year,
+            beleg.billing_month,
+            cfg.eeg.sepa_instant,
+        )
+        .await
+        {
+            Ok(crate::eeg_auszahlung::Zahlung::OhneKonto { offen_ct }) => tracing::info!(
+                malo_id,
+                tr_id = %beleg.tr_id,
+                offen_ct,
+                "accountingd: EEG payout outstanding but no creditor IBAN — set bank_iban in \
+                 the einsd plant record or PUT zahlungsinformation, then run the payouts"
+            ),
+            Ok(_) => {}
+            Err(e) => {
+                return ApiError::internal(anyhow::Error::from(e).context(format!(
+                    "EEG payout for plant {} — returning 500 so the sender redelivers",
+                    beleg.tr_id
+                )))
+                .into_response();
+            }
+        }
+    }
+    StatusCode::OK.into_response()
+}
+
+/// Pay one receipt chain's outstanding difference in its own transaction, then
+/// hand the order to the bank adapter when one is configured.
+async fn zahle_eeg_kette(
+    pool: &PgPool,
+    cfg: &AccountingdConfig,
+    tr_id: &str,
+    year: i16,
+    month: i16,
+    instant: bool,
+) -> Result<crate::eeg_auszahlung::Zahlung, crate::eeg_auszahlung::AuszahlungFehler> {
+    let mut tx = pool.begin().await?;
+    let zahlung = crate::eeg_auszahlung::zahle(
+        &mut tx,
+        cfg,
+        tr_id,
+        year,
+        month,
+        instant,
+        mako_fristen::heute(),
+    )
+    .await?;
+    tx.commit().await?;
+    if let crate::eeg_auszahlung::Zahlung::Auftrag(a) = &zahlung {
+        tracing::info!(
+            tr_id,
+            e2e_ref = %a.end_to_end_ref,
+            amount_ct = a.amount_ct,
+            "accountingd: EEG payout order created"
+        );
+        if let Some(ref url) = cfg.eeg.bank_submit_url {
+            submit_pain001_to_bank(
+                url,
+                cfg.eeg.bank_api_key.as_deref(),
+                &a.pain001_xml,
+                &a.end_to_end_ref,
+                pool,
+                &cfg.tenant,
+            )
+            .await;
+        }
+    }
+    Ok(zahlung)
 }
 
 /// `POST /api/v1/payments/import`  — ingest a **flat bank export** (JSON array).
@@ -4714,13 +4698,16 @@ pub async fn post_discard(
 
 // ── §25 EEG 2023 — SEPA Credit Transfer payout pipeline ──────────────────────
 //
-// When `de.eeg.verguetung.berechnet` is ingested by the webhook handler:
-//  1. EEG_GUTSCHRIFT ledger entry is created (credit, negative amount_ct)
-//  2. If cfg.eeg.auto_payout = true: pain.001 is generated, inserted into
-//     eeg_payout_orders, and optionally submitted to the bank adapter.
+// When `de.eeg.verguetung.berechnet` is ingested by the webhook handler
+// (`ingest_eeg_beleg`, rules in `crate::eeg_auszahlung`):
+//  1. the receipt is recorded in its chain (`eeg_belege`) and the ledger books
+//     what it changes the chain by (`EEG_GUTSCHRIFT`);
+//  2. if cfg.eeg.auto_payout = true: the chain's outstanding difference is
+//     ordered as a pain.001 in eeg_payout_orders, and optionally submitted to
+//     the bank adapter.
 //
-// Operators can also trigger a batch run via POST /api/v1/eeg/payouts/run,
-// list payout orders, and process pain.002 status reports from the bank.
+// Operators can also pay a billing month via POST /api/v1/eeg/payouts/run,
+// list payout orders and Rückforderungen, and process pain.002 status reports.
 //
 // Regulatory basis:
 // - §25 Abs. 1 EEG 2023: Vergütung credited "unverzüglich nach Ende des Monats"
@@ -4924,25 +4911,31 @@ pub async fn post_eeg_aufrechnung(
 #[serde(deny_unknown_fields)]
 pub struct RunEegPayoutsRequest {
     /// When `true`, force SCT Inst regardless of `[eeg].sepa_instant` config.
-    /// When `false` (default), use the config flag.
+    /// When `false` or absent, use the config flag.
     pub instant_override: Option<bool>,
-    /// Only generate payouts for this specific MaLo (for targeted re-run).
+    /// Only pay this MaLo's chains (for a targeted re-run).
     pub malo_id: Option<String>,
-    /// Only generate payouts for this year (defaults to current month's year).
-    pub billing_year: Option<i16>,
-    /// Only generate payouts for this month (defaults to current month).
-    pub billing_month: Option<i16>,
+    /// The **billing** year of the receipts to pay — the period they settle,
+    /// not the day the run happens.
+    pub billing_year: i16,
+    /// The billing month, 1–12.
+    pub billing_month: i16,
 }
 
 /// `POST /api/v1/eeg/payouts/run`
 ///
-/// Batch-generate SEPA pain.001 XML for all `EEG_GUTSCHRIFT` ledger entries
-/// that do not yet have a corresponding `eeg_payout_orders` row.
+/// Pay every Vergütung receipt chain of one billing month what it has
+/// outstanding — the chain's current receipt less what was already paid or
+/// ordered for it (`crate::eeg_auszahlung`). Each order carries the plant and
+/// billing month of the receipt it pays, so the EnFG ledger can attribute it;
+/// a chain already paid gets nothing, so a re-run is safe, and a chain whose
+/// order the bank rejected is paid again.
 ///
-/// This is the operator-triggered batch path. The auto-path runs per-CE when
-/// `[eeg].auto_payout = true`.
+/// This is the operator-triggered path; under `[eeg].auto_payout = true` each
+/// receipt is paid as it arrives, by the same rule.
 ///
-/// Returns a summary JSON with `generated`, `skipped_no_iban`, `errors`.
+/// Returns `generated`, `skipped_no_iban`, `nothing_outstanding` and
+/// `errors`, the last naming each chain whose order could not be built.
 pub async fn post_run_eeg_payouts(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4953,210 +4946,107 @@ pub async fn post_run_eeg_payouts(
     if let Err(e) = cedar.check(&claims.principal(), "run-payout", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    use crate::sepa::build_pain_001;
-
-    let debtor_iban = match cfg.eeg.debtor_iban.as_deref() {
-        Some(iban) => iban.to_owned(),
-        None => {
-            return ApiError::unprocessable("EEG payout requires [eeg].debtor_iban in config")
-                .into_response();
-        }
-    };
-
-    let use_instant = req.instant_override.unwrap_or(cfg.eeg.sepa_instant);
-    let today = mako_fristen::heute();
-    let year = req.billing_year.unwrap_or(today.year() as i16);
-    let month = req.billing_month.unwrap_or(today.month() as i16);
-
-    // EEG_GUTSCHRIFT entries booked in the period. Re-runs are idempotent via
-    // ON CONFLICT (end_to_end_ref) below, so no exclusion query is needed — an
-    // already-paid entry simply produces no new order.
-    let (Ok(month_u8), true) = (u8::try_from(month), (1..=12).contains(&month)) else {
+    if cfg.eeg.debtor_iban.is_none() {
+        return ApiError::unprocessable("EEG payout requires [eeg].debtor_iban in config")
+            .into_response();
+    }
+    if !(1..=12).contains(&req.billing_month) {
         return ApiError::unprocessable("billing_month must be 1–12").into_response();
-    };
-    let candidates = match crate::booking::booked_of_kind_in_month(
+    }
+    let use_instant = req.instant_override.unwrap_or(cfg.eeg.sepa_instant);
+
+    let ketten = match crate::eeg_auszahlung::verguetungsketten_im_monat(
         &pool,
         &cfg.tenant,
-        "EEG_GUTSCHRIFT",
-        i32::from(year),
-        month_u8,
+        req.billing_year,
+        req.billing_month,
+        req.malo_id.as_deref(),
     )
     .await
     {
-        Ok(c) => c,
+        Ok(k) => k,
         Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let mut generated = 0usize;
     let mut skipped_no_iban = 0usize;
-    let mut errors = 0usize;
-
-    for cand in &candidates {
-        let malo_id = cand.malo_id.clone();
-        if let Some(ref only) = req.malo_id
-            && *only != malo_id
-        {
-            continue;
-        }
-        let amount_ct = cand.amount_ct.abs();
-        let ce_id = cand.correlation.clone();
-
-        // Fetch the operator account (account_id for the order row + payout IBAN).
-        let account = match fetch_account(&pool, &malo_id, &cand.lf_mp_id, &cfg.tenant).await {
-            Ok(Some(a)) => a,
-            Ok(None) => {
-                errors += 1;
-                continue;
-            }
-            Err(e) => return ApiError::internal(e).into_response(),
-        };
-        let account_id = account.account_id;
-        let zahlungsinformation: Option<serde_json::Value> =
-            sqlx::query_scalar("SELECT zahlungsinformation FROM accounts WHERE account_id = $1")
-                .bind(account_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap_or(None);
-
-        // Extract creditor IBAN from account's zahlungsinformation.
-        let creditor_iban = zahlungsinformation
-            .as_ref()
-            .and_then(|z| z.get("bankverbindung"))
-            .and_then(|b| b.get("iban"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-        let creditor_name = zahlungsinformation
-            .as_ref()
-            .and_then(|z| z.get("kontoinhaber"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("EEG Einspeiser")
-            .to_owned();
-
-        let Some(creditor_iban) = creditor_iban else {
-            skipped_no_iban += 1;
-            continue;
-        };
-
-        // Build unique EndToEndId (max 35 chars, ISO 20022)
-        let e2e_ref = format!(
-            "EEG-{}-{year:04}-{month:02}-{}",
-            &malo_id[..malo_id.len().min(10)],
-            ce_id
-                .as_deref()
-                .and_then(|s| s.get(..8))
-                .unwrap_or("MANUAL")
-        );
-
-        let payment_type = if use_instant { "SCT_INST" } else { "SCT_CORE" };
-
-        let debtor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
-        let ct_schema = match crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(malo_id, error = %e, "accountingd: pain.001 schema config invalid");
-                errors += 1;
-                continue;
-            }
-        };
-        // §25 Abs. 1 EEG 2023 — "unverzüglich nach Ende des Monats": the payout
-        // leaves today, as the German banking calendar counts it. The crate's
-        // default execution date is not something a payment date should be
-        // inherited from.
-        let execution_date = today;
-        let creditor_address = account.postal_address();
-        let pain_xml = match build_pain_001(
-            &crate::sepa::DebtorIdentity {
-                iban: &debtor_iban,
-                name: debtor_name,
-                address: Some(&cfg.creditor_address),
-            },
-            &[crate::sepa::CreditTransferItem {
-                iban: &creditor_iban,
-                name: &creditor_name,
-                amount_ct,
-                end_to_end_ref: &e2e_ref,
-                address: Some(&creditor_address),
-            }],
-            execution_date,
+    let mut nothing_outstanding = 0usize;
+    let mut errors = Vec::new();
+    for k in &ketten {
+        use crate::eeg_auszahlung::{AuszahlungFehler, Zahlung};
+        match zahle_eeg_kette(
+            &pool,
+            &cfg,
+            &k.tr_id,
+            k.billing_year,
+            k.billing_month,
             use_instant,
-            ct_schema,
-        ) {
-            Ok(xml) => xml,
-            Err(e) => {
-                tracing::warn!(malo_id, error = %e, "accountingd: pain.001 build failed");
-                errors += 1;
-                continue;
-            }
-        };
-
-        // Insert payout order (idempotent via unique source_ce_id). The creditor
-        // address is snapshotted alongside the IBAN and name: what was sent has
-        // to stay readable even after the account's master data moves on.
-        let insert_result = sqlx::query(
-            r"INSERT INTO eeg_payout_orders
-                  (malo_id, account_id, billing_year, billing_month, amount_ct,
-                   creditor_iban, creditor_name, payment_type, end_to_end_ref,
-                   pain001_xml, source_ce_id, tenant,
-                   creditor_town, creditor_country, creditor_street,
-                   creditor_building_number, creditor_post_code,
-                   creditor_country_subdivision)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-              ON CONFLICT (end_to_end_ref) DO NOTHING",
         )
-        .bind(&malo_id)
-        .bind(account_id)
-        .bind(year)
-        .bind(month)
-        .bind(amount_ct)
-        .bind(&creditor_iban)
-        .bind(&creditor_name)
-        .bind(payment_type)
-        .bind(&e2e_ref)
-        .bind(&pain_xml)
-        .bind(ce_id.as_deref())
-        .bind(&cfg.tenant)
-        .bind(&creditor_address.town)
-        .bind(&creditor_address.country)
-        .bind(&creditor_address.street)
-        .bind(&creditor_address.building_number)
-        .bind(&creditor_address.post_code)
-        .bind(&creditor_address.country_subdivision)
-        .execute(&pool)
-        .await;
-
-        match insert_result {
-            Ok(r) if r.rows_affected() > 0 => {
-                // If bank_submit_url configured, submit immediately.
-                if let Some(ref url) = cfg.eeg.bank_submit_url {
-                    submit_pain001_to_bank(
-                        url,
-                        cfg.eeg.bank_api_key.as_deref(),
-                        &pain_xml,
-                        &e2e_ref,
-                        &pool,
-                        &cfg.tenant,
-                    )
-                    .await;
-                }
-                generated += 1;
+        .await
+        {
+            Ok(Zahlung::Auftrag(_)) => generated += 1,
+            Ok(Zahlung::OhneKonto { .. }) => skipped_no_iban += 1,
+            Ok(Zahlung::NichtsOffen { .. } | Zahlung::KeineVerguetung | Zahlung::KeinBeleg) => {
+                nothing_outstanding += 1;
             }
-            Ok(_) => { /* already exists — skip */ }
-            Err(e) => {
-                tracing::warn!(malo_id, error = %e, "accountingd: eeg_payout_orders insert failed");
-                errors += 1;
+            // A chain whose pain.001 cannot be built (an invalid creditor IBAN)
+            // stays outstanding and is named; the run goes on with the rest.
+            Err(e @ AuszahlungFehler::Pain001 { .. }) => errors.push(serde_json::json!({
+                "tr_id": k.tr_id,
+                "error": e.to_string(),
+            })),
+            Err(AuszahlungFehler::Konfiguration(m)) => {
+                return ApiError::unprocessable(m).into_response();
             }
+            Err(AuszahlungFehler::Db(e)) => return ApiError::internal(e).into_response(),
         }
     }
 
     Json(serde_json::json!({
-        "billing_year":  year,
-        "billing_month": month,
+        "billing_year":  req.billing_year,
+        "billing_month": req.billing_month,
         "payment_type":  if use_instant { "SCT_INST" } else { "SCT_CORE" },
         "generated":     generated,
         "skipped_no_iban": skipped_no_iban,
+        "nothing_outstanding": nothing_outstanding,
         "errors":        errors,
     }))
     .into_response()
+}
+
+/// `GET /api/v1/eeg/rueckforderungen` — every receipt chain whose plant
+/// operator owes money back: a correction lowered the period below what was
+/// already paid or ordered for it. `rueckforderung_ct` is the difference.
+pub async fn get_eeg_rueckforderungen(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    match crate::eeg_auszahlung::rueckforderungen(&pool, &cfg.tenant).await {
+        Ok(ketten) => {
+            let rows: Vec<serde_json::Value> = ketten
+                .iter()
+                .map(|k| {
+                    serde_json::json!({
+                        "tr_id": k.tr_id,
+                        "malo_id": k.malo_id,
+                        "billing_year": k.billing_year,
+                        "billing_month": k.billing_month,
+                        "receipt_id": k.receipt_id,
+                        "anspruch_ct": k.anspruch_ct,
+                        "geleistet_ct": k.geleistet_ct,
+                        "rueckforderung_ct": k.ausgleich().rueckforderung_ct,
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({ "rueckforderungen": rows })).into_response()
+        }
+        Err(e) => ApiError::internal(e).into_response(),
+    }
 }
 
 /// Request body for `PUT /api/v1/eeg/payouts/{payout_id}/status`
@@ -6373,156 +6263,6 @@ pub(crate) async fn submit_pain001_to_bank(
         }
         Err(e) => {
             tracing::warn!(error = %e, end_to_end_ref, "accountingd: bank submit failed");
-        }
-    }
-}
-
-/// Bundles all parameters for [`create_eeg_payout_order`] into a single struct
-/// to stay within the 7-argument clippy limit.
-pub(crate) struct EegPayoutParams<'a> {
-    pub malo_id: &'a str,
-    pub account_id: uuid::Uuid,
-    pub amount_ct: i64,
-    pub creditor_iban: &'a str,
-    pub creditor_name: &'a str,
-    /// The plant operator's own `Cdtr/PstlAdr`, from `accounts.addr_*`.
-    pub creditor_address: crate::sepa::AddressParts,
-    pub tr_id: Option<&'a str>,
-    pub billing_year: i16,
-    pub billing_month: i16,
-    pub source_ce_id: Option<&'a str>,
-}
-
-/// Generate and optionally submit a pain.001 payout for a single EEG settlement CE.
-///
-/// Called from the `de.eeg.verguetung.berechnet` webhook handler when
-/// `cfg.eeg.auto_payout = true`.  Idempotent via `source_ce_id` unique index.
-pub(crate) async fn create_eeg_payout_order(
-    cfg: &AccountingdConfig,
-    pool: &PgPool,
-    params: EegPayoutParams<'_>,
-) {
-    use crate::sepa::build_pain_001;
-
-    let debtor_iban = match cfg.eeg.debtor_iban.as_deref() {
-        Some(iban) => iban,
-        None => {
-            tracing::warn!(
-                malo_id = params.malo_id,
-                "accountingd: auto_payout=true but [eeg].debtor_iban not set — skip payout"
-            );
-            return;
-        }
-    };
-
-    let use_instant = cfg.eeg.sepa_instant;
-    let payment_type = if use_instant { "SCT_INST" } else { "SCT_CORE" };
-
-    // Build deterministic EndToEndId (max 35 chars, ISO 20022)
-    let e2e_ref = format!(
-        "EEG-{}-{:04}-{:02}-{}",
-        &params.malo_id[..params.malo_id.len().min(10)],
-        params.billing_year,
-        params.billing_month,
-        params
-            .source_ce_id
-            .and_then(|s| s.get(..8))
-            .unwrap_or("AUTO")
-    );
-
-    let debtor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
-    let ct_schema = match crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(malo_id = params.malo_id, error = %e, "accountingd: pain.001 schema config invalid");
-            return;
-        }
-    };
-    // §25 Abs. 1 EEG 2023 — "unverzüglich nach Ende des Monats": the payout
-    // leaves today rather than on a library default.
-    let execution_date = mako_fristen::heute();
-    let pain_xml = match build_pain_001(
-        &crate::sepa::DebtorIdentity {
-            iban: debtor_iban,
-            name: debtor_name,
-            address: Some(&cfg.creditor_address),
-        },
-        &[crate::sepa::CreditTransferItem {
-            iban: params.creditor_iban,
-            name: params.creditor_name,
-            amount_ct: params.amount_ct,
-            end_to_end_ref: &e2e_ref,
-            address: Some(&params.creditor_address),
-        }],
-        execution_date,
-        use_instant,
-        ct_schema,
-    ) {
-        Ok(xml) => xml,
-        Err(e) => {
-            tracing::warn!(malo_id = params.malo_id, error = %e, "accountingd: auto pain.001 build failed");
-            return;
-        }
-    };
-
-    let insert = sqlx::query(
-        r"INSERT INTO eeg_payout_orders
-              (malo_id, account_id, tr_id, billing_year, billing_month, amount_ct,
-               creditor_iban, creditor_name, payment_type, end_to_end_ref,
-               pain001_xml, source_ce_id, tenant,
-               creditor_town, creditor_country, creditor_street,
-               creditor_building_number, creditor_post_code,
-               creditor_country_subdivision)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-          ON CONFLICT (end_to_end_ref) DO NOTHING",
-    )
-    .bind(params.malo_id)
-    .bind(params.account_id)
-    .bind(params.tr_id)
-    .bind(params.billing_year)
-    .bind(params.billing_month)
-    .bind(params.amount_ct)
-    .bind(params.creditor_iban)
-    .bind(params.creditor_name)
-    .bind(payment_type)
-    .bind(&e2e_ref)
-    .bind(&pain_xml)
-    .bind(params.source_ce_id)
-    .bind(&cfg.tenant)
-    .bind(&params.creditor_address.town)
-    .bind(&params.creditor_address.country)
-    .bind(&params.creditor_address.street)
-    .bind(&params.creditor_address.building_number)
-    .bind(&params.creditor_address.post_code)
-    .bind(&params.creditor_address.country_subdivision)
-    .execute(pool)
-    .await;
-
-    match insert {
-        Ok(r) if r.rows_affected() > 0 => {
-            tracing::info!(
-                malo_id = params.malo_id,
-                payment_type,
-                e2e_ref,
-                amount_ct = params.amount_ct,
-                "accountingd: EEG payout order created"
-            );
-            // Auto-submit to bank adapter if configured.
-            if let Some(ref url) = cfg.eeg.bank_submit_url {
-                submit_pain001_to_bank(
-                    url,
-                    cfg.eeg.bank_api_key.as_deref(),
-                    &pain_xml,
-                    &e2e_ref,
-                    pool,
-                    &cfg.tenant,
-                )
-                .await;
-            }
-        }
-        Ok(_) => {} // idempotent — already exists
-        Err(e) => {
-            tracing::warn!(malo_id = params.malo_id, error = %e, "accountingd: eeg_payout_orders insert error");
         }
     }
 }

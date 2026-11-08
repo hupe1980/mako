@@ -260,7 +260,9 @@ impl<S, R> RemadvBuilder<S, R> {
         self
     }
 
-    /// Set the document date for DTM+137 (`YYYYMMDD`).
+    /// Set the document date for DTM+137 — the UTC instant `CCYYMMDDHHMM`
+    /// (format 303, optionally `+00`); a bare `CCYYMMDD` is refused with
+    /// [`Error::DtmNotAnInstant`](crate::Error::DtmNotAnInstant).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -325,7 +327,11 @@ impl<S, R> RemadvBuilder<S, R> {
         // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
         // `+00`; `[494]` requires the stamp to be the creation moment or
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
-        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        emit_comp!(
+            w,
+            "DTM",
+            ["137", &super::ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
+        );
         // `RFF+Z13` Prüfidentifikator — Muss, and what the receiving system
         // routes on.
         // `RFF` DE 1153/1154 are components of `C506`, so the qualifier and the
@@ -365,7 +371,11 @@ impl<S, R> RemadvBuilder<S, R> {
             emit_comp!(
                 w,
                 "DTM",
-                ["137", &super::ccyymmddhhmm_utc(&r.rechnungsdatum), "303"]
+                [
+                    "137",
+                    &super::ccyymmddhhmm_utc("137", &r.rechnungsdatum)?,
+                    "303"
+                ]
             );
         }
         for grund in &self.inner.abweichungsgruende {

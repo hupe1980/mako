@@ -169,13 +169,13 @@ are refused) with these claims:
 ### Cedar policy
 
 `policies/marktd.cedar` is compiled into the binary and has **five `permit`
-statements over 49 actions**, each starting from tenant equality:
+statements over 51 actions**, each starting from tenant equality:
 
 | Group | Actions | Extra condition |
 |---|---|---|
 | Tenant-wide reads | every `read-*` action except the ESA pair, plus `use-mcp` | none |
 | Ordinary writes | `write-malo`, `write-melo`, `write-nb-contract`, `write-partner`, `write-versorgungsstatus`, `write-device`, `write-sr`, `write-netzzugang`, `write-msb-rv-gas`, `write-melo-msb`, `write-bilanzierung`, `write-mabis-zp`, `write-lokationszuordnung` | none |
-| Grid-operator writes | `write-preisblatt`, `write-nelo`, `write-tranche`, `write-malo-grid`, `write-grundversorger`, `write-energiemix`, `write-mmma-preis`, `dispatch-pricat` | `mako_roles` contains `NB` |
+| Grid-operator writes | `write-preisblatt`, `write-nelo`, `write-tranche`, `write-malo-grid`, `write-grundversorger`, `write-energiemix`, `write-mmma-preis`, `write-netznutzungsdaten`, `dispatch-pricat` | `mako_roles` contains `NB` |
 | ESA consent | `read-einwilligung`, `write-einwilligung` | `MSB` **or** `ESA` |
 | Operations | `manage-subscription`, `manage-fanout` | `ADMIN` |
 
@@ -218,7 +218,9 @@ Every request body denies unknown fields.
 A failure of `marktd` itself — a database error, a stored document that no
 longer deserialises, an outbox write — is a `500` whose body carries only
 `"detail": "internal server error"` and an `error_id`; the error's own text is
-logged beside the same id. A failed call to `makod` is a `502` naming it. A
+logged beside the same id.
+
+A failed call to `makod` is a `502` naming it. A
 `POST /api/v1/subscriptions/{id}/test` probe the subscriber refuses is a `502`
 (a `503` when unreachable, a `504` on timeout) naming the subscriber; its
 status is in the log under the `error_id`. Client errors carry a sentence in
@@ -306,6 +308,8 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/tranchen` · `/{id}` | `read-tranche` | List (`?malo_id=`); one |
 | `PUT` | `/api/v1/tranchen/{id}` | `write-tranche` | GPKE Teil 4 „Daten der Tranche" |
 | `GET/PUT` | `/api/v1/malos/{malo_id}/grid` | `read-malo-grid` / `write-malo-grid` | Grid topology from NIS/GIS |
+| `GET` | `/api/v1/malos/{malo_id}/utilmd-stammdaten?stichtag=` | `read-utilmd-stammdaten` | The Marktlokation's [UTILMD Stammdaten](#utilmd-stammdaten) on the Stichtag; `404` for an unknown MaLo |
+| `PUT` | `/api/v1/malos/{malo_id}/netznutzungsdaten` | `write-netznutzungsdaten` (NB) | One dated row of the NB's Netznutzungsdaten; an overlapping row is `422` |
 | `GET/PUT` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattMessung`; GET includes `auf_abschlaege` |
 | `GET/PUT` | `/api/v1/preisblaetter-ka/{nb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattKonzessionsabgabe` |
 | `GET/PUT` | `/api/v1/preisblaetter-dienstleistung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattDienstleistung` |
@@ -320,7 +324,7 @@ is a `422` naming the stage in `code`:
 | `PUT` | `/api/v1/lokationszuordnungen` | `write-lokationszuordnung` | Upsert an edge; `data` is a gated `Bo4e<Lokationszuordnung>` |
 | `DELETE` | `/api/v1/lokationszuordnungen/{von_id}/{nach_id}` | `write-lokationszuordnung` | Delete an edge pair, every temporal variant |
 | `GET` | `/api/v1/melos/{melo_id}/zaehler` | `read-device` | Zähler of a MeLo |
-| `GET/PUT` | `/api/v1/melos/{melo_id}/msb` | `read-melo-msb` / `write-melo-msb` | MSB on `?at=` (WiM Teil 2 UC 4.1.1); PUT `{ msb_mp_id, valid_from }` closes the open assignment |
+| `GET/PUT` | `/api/v1/melos/{melo_id}/msb` | `read-melo-msb` / `write-melo-msb` | MSB on `?at=` (WiM Teil 2 UC 4.1.1); PUT `{ msb_mp_id, valid_from }` closes the open assignment, and may state `msb_rolle` (`GRUNDZUSTAENDIG`/`WETTBEWERBLICH`/`AUFFANG`), `grundlage` (`VERTRAG`/`WEITERVERPFLICHTUNG`) and `gmsb_mp_id` |
 | `GET` | `/api/v1/melos/{melo_id}/msb/history` | `read-melo-msb` | Dated MSB timeline |
 | `GET/PUT` | `/api/v1/malos/{malo_id}/bilanzierung` | `read-bilanzierung` / `write-bilanzierung` | BO4E `Bilanzierung` keyed on `(malo, bilanzierungsbeginn)`; GET at `?at=`. `422` without `bilanzierungsbeginn` or with an end at/before it |
 | `GET` | `/api/v1/malos/{malo_id}/bilanzierung/history` | `read-bilanzierung` | Full history |
@@ -696,6 +700,31 @@ and a payload carrying only it leaves the column `NULL`.
 
 ---
 
+## UTILMD Stammdaten {#utilmd-stammdaten}
+
+`GET /api/v1/malos/{malo_id}/utilmd-stammdaten?stichtag=YYYY-MM-DD` is the
+Marktlokation's UTILMD record on a date, as facts: the record an Anmeldung EoG
+(55013 Strom, 44013 Gas) carries whole and makod reads at its boundary. GeLi
+Gas 3.0 Kap. 3.3.2 has the NB tell the E/G names and addresses, whether the
+Letztverbraucher is a Haushaltskunde, and the identity of the MSB. The
+Stichtag is required — an EoG Zuordnung may be retroactive — and every dated
+source is resolved for it.
+
+| Fact | Source |
+|---|---|
+| Netzebene, Gasqualität, Marktgebiet, Lokationsadresse, Endkunde (name, Korrespondenzanschrift), Zählwerke with their OBIS and Konzessionsabgabe | the BO4E `Marktlokation` |
+| Prognosegrundlage, Profiltypen, Jahresverbrauchsprognose (kWh), Fallgruppe | the BO4E `Bilanzierung` effective at the start of the Stichtag (Europe/Berlin) |
+| Messlokationen | the `MELO → MALO` edges of the location graph covering the Stichtag |
+| MSB, its Rolle and Grundlage, the gMSB | `melo_msb_zuordnungen` on the Stichtag |
+| Zähler (Nummer, Typ, Größe, fernauslesbar) and their OBIS | `zaehler` (BO4E `Zaehler`) and the `zaehler_register` rows active on the Stichtag |
+| Haushaltskunde, Betriebszustand, Termin / nächstes Jahr / Intervall der Netznutzungsabrechnung, Abrechnungsvariante, Gemeinderabatt | `malo_netznutzungsdaten`, written by `PUT /api/v1/malos/{malo_id}/netznutzungsdaten` (NB) |
+
+A fact no row holds is `null` (or an empty list), never a default: the message
+that needs it is refused by makod, naming it. The type is
+`mako_markt::utilmd_stammdaten::MaloUtilmdStammdaten`.
+
+---
+
 ## NB network contracts
 
 `nb_contracts` carries typed columns (`netzebene`, `bilanzierungsmethode`,
@@ -755,6 +784,7 @@ before deciding an Anmeldung.
 | `rollenzuordnungen` | Dated NB/LF/MSB roles per MaLo |
 | `melo_msb_zuordnungen` | Dated MSB per MeLo, from IFTSTA 21012 — never from the vorläufige Anmeldebestätigung 55043 |
 | `bilanzierungen` | BO4E `Bilanzierung` per MaLo; a currently effective one derives `malo.fallgruppe` |
+| `malo_netznutzungsdaten` | The NB's facts of a MaLo's UTILMD record no BO4E object carries — Gruppenzuordnung, Betriebszustand, Termine and Intervall der Netznutzungsabrechnung, Abrechnungsvariante, Gemeinderabatt; dated, half-open, non-overlapping |
 | `lokationszuordnungen` | Location graph edges, typed `Lokationstyp` (`MALO`/`MELO`/`NELO`/`SR`/`TR`) |
 | `partners` · `subscriptions` | Marktpartner; webhook subscribers |
 | `process_correlation` · `processed_events` | Process tracking per MaLo; inbound idempotency |
@@ -1037,7 +1067,9 @@ after `saison_bis` crosses the turn of the year (WINTER `"10-01"` to
 `Zaehlzeitdefinition` leaves the dates to a `saisonprofil` the market partners
 agree on — so the window states the Preisblatt's dates. A `GESAMT` window holds
 all year and carries neither; the schema refuses an undated `SOMMER`/`WINTER`
-window and a dated `GESAMT` one. The season is the instant's own calendar day,
+window and a dated `GESAMT` one.
+
+The season is the instant's own calendar day,
 while the weekday stays the day the window opened on: on 1 April a SOMMER
 night that opened on 31 March takes over from WINTER's at midnight, so the
 seasons' windows meet without a gap or an overlap.

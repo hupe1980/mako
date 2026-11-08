@@ -129,9 +129,10 @@ test-einsd-db:
 
 # Ledger integration tests for accountingd — the doubleentry-backed
 # Massenkontokorrent (idempotency, netting, reconcile, period seal, Merkle
-# inclusion proof) against real PostgreSQL.
+# inclusion proof) and the EEG payout chains against real PostgreSQL.
 test-accountingd-db:
     {{ just_executable() }} suite accountingd db_scenarios --include-ignored --test-threads=1
+    {{ just_executable() }} suite accountingd eeg_payout --include-ignored --test-threads=1
     {{ just_executable() }} suite accountingd router_builds --include-ignored
 
 # Records integration tests for billingd.
@@ -160,7 +161,8 @@ test-marktd-db:
         esa_integration:: registries_integration:: \
         fanout_durable_integration:: mabis_zp_integration:: \
         temporal_constraints_integration:: tenant_isolation_integration:: \
-        overlap_is_a_client_error:: konfigurationsprodukte_body::
+        overlap_is_a_client_error:: konfigurationsprodukte_body:: \
+        utilmd_stammdaten_integration::
 
 # invoicd's receipt store — the § 147 AO / GoBD audit trail, its per-tenant
 # uniqueness and the ERP re-dispatch lease.
@@ -739,6 +741,24 @@ desk-gen:
 # Regenerate the Desk's screenshots in site/content/docs/guide/desk/
 desk-screenshots:
     cd desk && npm run screenshots
+
+# Playwright against the production build under `vite preview`, agentd's
+# stream played from desk/fixtures/: the first streamed step ≤ 1 s, an entry's
+# ⌘K actions ≤ 100 ms, a keyboard decision's INP ≤ 100 ms, each at the 95th
+# percentile, every measurement printed. Proves first that a late fixture
+# fails. Needs Playwright's Chromium, so it is not part of `desk-check`.
+#
+# The Desk's interaction budgets, measured in a browser
+desk-budgets:
+    cd desk && npm run budgets
+
+# axe-core over the assistant's trail, receipt, pill and ⌘K action panel, light
+# and dark, under reduced motion, each reached from the keyboard. Needs
+# Playwright's Chromium, so it is not part of `desk-check`.
+#
+# The assistant's surfaces scanned for access in a browser
+desk-axe:
+    cd desk && npm run zugang
 
 # Needs Node (desk/.node-version) and no browser or Docker.
 #

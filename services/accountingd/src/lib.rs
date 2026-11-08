@@ -26,6 +26,7 @@ pub mod booking;
 pub mod clients;
 pub mod config;
 pub mod daemon;
+pub mod eeg_auszahlung;
 pub mod enfg;
 pub mod handlers;
 pub mod ledger;

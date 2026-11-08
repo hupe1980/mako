@@ -390,6 +390,46 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
 /// while living entirely inside `makod`.
 pub const MAKOD_INTERNAL: &[(&str, &str)] = &[];
 
+// ── Command bodies ────────────────────────────────────────────────────────────
+
+/// The `payload` of [`GPKE_EOG_ANMELDEN`] — the NB's Anmeldung `EoG` 55013.
+///
+/// One type on both sides: `makod` reads the payload as this type and refuses
+/// a key it does not declare, and a dispatching service builds the payload
+/// from it, so the two cannot disagree on a field. The Marktlokation's
+/// Stammdaten are not part of it: `makod` reads them from `marktd` at its
+/// boundary.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpkeEogAnmelden {
+    /// The Marktlokation.
+    pub malo_id: String,
+    /// MP-ID of the Grundversorger (§ 36 Abs. 2 `EnWG` Feststellung).
+    pub gv_mp_id: String,
+    /// Zuordnungsbeginn `SG4 DTM+92`, `YYYY-MM-DD` or `YYYYMMDD` (may be
+    /// retroactive).
+    pub process_date: String,
+    /// `SG4 STS+7` DE 9013 Transaktionsgrund.
+    pub transaktionsgrund: String,
+}
+
+/// The `payload` of [`GELI_EOG_ANMELDEN`] — the GNB's Anmeldung `EoG` 44013.
+/// See [`GpkeEogAnmelden`] for why it is shared.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeliEogAnmelden {
+    /// The Marktlokation.
+    pub malo_id: String,
+    /// MP-ID of the E/G Lieferant.
+    pub gv_mp_id: String,
+    /// Zuordnungsbeginn `SG4 DTM+92`, `YYYY-MM-DD` or `YYYYMMDD`.
+    pub process_date: String,
+    /// `SG4 DTM+158` Bilanzierungsbeginn, `YYYY-MM-DD` or `YYYYMMDD`.
+    pub bilanzierungsbeginn: String,
+    /// `SG4 STS+7` DE 9013 Transaktionsgrund.
+    pub transaktionsgrund: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DISPATCHED_BY_SERVICES, MAKOD_INTERNAL};

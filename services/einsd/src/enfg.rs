@@ -1133,6 +1133,35 @@ mod tests {
         ));
     }
 
+    /// accountingd pays a correction as the difference to its chain, so a
+    /// corrected month carries two payouts — the original and the difference —
+    /// whose sum is the corrected receipt. Both land under the plant, and the
+    /// month reconciles to the correction.
+    #[test]
+    fn a_correction_paid_as_its_difference_reconciles_to_the_corrected_receipt() {
+        let korrektur = beleg("VERGUETUNG", dec!(110));
+        let anlagen: BTreeMap<_, _> = [anlage(
+            "TR-1",
+            Some(ZONE),
+            vec![beleg("VERGUETUNG", dec!(100)), korrektur.clone()],
+        )]
+        .into();
+        let monat = monatsposten(
+            &[auszahlung("TR-1", 10_000), auszahlung("TR-1", 1_000)],
+            &anlagen,
+        )
+        .expect("the month reconciles");
+        assert_eq!(monat.posten.len(), 2);
+        assert!(
+            monat
+                .posten
+                .iter()
+                .all(|p| p.tr_id == "TR-1" && p.receipt_id == korrektur.receipt_id)
+        );
+        let summe: Decimal = monat.posten.iter().map(|p| p.betrag.to_decimal()).sum();
+        assert_eq!(summe, dec!(110));
+    }
+
     /// A Flexibilitätsprämie settlement pays a § 19 and a § 50 part, split by its
     /// receipt's § 50 position; the parts sum to what was paid.
     #[test]

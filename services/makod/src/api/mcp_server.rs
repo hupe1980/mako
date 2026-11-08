@@ -414,12 +414,31 @@ pub struct DeadlineView {
 /// message or a command alike — while the registry holds process ids only, so
 /// the index answers a MaLo-, MeLo- or Vorgangsnummer and the registry a
 /// process id.
+///
+/// A Marktlokation names the Netzbetreiber's own EoG process too, which is
+/// indexed apart from the bare MaLo so that on a deployment that is NB and LF
+/// at once the E/G's process on the same Marktlokation is a different one:
+/// [`mako_gpke::eog_nb_anfrage_key`] (Strom) and
+/// [`mako_geli_gas::gnb_anfrage_key`] (Gas). A lookup lists both sides.
 async fn processes_named(
     registry: &impl mako_engine::registry::ProcessRegistry,
     tenant: TenantId,
     key: &mako_engine::registry::RegistryKey,
 ) -> Result<Vec<mako_engine::ids::ProcessIdentity>, mako_engine::error::EngineError> {
-    let correlated = registry.lookup_correlated(tenant, key.as_str()).await?;
+    let mut correlated = registry.lookup_correlated(tenant, key.as_str()).await?;
+    for initiator_key in [
+        mako_gpke::eog_nb_anfrage_key(key.as_str()),
+        mako_geli_gas::gnb_anfrage_key(key.as_str()),
+    ] {
+        for identity in registry.lookup_correlated(tenant, &initiator_key).await? {
+            if !correlated
+                .iter()
+                .any(|known| known.process_id == identity.process_id)
+            {
+                correlated.push(identity);
+            }
+        }
+    }
     if !correlated.is_empty() {
         return Ok(correlated);
     }
@@ -964,7 +983,8 @@ impl MakodMcpHandler {
     /// and pending deadlines — so a MaLo with a running Lieferbeginn and a
     /// Sperrung answers both. The key is the one the process was indexed under
     /// when it started, whether from an inbound message or a command:
-    /// - GPKE / GeLi Gas → `malo_id` (11-digit Marktlokations-ID)
+    /// - GPKE / GeLi Gas → `malo_id` (11-digit Marktlokations-ID) — both
+    ///   sides of an EoG on a combined NB+LF deployment
     /// - WiM Strom → `melo_id` (Messlokations-ID)
     /// - WiM Gas Stornierung → `vorgang_id` (Vorgangsnummer from PID 44022)
     ///
@@ -2120,9 +2140,14 @@ fn dispatch_error_to_string(e: crate::commands_api::DispatchError) -> String {
             format!("not_implemented: Command '{cmd}' is registered but not yet dispatchable.")
         }
         DispatchError::EdiUnzulaessig(msg) => format!("edi_unzulaessig: {msg}"),
-        DispatchError::MarktdUnavailable(_) => "marktd_unavailable: marktd, which holds the \
-             recipient's EDI agreement, did not answer — retry."
+        DispatchError::MarktdUnavailable(_) => "marktd_unavailable: marktd, which holds what \
+             this command needs, did not answer — retry."
             .to_owned(),
+        DispatchError::StammdatenUnvollstaendig { malo_id, fehlend } => format!(
+            "stammdaten_unvollstaendig: marktd does not hold every Stammdatum the message for \
+             MaLo '{malo_id}' carries — nothing is sent: {}",
+            fehlend.join("; ")
+        ),
         DispatchError::InvoicNichtDarstellbar { message, .. } => {
             format!("invoic_nicht_darstellbar: {message}")
         }
@@ -2341,6 +2366,56 @@ mod tool_inventory_tests {
         .await
         .expect("lookup");
         assert!(unknown.is_empty());
+    }
+
+    /// A lookup by MaLo lists both sides of an EoG on a deployment that is NB
+    /// and LF at once: the E/G's process under the bare MaLo and the
+    /// Netzbetreiber's own under its initiator key — `eog_nb_anfrage_key` for
+    /// Strom, `gnb_anfrage_key` for Gas. Reading the bare MaLo alone hides the
+    /// process the operator started.
+    #[tokio::test]
+    async fn a_lookup_by_malo_lists_the_netzbetreibers_own_process_too() {
+        use mako_engine::ids::{ProcessId, ProcessIdentity, TenantId};
+        use mako_engine::registry::{ProcessRegistry as _, RegistryKey};
+        use mako_engine::version::WorkflowId;
+
+        let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+            .await
+            .expect("store");
+        let registry = store.as_process_registry();
+        let tenant = TenantId::from_party_id("9900357000004");
+        let malo = "51238696012";
+        let mut expected = Vec::new();
+        for (key, workflow) in [
+            (malo.to_owned(), "gpke-eog"),
+            (mako_gpke::eog_nb_anfrage_key(malo), "gpke-eog"),
+            (malo.to_owned(), "geli-gas-supplier-change"),
+            (
+                mako_geli_gas::gnb_anfrage_key(malo),
+                "geli-gas-supplier-change",
+            ),
+        ] {
+            let process_id = ProcessId::new();
+            let identity = ProcessIdentity::new(
+                process_id,
+                tenant,
+                WorkflowId::new(workflow, "FV2026-04-01"),
+            );
+            registry
+                .register_correlated(tenant, &key, process_id, identity.clone())
+                .await
+                .expect("index");
+            expected.push(identity);
+        }
+
+        let mut found =
+            super::processes_named(&registry, tenant, &RegistryKey::parse(malo).expect("key"))
+                .await
+                .expect("lookup");
+        let id = |i: &ProcessIdentity| i.process_id.to_string();
+        found.sort_by_key(id);
+        expected.sort_by_key(id);
+        assert_eq!(found, expected);
     }
 
     /// The history of a process stored in makod's own store marks the

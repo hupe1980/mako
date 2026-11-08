@@ -42,17 +42,10 @@ export function Tile({
           : "";
   const zeilen = state.kind === "wert" ? state.zeilen.slice(state.wert ? 0 : 1) : [];
   return (
+    // The link's name is its visible text — label, figure, lines, source — so a
+    // person who reads a tile aloud can say what is on it (WCAG 2.5.3).
     <Link
       href={href}
-      aria-label={
-        state.kind === "count"
-          ? `${label}: ${value}`
-          : state.kind === "wert"
-            ? [`${label}: ${value}`, ...zeilen].join(", ")
-            : state.kind === "failed"
-              ? `${label}: ${state.service} nicht erreichbar`
-              : `${label}: lädt`
-      }
       className={`squircle focus-ring group flex min-h-36 flex-col rounded-panel border bg-surface p-5 no-underline transition-colors data-[hovered]:bg-fill ${
         breach ? "border-[color-mix(in_srgb,var(--critical)_45%,transparent)]" : "border-separator"
       }`}
@@ -63,7 +56,9 @@ export function Tile({
       </span>
       <span className="mt-auto pt-4">
         {state.kind === "loading" ? (
-          <span className="skeleton block h-10 w-20" />
+          <span className="skeleton block h-10 w-20">
+            <span className="sr-only">lädt</span>
+          </span>
         ) : state.kind === "wert" && !state.wert ? (
           <span className="block text-title font-semibold text-text-2">{value}</span>
         ) : (

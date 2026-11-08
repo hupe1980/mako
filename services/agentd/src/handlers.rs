@@ -369,14 +369,17 @@ pub async fn start_runs(
     // webhook's, and their state, steps and result are read where every run's
     // are — `/api/v1/oversight/runs/{run}`. A request held open for a model's
     // answer is a request a proxy, a browser or a person gives up on.
+    // Journaled as each run's starter, who alone follows and stops it at
+    // `/api/v1/runs/{run}/schritte` and `/stopp`.
+    let starter = claims.sub();
     let accepted = match agent_name.as_deref() {
         Some(name) => state
             .plane
-            .accept_named(name, envelope, data)
+            .accept_named_by(name, envelope, data, starter)
             .await
             .into_iter()
             .collect(),
-        None => state.plane.accept(envelope, data).await,
+        None => state.plane.accept_by(envelope, data, starter).await,
     };
     if accepted.is_empty() {
         return ApiError::unprocessable(format!(
@@ -407,8 +410,9 @@ pub async fn hinweise(
 
 /// `GET /api/v1/runs/{run}/antwort` — a run's answer, sentence by sentence,
 /// each with the call it cites and whether that call's output carries its
-/// figures. Read under the verb the oversight run view is: whoever may read a
-/// run may read its answer.
+/// figures. Read under the verb the oversight run view is (`RUN_READ`); a run
+/// a person started is read only by that person, a run nobody started by
+/// anyone holding the verb.
 pub async fn answer(
     State(state): State<Arc<AppState>>,
     claims: Claims,
@@ -417,11 +421,261 @@ pub async fn answer(
     if let Some(refused) = refusal(&state, &claims, agentplane::api::action::RUN_READ) {
         return Err(refused);
     }
+    zugriff(&state, &claims, &run, Zugriff::Lesen).await?;
     match state.plane.answer(&run, &claims.principal().sub).await {
         Ok(Some(answer)) => Ok(Json(answer)),
         Ok(None) => Err(ApiError::NotFound),
         Err(e) => Err(ApiError::internal(anyhow::anyhow!(
             "read the answer of run {run}: {e}"
+        ))),
+    }
+}
+
+/// How often a follower re-reads the journal when no append wakes it first —
+/// agentplane's A2A stream's interval.
+const SCHRITTE_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The comment sent on an idle stream, so an intermediary does not reap a
+/// run that is waiting on a model.
+const SCHRITTE_KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Who may act on a run, beside the verb its route asks.
+#[derive(Clone, Copy)]
+enum Zugriff {
+    /// Read its answer or follow it: a run a person started is theirs alone;
+    /// a run nobody started — an event's, a waiting proposal's — is the
+    /// tenant's, under the verb.
+    Lesen,
+    /// Stop it here: only a run's starter. A run nobody started is stopped on
+    /// the oversight surface (`RUN_CANCEL`).
+    Stoppen,
+}
+
+/// The run-level half of who may read or stop `run`; the verb is checked
+/// before. A run reads its Anker under its starter's roles, so a person's run
+/// is nobody else's to read here — the oversight surface is where an operator
+/// reads anyone's run, under its own verbs.
+async fn zugriff(
+    state: &AppState,
+    claims: &Claims,
+    run: &str,
+    zugriff: Zugriff,
+) -> Result<(), ApiError> {
+    let not_the_starter = |detail: &str| ApiError::forbidden(detail).with_code("not_the_starter");
+    match (state.plane.starter(run).await, zugriff) {
+        (Ok(None), _) => Err(ApiError::NotFound),
+        (Ok(Some(Some(starter))), _) if starter == claims.sub() => Ok(()),
+        (Ok(Some(None)), Zugriff::Lesen) => Ok(()),
+        (Ok(Some(Some(_))), _) => Err(not_the_starter(
+            "only the person who started this run reads, follows or stops it here; anyone \
+             else reads and stops runs on the oversight surface",
+        )),
+        (Ok(Some(None)), Zugriff::Stoppen) => Err(not_the_starter(
+            "nobody started this run by hand, so it is stopped on the oversight surface, not \
+             here",
+        )),
+        (Err(e), _) => Err(ApiError::internal(anyhow::anyhow!(
+            "read who started run {run}: {e}"
+        ))),
+    }
+}
+
+/// `GET /api/v1/runs/{run}/schritte` — the run's reads as they are journaled,
+/// as Server-Sent Events, then its conclusion.
+///
+/// `schritt` per settled tool call, then `antwort` — the [`Answer`] `GET
+/// …/antwort` returns for the run, unchanged — or `abgebrochen` with who
+/// stopped it, after which the stream ends. Each event's `id` is the journal
+/// sequence of the record it is derived from, and a reconnect's
+/// `Last-Event-ID` continues after it, so no step is missed or repeated.
+///
+/// Read from the journal, never from an in-process channel — woken by the
+/// store's append hint, with a poll as the fallback — so any instance serves
+/// it and it cannot disagree with history (agentplane `api::a2a_stream`).
+/// Authorized exactly as the answer read is: `RUN_READ`, and a run a person
+/// started only for that person.
+///
+/// [`Answer`]: crate::plane::Answer
+pub async fn schritte(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    headers: HeaderMap,
+    axum::extract::Path(run): axum::extract::Path<String>,
+) -> ApiResult<Response> {
+    use axum::response::sse::{KeepAlive, Sse};
+    if let Some(refused) = refusal(&state, &claims, agentplane::api::action::RUN_READ) {
+        return Err(refused);
+    }
+    let nach = match mako_service::headers::single_str(&headers, "last-event-id") {
+        Err(_) => {
+            return Err(ApiError::unprocessable(
+                "`Last-Event-ID` arrived more than once",
+            ));
+        }
+        Ok(None) => 0,
+        Ok(Some(raw)) => raw.trim().parse::<u64>().map_err(|_| {
+            ApiError::unprocessable("`Last-Event-ID` is not an event id this stream sent")
+        })?,
+    };
+    zugriff(&state, &claims, &run, Zugriff::Lesen).await?;
+    let id = agentplane::core::RunId::parse(&run).map_err(|_| ApiError::NotFound)?;
+    let folge = Folge {
+        state,
+        run: id,
+        reader: claims.sub().to_owned(),
+        nach,
+        next: 0,
+        faltung: crate::plane::schritte::Faltung::default(),
+        pending: std::collections::VecDeque::new(),
+        watch: None,
+        watching: false,
+        ended: false,
+    };
+    let stream = futures_util::stream::unfold(folge, Folge::next_event);
+    Ok(Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(SCHRITTE_KEEP_ALIVE))
+        .into_response())
+}
+
+/// The state behind one `schritte` stream.
+struct Folge {
+    state: Arc<AppState>,
+    run: agentplane::core::RunId,
+    reader: String,
+    /// The last event id the subscriber holds; only later ones are sent.
+    nach: u64,
+    /// The next journal sequence to read.
+    next: u64,
+    faltung: crate::plane::schritte::Faltung,
+    pending: std::collections::VecDeque<axum::response::sse::Event>,
+    watch: Option<agentplane::journal::AppendWatch>,
+    watching: bool,
+    ended: bool,
+}
+
+impl Folge {
+    async fn next_event(
+        mut self,
+    ) -> Option<(
+        Result<axum::response::sse::Event, std::convert::Infallible>,
+        Self,
+    )> {
+        use crate::plane::schritte::Gefaltet;
+        loop {
+            if let Some(event) = self.pending.pop_front() {
+                return Some((Ok(event), self));
+            }
+            if self.ended {
+                return None;
+            }
+            let runtime = self.state.plane.runtime();
+            // Subscribed before the first read, so an append between the two
+            // still wakes the loop.
+            if !self.watching {
+                self.watch = runtime.journal().watch(self.run).await;
+                self.watching = true;
+            }
+            // A read that fails is not a run that failed: the stream ends, and
+            // a reconnect is told the truth from the journal.
+            let records = runtime.journal().read(self.run, self.next).await.ok()?;
+            let um = crate::plane::schritte::jetzt();
+            for record in &records {
+                self.next = record.seq() + 1;
+                match self.faltung.falte(record, &um) {
+                    Some(Gefaltet::Schritt(schritt)) if schritt.seq > self.nach => {
+                        let seq = schritt.seq;
+                        self.pending.push_back(sse("schritt", seq, &schritt));
+                    }
+                    Some(Gefaltet::Ende { seq, abgebrochen }) => {
+                        self.ended = true;
+                        if seq <= self.nach {
+                            break;
+                        }
+                        match abgebrochen {
+                            Some(a) => self.pending.push_back(sse("abgebrochen", seq, &a)),
+                            None => {
+                                let answer = self
+                                    .state
+                                    .plane
+                                    .answer(&self.run.to_string(), &self.reader)
+                                    .await
+                                    .ok()
+                                    .flatten()?;
+                                self.pending.push_back(sse("antwort", seq, &answer));
+                            }
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if !self.pending.is_empty() || self.ended {
+                continue;
+            }
+            // A stream to a run that waits for days would hold a graceful
+            // shutdown open; ending is safe because a reconnect resumes from
+            // the journal.
+            if runtime.is_draining() {
+                return None;
+            }
+            match self.watch.as_mut() {
+                Some(watch) => {
+                    if let Ok(None) = tokio::time::timeout(SCHRITTE_POLL, watch.changed()).await {
+                        self.watch = None;
+                    }
+                }
+                None => tokio::time::sleep(SCHRITTE_POLL).await,
+            }
+        }
+    }
+}
+
+/// One named event with the journal sequence as its id.
+fn sse(name: &str, seq: u64, data: &impl serde::Serialize) -> axum::response::sse::Event {
+    axum::response::sse::Event::default()
+        .event(name)
+        .id(seq.to_string())
+        .data(serde_json::to_string(data).unwrap_or_else(|_| "null".to_owned()))
+}
+
+/// `POST /api/v1/runs/{run}/stopp` takes no body, or an empty object.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoppRequest {}
+
+/// The reason on the record when a person stops their own run.
+const STOPP_GRUND: &str = "stopped by the person who started the run";
+
+/// `POST /api/v1/runs/{run}/stopp` — the starter stops their run.
+///
+/// agentplane's `request_cancel` with the person as operator: durable at once,
+/// acted on at the run's next step boundary, after which the `schritte` stream
+/// ends with `abgebrochen` and the answer read reports `cancelled`. Until then
+/// no service is read for the run (`plane::tools::StopGuard`). `202`, because
+/// the stop is recorded, not yet carried out. Only the starter stops a run
+/// here; anyone else's stop is the oversight surface's `RUN_CANCEL`.
+pub async fn stopp(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    axum::extract::Path(run): axum::extract::Path<String>,
+    _body: Option<Json<StoppRequest>>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::RUN_START) {
+        return Err(refused);
+    }
+    zugriff(&state, &claims, &run, Zugriff::Stoppen).await?;
+    match state.plane.stoppen(&run, claims.sub(), STOPP_GRUND).await {
+        Ok(recorded) => Ok((
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "run": run, "recorded": recorded })),
+        )),
+        Err(crate::plane::StoppError::Unbekannt) => Err(ApiError::NotFound),
+        Err(crate::plane::StoppError::Abgeschlossen(outcome)) => Err(ApiError::conflict(format!(
+            "run {run} has already concluded ({outcome}); its answer stands"
+        ))
+        .with_code("already_concluded")),
+        Err(crate::plane::StoppError::Journal(e)) => Err(ApiError::internal(anyhow::anyhow!(
+            "record the stop of run {run}: {e}"
         ))),
     }
 }

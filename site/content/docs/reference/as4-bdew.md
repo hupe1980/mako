@@ -1,6 +1,6 @@
 +++
 title = "BDEW AS4 Guide"
-description = "Configure makod for BDEW AS4-Profil 1.2 on asx-rs 0.16: one identity and client per MP-ID, the SM-PKI trust anchor and CRL signer, partners, the sender policy, and testing with a test SM-PKI."
+description = "Configure makod for BDEW AS4-Profil 1.2 on asx-rs 0.16: one identity per MP-ID, the SM-PKI trust anchor, partners, the sender policy, and testing."
 weight = 17
 +++
 AS4 has been the mandatory BDEW MaKo transport since **1 April 2024** (Strom, BK6-22-024)

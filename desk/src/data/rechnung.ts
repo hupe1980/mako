@@ -5,8 +5,8 @@
 //
 // Two of them send a message: the Ablehnung of a disputed INVOIC (a REMADV to
 // the Rechnungssteller) and the Freigabe of a held invoice (issued to the
-// customer). They are confirmed and sent at once. Beilegen and Geprüft send
-// nothing and are held for undo.
+// customer). Like Beilegen and Geprüft, which send nothing, each is held for
+// undo before it leaves — in its view as in ⌘K — and none asks confirmation.
 
 import { problem, sentence } from "./problem";
 import { type Handlung, verweigern } from "./verweigert";
@@ -63,16 +63,17 @@ export function beilegen(id: string, bemerkung: string, keepalive = false): Prom
 }
 
 /** Send the refusal (REMADV) a disputed receipt is still owed. */
-export function ablehnungSenden(id: string): Promise<void> {
-  return senden(`${RECEIPTS}/${encodeURIComponent(id)}/dispatch-answer`, DISPUT, null);
+export function ablehnungSenden(id: string, keepalive = false): Promise<void> {
+  return senden(`${RECEIPTS}/${encodeURIComponent(id)}/dispatch-answer`, DISPUT, null, keepalive);
 }
 
 /** Issue an invoice the risk gate held. */
-export function freigeben(id: string): Promise<void> {
+export function freigeben(id: string, keepalive = false): Promise<void> {
   return senden(
     `${BILLING}/${encodeURIComponent(id)}/release`,
     { dienst: "billingd", aktion: "freigeben" },
     null,
+    keepalive,
   );
 }
 

@@ -1,4 +1,3 @@
-import { useMutation } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import {
   Button as AriaButton,
@@ -8,20 +7,20 @@ import {
   TextArea,
   TextField,
 } from "react-aria-components";
+import {
+  type Entscheidbar,
+  perTaste,
+  aktion as registriert,
+  schluessel,
+  useFehlschlag,
+  useHalten,
+} from "../app/aktionen";
 import { DIENST, nichtErreichbar } from "../app/dienste";
-import { useHold } from "../app/Holds";
-import { ABLEHNEN, FREIGEBEN, UEBERNEHMEN } from "../app/keys";
-import { type Schicksal, schicksal, type Vorschlag } from "../data/agent";
+import { FREIGEBEN, UEBERNEHMEN, UNDO } from "../app/keys";
+import type { Vorschlag } from "../data/agent";
 import type { Pruefposten } from "../data/gen/billingd";
 import type { Disput } from "../data/gen/invoicd";
-import {
-  Abgelehnt,
-  ablehnungSenden,
-  beilegen,
-  freigeben,
-  geprueft,
-  SchonErledigt,
-} from "../data/rechnung";
+import { Abgelehnt, SchonErledigt } from "../data/rechnung";
 import { useVerweigert, Verweigert } from "../data/verweigert";
 import { Icon } from "../design/Icon";
 import { Notice, Panel } from "../design/Panel";
@@ -33,55 +32,6 @@ const WAHL =
   "focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body font-medium text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent";
 const PRIMAER =
   "focus-ring h-9 rounded-control bg-accent px-4 text-body font-semibold text-on-accent data-[disabled]:opacity-40";
-
-/**
- * The confirm a final decision passes: what it does, then the act. A
- * message-sending decision keeps the default words; a booking names its own.
- */
-export function Bestaetigen({
-  text,
-  pending,
-  onAbbrechen,
-  onSenden,
-  frage = "Senden bestätigen",
-  los = "Jetzt senden",
-  laeuft = "Sendet …",
-}: {
-  text: string;
-  pending: boolean;
-  onAbbrechen: () => void;
-  onSenden: () => void;
-  /** The dialog's name. */
-  frage?: string;
-  /** The button that acts. */
-  los?: string;
-  /** The button while it acts. */
-  laeuft?: string;
-}) {
-  return (
-    <div
-      role="alertdialog"
-      aria-label={frage}
-      className="flex flex-wrap items-center gap-3 rounded-[10px] bg-fill px-3 py-2"
-    >
-      <p className="m-0 flex-1 text-body text-text">{text}</p>
-      <AriaButton
-        onPress={onAbbrechen}
-        className="focus-ring h-8 rounded-control px-3 text-body text-text-2 data-[hovered]:bg-fill-strong"
-      >
-        Abbrechen
-      </AriaButton>
-      <AriaButton
-        autoFocus
-        isDisabled={pending}
-        onPress={onSenden}
-        className="focus-ring h-8 rounded-control bg-accent px-3 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
-      >
-        {pending ? laeuft : los}
-      </AriaButton>
-    </div>
-  );
-}
 
 /** The service's answer to a decision it did not take, in its words. */
 function Fehler({ error, dienst }: { error: unknown; dienst: "invoicd" | "billingd" }) {
@@ -99,12 +49,12 @@ function Fehler({ error, dienst }: { error: unknown; dienst: "invoicd" | "billin
   );
 }
 
-/** A held routine decision, until it is sent or taken back. */
-function Gehalten({ text }: { text: string }) {
+/** A held decision, until it is sent or taken back. */
+export function Gehalten({ text }: { text: string }) {
   return (
     <p role="status" className="m-0 flex items-center gap-2 text-callout text-text">
       <Icon name="check" size={14} className="text-accent" />
-      {text} — „Rückgängig" nimmt es zurück, bevor etwas gesendet wird.
+      {text} — „Rückgängig" oder {UNDO.keys} nimmt es zurück, bevor etwas gesendet wird.
     </p>
   );
 }
@@ -113,9 +63,9 @@ type DisputAktion = "beilegen" | "ablehnung";
 
 /**
  * The decision on a Rechnungsdisput: close it (Beilegen, with a Bemerkung —
- * sends nothing, held for undo), or, while the refusal has not gone out, send
- * it (a REMADV, confirmed). The proposal agentd prepared, with the finding it
- * rests on, fills the form; the person sends.
+ * sends nothing), or, while the refusal has not gone out, send it (a REMADV).
+ * Either is held for undo and asks no confirmation. The proposal agentd
+ * prepared, with the finding it rests on, fills the form; the person sends.
  */
 export function DisputEntscheiden({
   d,
@@ -129,12 +79,10 @@ export function DisputEntscheiden({
 }) {
   const [aktion, setAktion] = useState<DisputAktion | null>(null);
   const [bemerkung, setBemerkung] = useState("");
-  const [bestaetigen, setBestaetigen] = useState(false);
   const [gehalten, setGehalten] = useState(false);
-  const [fehler, setFehler] = useState<unknown>(null);
   const [herkunft, setHerkunft] = useState<{ run: string; v: Vorschlag } | null>(null);
   const verweigert = useVerweigert({ dienst: "invoicd", aktion: "entscheiden" });
-  const hold = useHold();
+  const halte = useHalten();
   const wartend = useVorschlaege({ disput: [d.id] }).disput.get(d.id);
   const wartet = wartend?.vorschlag ? { v: wartend.vorschlag, run: wartend.run } : null;
 
@@ -153,43 +101,26 @@ export function DisputEntscheiden({
     setAktion(a);
     // The Begründung stays the model's: the Bemerkung is recorded as the
     // person's own words, so nothing of the proposal is copied into it.
-    setBestaetigen(false);
   }
 
-  /** What became of the proposal — the assistant's quality signal, never blocking. */
-  function vermerken(gesendet: DisputAktion, keepalive = false) {
-    if (!herkunft) return;
-    const was: Schicksal = fuer(herkunft.v) === gesendet ? "sent" : "edited";
-    void schicksal(herkunft.run, was, keepalive).catch(() => undefined);
-  }
+  // Each request and its hold are the action registry's, the ones ⌘K uses too.
+  const ding: Entscheidbar = { art: "disput", d };
+  const fehler = useFehlschlag(schluessel(ding))?.error ?? null;
+  const gewaehlt = aktion ? registriert(ding, aktion) : undefined;
 
-  const ablehnung = useMutation({
-    mutationFn: async () => {
-      await ablehnungSenden(d.id);
-      vermerken("ablehnung");
-    },
-    onSuccess: onDone,
-    onError: setFehler,
-  });
-
-  function beilegenHalten() {
-    const text = bemerkung;
+  function senden() {
+    if (!gewaehlt) return;
     setGehalten(true);
-    setFehler(null);
-    hold(
-      `disput/${d.id}`,
-      "Disput beigelegt",
-      async (keepalive) => {
-        try {
-          await beilegen(d.id, text, keepalive);
-          vermerken("beilegen", keepalive);
-          onDone();
-        } catch (e) {
-          setGehalten(false);
-          setFehler(e);
-        }
+    halte(
+      ding,
+      gewaehlt,
+      { code: null, text: gewaehlt.id === "beilegen" ? bemerkung : "" },
+      {
+        herkunft,
+        gesendet: onDone,
+        zurueck: () => setGehalten(false),
+        fehlgeschlagen: () => setGehalten(false),
       },
-      () => setGehalten(false),
     );
   }
 
@@ -201,15 +132,10 @@ export function DisputEntscheiden({
         uebernehmen(wartet.v, wartet.run);
         return;
       }
-      const a = FREIGEBEN.match?.(e)
-        ? "beilegen"
-        : ABLEHNEN.match?.(e) && !d.abgesendet
-          ? "ablehnung"
-          : null;
-      if (!a) return;
+      const a = perTaste(ding, e)?.id;
+      if (a !== "beilegen" && a !== "ablehnung") return;
       e.preventDefault();
       setAktion(a);
-      setBestaetigen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -277,17 +203,14 @@ export function DisputEntscheiden({
           </p>
         )}
 
-        {gehalten ? (
-          <Gehalten text="Beigelegt" />
+        {gehalten && gewaehlt ? (
+          <Gehalten text={gewaehlt.gehalten} />
         ) : (
           <>
             <RadioGroup
               aria-label="Entscheidung"
               value={aktion}
-              onChange={(v) => {
-                setAktion(v as DisputAktion);
-                setBestaetigen(false);
-              }}
+              onChange={(v) => setAktion(v as DisputAktion)}
               orientation="horizontal"
               className="flex gap-2"
             >
@@ -312,26 +235,14 @@ export function DisputEntscheiden({
               </TextField>
             )}
 
-            <Fehler error={fehler ?? ablehnung.error} dienst="invoicd" />
+            <Fehler error={fehler} dienst="invoicd" />
 
-            {aktion === "ablehnung" && bestaetigen ? (
-              <Bestaetigen
-                text="Das sendet die Ablehnung (REMADV) als Marktnachricht an den Rechnungssteller — sie lässt sich nicht zurückholen."
-                pending={ablehnung.isPending}
-                onAbbrechen={() => setBestaetigen(false)}
-                onSenden={() => ablehnung.mutate()}
-              />
-            ) : (
-              <div className="flex justify-end">
-                <AriaButton
-                  isDisabled={aktion === null}
-                  onPress={() => (aktion === "beilegen" ? beilegenHalten() : setBestaetigen(true))}
-                  className={PRIMAER}
-                >
-                  {aktion === "ablehnung" ? "Ablehnung senden …" : "Beilegen"}
-                </AriaButton>
-              </div>
-            )}
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              {gewaehlt && <p className="m-0 flex-1 text-caption text-text-2">{gewaehlt.was}</p>}
+              <AriaButton isDisabled={!gewaehlt} onPress={senden} className={PRIMAER}>
+                {aktion === "ablehnung" ? "Ablehnung senden" : "Beilegen"}
+              </AriaButton>
+            </div>
           </>
         )}
       </Panel>
@@ -341,10 +252,10 @@ export function DisputEntscheiden({
 }
 
 /**
- * The decision on a Prüfposten. A HELD invoice is released — it is issued, so
- * the person confirms. A REVIEW invoice went out when it was banded; „Geprüft"
- * takes it off the list and sends nothing, held for undo. The assistant
- * proposes neither: the risk gate's findings are already the evidence.
+ * The decision on a Prüfposten. A HELD invoice is released — it is issued. A
+ * REVIEW invoice went out when it was banded; „Geprüft" takes it off the list
+ * and sends nothing. Either is held for undo and asks no confirmation. The
+ * assistant proposes neither: the risk gate's findings are already the evidence.
  */
 export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: () => void }) {
   const gehaltenBand = r.risk_band === "HELD";
@@ -352,32 +263,25 @@ export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: 
     dienst: "billingd",
     aktion: gehaltenBand ? "freigeben" : "pruefen",
   });
-  const [bestaetigen, setBestaetigen] = useState(false);
   const [gehalten, setGehalten] = useState(false);
-  const [fehler, setFehler] = useState<unknown>(null);
-  const hold = useHold();
-  const freigabe = useMutation({
-    mutationFn: () => freigeben(r.id),
-    onSuccess: onDone,
-    onError: setFehler,
-  });
+  const halte = useHalten();
+  // The request and its hold are the action registry's, the ones ⌘K uses too.
+  const ding: Entscheidbar = { art: "pruefposten", r };
+  const fehler = useFehlschlag(schluessel(ding))?.error ?? null;
+  const a = registriert(ding, gehaltenBand ? "freigeben" : "geprueft");
 
-  function gepruefthalten() {
+  function senden() {
+    if (!a) return;
     setGehalten(true);
-    setFehler(null);
-    hold(
-      `pruefposten/${r.id}`,
-      "Als geprüft vermerkt",
-      async (keepalive) => {
-        try {
-          await geprueft(r.id, keepalive);
-          onDone();
-        } catch (e) {
-          setGehalten(false);
-          setFehler(e);
-        }
+    halte(
+      ding,
+      a,
+      { code: null, text: "" },
+      {
+        gesendet: onDone,
+        zurueck: () => setGehalten(false),
+        fehlgeschlagen: () => setGehalten(false),
       },
-      () => setGehalten(false),
     );
   }
 
@@ -386,8 +290,7 @@ export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: 
     const onKey = (e: KeyboardEvent) => {
       if (!FREIGEBEN.match?.(e)) return;
       e.preventDefault();
-      if (gehaltenBand) setBestaetigen(true);
-      else gepruefthalten();
+      senden();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -416,29 +319,17 @@ export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: 
         <Notice tone="refusal" title="Die Abrechnung lässt Sie hier nicht entscheiden">
           {verweigert}
         </Notice>
-      ) : gehalten ? (
-        <Gehalten text="Geprüft" />
+      ) : gehalten && a ? (
+        <Gehalten text={a.gehalten} />
       ) : (
         <>
           <Fehler error={fehler} dienst="billingd" />
-          {bestaetigen ? (
-            <Bestaetigen
-              text="Das gibt die Rechnung zur Ausstellung frei — danach nimmt sie nur eine Stornorechnung zurück."
-              pending={freigabe.isPending}
-              onAbbrechen={() => setBestaetigen(false)}
-              onSenden={() => freigabe.mutate()}
-            />
-          ) : (
-            <div className="flex justify-end">
-              <AriaButton
-                onPress={() => (gehaltenBand ? setBestaetigen(true) : gepruefthalten())}
-                aria-keyshortcuts="A"
-                className={PRIMAER}
-              >
-                {gehaltenBand ? "Freigeben …" : "Geprüft"}
-              </AriaButton>
-            </div>
-          )}
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {a && <p className="m-0 flex-1 text-caption text-text-2">{a.was}</p>}
+            <AriaButton onPress={senden} aria-keyshortcuts="A" className={PRIMAER}>
+              {gehaltenBand ? "Freigeben" : "Geprüft"}
+            </AriaButton>
+          </div>
         </>
       )}
     </Panel>

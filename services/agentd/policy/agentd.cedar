@@ -90,13 +90,13 @@ permit(principal, action == Action::"effect:perform", resource);
 // a named human. Trust is a per-argument question, and Cedar sees the call, not
 // the fields.
 //
-// **Neither is configured anywhere today, because there is nothing to configure
-// them on: no manifest declares `mutates: true`.** So the plane's advisory
-// posture — the one mako's AI Act Annex III position rests on
-// — holds by the *absence* of a mutating grant and not by this policy. Adding
-// the first one without `protected_fields` and the human gate would be
-// unguarded, and nothing in `just ci` would say so. That guard is owed at the
-// same time as the grant, not after it.
+// **Neither is configured anywhere, because there is nothing to configure them
+// on: no manifest declares `mutates: true`.** The plane's advisory posture —
+// the one mako's AI Act Annex III position rests on — is held by
+// `cargo xtask check-tool-grants`, which refuses any grant to a tool whose MCP
+// server does not declare `read_only_hint = true`, not by this policy. Lifting
+// that posture means this policy gains `protected_fields` and the human gate in
+// the same change.
 
 // mako's own services, and nothing else. The plane reaches MCP servers over a
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing

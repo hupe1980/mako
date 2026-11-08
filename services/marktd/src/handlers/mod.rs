@@ -34,6 +34,7 @@ pub mod preisblatt;
 pub mod pricat;
 pub mod subscription;
 pub mod tranche;
+pub mod utilmd_stammdaten;
 pub mod versorgung;
 
 use axum::{

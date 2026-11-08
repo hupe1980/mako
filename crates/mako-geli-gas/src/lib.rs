@@ -196,7 +196,7 @@ pub use lieferbeginn::{
     GasSupplierChangeEvent, GasSupplierChangeProjection, GasSupplierChangeRecord,
     GasSupplierChangeRecordData, GasSupplierChangeState, GeliGasSupplierChangeWorkflow,
     RESPONSE_WINDOW_LABEL as LIEFERBEGINN_RESPONSE_WINDOW_LABEL, UTILMD_PIDS, WORKFLOW_NAME,
-    gnb_antwort_accepted, response_pid_for,
+    gnb_anfrage_key, gnb_antwort_accepted, response_pid_for,
 };
 pub use mscons::{
     GasMsconsDatenCommand, GasMsconsDatenEvent, GasMsconsDatenState, GeliGasMsconsWorkflow,

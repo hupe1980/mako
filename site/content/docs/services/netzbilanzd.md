@@ -1,6 +1,6 @@
 +++
 title = "netzbilanzd Operator Guide"
-description = "Operator guide for netzbilanzd, the NB billing daemon: Netznutzungsentgelt, Konzessionsabgabe and Mehr-/Mindermengen settlement into INVOIC drafts, and the MaBiS Summenzeitreihen filed with the BIKO."
+description = "netzbilanzd operator guide: NNE, Konzessionsabgabe and Mehr-/Mindermengen settled into INVOIC drafts, and MaBiS Summenzeitreihen filed with the BIKO."
 weight = 25
 +++
 `netzbilanzd` settles, checks and dispatches every invoice a network operator owes its
@@ -863,8 +863,8 @@ Datenstatus (§9.9.2 Nr. 1).
 `[mabis] submission_target` selects where Summenzeitreihen are filed. One value is
 accepted, `"biko-bilateral"` (the default). `"mabis-hub"` (BK6-24-210) parses
 and then **refuses at startup**: no Beschluss publishes a wire format, endpoint
-or payload shape. Its Anwendungsfälle will be EDIFACT, not API-Webdienste
-([Mitteilung Nr. 58](@/docs/regulatory/bnetza.md), 01.10.2026).
+or payload shape. Mitteilung Nr. 58 (01.10.2026) states that its Anwendungsfälle
+are to be EDIFACT, not API-Webdienste ([BNetzA](@/docs/regulatory/bnetza.md)).
 
 ### Routes and run lifecycle
 

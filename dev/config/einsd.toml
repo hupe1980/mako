@@ -12,6 +12,11 @@ tenant = "9900357000004"
 edmd_url     = "http://127.0.0.1:8380"
 edmd_api_key = "dev-edmd-key"
 
+# The EnFG ledger and Mitteilung: payments made, and each plant's Regelzone and
+# Netzebene. Without them both answer 503.
+accountingd_url = "http://127.0.0.1:9380"
+marktd_url      = "http://127.0.0.1:8180"
+
 [http]
 addr = "127.0.0.1:9180"
 

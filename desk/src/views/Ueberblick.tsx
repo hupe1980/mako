@@ -16,12 +16,19 @@ import { useDeadLetters } from "./DeadLetters";
 import { Hinweise } from "./Hinweise";
 
 /** A tile's state from its query: the service's number, or why there is none. */
-function tileState<T>(
+export function tileState<T>(
   q: { data?: T; isError: boolean; error: Error | null },
   service: Service,
   read: (data: NonNullable<T>) => Omit<Extract<TileState, { kind: "count" }>, "kind">,
 ): TileState {
-  if (q.data) return { kind: "count", ...read(q.data) };
+  if (q.data) {
+    const count = read(q.data);
+    // An answer without the figure is no figure: the tile says the service did
+    // not give one, never a number the Desk made up (`NaN`, a zero).
+    return Number.isFinite(count.n)
+      ? { kind: "count", ...count }
+      : { kind: "failed", service: DIENST[service] };
+  }
   if (q.isError)
     return {
       kind: "failed",

@@ -1,8 +1,12 @@
 // agentd's run API: a person's question starts a run (`POST /api/v1/runs`,
-// answered `202` with the run ids at once) and its answer is read when the
-// run has concluded (`GET /api/v1/runs/{run}/antwort`). REST, not MCP: a run is
-// started, not a tool read. The shapes are agentd's `Accepted` and `Answer`.
+// answered `202` with the run ids at once), its reads arrive as they are
+// journaled (`GET /api/v1/runs/{run}/schritte`, Server-Sent Events), Stop
+// cancels it (`POST /api/v1/runs/{run}/stopp`), and its answer is the stream's
+// last event — or, where no stream can be read, `GET /api/v1/runs/{run}/antwort`.
+// REST, not MCP: a run is started, not a tool read. The shapes are agentd's
+// `Accepted`, `Schritt` and `Answer`.
 
+import type { Instant } from "../format/brands";
 import { problem, sentence } from "./problem";
 import { type Handlung, verweigern } from "./verweigert";
 
@@ -123,6 +127,90 @@ export async function antwort(run: string): Promise<Answer> {
   const res = await reach(`${BASE}/${encodeURIComponent(run)}/antwort`);
   if (!res.ok) throw await failure(res);
   return (await res.json()) as Answer;
+}
+
+/** The read a step made: the service, its tool and what it was asked for. */
+export interface SchrittQuelle {
+  /** The MCP server, as the grant names it. */
+  dienst: string;
+  werkzeug: string;
+  /** The argument value the step's `objekt` names; null when none does. */
+  ref: string | null;
+}
+
+/** One read of a run as its journal records it — one line of the trail. */
+export interface Schritt {
+  /** The journal sequence, also the event's SSE `id`. */
+  seq: number;
+  /** `lesen`, or `fehlgeschlagen` for a call that did not answer. */
+  art: string;
+  /** What was done, agentd's verb from the tool's name: „gelesen", „aufgelistet". */
+  was: string;
+  /** What it was done to, from the call's arguments: „Prozess 4711"; null when none names one. */
+  objekt: string | null;
+  /** Null exactly when `verborgen`: the person may not read the source. */
+  quelle: SchrittQuelle | null;
+  verborgen: boolean;
+  um: Instant;
+}
+
+/** Who stopped a run, and when the journal recorded it. */
+export interface Abbruch {
+  durch: string;
+  um: Instant;
+}
+
+/** What a run's stream tells its reader. */
+export interface StromLeser {
+  schritt: (s: Schritt) => void;
+  /** The conclusion — the same `Answer` `GET …/antwort` returns. */
+  antwort: (a: Answer) => void;
+  abgebrochen: (a: Abbruch) => void;
+  /** The stream cannot be read (refused, absent); the answer read is the way left. */
+  unlesbar: () => void;
+}
+
+/**
+ * Follow a run's steps as agentd journals them. The browser's `EventSource`
+ * reconnects by itself and sends the last event's id as `Last-Event-ID`, so
+ * agentd resumes behind it; a step that still comes twice at the seam is
+ * handed over once. The stream is closed after its conclusion, and the
+ * returned function closes it early.
+ */
+export function schritte(run: string, leser: StromLeser): () => void {
+  if (typeof EventSource === "undefined") {
+    leser.unlesbar();
+    return () => undefined;
+  }
+  const es = new EventSource(`${BASE}/${encodeURIComponent(run)}/schritte`);
+  const gesehen = new Set<string>();
+  const on = <T>(event: string, fn: (data: T) => void, ende = false) =>
+    es.addEventListener(event, (e) => {
+      const m = e as MessageEvent<string>;
+      if (m.lastEventId && gesehen.has(m.lastEventId)) return;
+      if (m.lastEventId) gesehen.add(m.lastEventId);
+      if (ende) es.close();
+      fn(JSON.parse(m.data) as T);
+    });
+  on<Schritt>("schritt", leser.schritt);
+  on<Answer>("antwort", leser.antwort, true);
+  on<Abbruch>("abgebrochen", leser.abgebrochen, true);
+  es.onerror = () => {
+    // CONNECTING is the browser retrying; CLOSED is it giving up — a refusal
+    // or a route agentd does not serve, which only the answer read can name.
+    if (es.readyState === es.CLOSED) leser.unlesbar();
+  };
+  return () => es.close();
+}
+
+/**
+ * Stop a run the person started. agentd cancels it at its next step boundary
+ * and answers `202`; the stream then ends with `abgebrochen`. A run that has
+ * concluded already is refused — its answer stands.
+ */
+export async function stoppen(run: string): Promise<void> {
+  const res = await reach(`${BASE}/${encodeURIComponent(run)}/stopp`, { method: "POST" });
+  if (res.status !== 202) throw await failure(res, { dienst: "agentd", aktion: "stoppen" });
 }
 
 /**

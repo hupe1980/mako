@@ -879,6 +879,8 @@ fn gdpr_anonymization_fields_list_is_complete() {
         "sepa_mandates.kontoinhaber",
         "sepa_mandates.bic",
         "sepa_mandates.debtor_*",
+        "eeg_belege.bank_iban",
+        "eeg_belege.zahlungsempfaenger",
     ] {
         assert!(
             declared.iter().any(|d| d == required),

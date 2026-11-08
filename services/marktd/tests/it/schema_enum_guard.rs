@@ -290,3 +290,48 @@ fn the_removed_bo4e_enums_are_not_a_column_domain() {
         "von_typ must carry exactly mako's own Lokationstyp values"
     );
 }
+
+/// The UTILMD Stammdaten enums `mako-markt` owns — the facts BO4E has no type
+/// for — against the `CHECK` lists of the columns that store them, in both
+/// directions: a variant the column refuses is a 422 on every write naming
+/// it, and a value the column admits that the enum does not read is dropped
+/// to `None` on the read, which the Anmeldung EoG then refuses as missing.
+/// Each value must also be the enum's own serde spelling, which is what the
+/// REST body carries.
+#[test]
+fn utilmd_stammdaten_enums_match_their_check_lists() {
+    use mako_markt::utilmd_stammdaten::{
+        Abrechnungsvariante, Betriebszustand, MsbGrundlage, MsbRolle,
+    };
+    fn reads<T: serde::de::DeserializeOwned>(v: &str, wire: impl Fn(&T) -> &'static str) -> bool {
+        serde_json::from_value::<T>(serde_json::Value::String(v.to_owned()))
+            .is_ok_and(|e| wire(&e) == v)
+    }
+    let sql = migration_sql();
+    type Case = (&'static str, &'static [&'static str], fn(&str) -> bool);
+    let cases: [Case; 4] = [
+        ("betriebszustand", Betriebszustand::VARIANTS, |v| {
+            Betriebszustand::from_wire(v).is_some() && reads::<Betriebszustand>(v, |e| e.as_str())
+        }),
+        ("abrechnungsvariante", Abrechnungsvariante::VARIANTS, |v| {
+            Abrechnungsvariante::from_wire(v).is_some()
+                && reads::<Abrechnungsvariante>(v, |e| e.as_str())
+        }),
+        ("msb_rolle", MsbRolle::VARIANTS, |v| {
+            MsbRolle::from_wire(v).is_some() && reads::<MsbRolle>(v, |e| e.as_str())
+        }),
+        ("grundlage", MsbGrundlage::VARIANTS, |v| {
+            MsbGrundlage::from_wire(v).is_some() && reads::<MsbGrundlage>(v, |e| e.as_str())
+        }),
+    ];
+    for (column, variants, reads_back) in cases {
+        let lists = all_check_lists(&sql, column);
+        assert_eq!(lists.len(), 1, "`{column}` has exactly one CHECK list");
+        let check: BTreeSet<&str> = lists[0].iter().map(String::as_str).collect();
+        let enum_set: BTreeSet<&str> = variants.iter().copied().collect();
+        assert_eq!(check, enum_set, "`{column}` CHECK list vs the enum");
+        for v in variants {
+            assert!(reads_back(v), "`{column}`: {v} must read back as itself");
+        }
+    }
+}

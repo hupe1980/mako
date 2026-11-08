@@ -90,7 +90,7 @@ pub enum Quelle {
 #[derive(Debug, Clone)]
 pub struct PayoutRow {
     pub payout_id: Uuid,
-    pub tr_id: Option<String>,
+    pub tr_id: String,
     pub malo_id: String,
     pub billing_year: i16,
     pub billing_month: i16,
@@ -118,9 +118,10 @@ pub struct GeleisteteZahlung {
     pub quelle: Quelle,
     /// `payout_id` or `aufrechnung_id`.
     pub id: Uuid,
-    /// The plant. `None` for a payout order created without one — the reader
-    /// cannot attribute it and must refuse it rather than guess the plant.
-    pub tr_id: Option<String>,
+    /// The plant: every payout order and Aufrechnung names one
+    /// (`eeg_payout_orders.tr_id` is `NOT NULL`), so every payment served is
+    /// attributable.
+    pub tr_id: String,
     pub malo_id: String,
     pub billing_year: i16,
     pub billing_month: i16,
@@ -160,7 +161,7 @@ pub fn geleistete_zahlungen(
     out.extend(aufrechnungen.into_iter().map(|a| GeleisteteZahlung {
         quelle: Quelle::Aufrechnung,
         id: a.aufrechnung_id,
-        tr_id: Some(a.tr_id),
+        tr_id: a.tr_id,
         malo_id: a.malo_id,
         billing_year: a.billing_year,
         billing_month: a.billing_month,
@@ -180,7 +181,7 @@ mod tests {
     fn payout(status: Option<&str>) -> PayoutRow {
         PayoutRow {
             payout_id: Uuid::new_v4(),
-            tr_id: Some("TR-1".to_owned()),
+            tr_id: "TR-1".to_owned(),
             malo_id: "51238696012".to_owned(),
             billing_year: 2026,
             billing_month: 3,

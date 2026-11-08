@@ -182,6 +182,67 @@ async fn connect_one(
     Ok(Arc::new(client) as Arc<dyn ToolClient>)
 }
 
+/// A tool server that refuses every call of a run whose stop stands.
+///
+/// agentplane acts on a stop at the run's next step boundary, and a
+/// tool-calling agent's whole tool loop is one step: without this, a run the
+/// person stopped would go on reading services until its model answered. With
+/// it, each call after the stop is refused before it leaves — answered to the
+/// model as a refused call, journaled as a failed one — so no service is read
+/// on behalf of a run its starter stopped, and the step ends at the model's
+/// next answer.
+///
+/// The stop is read from the journal store (`JournalStore::cancellation`),
+/// where `request_cancel` writes it durably, so it holds on every instance.
+#[derive(Debug)]
+pub struct StopGuard {
+    inner: Arc<dyn ToolClient>,
+    journal: Arc<dyn agentplane::journal::JournalStore>,
+}
+
+impl StopGuard {
+    /// `inner`, refusing the calls of a run with a standing stop in `journal`.
+    #[must_use]
+    pub fn guarding(
+        inner: Arc<dyn ToolClient>,
+        journal: Arc<dyn agentplane::journal::JournalStore>,
+    ) -> Arc<dyn ToolClient> {
+        Arc::new(Self { inner, journal })
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolClient for StopGuard {
+    async fn call(
+        &self,
+        tool: &agentplane::tools::ToolId,
+        arguments: &serde_json::Value,
+        provenance: Option<&agentplane::core::Provenance>,
+    ) -> Result<serde_json::Value, agentplane::tools::ToolError> {
+        if let Some(p) = provenance {
+            // An unreadable store refuses the call: reading on behalf of a run
+            // that may have been stopped is the direction not to fail in.
+            let stopped = self.journal.cancellation(p.run).await.map_err(|e| {
+                agentplane::tools::ToolError::Unreachable {
+                    tool: tool.clone(),
+                    detail: format!("whether the run was stopped is unreadable: {e}"),
+                }
+            })?;
+            if stopped.is_some() {
+                return Err(agentplane::tools::ToolError::Refused {
+                    tool: tool.clone(),
+                    detail: "the run was stopped; nothing more is read for it".to_owned(),
+                });
+            }
+        }
+        self.inner.call(tool, arguments, provenance).await
+    }
+
+    fn destination(&self, tool: &agentplane::tools::ToolId) -> agentplane::tools::Destination {
+        self.inner.destination(tool)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

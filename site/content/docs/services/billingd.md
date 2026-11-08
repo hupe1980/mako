@@ -242,17 +242,17 @@ The levy line prices the supplier's own CO₂ cost from its series point, and
 its legal basis names that point's source — in 2026 `nEHS-Zertifikatspreis vom
 {datum} (Versteigerung nach § 10 Abs. 1 BEHG)`, never § 4. § 3 Abs. 3 makes
 the Preisbestandteil the Nr. 1 emissions times the § 4 Abs. 1 price at the time
-of delivery, plus Umsatzsteuer, so the statement states that figure
-separately: a 2026 invoice whose CO₂ line is priced from a 63 EUR/t point
-discloses 60 EUR/t and, for 1000 kWh_Hs, `0.18139 t CO₂ × 60 EUR/t = 10.88 EUR
-netto, 12.95 EUR mit Umsatzsteuer (19 %)` — emissions to the cent kaufmännisch,
-the Umsatzsteuer at the rate the supply is charged. An invoice
-whose delivery year has no recorded § 4 price is refused **`RATE_REFUSED`**
+of delivery, plus Umsatzsteuer, and the statement states it separately: a 2026
+invoice whose CO₂ line is priced from a 63 EUR/t point discloses 60 EUR/t and,
+for 1000 kWh_Hs, `0.18139 t CO₂ × 60 EUR/t = 10.88 EUR netto, 12.95 EUR mit
+Umsatzsteuer (19 %)`.
+
+A delivery year without a recorded § 4 price is refused **`RATE_REFUSED`**
 (`satz` `CO2KostAufG`), and so is a period running into a year with another
-§ 4 price: split at 31.12. Until the UBA's 2027 figure is recorded, a 2027
-Gas invoice and a 2027 Fernwärme invoice with an Emissionsfaktor are therefore
-refused. productd's quotation shows the § 4 figure too, and quotes a year
-without one with a `co2kostaufg_hinweis` instead of refusing.
+§ 4 price (split at 31.12.); a 2027 Gas or Fernwärme invoice with an
+Emissionsfaktor is refused until the UBA's 2027 figure is recorded. productd's
+quotation shows the § 4 figure too, and quotes a year without one with a
+`co2kostaufg_hinweis` instead of refusing.
 
 ### Statutory rates by year
 

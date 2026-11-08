@@ -60,6 +60,7 @@ permit(
         Action::"read-lokationszuordnung",
         Action::"read-pricat",
         Action::"read-mmma-preis",
+        Action::"read-utilmd-stammdaten",
         Action::"use-mcp"
     ],
     resource
@@ -109,6 +110,10 @@ permit(
 //                        statutory fallback supply to the wrong supplier.
 //   write-energiemix     §42 EnWG grid-area Energiemix — LFs disclose the
 //                        Reststrommix from it.
+//   write-netznutzungsdaten  the NB's Netznutzungsdaten of a Marktlokation —
+//                        what an Anmeldung EoG 55013/44013 transmits as the
+//                        Gruppenzuordnung, Betriebszustand, Termine and
+//                        Gemeinderabatt of the Marktlokation.
 //   write-mmma-preis     MMMA Gas / MMM Strom settlement prices used by
 //                        netzbilanzd's MMM billing and invoicd's check 6.
 //   dispatch-pricat      (Re-)sends PRICAT 27003 to every active LF partner.
@@ -123,6 +128,7 @@ permit(
         Action::"write-grundversorger",
         Action::"write-energiemix",
         Action::"write-mmma-preis",
+        Action::"write-netznutzungsdaten",
         Action::"dispatch-pricat"
     ],
     resource

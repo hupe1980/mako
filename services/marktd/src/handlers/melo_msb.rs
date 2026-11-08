@@ -45,6 +45,15 @@ pub struct PutMeloMsbBody {
     pub msb_mp_id: String,
     /// Assignment start (ISO `YYYY-MM-DD`).
     pub valid_from: String,
+    /// Which kind of MSB it is — the role a UTILMD `CAV+Z91` names.
+    #[serde(default)]
+    pub msb_rolle: Option<mako_markt::utilmd_stammdaten::MsbRolle>,
+    /// On which footing it operates the Messstelle (`CAV+Z91` DE 7110).
+    #[serde(default)]
+    pub grundlage: Option<mako_markt::utilmd_stammdaten::MsbGrundlage>,
+    /// MP-ID of the grundzuständiger MSB for the Messlokation (`CAV+ZF0`).
+    #[serde(default)]
+    pub gmsb_mp_id: Option<String>,
 }
 
 /// `GET /api/v1/melos/{melo_id}/msb?at=YYYY-MM-DD` — the MSB responsible on a date.
@@ -116,8 +125,13 @@ pub async fn put_melo_msb(
         Err(e) => return mako_service::ApiError::from(e).into_response(),
     };
     info!(%melo_id, msb_mp_id = %body.msb_mp_id, %valid_from, "marktd: assigning MSB to MeLo");
+    let details = crate::pg::MsbDetails {
+        rolle: body.msb_rolle,
+        grundlage: body.grundlage,
+        gmsb_mp_id: body.gmsb_mp_id.as_deref(),
+    };
     match repo
-        .assign_msb(&tenant, &melo_id, &body.msb_mp_id, valid_from)
+        .assign_msb_with(&tenant, &melo_id, &body.msb_mp_id, valid_from, details)
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),

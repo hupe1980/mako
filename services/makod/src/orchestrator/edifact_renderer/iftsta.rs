@@ -131,7 +131,7 @@ pub(super) fn render_iftsta(
         builder = builder.document_id(id);
     }
     if let Some(d) = p.get("document_date").and_then(|v| v.as_str()) {
-        builder = builder.document_date(normalise_date(d));
+        builder = builder.document_date(dokumentdatum_303(mt, d)?);
     }
     if let Some(order_ref) = p
         .get("korrelation_ref")
@@ -141,10 +141,16 @@ pub(super) fn render_iftsta(
         builder = builder.order_reference(order_ref);
     }
     if let Some(ende) = p.get("beendigung_zum").and_then(|v| v.as_str()) {
-        // May arrive RFC 3339 (`2026-08-01T00:00:00Z`) or bare date — take the
-        // date part and strip dashes for the `DTM+93` CCYYMMDD form.
-        let date = ende.split('T').next().unwrap_or(ende);
-        builder = builder.vertragsende(normalise_date(date));
+        // May arrive RFC 3339 (`2026-08-01T00:00:00Z`) or as a bare date; the
+        // date part is the German Vertragsende, and `DTM+93` is `303`, so it
+        // goes out as the UTC instant that day begins. 21042 is MSB → ESA, a
+        // Strom role.
+        builder = builder.vertragsende(prozessdatum_303(
+            mt,
+            "beendigung_zum",
+            ende,
+            mako_fristen::Sparte::Strom,
+        )?);
     }
 
     finish_interchange(builder.serialize(), sender, receiver, msg)

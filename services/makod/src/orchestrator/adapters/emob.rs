@@ -54,11 +54,11 @@ fn daten(msg: &AnyMessage) -> Result<Modellwechseldaten, EngineError> {
         55_238 | 55_239 => [dtm::BEGINN_ZUM, dtm::BILANZIERUNGSBEGINN],
         _ => [dtm::ENDE_ZUM, dtm::BILANZIERUNGSENDE],
     };
-    let process_date = qualifiers
-        .iter()
-        .find_map(|q| vorgang.and_then(|t| t.date(q)))
-        .unwrap_or_default()
-        .to_owned();
+    let process_date = super::prozesstag(
+        qualifiers.iter().find_map(|q| super::sg4_dtm(vorgang, q)),
+        super::utilmd_sparte(u),
+    )?
+    .unwrap_or_default();
 
     Ok(Modellwechseldaten {
         // `SG5 LOC+Z16` explicitly. Modell 2 is Strom-only and the 55239

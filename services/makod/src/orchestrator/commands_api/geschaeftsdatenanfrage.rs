@@ -62,12 +62,16 @@ struct AblehnungBody {
     antwortcode: String,
 }
 
-/// The Stammdaten of an answer, segment by segment.
+/// Stammdaten a command carries whole, segment by segment — the answer to a
+/// Geschäftsdatenanfrage.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StammdatenBody {
     /// `SG5 LOC`, in the MIG's order.
     lokationen: Vec<LokationBody>,
+    /// `SG6` segments — each `RFF` and the `DTM`s of its group.
+    #[serde(default)]
+    sg6: Vec<SegmentBody>,
     /// `SG8` blocks.
     bloecke: Vec<BlockBody>,
     /// `SG12` segments.
@@ -125,6 +129,7 @@ impl From<StammdatenBody> for Stammdaten {
                     id: l.id,
                 })
                 .collect(),
+            sg6: b.sg6.into_iter().map(Into::into).collect(),
             bloecke: b
                 .bloecke
                 .into_iter()

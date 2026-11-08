@@ -33,13 +33,18 @@ export class SchonEntschieden extends Error {
   }
 }
 
-export async function entscheiden(id: string, e: Entscheidung): Promise<void> {
+/**
+ * Send a decision. `keepalive` lets it outlive the page — a decision held for
+ * undo and sent on `pagehide`.
+ */
+export async function entscheiden(id: string, e: Entscheidung, keepalive = false): Promise<void> {
   const tuer = e.aktion === "freigeben" ? "approve" : "reject";
   const { aktion: _, ...body } = e;
   const res = await fetch(`/svc/processd/api/v1/queue/${encodeURIComponent(id)}/${tuer}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+    keepalive,
   });
   if (res.ok) return;
   const p = await problem(res);

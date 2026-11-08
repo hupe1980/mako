@@ -3865,14 +3865,30 @@
                         {
                           "codes": [
                             {
-                              "code": "RLMNEV",
-                              "name": "Dieser Code darf nur für Liefermonate vor dem 01.10.2016 genutzt werden) GABi- RLM-Kunde in Tagesregime - Exit GABi- RLM-Kunde im Stundenregime - Exit GABi- SLP-Kunden analytisches Verfahren - Exit GABi- SLP-Kunden synthetisches Verfahren - Exit"
+                              "code": "GABi-RLMNEV",
+                              "name": "Nominierungsersatzverfahren - Exit (Hinweis: Dieser Code darf nur für Liefermonate vor dem 01.10.2016 genutzt werden)"
+                            },
+                            {
+                              "code": "GABi-RLMmT",
+                              "name": "RLM-Kunde in Tagesregime - Exit"
+                            },
+                            {
+                              "code": "GABi-RLMoT",
+                              "name": "RLM-Kunde im Stundenregime - Exit"
+                            },
+                            {
+                              "code": "GABi-SLPana",
+                              "name": "SLP-Kunden analytisches Verfahren - Exit"
+                            },
+                            {
+                              "code": "GABi-SLPsyn",
+                              "name": "SLP-Kunden synthetisches Verfahren - Exit"
                             }
                           ],
                           "format": "an..17",
                           "id": "1131",
                           "name": "Codeliste, Code",
-                          "note": "Fallgruppenzuordnung GABi- Nominierungsersatzverfahren - Exit (Hinweis:",
+                          "note": "Fallgruppenzuordnung",
                           "status": "R"
                         }
                       ],
@@ -7594,10 +7610,28 @@
                           "status": "M"
                         },
                         {
+                          "codes": [
+                            {
+                              "code": "GABi-RLMmT",
+                              "name": "RLM-Kunde in Tagesregime - Exit"
+                            },
+                            {
+                              "code": "GABi-RLMoT",
+                              "name": "RLM-Kunde im Stundenregime - Exit"
+                            },
+                            {
+                              "code": "GABi-SLPana",
+                              "name": "SLP-Kunden analytisches Verfahren - Exit"
+                            },
+                            {
+                              "code": "GABi-SLPsyn",
+                              "name": "SLP-Kunden synthetisches Verfahren - Exit"
+                            }
+                          ],
                           "format": "an..17",
                           "id": "1131",
                           "name": "Codeliste, Code",
-                          "note": "Fallgruppenzuordnung GABi- RLM-Kunde in Tagesregime - Exit RLMmT GABi- RLM-Kunde im Stundenregime - Exit RLMoT GABi- SLP-Kunden analytisches Verfahren - Exit SLPana GABi- SLP-Kunden synthetisches Verfahren - Exit SLPsyn",
+                          "note": "Fallgruppenzuordnung",
                           "status": "R"
                         }
                       ],

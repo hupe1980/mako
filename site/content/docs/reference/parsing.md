@@ -64,6 +64,7 @@ other one second, because reading only the declared one makes a conformant
 partner's message undetectable — and an undetectable message is dropped without
 an APERAK. Both demand a plausible five-digit code, since `BGM` DE 1004
 legitimately carries a Dokumentennummer that would otherwise beat the real PID.
+
 Every path — full parse, envelope-only routing, typed deserialization — goes
 through that one function, so routing and parsing cannot resolve different codes
 from the same bytes.

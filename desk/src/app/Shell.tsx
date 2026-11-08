@@ -1,4 +1,4 @@
-import { Outlet, useRouter } from "@tanstack/react-router";
+import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Button, Link, RouterProvider } from "react-aria-components";
 import { Icon, type IconName } from "../design/Icon";
@@ -9,6 +9,7 @@ import { AccountMenu } from "./AccountMenu";
 import { CommandPalette } from "./CommandPalette";
 import { HoldProvider } from "./Holds";
 import { SHEET } from "./keys";
+import { LaufPills } from "./LaufPills";
 import { RolleBadge } from "./RolleBadge";
 import { ROLLEN, useRolle } from "./rollen";
 import { ShortcutSheet } from "./ShortcutSheet";
@@ -25,8 +26,9 @@ function NavItem({
   icon: IconName;
   children: ReactNode;
 }) {
-  const router = useRouter();
-  const current = router.state.location.pathname.startsWith(match);
+  // Subscribed, so the mark follows a client-side navigation.
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const current = pathname.startsWith(match);
   return (
     <Link
       href={to}
@@ -126,9 +128,12 @@ export function Shell() {
             </div>
           </aside>
 
-          <main className="relative min-w-0 overflow-auto">
-            <header className="material sticky top-0 z-10 flex h-13 items-center gap-3 border-b border-separator px-5">
+          {/* A scroll into view — a focused citation, a hash link, focus moving
+              down a list — stops below the sticky bar, not under it. */}
+          <main className="relative min-w-0 scroll-pt-(--topbar) overflow-auto">
+            <header className="material sticky top-0 z-10 flex h-(--topbar) items-center gap-3 border-b border-separator px-5">
               <RolleBadge />
+              <LaufPills />
               <div className="flex-1" />
               <Button
                 onPress={() => setPalette(true)}
@@ -142,8 +147,9 @@ export function Shell() {
             <Outlet />
           </main>
         </div>
+        {/* Inside the holds: a decision made in ⌘K is held like any other. */}
+        <CommandPalette open={palette} onOpenChange={setPalette} />
       </HoldProvider>
-      <CommandPalette open={palette} onOpenChange={setPalette} />
       <ShortcutSheet open={sheet} onOpenChange={setSheet} />
     </RouterProvider>
   );

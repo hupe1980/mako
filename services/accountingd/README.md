@@ -39,7 +39,7 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 | Payments | `POST /api/v1/payments/import`, `/import/camt052`, `/camt053`, `/camt054` |
 | Periods & proofs | `POST /api/v1/periods/{id}/seal`, `GET /periods/seals`, `/periods/{id}/balance-proof`, `/entries/{id}/proof`, `/entries/consistency-proof` |
 | Parked bookings | `POST /api/v1/bookings/{key}/rebook`, `/discard` |
-| Jahresabschluss · EEG | `POST /api/v1/jahresabschluss/{malo_id}`; `/api/v1/eeg/payouts`; `GET /api/v1/eeg/enfg-zahlungen` (settled payouts and Aufrechnungen per month, § 13 Abs. 1 EnFG); `POST /api/v1/eeg/aufrechnungen` |
+| Jahresabschluss · EEG | `POST /api/v1/jahresabschluss/{malo_id}`; `/api/v1/eeg/payouts` (each order pays a receipt chain's outstanding difference — a correction is never paid in full twice); `GET /api/v1/eeg/rueckforderungen`; `GET /api/v1/eeg/enfg-zahlungen` (settled payouts and Aufrechnungen per month, § 13 Abs. 1 EnFG); `POST /api/v1/eeg/aufrechnungen` |
 
 ## Configuration
 

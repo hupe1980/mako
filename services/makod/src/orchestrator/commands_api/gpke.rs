@@ -1255,7 +1255,21 @@ pub(super) fn cmd_gpke_eog_ablehnen<'a>(
 /// operator. GPKE Teil 2 Kap. 2.3: the Zuordnung is sent "unverzüglich" and
 /// may be retroactive.
 ///
-/// ## Required payload fields
+/// The process is keyed by [`mako_gpke::eog_nb_anfrage_key`], not the bare
+/// Marktlokation: on a deployment that is NB and LF at once the 55013 returns
+/// through the loopback and opens the E/G's own process on that Marktlokation,
+/// under the same workflow name.
+///
+/// The 55013 carries the Marktlokation's Stammdaten — its Messlokationen, the
+/// `SG8 SEQ+Z98`/`ZF3` groups and the `SG12` Anschriften. They are read from
+/// marktd for the Zuordnungsbeginn ([`super::eog_stammdaten`]); a fact marktd
+/// does not hold refuses the command naming it, and so does a marktd that does
+/// not answer. The Transaktionsgrundergänzung follows from the same record:
+/// `ZW7` when marktd assigns the Marktlokation a Messlokation, `ZW6` when it
+/// assigns none. Before the spawn the 55013 is rendered and checked against
+/// its AHB profile, the check the pre-send gate runs.
+///
+/// ## Payload — [`mako_markt::commands::GpkeEogAnmelden`]
 ///
 /// | Field | Type | Notes |
 /// |---|---|---|
@@ -1263,64 +1277,54 @@ pub(super) fn cmd_gpke_eog_ablehnen<'a>(
 /// | `gv_mp_id` | string | MP-ID of the Grundversorger (§36 Abs. 2 Feststellung) |
 /// | `process_date` | string | Zuordnungsbeginn, ISO-8601 or `YYYYMMDD` (retroactive allowed) |
 /// | `transaktionsgrund` | string | SG4 STS DE9013 (Z02/Z36/Z37/Z39/ZC6/ZC7/ZT6/ZT7/E06/ZZD) |
-/// | `haushaltskunde` | bool (opt.) | CCI Z15/Z18, when known |
+///
+/// Any other key is refused.
 pub(super) async fn dispatch_gpke_eog_anmelden(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let malo_id = extract_malo_id(payload)?;
+    let body: mako_markt::commands::GpkeEogAnmelden =
+        mako_service::json_from_value(payload.clone()).map_err(|e| {
+            DispatchError::InvalidPayload(format!("gpke.eog.anmelden payload: {e}"))
+        })?;
+    let malo_id = extract_malo_id(&serde_json::json!({ "malo_id": body.malo_id }))?;
+    let transaktionsgrund = body.transaktionsgrund.trim().to_owned();
+    let stichtag = super::eog_stammdaten::stichtag(&body.process_date)?;
 
-    let gv_mp_id = payload
-        .get("gv_mp_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"gv_mp_id\" (MP-ID of the Grundversorger)".into(),
-            )
-        })?
-        .to_owned();
-    let process_date = payload
-        .get("process_date")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"process_date\" (Zuordnungsbeginn, ISO-8601)".into(),
-            )
-        })?
-        .to_owned();
-    let transaktionsgrund = payload
-        .get("transaktionsgrund")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"transaktionsgrund\" (SG4 STS DE9013, e.g. \"ZT6\")".into(),
-            )
-        })?
-        .to_owned();
-    let haushaltskunde = payload.get("haushaltskunde").and_then(|v| v.as_bool());
+    let stammdaten = super::eog_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
+    let eog = super::eog_stammdaten::strom_55013(&stammdaten, &transaktionsgrund)?;
 
     let pid = Pruefidentifikator::new(mako_gpke::EOG_ANMELDUNG_PID)
         .map_err(DispatchError::InvalidPayload)?;
     let domain_cmd = mako_gpke::EogCommand::Anmelden {
         pid,
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
-        receiver: MarktpartnerCode::new(gv_mp_id),
+        receiver: MarktpartnerCode::new(body.gv_mp_id),
         location_id: malo_id.clone(),
-        process_date,
+        process_date: body.process_date,
         transaktionsgrund,
-        haushaltskunde,
+        transaktionsgrund_ergaenzung: eog.ergaenzung.to_owned(),
+        haushaltskunde: eog.haushaltskunde,
+        stammdaten: eog.stammdaten,
     };
+    {
+        use mako_engine::workflow::Workflow as _;
+        let out = GpkeEogWorkflow::handle(&mako_gpke::EogState::New, domain_cmd.clone())
+            .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+    }
 
     // ── Duplicate guard (workflow-scoped) ─────────────────────────────────────
-    // Only a still-running EoG process for this MaLo blocks; a concurrent
-    // Lieferbeginn or Sperrung on the same MaLo is legitimate, and an EoG that
-    // was rejected or ended is terminal. See `find_occupying_process`.
-    let occupancy = find_occupying_process::<GpkeEogWorkflow>(
-        state,
-        malo_id.as_str(),
-        mako_gpke::EOG_WORKFLOW_NAME,
-    )
-    .await?;
+    // Only a still-running EoG process this NB opened for the MaLo blocks; a
+    // concurrent Lieferbeginn or Sperrung on the same MaLo is legitimate, and
+    // an EoG that was rejected or ended is terminal. The NB side is keyed by
+    // `eog_nb_anfrage_key`, so the E/G's own process on the MaLo — on a
+    // deployment that is NB and LF at once — neither blocks it nor is found by
+    // it. See `find_occupying_process`.
+    let nb_key = mako_gpke::eog_nb_anfrage_key(malo_id.as_str());
+    let occupancy =
+        find_occupying_process::<GpkeEogWorkflow>(state, &nb_key, mako_gpke::EOG_WORKFLOW_NAME)
+            .await?;
     if let Some(dup_id) = occupancy.process {
         tracing::warn!(
             malo_id    = %malo_id,
@@ -1352,7 +1356,7 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
         workflow_id,
         domain_cmd,
         &deadlines,
-        &[malo_id.as_str()],
+        &[&nb_key],
     )
     .await?;
 

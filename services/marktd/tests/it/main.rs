@@ -19,4 +19,5 @@ mod router_builds;
 mod schema_enum_guard;
 mod temporal_constraints_integration;
 mod tenant_isolation_integration;
+mod utilmd_stammdaten_integration;
 mod versorgung_integration;

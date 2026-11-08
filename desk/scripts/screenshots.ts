@@ -3,20 +3,29 @@
 //
 //   just desk-screenshots
 //
-// Deterministic by construction: Vite serves the Desk, makod's MCP answers are
-// recorded responses in the schema makod declares (services/makod/mcp.snapshot.json),
+// Deterministic by construction: Vite serves the Desk, each service's MCP
+// answers are recorded responses in the schema it declares
+// (services/<name>/mcp.snapshot.json), agentd's stream is the recorded run
+// `fixtures/run-bebildert.jsonl` played by the middleware of `aufzeichnung.ts`,
 // the browser clock is fixed, the zone is Europe/Berlin. No service has to run.
+// Any read the scenes below do not answer gets the stage's empty answer
+// (`buehne.ts`), so no request reaches a real port.
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { type BrowserContext, chromium, type Page } from "playwright";
 import { createServer } from "vite";
+import { aufzeichnungen } from "./aufzeichnung.ts";
+import { aufnehmen } from "./buehne.ts";
 
 const desk = resolve(import.meta.dirname, "..");
 const out = resolve(desk, "../site/content/docs/guide/desk");
 const NOW = "2026-11-04T09:20:00Z"; // 10:20 in Berlin
 
 const KEY = "51238696012";
+// The recorded run every question here starts: four reads about KEY's two
+// processes, then the answer after a pause the trail is photographed in.
+const RUN = "bebildert";
 const UNKNOWN = "51238696782";
 
 // Two processes under one MaLo, with the deadline labels their workflows declare.
@@ -401,13 +410,25 @@ async function recordedProcessd(context: BrowserContext) {
   });
 }
 
-// The assistant's answer about Erika: two sentences the cited reads carry, one
-// with a figure the model worked out — marked, as agentd's check marks it.
 // agentd's catalog, generated from the manifests themselves
 // (`katalog.fixture.json`): six skills, one not activated.
 const katalog = JSON.parse(
   readFileSync(resolve(import.meta.dirname, "katalog.fixture.json"), "utf8"),
-);
+) as { faehigkeiten: { name: string; bilanz?: unknown }[] };
+// The manifests carry no record; agentd counts one beside each run. The desk
+// assistant's last 30 days, so a proposal card ends with its line.
+for (const f of katalog.faehigkeiten) {
+  if (f.name === "desk-assistant") {
+    f.bilanz = {
+      tage: 30,
+      laeufe: 212,
+      offen: 1,
+      abgeschlossen: { succeeded: 205, failed: 6 },
+      hilfreich: { ja: 41, nein: 6 },
+      vorschlag: { sent: 14, edited: 2, dismissed: 1 },
+    };
+  }
+}
 
 // The Lieferant's two inbox sources beyond processd: an invoice in dispute,
 // due by its Zahlungsziel, and a held one — in the shapes invoicd and billingd
@@ -526,7 +547,7 @@ async function recordedAgentd(context: BrowserContext) {
   );
   await context.route("**/svc/agentd/api/v1/runs", (route) => {
     const input = (route.request().postDataJSON() as { input?: { freigabe?: string } }).input;
-    const run_id = input?.freigabe ? "run-freigabe-1" : "run-desk-1";
+    const run_id = input?.freigabe ? "run-freigabe-1" : RUN;
     return route.fulfill({
       status: 202,
       contentType: "application/json",
@@ -535,41 +556,7 @@ async function recordedAgentd(context: BrowserContext) {
       ]),
     });
   });
-  await context.route("**/svc/agentd/api/v1/runs/*/antwort", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        run: "run-desk-1",
-        status: "succeeded",
-        disclosure: "AI-generated.",
-        saetze: [
-          {
-            text: "Offen ist die Anmeldung der Lieferstelle 51238696012, Wohnung Lindenstraße 4.",
-            quelle: "vertragd/get_kunde",
-            belegt: true,
-          },
-          {
-            text: "Der Netzbetreiber muss bis zum 05.11.2026, 11:00 Uhr antworten.",
-            quelle: "processd/list_open_processes",
-            belegt: true,
-          },
-          {
-            text: "Das sind noch rund 25 Stunden.",
-            quelle: "processd/list_open_processes",
-            belegt: false,
-          },
-        ],
-        schritte: [
-          { quelle: "vertragd/get_kunde", fertig: true },
-          { quelle: "makod/get_process", fertig: true },
-          { quelle: "processd/list_open_processes", fertig: true },
-        ],
-        hilfreich: null,
-      }),
-    }),
-  );
-  // Registered last: Playwright asks the newest route first. The same run is
-  // the proposal agentd computed for the Freigabe before anyone asked.
+  // The run agentd computed for the Freigabe before anyone asked: its proposal.
   const proposal = {
     run: "run-freigabe-1",
     status: "succeeded",
@@ -638,7 +625,21 @@ async function shot(page: Page, name: string, theme: string) {
 }
 
 mkdirSync(out, { recursive: true });
-const server = await createServer({ root: desk, server: { port: 0 }, logLevel: "error" });
+// The dev server, for the gallery it alone serves; the recorded runs stand in
+// front of its proxy, so agentd's stream is the fixture's.
+const server = await createServer({
+  root: desk,
+  server: { port: 0 },
+  logLevel: "error",
+  plugins: [
+    {
+      name: "aufzeichnungen",
+      configureServer(s) {
+        s.middlewares.use(aufzeichnungen());
+      },
+    },
+  ],
+});
 await server.listen();
 const base = server.resolvedUrls?.local[0] ?? "http://localhost:5173/";
 const browser = await chromium.launch();
@@ -652,6 +653,7 @@ try {
       locale: "de-DE",
       timezoneId: "Europe/Berlin",
     });
+    await aufnehmen(context, RUN);
     await recordedMakod(context);
     await recordedVertragd(context);
     await recordedProcessd(context);
@@ -664,6 +666,32 @@ try {
     await page.goto(`${base}prozess?key=${KEY}`);
     await page.getByText("2 Prozesse").waitFor();
     await shot(page, "prozesse", theme);
+
+    // A question about the MaLo while the assistant reads: the numbered
+    // trail, the hairline, Stop in the place of Fragen.
+    const fragen = page.getByRole("region", { name: "Fragen" });
+    await fragen.getByRole("button", { name: "Was ist hier offen?" }).click();
+    await fragen.locator("[data-schritt]").nth(3).waitFor();
+    await fragen.getByRole("button", { name: /Stoppen/ }).waitFor();
+    await fragen.evaluate((el) => el.scrollIntoView({ block: "end" }));
+    await shot(page, "fragen-live", theme);
+
+    // Left mid-run, the question rides along as a pill in the top bar.
+    await page.getByRole("navigation", { name: "Ansichten" }).getByRole("link").first().click();
+    const pille = page.getByRole("list", { name: "Laufende Fragen" }).getByRole("button");
+    await pille.waitFor();
+    await page.mouse.move(640, 790);
+    await shot(page, "pille", theme);
+
+    // Back on the question once it answered: the folded receipt, and one
+    // citation focused so the Verlauf it cites is outlined.
+    await pille.click();
+    await fragen.getByRole("button", { name: /Quellen gelesen/ }).waitFor({ timeout: 15_000 });
+    await fragen.getByRole("button", { name: "Beleg 3" }).focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.locator("[data-beleg][data-markiert]").first().waitFor();
+    await fragen.evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await shot(page, "fragen", theme);
 
     // ⌘K on a page with a Fragen panel offers to ask the assistant.
     await page.keyboard.press("ControlOrMeta+k");
@@ -709,9 +737,33 @@ try {
     await page.getByRole("button", { name: "In die Entscheidung übernehmen" }).waitFor();
     await page.keyboard.press("u");
     await page.getByText(/Vom Assistenten vorgeschlagen/).waitFor();
-    await page.getByRole("button", { name: "Freigeben …" }).click();
-    await page.getByRole("button", { name: "Jetzt senden" }).waitFor();
+    await page.getByText(/Sendet die Antwort als Marktnachricht/).waitFor();
     await shot(page, "freigaben", theme);
+
+    // ⌘K decides the same Freigabe from Heute: its action panel, Freigeben
+    // carrying the proposal, the code it names filled in and marked.
+    await page.goto(`${base}heute`);
+    await page.getByRole("button", { name: /verbundenen Lieferanten/ }).waitFor();
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.keyboard.type(KEY);
+    await page.getByRole("menuitem", { name: /Freigabe/ }).click();
+    await page.getByRole("option", { name: /^Freigeben/ }).click();
+    await page.getByText(/Vom Assistenten vorgeschlagen/).waitFor();
+    await shot(page, "palette-aktion", theme);
+
+    // ↵ holds it: the palette closes onto the entry, whose ring counts down
+    // beside the toast that takes it back.
+    await page.keyboard.press("Enter");
+    await page
+      .getByRole("timer", { name: /Gleich gesendet/ })
+      .first()
+      .waitFor();
+    await page.getByRole("button", { name: /Rückgängig/ }).waitFor();
+    // A second into the five: the ring has begun to drain.
+    await page.waitForTimeout(1000);
+    await shot(page, "gehalten", theme);
+    await page.keyboard.press("ControlOrMeta+z");
+    await page.getByRole("timer").first().waitFor({ state: "detached" });
 
     // The Lieferant starts from Heute and from the customer.
     await page.addInitScript(() => localStorage.setItem("mako-desk.rolle", "lieferant"));
@@ -739,9 +791,9 @@ try {
     await shot(page, "heute-disput", theme);
 
     await page.goto(`${base}ueberblick`);
-    await page.getByRole("link", { name: "Anmeldungen offen: 4" }).waitFor();
-    await page.getByRole("link", { name: "Rechnungsprüfung: 1" }).waitFor();
-    await page.getByRole("link", { name: "Rechnungsdispute: 1" }).waitFor();
+    await page.getByRole("link", { name: /^Anmeldungen offen 4/ }).waitFor();
+    await page.getByRole("link", { name: /^Rechnungsprüfung 1/ }).waitFor();
+    await page.getByRole("link", { name: /^Rechnungsdispute 1/ }).waitFor();
     await shot(page, "ueberblick", theme);
 
     await page.goto(`${base}fristen`);
@@ -760,11 +812,6 @@ try {
     await page.getByRole("heading", { name: "Erika Mustermann", level: 1 }).waitFor();
     await shot(page, "kunde", theme);
 
-    await page.getByRole("button", { name: "Was ist bei diesem Kunden offen?" }).click();
-    await page.getByText("nicht belegt").waitFor();
-    await page.getByRole("region", { name: "Fragen" }).scrollIntoViewIfNeeded();
-    await shot(page, "fragen", theme);
-
     await page.keyboard.press("ControlOrMeta+k");
     await page.keyboard.type("Muster");
     await page.getByRole("menuitem", { name: /Max Mustermann/ }).waitFor();
@@ -781,6 +828,7 @@ try {
   });
   // The shell around the gallery reads too (the Freigaben count): the same
   // recorded answers, so no request reaches a real port.
+  await aufnehmen(context, RUN);
   await recordedMakod(context);
   await recordedVertragd(context);
   await recordedProcessd(context);

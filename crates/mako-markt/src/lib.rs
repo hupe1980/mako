@@ -21,6 +21,7 @@
 //! | [`commands`] | ERP command-name constants shared between `makod`'s registry and dispatching services (`processd`, …) |
 //! | [`makod_client`] | Typed HTTP client for `makod` admin + command APIs (reqwest-backed); requires `makod-client` feature |
 //! | [`error`] | `MdmError` — all domain-level error variants |
+//! | [`utilmd_stammdaten`] | `MaloUtilmdStammdaten` — the UTILMD Stammdaten of a Marktlokation on a Stichtag, as marktd serves them |
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -43,3 +44,4 @@ pub mod makod_client;
 #[cfg(feature = "marktd-client")]
 pub mod marktd_client;
 pub mod repository;
+pub mod utilmd_stammdaten;

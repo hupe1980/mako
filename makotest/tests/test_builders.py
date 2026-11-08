@@ -108,8 +108,9 @@ class TestDeterminism:
         assert utilmd_interchange() == utilmd_interchange()
 
     def test_the_document_date_follows_the_send_date(self):
+        """The send date's German midnight — 01.04.2026 00:00 MESZ is 22:00 UTC."""
         message = build_utilmd(55001, LF_ID, NB_ID, on="2026-04-01")
-        assert b"DTM+137:20260401" in message
+        assert b"DTM+137:202603312200?+00:303" in message
 
 
 class TestAcknowledgements:
@@ -155,7 +156,8 @@ class TestBusinessAnswer:
         assert f"LOC+Z16+{MALO}" in text, "the Marktlokation rides SG5 LOC"
         assert "IDE+24+" in text, "IDE carries the Vorgangsnummer, not a location"
         assert "RFF+Z13:55001" not in text, "the request's PID is not echoed"
-        assert "DTM+92:20260501" in text
+        # 01.05.2026 00:00 MESZ — the Strom day begins at 22:00 UTC the day before.
+        assert "DTM+92:202604302200?+00:303" in text
 
     def test_the_answer_validates_on_the_same_format_version(self, anmeldung):
         answer = build_answer(anmeldung, 55002, on=ON)

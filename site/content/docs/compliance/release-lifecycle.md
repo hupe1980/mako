@@ -144,13 +144,15 @@ reads it once more from the binaries it extracts from the pushed images.
 
 **The SBOMs.** `cargo cyclonedx` describes each service binary from the
 lockfile's resolved graph, without build-time dependencies, and `processd`
-with the `integrated` feature the image builds it with. Regulation (EU)
-2024/2847 Annex I Part II point (1) asks a manufacturer to draw up „a software
-bill of materials in a commonly used and machine-readable format covering at
-the very least the top-level dependencies"; Annex VII point 2(b) places it in
-the technical documentation, and Annex VII point 8 provides it to a market
-surveillance authority on reasoned request. Whether those obligations bind mako
-depends on its role under the Regulation, which this page does not determine.
+with the `integrated` feature the image builds it with.
+
+Regulation (EU) 2024/2847 Annex I Part II point (1) asks a manufacturer for „a
+software bill of materials in a commonly used and machine-readable format
+covering at the very least the top-level dependencies" (technical
+documentation, Annex VII points 2(b) and 8). mako is outside the Regulation's
+scope by the owner's determination ([CRA and AI
+Act](@/docs/compliance/eu-regulations.md)); the SBOMs are published for anyone
+who builds mako into a product of their own.
 
 **VEX.** `release/vex.json` carries one OpenVEX statement per RustSec ID in
 `deny.toml`'s `[advisories] ignore` list — status, justification and impact
@@ -158,11 +160,12 @@ statement — so a scanner does not re-raise an advisory the project has
 already assessed. `cargo xtask check-vex` holds the two lists equal in both
 directions, refuses a subcomponent version that neither `Cargo.lock` nor
 `fuzz/Cargo.lock` holds and, where a local RustSec database is present, refuses
-a statement naming a different crate than the advisory does. `fuzz/` lies
-outside the workspace, so `just deny` (and the CI `deny` job) runs the
-advisory check over its lock separately, under the same `deny.toml`. The Regulation does not name
-VEX; it is the machine-readable form chosen here for documenting how a known
-vulnerability is addressed (Annex I Part II point (2)).
+a statement naming a different crate than the advisory does.
+
+`fuzz/` lies outside the workspace, so `just deny` (and the CI `deny` job) runs
+the advisory check over its lock separately, under the same `deny.toml`. The
+Regulation does not name VEX; it is the machine-readable form chosen here for
+documenting how a known vulnerability is addressed (Annex I Part II point (2)).
 
 **Who built it.** Every attestation is a keyless Sigstore bundle signed with
 the release job's OIDC identity: repository, workflow file and commit are in
@@ -186,18 +189,23 @@ and the Docker `chef` stage assert that the active `rustc` is that channel and
 fail otherwise, so an override that would compile a release with a different
 compiler cannot pass silently.
 
-**Pinned supply chain.** Every third-party action is pinned to a full commit
-SHA with its release tag in a trailing comment, every Dockerfile base image to
-an `@sha256:` digest, and every workflow grants `contents: read` by default with
-each job declaring what more it needs. Python packages a workflow installs come
-from hash-pinned requirements files under `.github/requirements/`
-(`pip install --require-hashes`), the job's own built wheel or sdist is installed
-`--no-deps`, and the site tooling installs with `npm ci` against the tracked
-`site/package-lock.json`. `cargo xtask check-action-pins` refuses a
-tag-pinned `uses:`, a digest-less `FROM`, a wider workflow default, an
-unpinned `pip install` and an `npm install`; a pin moves only in a reviewed
-change. OpenSSF Scorecard scores the repository on every push to `main`
-(`scorecard.yml`), publishes the result and fails below a recorded floor.
+**Pinned supply chain.**
+
+- every third-party action is pinned to a full commit SHA, its release tag in a
+  trailing comment;
+- every Dockerfile base image is pinned to an `@sha256:` digest;
+- every workflow grants `contents: read` by default, each job declaring what
+  more it needs;
+- Python packages come from hash-pinned requirements under
+  `.github/requirements/` (`pip install --require-hashes`), a job's own wheel or
+  sdist installs `--no-deps`, and the site tooling installs with `npm ci`
+  against `site/package-lock.json`.
+
+`cargo xtask check-action-pins` refuses a tag-pinned `uses:`, a digest-less
+`FROM`, a wider workflow default, an unpinned `pip install` and an
+`npm install`; a pin moves only in a reviewed change. OpenSSF Scorecard scores
+the repository on every push to `main` (`scorecard.yml`) and fails below a
+recorded floor.
 
 #### The evidence pack
 

@@ -14,10 +14,6 @@ use super::{Set, Unset, bytes_to_segments};
 // These return only the DE 2380 datetime value; qualifier and format code are
 // separate components at the emit site.
 
-fn midnight_303(date: &str) -> String {
-    format!("{date}0000+0000")
-}
-
 fn now_303() -> String {
     let now = time::OffsetDateTime::now_utc();
     let (y, mo, d, h, m) = (
@@ -27,7 +23,7 @@ fn now_303() -> String {
         now.hour(),
         now.minute(),
     );
-    format!("{y:04}{mo:02}{d:02}{h:02}{m:02}+0000")
+    format!("{y:04}{mo:02}{d:02}{h:02}{m:02}")
 }
 
 // ── PRICAT price-body structs (public, re-exported from mod.rs) ──────────────
@@ -48,7 +44,7 @@ pub struct PricatPriceEntry {
     pub range_low: Option<String>,
     /// Optional upper range boundary for tiered pricing.
     pub range_high: Option<String>,
-    /// Optional start of the price validity period (format-303, e.g. `"202504010000+0000"`).
+    /// Optional start of the price validity period (format-303 UTC instant `CCYYMMDDHHMM`, e.g. `"202503312200"` — 01.04.2025 00:00 MESZ).
     pub valid_from: Option<String>,
     /// Optional end of the price validity period (format-303).
     pub valid_to: Option<String>,
@@ -218,8 +214,8 @@ struct PricatBuilderInner {
 /// use edi_energy::builders::{PricatBuilder, PricatPriceEntry, PricatLineItem, PricatPriceGroup};
 ///
 /// let price = PricatPriceEntry::new("CAL", "5.50", "EUR")
-///     .valid_from("202504010000+0000")
-///     .valid_to("202505010000+0000");
+///     .valid_from("202503312200")
+///     .valid_to("202504302200");
 /// let line = PricatLineItem::new(price).schedule_id("AEP001");
 /// let group = PricatPriceGroup::new("Z01", line);
 ///
@@ -321,7 +317,8 @@ impl<S, R> PricatBuilder<S, R> {
         self
     }
 
-    /// Set the document date (`YYYYMMDD`) for DTM+137 (emitted in format 303, midnight UTC).
+    /// Set the document date for DTM+137 — the UTC instant `CCYYMMDDHHMM` (format
+    /// 303); a bare `CCYYMMDD` is refused with [`Error::DtmNotAnInstant`].
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -349,7 +346,7 @@ impl<S, R> PricatBuilder<S, R> {
         let dtm_val = match self.inner.document_date.as_deref() {
             None => now_303(),
             Some(s) if s.starts_with("__303:") => s["__303:".len()..].to_owned(),
-            Some(date) => midnight_303(date),
+            Some(date) => date.to_owned(),
         };
 
         let mut buf = Vec::new();
@@ -372,7 +369,11 @@ impl<S, R> PricatBuilder<S, R> {
         if let Some(pid) = self.inner.pruefidentifikator {
             emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
         }
-        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        emit_comp!(
+            w,
+            "DTM",
+            ["137", &super::ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
+        );
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -413,10 +414,18 @@ impl<S, R> PricatBuilder<S, R> {
                         emit_comp!(w, "RNG", ["10"], [low, high]);
                     }
                     if let Some(from) = &price.valid_from {
-                        emit_comp!(w, "DTM", ["163", &super::ccyymmddhhmm_utc(from), "303"]);
+                        emit_comp!(
+                            w,
+                            "DTM",
+                            ["163", &super::ccyymmddhhmm_utc("163", from)?, "303"]
+                        );
                     }
                     if let Some(to) = &price.valid_to {
-                        emit_comp!(w, "DTM", ["164", &super::ccyymmddhhmm_utc(to), "303"]);
+                        emit_comp!(
+                            w,
+                            "DTM",
+                            ["164", &super::ccyymmddhhmm_utc("164", to)?, "303"]
+                        );
                     }
                 }
             }

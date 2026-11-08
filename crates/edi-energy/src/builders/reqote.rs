@@ -179,9 +179,10 @@ impl<S, R> ReqoteBuilder<S, R> {
 
     /// Set the document date for `DTM+137`.
     ///
-    /// Accepts `CCYYMMDD` or `CCYYMMDDHHMM`; the segment is always rendered in
-    /// DE 2379 format `303` with the `+00` zone the AHB fixes. Defaults to the
-    /// render-time UTC minute.
+    /// Accepts the UTC instant `CCYYMMDDHHMM`; the segment is rendered in DE
+    /// 2379 format `303` with the `+00` zone the AHB fixes, and a bare
+    /// `CCYYMMDD` is refused rather than padded. Defaults to the render-time
+    /// UTC minute.
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -343,10 +344,14 @@ impl<S, R> ReqoteBuilder<S, R> {
             ["REQOTE", "D", "10A", "UN", self.inner.release.as_str()]
         );
         emit_seg!(w, "BGM", code, doc_id);
-        emit_comp!(w, "DTM", ["137", &ccyymmddhhmm_utc(&dtm_val), "303"]);
+        emit_comp!(
+            w,
+            "DTM",
+            ["137", &ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
+        );
         // `DTM+76` — geplanter Leistungsbeginn, format 303 (CCYYMMDDHHMMZZZ).
         if let Some(beginn) = &self.inner.leistungsbeginn {
-            emit_comp!(w, "DTM", ["76", &ccyymmddhhmm_utc(beginn), "303"]);
+            emit_comp!(w, "DTM", ["76", &ccyymmddhhmm_utc("76", beginn)?, "303"]);
         }
         // `FTX+<4451>+++<C108>` — C108 sits at element position 4 in the
         // EDIFACT directory, with 4453 and C107 unused by this MIG. `FTX+ACB`

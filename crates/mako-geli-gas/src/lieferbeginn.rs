@@ -48,6 +48,7 @@
 use std::collections::HashMap;
 
 use mako_engine::lf_vorgang::LfVorgangsdaten;
+use mako_engine::payload::{Stammdaten, UtilmdPayload};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -96,6 +97,22 @@ pub const ANTWORT_PIDS: &[u32] = &[
 /// process through [`GasSupplierChangeCommand::ReceiveGnbAntwort`]; every other
 /// answer in [`ANTWORT_PIDS`] travels the other way and is sent from here.
 pub const GNB_ANTWORT_PIDS: &[u32] = &[44008, 44009, 44011, 44012, 44014, 44015];
+
+/// Correlation key of a process the GNB opened itself with
+/// [`GasSupplierChangeCommand::InitiateGnbProcess`] — 44007, 44010, 44013,
+/// 44019 — and under which each of [`GNB_ANTWORT_PIDS`] resumes it.
+///
+/// A process that answers an inbound Anfrage stays keyed by the bare
+/// Marktlokation. The two sides run the one workflow name on the one
+/// Marktlokation wherever a deployment is GNB and LF at once: the GNB's 44013
+/// reaches its own LF side through the AS4 loopback. Keyed alike, the LF's copy
+/// of the 44013 finds the GNB's process waiting for the answer and is refused
+/// as an Anfrage, and the LF's answer door finds two processes on its
+/// Marktlokation. Keyed apart, each door reaches only its own side.
+#[must_use]
+pub fn gnb_anfrage_key(malo_id: &str) -> String {
+    format!("gnb-anfrage:{malo_id}")
+}
 
 /// Whether a [`GNB_ANTWORT_PIDS`] answer is the Bestätigung (`Some(true)`) or
 /// the Ablehnung (`Some(false)`) — the Prüfidentifikator alone says which.
@@ -654,11 +671,6 @@ impl GasSupplierChangeState {
 
 /// Commands for the GeLi Gas supplier-change workflow.
 #[derive(Clone)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "ReceiveUtilmd carries the whole inbound Vorgang;"
-)]
-// boxing it would only move the allocation, and the command is built once per message.
 pub enum GasSupplierChangeCommand {
     /// Inbound UTILMD G Anfrage received (responder role — GNB or LFA).
     ///
@@ -774,6 +786,17 @@ pub enum GasSupplierChangeCommand {
         process_date: String,
         /// EDIFACT message reference of the outbound Anfrage.
         message_ref: MessageRef,
+        /// `SG4 STS+7` Transaktionsgrund — Muss on 44013 („genau einmal je
+        /// SG4 IDE", UTILMD AHB Gas 1.2 Kap. 5.9, Bedingung `[2061]`).
+        transaktionsgrund: Option<String>,
+        /// `SG4 DTM+158` Bilanzierungsbeginn — Muss on a 44013 without an
+        /// `Ende zum` (Bedingung `[18]`).
+        bilanzierungsbeginn: Option<String>,
+        /// The Marktlokation's Stammdaten as the GNB holds them, carried
+        /// whole: the Messlokationen (`SG5 LOC+172`), the Termine der
+        /// Marktlokation (`SG6 RFF+Z18`), the `SG8` groups and the `SG12`
+        /// Marktlokationsanschrift a 44013 makes Muss.
+        stammdaten: Stammdaten,
     },
     /// GNB received the Antwort to its initiated Anfrage.
     ReceiveGnbAntwort {
@@ -1214,6 +1237,9 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 document_date,
                 process_date,
                 message_ref,
+                transaktionsgrund,
+                bilanzierungsbeginn,
+                stammdaten,
             } => {
                 if !matches!(state, GasSupplierChangeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
@@ -1226,23 +1252,42 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 }
                 let variant = GasProcessVariant::from_anfrage_pid(pid.as_u32())
                     .expect("GNB_INITIATOR_PIDS are all valid Anfrage PIDs");
+                let nonempty =
+                    |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+                if variant == GasProcessVariant::EogAnmeldung {
+                    let missing: Vec<&str> = [
+                        ("transaktionsgrund", nonempty(&transaktionsgrund)),
+                        ("bilanzierungsbeginn", nonempty(&bilanzierungsbeginn)),
+                        ("stammdaten", !stammdaten.is_empty()),
+                    ]
+                    .into_iter()
+                    .filter_map(|(field, present)| (!present).then_some(field))
+                    .collect();
+                    if !missing.is_empty() {
+                        return Err(WorkflowError::validation(format!(
+                            "an Anmeldung EoG 44013 carries {} — UTILMD AHB Gas 1.2 Kap. 5.9 \
+                             makes SG4 STS+7, SG4 DTM+158 and the Marktlokation's Stammdaten \
+                             (SG6 Termine, SG8, SG12 Marktlokationsanschrift) Muss",
+                            missing.join(", ")
+                        )));
+                    }
+                }
 
-                // `render_utilmd` contract keys — see the SendAntwort branch.
-                let outbox_payload = serde_json::json!({
-                    "pid":           pid.as_u32(),
-                    "anfrage_pid":   pid.as_u32(),
-                    "variant":       format!("{variant:?}"),
-                    "malo":          malo_id.as_str(),
-                    "sender":        sender.as_str(),
-                    "receiver":      receiver.as_str(),
-                    "document_date": document_date,
-                    "process_date":  process_date,
-                    "message_ref":   message_ref.as_str(),
-                });
-                let outbox = vec![PendingOutbox::new(
-                    "UTILMD",
+                let outbox = vec![PendingOutbox::typed(
                     receiver.as_str(),
-                    outbox_payload,
+                    &UtilmdPayload {
+                        pid: pid.as_u32(),
+                        sender: sender.as_str().to_owned(),
+                        receiver: Some(receiver.as_str().to_owned()),
+                        malo: Some(malo_id.as_str().to_owned()),
+                        document_date: Some(document_date.clone()),
+                        process_date: Some(process_date.clone()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        transaktionsgrund,
+                        bilanzierungsbeginn,
+                        stammdaten,
+                        ..UtilmdPayload::default()
+                    },
                 )];
 
                 let event = GasSupplierChangeEvent::GnbProcessInitiated {
@@ -1696,6 +1741,35 @@ mod tests {
             document_date: "20250115".to_owned(),
             process_date: "20250301".to_owned(),
             message_ref: MessageRef::new("MSG-GNB-001"),
+            transaktionsgrund: (p == 44013).then(|| "Z36".to_owned()),
+            bilanzierungsbeginn: (p == 44013).then(|| "20250301".to_owned()),
+            stammdaten: if p == 44013 {
+                eog_stammdaten()
+            } else {
+                Stammdaten::default()
+            },
+        }
+    }
+
+    /// A 44013's Stammdaten, reduced to one segment per part — the AHB check
+    /// of what renders is makod's.
+    fn eog_stammdaten() -> Stammdaten {
+        use mako_engine::payload::{StammdatenBlock, StammdatenSegment};
+        let seg = |tag: &str, el: &[&[&str]]| StammdatenSegment {
+            tag: tag.to_owned(),
+            elemente: el
+                .iter()
+                .map(|e| e.iter().map(|c| (*c).to_owned()).collect())
+                .collect(),
+        };
+        Stammdaten {
+            sg6: vec![seg("RFF", &[&["Z18", "51238696012"]])],
+            bloecke: vec![StammdatenBlock {
+                seq: "Z01".to_owned(),
+                segmente: vec![seg("CCI", &[&[], &[], &["Z15"]])],
+            }],
+            sg12: vec![seg("NAD", &[&["DP"], &[], &[], &[], &["Musterstr. 1"]])],
+            ..Stammdaten::default()
         }
     }
 
@@ -1972,6 +2046,64 @@ mod tests {
         .unwrap();
         let state = apply_all(state, &out.events);
         assert!(matches!(state, GasSupplierChangeState::Completed(_)));
+    }
+
+    /// The 44013 carries what the AHB makes Muss on it: the Transaktionsgrund,
+    /// the Bilanzierungsbeginn and the Marktlokation's Stammdaten reach the
+    /// outbox payload under the keys the UTILMD renderer reads.
+    #[test]
+    fn eog_anmeldung_outbox_carries_its_muss_facts() {
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &GasSupplierChangeState::default(),
+            gnb_cmd(44013),
+        )
+        .unwrap();
+        let [utilmd] = out.outbox.as_slice() else {
+            panic!("one UTILMD, got {}", out.outbox.len());
+        };
+        let p: UtilmdPayload = serde_json::from_value(utilmd.payload.clone()).unwrap();
+        assert_eq!(p.pid, 44013);
+        assert_eq!(p.transaktionsgrund.as_deref(), Some("Z36"));
+        assert_eq!(p.bilanzierungsbeginn.as_deref(), Some("20250301"));
+        assert_eq!(p.stammdaten, eog_stammdaten());
+    }
+
+    /// A 44013 lacking a Muss fact is refused, naming each one missing.
+    #[test]
+    fn eog_anmeldung_without_its_muss_facts_is_refused() {
+        let GasSupplierChangeCommand::InitiateGnbProcess {
+            pid,
+            sender,
+            receiver,
+            malo_id,
+            document_date,
+            process_date,
+            message_ref,
+            ..
+        } = gnb_cmd(44013)
+        else {
+            unreachable!()
+        };
+        let err = GeliGasSupplierChangeWorkflow::handle(
+            &GasSupplierChangeState::default(),
+            GasSupplierChangeCommand::InitiateGnbProcess {
+                pid,
+                sender,
+                receiver,
+                malo_id,
+                document_date,
+                process_date,
+                message_ref,
+                transaktionsgrund: None,
+                bilanzierungsbeginn: Some(" ".to_owned()),
+                stammdaten: Stammdaten::default(),
+            },
+        )
+        .expect_err("refused");
+        let text = err.to_string();
+        for field in ["transaktionsgrund", "bilanzierungsbeginn", "stammdaten"] {
+            assert!(text.contains(field), "names {field}: {text}");
+        }
     }
 
     // ── Kündigung beim alten LF (44016) ──────────────────────────────────────

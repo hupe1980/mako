@@ -29,20 +29,13 @@ fn esa_korrelation_ref(p: &serde_json::Value) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-/// A `CCYYMMDDHHMM` stamp for the `303`-format DTM segments the ESA PIDs use.
+/// The `303` value of an ESA process date (REQOTE `DTM+76` Wunschtermin,
+/// ORDERS `DTM+203` Ausführungsdatum, QUOTES `DTM+469` frühester Start).
 ///
-/// The AHBs give DE 2379 as `303` (`CCYYMMDDHHMMZZZ`) throughout Kapitel 4,
-/// with condition `[931]` fixing the offset to `+00`; the builders append the
-/// zone, so this produces the minute-precision part from a `YYYY-MM-DD` date.
-fn esa_dtm303(date: &str) -> String {
-    let digits: String = date.chars().filter(char::is_ascii_digit).collect();
-    let mut out = digits;
-    out.truncate(8);
-    while out.len() < 8 {
-        out.push('0');
-    }
-    out.push_str("0000");
-    out
+/// The ESA is a Strom role (Rollenmodell V2.2), so the date goes out as the
+/// UTC instant of 00:00 Europe/Berlin — see [`prozessdatum_303`].
+fn esa_dtm303(message_type: &str, field: &str, date: &str) -> Result<String, RenderError> {
+    prozessdatum_303(message_type, field, date, mako_fristen::Sparte::Strom)
 }
 
 // ── ORDERS ────────────────────────────────────────────────────────────────────
@@ -108,7 +101,7 @@ pub(super) fn render_reqote(
     if pid == Some(35003) {
         builder = builder.document_code("Z57").delivery_party();
         if let Some(termin) = p.get("wunschtermin").and_then(|v| v.as_str()) {
-            builder = builder.leistungsbeginn(esa_dtm303(termin));
+            builder = builder.leistungsbeginn(esa_dtm303(mt, "wunschtermin", termin)?);
         }
         let contact = p
             .get("contact")
@@ -272,7 +265,7 @@ pub(super) fn render_orders(
             .and_then(|v| v.as_str())
             .or_else(|| p.get("wunschtermin").and_then(|v| v.as_str()))
         {
-            builder = builder.ausfuehrungsdatum(esa_dtm303(datum));
+            builder = builder.ausfuehrungsdatum(esa_dtm303(mt, "ausfuehrungsdatum", datum)?);
         }
         if let Some(abo) = p.get("abonnement").and_then(|v| v.as_str()) {
             builder = builder.abonnement(abo);
@@ -402,7 +395,8 @@ pub(super) fn render_ordrsp(
     let doc_date = p
         .get("document_date")
         .and_then(|v| v.as_str())
-        .map(normalise_date);
+        .map(|d| dokumentdatum_303(mt, d))
+        .transpose()?;
     let message_ref = p
         .get("message_ref")
         .and_then(|v| v.as_str())
@@ -557,7 +551,8 @@ pub(super) fn render_quotes(
     let doc_date = p
         .get("document_date")
         .and_then(|v| v.as_str())
-        .map(normalise_date);
+        .map(|d| dokumentdatum_303(mt, d))
+        .transpose()?;
     let message_ref = p
         .get("message_ref")
         .and_then(|v| v.as_str())
@@ -628,7 +623,7 @@ pub(super) fn render_quotes(
         builder = builder.currency(p.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR"));
         // `DTM+469` — the earliest start the MSB can deliver from (Muss).
         if let Some(start) = p.get("fruehester_start").and_then(|v| v.as_str()) {
-            builder = builder.fruehester_start(esa_dtm303(start));
+            builder = builder.fruehester_start(esa_dtm303(mt, "fruehester_start", start)?);
         }
         let contact = p
             .get("contact")

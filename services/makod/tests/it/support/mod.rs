@@ -117,3 +117,213 @@ pub async fn webdienste_signed(
     );
     axum::http::Request::from_parts(parts, axum::body::Body::from(bytes))
 }
+
+/// A Messlokation of the Gas fixtures' Marktlokation — a Zählpunktbezeichnung, `LOC+172` DE 3225
+/// Bedingung `[951]`.
+pub const GAS_MELO: &str = "DE0000000000000000000000000000042";
+
+/// A Messlokation of the Strom fixtures' Marktlokation.
+pub const STROM_MELO: &str = "DE0000000000000000000000000000043";
+
+/// The Marktgebiet the Gas fixtures' Marktlokation lies in (an Area EIC).
+pub const MARKTGEBIET: &str = "37Y005053MH0000R";
+
+fn adresse(strasse: &str, hausnummer: &str) -> mako_markt::utilmd_stammdaten::Anschrift {
+    mako_markt::utilmd_stammdaten::Anschrift {
+        strasse: Some(strasse.to_owned()),
+        hausnummer: Some(hausnummer.to_owned()),
+        postleitzahl: Some("10115".to_owned()),
+        ort: Some("Berlin".to_owned()),
+        ortsteil: None,
+        landescode: Some("DE".to_owned()),
+    }
+}
+
+fn kunde() -> mako_markt::utilmd_stammdaten::Kunde {
+    mako_markt::utilmd_stammdaten::Kunde {
+        nachname: Some("Muster".to_owned()),
+        vorname: Some("Erika".to_owned()),
+        organisationsname: None,
+        anschrift: Some(adresse("Postweg", "7")),
+    }
+}
+
+fn netznutzung() -> mako_markt::utilmd_stammdaten::Netznutzungsdaten {
+    use mako_markt::utilmd_stammdaten::{Abrechnungsvariante, Betriebszustand};
+    mako_markt::utilmd_stammdaten::Netznutzungsdaten {
+        valid_from: time::macros::date!(2026 - 01 - 01),
+        valid_to: None,
+        haushaltskunde: Some(false),
+        betriebszustand: Some(Betriebszustand::Regelbetrieb),
+        abrechnungstermin: Some("1001".to_owned()),
+        naechste_abrechnung_jahr: Some(2027),
+        abrechnungsintervall_monate: Some(12),
+        abrechnungsvariante: Some(Abrechnungsvariante::ArbeitspreisLeistungspreis),
+        gemeinderabatt_prozent: Some(rust_decimal::Decimal::ZERO),
+    }
+}
+
+fn messlokation(
+    melo: &str,
+    msb: &str,
+    zaehler: mako_markt::utilmd_stammdaten::ZaehlerStammdaten,
+) -> mako_markt::utilmd_stammdaten::MesslokationStammdaten {
+    use mako_markt::utilmd_stammdaten::{Messstellenbetrieb, MsbGrundlage, MsbRolle};
+    mako_markt::utilmd_stammdaten::MesslokationStammdaten {
+        melo_id: melo.to_owned(),
+        messstellenbetrieb: Some(Messstellenbetrieb {
+            msb_mp_id: msb.to_owned(),
+            rolle: Some(MsbRolle::Grundzustaendig),
+            grundlage: Some(MsbGrundlage::Vertrag),
+            gmsb_mp_id: Some(msb.to_owned()),
+        }),
+        zaehler: vec![zaehler],
+    }
+}
+
+/// `malo`'s UTILMD Stammdaten as marktd serves them for a Gas Marktlokation
+/// on 2026-12-01: an RLM Marktlokation in the Niederdruck with one
+/// Messlokation, its MSB `msb` and one Balgengaszähler.
+pub fn gas_stammdaten(
+    malo: &str,
+    msb: &str,
+) -> mako_markt::utilmd_stammdaten::MaloUtilmdStammdaten {
+    use mako_markt::utilmd_stammdaten::{BilanzierungStammdaten, MaloZaehlwerk, ZaehlerStammdaten};
+    use rubo4e::current::{
+        AbgabeArt, Fallgruppenzuordnung, Gasqualitaet, Netzebene, Prognosegrundlage,
+        Zaehlergroesse, Zaehlertyp,
+    };
+    mako_markt::utilmd_stammdaten::MaloUtilmdStammdaten {
+        malo_id: malo.to_owned(),
+        sparte: mako_markt::domain::Sparte::Gas,
+        stichtag: time::macros::date!(2026 - 12 - 01),
+        netzebene: Some(Netzebene::Nd),
+        gasqualitaet: Some(Gasqualitaet::HGas),
+        marktgebiet: Some(MARKTGEBIET.to_owned()),
+        anschrift: Some(adresse("Musterstr.", "1")),
+        kunde: Some(kunde()),
+        zaehlwerke: vec![MaloZaehlwerk {
+            obis_kennzahl: "7-20:99.33.17".to_owned(),
+            konzessionsabgabe_satz: Some(AbgabeArt::Sa),
+            konzessionsabgabe_eur_kwh: None,
+        }],
+        bilanzierung: Some(BilanzierungStammdaten {
+            prognosegrundlage: Some(Prognosegrundlage::Werte),
+            profiltypen: vec![],
+            jahresverbrauchsprognose_kwh: None,
+            fallgruppe: Some(Fallgruppenzuordnung::GabiRlmMitTagesband),
+        }),
+        netznutzung: Some(netznutzung()),
+        messlokationen: vec![messlokation(
+            GAS_MELO,
+            msb,
+            ZaehlerStammdaten {
+                zaehler_id: "Z-GAS-1".to_owned(),
+                zaehlernummer: Some("1ABC0012345678".to_owned()),
+                zaehlertyp: Some(Zaehlertyp::Balgengaszaehler),
+                zaehlergroesse: Some(Zaehlergroesse::G4),
+                fernauslesbar: Some(false),
+                obis_kennzahlen: vec!["7-20:99.33.17".to_owned()],
+            },
+        )],
+    }
+}
+
+/// `malo`'s UTILMD Stammdaten as marktd serves them for a Strom Marktlokation
+/// on 2026-12-01: an SLP Marktlokation in the Niederspannung with one
+/// Messlokation, its MSB `msb` and one moderne Messeinrichtung.
+pub fn strom_stammdaten(
+    malo: &str,
+    msb: &str,
+) -> mako_markt::utilmd_stammdaten::MaloUtilmdStammdaten {
+    use mako_markt::utilmd_stammdaten::{BilanzierungStammdaten, ZaehlerStammdaten};
+    use rubo4e::current::{Netzebene, Profiltyp, Prognosegrundlage, Zaehlertyp};
+    mako_markt::utilmd_stammdaten::MaloUtilmdStammdaten {
+        malo_id: malo.to_owned(),
+        sparte: mako_markt::domain::Sparte::Strom,
+        stichtag: time::macros::date!(2026 - 12 - 01),
+        netzebene: Some(Netzebene::Nsp),
+        gasqualitaet: None,
+        marktgebiet: None,
+        anschrift: Some(adresse("Musterstr.", "1")),
+        kunde: Some(kunde()),
+        zaehlwerke: vec![],
+        bilanzierung: Some(BilanzierungStammdaten {
+            prognosegrundlage: Some(Prognosegrundlage::Profile),
+            profiltypen: vec![Profiltyp::SlpSep],
+            jahresverbrauchsprognose_kwh: Some(rust_decimal::Decimal::from(3500)),
+            fallgruppe: None,
+        }),
+        netznutzung: Some(netznutzung()),
+        messlokationen: vec![messlokation(
+            STROM_MELO,
+            msb,
+            ZaehlerStammdaten {
+                zaehler_id: "Z-STROM-1".to_owned(),
+                zaehlernummer: Some("1EMH0012345678".to_owned()),
+                zaehlertyp: Some(Zaehlertyp::ModerneMesseinrichtung),
+                zaehlergroesse: None,
+                fernauslesbar: Some(false),
+                obis_kennzahlen: vec!["1-1:1.8.0".to_owned()],
+            },
+        )],
+    }
+}
+
+/// A stand-in marktd serving `record` as the UTILMD Stammdaten of whichever
+/// Marktlokation is asked for — `None` answers 404, as marktd does for a
+/// Marktlokation it does not hold.
+pub async fn stub_marktd(
+    record: Option<mako_markt::utilmd_stammdaten::MaloUtilmdStammdaten>,
+) -> mako_markt::marktd_client::MarktdClient {
+    use axum::{extract::Path, response::IntoResponse, routing::get};
+    let record = std::sync::Arc::new(record);
+    let app = axum::Router::new().route(
+        "/api/v1/malos/{id}/utilmd-stammdaten",
+        get(move |Path(id): Path<String>| {
+            let record = std::sync::Arc::clone(&record);
+            async move {
+                match record.as_ref() {
+                    Some(r) => {
+                        let mut r = r.clone();
+                        r.malo_id = id;
+                        axum::Json(r).into_response()
+                    }
+                    None => axum::http::StatusCode::NOT_FOUND.into_response(),
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind stand-in marktd");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    mako_markt::marktd_client::MarktdClient::new(
+        format!("http://{addr}"),
+        secrecy::SecretString::from("test-key"),
+        reqwest::Client::new(),
+    )
+}
+
+/// A marktd client pointed at a port nothing listens on.
+pub fn unreachable_marktd() -> mako_markt::marktd_client::MarktdClient {
+    mako_markt::marktd_client::MarktdClient::new(
+        "http://127.0.0.1:9",
+        secrecy::SecretString::from("test-key"),
+        reqwest::Client::new(),
+    )
+}
+
+/// The `geli.eog.anmelden` body for `malo` to the E/G `gv_mp_id` — the
+/// command's facts only; makod reads the Marktlokation's Stammdaten from
+/// marktd.
+pub fn geli_eog_anmeldung(malo: &str, gv_mp_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "malo_id": malo,
+        "gv_mp_id": gv_mp_id,
+        "process_date": "2026-12-01",
+        "bilanzierungsbeginn": "2026-12-01",
+        "transaktionsgrund": "Z36",
+    })
+}

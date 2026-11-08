@@ -323,8 +323,8 @@ impl OutboundPayload for UtilmdPayload {
     const MESSAGE_TYPE: &'static str = "UTILMD";
 }
 
-/// Stammdaten a Vorgang carries whole: every `SG5 LOC`, `SG8` block and
-/// `SG12` segment, as the sender holds them.
+/// Stammdaten a Vorgang carries whole: every `SG5 LOC`, `SG6` segment, `SG8`
+/// block and `SG12` segment, as the sender holds them.
 ///
 /// A Stammdaten-Antwort is the Netzbetreiber's master data of a Lokation —
 /// UTILMD AHB Strom 2.2 Kap. 9.5 gives 55035, 55095 and 55060 several dozen
@@ -336,6 +336,10 @@ pub struct Stammdaten {
     /// `SG5 LOC` — `(DE 3227 qualifier, DE 3225 ID)`, in the MIG's order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lokationen: Vec<StammdatenLokation>,
+    /// `SG6` segments — each `RFF` and the `DTM`s of its group, in order:
+    /// the Termine der Marktlokation (`RFF+Z18` with `DTM+Z21`/`Z09`/`Z22`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sg6: Vec<StammdatenSegment>,
     /// `SG8` blocks, each opened by its `SEQ`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bloecke: Vec<StammdatenBlock>,
@@ -348,7 +352,10 @@ impl Stammdaten {
     /// `true` when nothing is carried.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.lokationen.is_empty() && self.bloecke.is_empty() && self.sg12.is_empty()
+        self.lokationen.is_empty()
+            && self.sg6.is_empty()
+            && self.bloecke.is_empty()
+            && self.sg12.is_empty()
     }
 }
 

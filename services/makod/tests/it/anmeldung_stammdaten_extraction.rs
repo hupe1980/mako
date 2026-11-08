@@ -91,25 +91,78 @@ fn a_technische_ressource_is_not_a_bilanzierungsgebiet() {
 
 // ── The Lieferbeginn ─────────────────────────────────────────────────────────
 
-/// The Anmeldung's `SG4 DTM+92` „Beginn zum" reaches the command.
+/// The Anmeldung's `SG4 DTM+92` „Beginn zum" reaches the command as the
+/// German date it names.
 ///
 /// An empty `process_date` is not a validation error anywhere: `processd`'s
 /// `AnmeldungPayload::parse` returns `None`, and the caller reads that as "not
 /// addressed to this module". The Anmeldung is then never evaluated, silently.
 ///
+/// The value on the wire is the UTC instant at which the German day begins
+/// (Allgemeine Festlegungen V6.1d Kap. 3.1): a Lieferbeginn on 01.01.2027 is
+/// `202612312300+00`, whose first eight digits are the day before. The
+/// command carries the German date.
+///
 /// The `e2e_lieferbeginn` suite cannot catch it — it submits through the REST
 /// command API, where the ERP supplies `process_date` directly.
 #[test]
 fn the_anmeldung_carries_its_lieferbeginn() {
-    let cmd = adapt("DTM+92:202610010000?+00:303'");
-    let SupplierChangeCommand::ReceiveUtilmd { process_date, .. } = cmd else {
+    for (dtm, expected) in [
+        ("DTM+92:202612312300?+00:303'", "20270101"),
+        ("DTM+92:202706302200?+00:303'", "20270701"),
+    ] {
+        let cmd = adapt(dtm);
+        let SupplierChangeCommand::ReceiveUtilmd { process_date, .. } = cmd else {
+            panic!("expected ReceiveUtilmd");
+        };
+        assert_eq!(
+            process_date, expected,
+            "{dtm}: the Lieferbeginn is the German day that instant begins"
+        );
+    }
+}
+
+/// UTC midnight begins no German day in Strom — it is 01:00 or 02:00 Berlin —
+/// so the adapter refuses the date instead of reading its first eight digits.
+#[test]
+fn a_lieferbeginn_at_utc_midnight_is_refused() {
+    let wire = ANMELDUNG.replace("{cci}", "DTM+92:202610010000?+00:303'");
+    let raw = Platform::with_all_profiles()
+        .parse(wire.as_bytes())
+        .expect("the fixture parses");
+    let Err(err) = gpke_registry().dispatch(&raw as &dyn Any, &FormatVersion::new("FV2025-10-01"))
+    else {
+        panic!("UTC midnight names no Strom day");
+    };
+    assert!(err.to_string().contains("DTM+92"), "{err}");
+}
+
+/// The Gas Anmeldung's `DTM+92` is the Gastag's 06:00 — `0400` UTC in summer
+/// — and reads back to its own date.
+#[test]
+fn the_gas_anmeldung_carries_its_lieferbeginn() {
+    let wire = "\
+UNB+UNOC:3+9870000000006:502+9870000000013:502+270901:0800+GAS-1'\
+UNH+1+UTILMD:D:11A:UN:G1.1'\
+BGM+E01:::+00044001::+9'\
+DTM+137:202709010800?+00:303'\
+RFF+Z13:44001'\
+NAD+MS+9870000000006::332'\
+IDE+24+VORGANG-0001'\
+DTM+92:202710010400?+00:303'\
+LOC+172+51238696012'\
+UNT+9+1'\
+UNZ+1+GAS-1'";
+    let raw = Platform::with_all_profiles()
+        .parse(wire.as_bytes())
+        .expect("the fixture parses");
+    let cmd = makod::adapters::geli_gas_registry(time::OffsetDateTime::UNIX_EPOCH)
+        .dispatch(&raw as &dyn Any, &FormatVersion::new("FV2026-04-01"))
+        .expect("the Gas Anmeldung adapts");
+    let mako_geli_gas::GasSupplierChangeCommand::ReceiveUtilmd { process_date, .. } = cmd else {
         panic!("expected ReceiveUtilmd");
     };
-    assert_eq!(
-        process_date, "202610010000+00",
-        "the Lieferbeginn must survive the adapter — an empty process_date is \
-         silently dropped by processd's NB module"
-    );
+    assert_eq!(process_date, "20271001");
 }
 
 /// `163` is not a UTILMD SG4 date, and reading one must not produce a

@@ -113,7 +113,7 @@ fn both_header_dates_are_303_with_the_931_zone() {
         "DTM+137 must be a zoned 303 stamp: {dtm137}"
     );
     assert!(
-        wire.contains("DTM+76:202609010000?+00:303"),
+        wire.contains("DTM+76:202608312200?+00:303"),
         "DTM+76 must carry the Wunschtermin as a zoned 303 stamp:\n{wire}"
     );
 }

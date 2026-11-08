@@ -284,7 +284,7 @@ pub use datenabruf::{
 pub use eog::{
     EOG_ANMELDUNG_PID, EOG_ANTWORT_PIDS, EOG_PIDS, EOG_RESPONSE_WINDOW_LABEL, EogCommand, EogData,
     EogEvent, EogState, GpkeEogWorkflow, Versorgungsart, WORKFLOW_NAME as EOG_WORKFLOW_NAME,
-    eog_antwort_due_at, eog_response_pid,
+    eog_antwort_due_at, eog_response_pid, nb_anfrage_key as eog_nb_anfrage_key,
 };
 pub use geschaeftsdatenanfrage::{
     ABLEHNUNG_PID as GDA_ABLEHNUNG_PID, ANFRAGE_PID as GDA_ANFRAGE_PID,

@@ -225,16 +225,22 @@ pub fn geli_gas_registry(
                     .and_then(|d| d.value_str())
                     .unwrap_or("")
                     .to_owned(),
-                process_date: u
-                    .transactions()
-                    .first()
-                    // `SG4 DTM+92` „Beginn zum" — the Lieferbeginn. UTILMD AHB
-                    // Strom 2.1 names only `92` and `157 (Änderung zum)` in SG4;
-                    // `163` is an MSCONS qualifier. Reading the wrong one yields
-                    // an empty `process_date`, which `processd` cannot decide on.
-                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::BEGINN_ZUM))
-                    .unwrap_or("")
-                    .to_owned(),
+                // `SG4 DTM+92` „Beginn zum" — the Lieferbeginn of an
+                // Anmeldung — or `DTM+93` „Ende zum", the Lieferende of an
+                // Abmeldung (55004 / 44004), which carries no `92`. `163` is
+                // an MSCONS qualifier. Reading the wrong one yields an empty
+                // `process_date`, which `processd` cannot decide on and the
+                // answer cannot restate.
+                process_date: {
+                    let first = u.transactions().first();
+                    super::prozesstag(
+                        super::sg4_dtm(first, edi_energy::utilmd_codes::dtm::BEGINN_ZUM).or_else(
+                            || super::sg4_dtm(first, edi_energy::utilmd_codes::dtm::ENDE_ZUM),
+                        ),
+                        super::utilmd_sparte(u),
+                    )?
+                    .unwrap_or_default()
+                },
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
@@ -246,7 +252,7 @@ pub fn geli_gas_registry(
                 // Transaktionsgrund *and* its Ergänzung, the Vorgangsnummer,
                 // `DTM+154` and `DTM+471`. Reading the Grund alone escalated
                 // every Gas answer at Prüfschritt 10.
-                vorgang: super::lf_vorgangsdaten(u),
+                vorgang: super::lf_vorgangsdaten(u)?,
                 // No gas-quality characteristic exists in UTILMD G; see
                 // `extract_gasqualitaet`. Always `None` until an AHB defines one.
                 gasqualitaet: extract_gasqualitaet(u.segments()).map(str::to_owned),
@@ -1042,10 +1048,11 @@ pub fn geli_gas_stammdaten_registry(
             // `SG4 DTM+157` „Änderung zum" — the Stammdatenänderung's own date,
             // and what makod's renderer writes for this PID family. `163` is an
             // MSCONS qualifier and appears in no UTILMD Anwendungsfall.
-            let aenderungsdatum = first_tx
-                .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::AENDERUNG_ZUM))
-                .unwrap_or("")
-                .to_owned();
+            let aenderungsdatum = super::prozesstag(
+                super::sg4_dtm(first_tx, edi_energy::utilmd_codes::dtm::AENDERUNG_ZUM),
+                super::utilmd_sparte(u),
+            )?
+            .unwrap_or_default();
 
             let pid_u32 = pid.as_u32();
             if mako_geli_gas::stammdatenaenderung::is_antwort_pid(pid_u32)

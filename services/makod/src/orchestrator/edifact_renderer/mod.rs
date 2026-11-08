@@ -400,6 +400,7 @@ use insrpt::*;
 use invoic::*;
 use mscons::*;
 use orders::*;
+pub(crate) use utilmd::utilmd_ahb_findings;
 use utilmd::*;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -486,8 +487,125 @@ fn optional_pid(
 
 /// Normalise a date string: accepts both ISO-8601 (`2026-01-01`) and
 /// YYYYMMDD (`20260101`). Strips dashes and returns the 8-digit form.
+///
+/// Only for a DTM whose DE 2379 is a **date** format (`102`). A `303` place
+/// takes [`prozessdatum_303`] or [`dokumentdatum_303`].
 fn normalise_date(date: &str) -> String {
     date.replace('-', "")
+}
+
+/// What a payload date field holds: a German calendar date, or a `303`
+/// instant a producer already converted.
+enum Datumsangabe {
+    Tag(time::Date),
+    Zeitpunkt(time::OffsetDateTime),
+}
+
+/// Read a payload date: `YYYYMMDD`, `YYYY-MM-DD`, an RFC 3339 value (its date
+/// part), or a `CCYYMMDDHHMM` UTC instant with or without `+00`.
+fn datumsangabe(value: &str) -> Option<Datumsangabe> {
+    let value = value.trim();
+    let digits: String = value
+        .split('T')
+        .next()
+        .unwrap_or(value)
+        .chars()
+        .filter(|c| *c != '-')
+        .collect();
+    let stamp = digits
+        .strip_suffix("?+00")
+        .or_else(|| digits.strip_suffix("+00"))
+        .unwrap_or(&digits);
+    if !stamp.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let day = |d: &str| {
+        time::Date::from_calendar_date(
+            d[0..4].parse().ok()?,
+            time::Month::try_from(d[4..6].parse::<u8>().ok()?).ok()?,
+            d[6..8].parse().ok()?,
+        )
+        .ok()
+    };
+    match stamp.len() {
+        8 if stamp == digits => day(stamp).map(Datumsangabe::Tag),
+        12 => {
+            let t =
+                time::Time::from_hms(stamp[8..10].parse().ok()?, stamp[10..12].parse().ok()?, 0)
+                    .ok()?;
+            Some(Datumsangabe::Zeitpunkt(
+                day(stamp)?.with_time(t).assume_utc(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// `CCYYMMDDHHMM` of a UTC instant — the `303` value without its `+00`, which
+/// the builder appends.
+fn ccyymmddhhmm(instant: time::OffsetDateTime) -> String {
+    let u = instant.to_offset(time::UtcOffset::UTC);
+    format!(
+        "{:04}{:02}{:02}{:02}{:02}",
+        u.year(),
+        u.month() as u8,
+        u.day(),
+        u.hour(),
+        u.minute()
+    )
+}
+
+/// A **process date** for a `303` DTM — the UTC instant at which the German
+/// day begins in `sparte`.
+///
+/// Allgemeine Festlegungen V6.1d Kap. 3.1 (S. 28–29): every point in time a
+/// process names is gesetzliche deutsche Zeit, the message carries it in UTC,
+/// and a spartenspezifische prozessuale Zeitangabe in format `303` admits only
+/// `2300`/`2200` in Strom (00:00 MEZ/MESZ) and `0500`/`0400` in Gas (06:00).
+/// A Strom Lieferbeginn on 01.01.2027 is therefore `202612312300`. A payload
+/// date is converted with [`mako_fristen::tagesbeginn_utc`]; a payload
+/// instant must already be such a beginning ([`mako_fristen::tag_des_beginns`])
+/// and is refused otherwise — never rounded.
+fn prozessdatum_303(
+    message_type: &str,
+    field: &str,
+    value: &str,
+    sparte: mako_fristen::Sparte,
+) -> Result<String, RenderError> {
+    let refuse = |why: String| RenderError::InsufficientPayload {
+        message_type: message_type.into(),
+        detail: format!("{field} {value:?}: {why}").into(),
+    };
+    match datumsangabe(value) {
+        Some(Datumsangabe::Tag(day)) => {
+            Ok(ccyymmddhhmm(mako_fristen::tagesbeginn_utc(day, sparte)))
+        }
+        Some(Datumsangabe::Zeitpunkt(instant)) => mako_fristen::tag_des_beginns(instant, sparte)
+            .map(|_| ccyymmddhhmm(instant))
+            .map_err(|e| refuse(e.to_string())),
+        None => Err(refuse(
+            "not a date (YYYYMMDD / YYYY-MM-DD) or a CCYYMMDDHHMM UTC instant".to_owned(),
+        )),
+    }
+}
+
+/// A **document date** (`DTM+137`) for a `303` DTM: an instant goes out as
+/// itself; a calendar date becomes the instant that German day begins
+/// (00:00 Europe/Berlin) — never UTC midnight, which is that day's 01:00 or
+/// 02:00, or the previous day's evening in UTC terms read back.
+fn dokumentdatum_303(message_type: &str, value: &str) -> Result<String, RenderError> {
+    match datumsangabe(value) {
+        Some(Datumsangabe::Tag(day)) => Ok(ccyymmddhhmm(mako_fristen::berlin_midnight(day))),
+        Some(Datumsangabe::Zeitpunkt(instant)) => Ok(ccyymmddhhmm(instant)),
+        None => Err(RenderError::InsufficientPayload {
+            message_type: message_type.into(),
+            detail: format!(
+                "document_date {value:?}: not a date (YYYYMMDD / YYYY-MM-DD) or a \
+                 CCYYMMDDHHMM UTC instant"
+            )
+            .into(),
+        }),
+    }
 }
 
 /// Truncate a UUID string to a valid EDIFACT UNH message reference (max 14 chars).
@@ -834,6 +952,78 @@ mod tests {
             !text.contains("SEQ+Z79"),
             "the Strom Produktpaket has no Gas counterpart: {text}"
         );
+    }
+
+    /// **A process date leaves as the UTC instant its German day begins.**
+    /// Allgemeine Festlegungen V6.1d Kap. 3.1 admits `2300`/`2200` (00:00
+    /// MEZ/MESZ) for a Strom and `0500`/`0400` (the Gastag's 06:00) for a Gas
+    /// process date in a `303` DTM. Padding the German date to `0000` states an
+    /// instant one or two hours into the Strom day and before the Gastag.
+    #[test]
+    fn a_process_date_is_the_utc_instant_its_german_day_begins() {
+        for (pid, sender, receiver, date, expected) in [
+            (
+                55001_u32,
+                "9900123456789",
+                "9900987654321",
+                "20270101",
+                "DTM+92:202612312300?+00:303'",
+            ),
+            (
+                55001,
+                "9900123456789",
+                "9900987654321",
+                "2027-07-01",
+                "DTM+92:202706302200?+00:303'",
+            ),
+            (
+                44001,
+                "9870123456789",
+                "9870987654325",
+                "20271001",
+                "DTM+92:202710010400?+00:303'",
+            ),
+        ] {
+            let msg = fake_msg(
+                "UTILMD",
+                receiver,
+                serde_json::json!({
+                    "pid": pid,
+                    "sender": sender,
+                    "receiver": receiver,
+                    "malo": "51238696012",
+                    "process_date": date,
+                    "transaktionsgrund": "E03",
+                    "bilanzkreis": "11XBK-STD------Y",
+                }),
+            );
+            let wire = render_to_wire_bytes(&msg, &test_registry(sender))
+                .unwrap_or_else(|e| panic!("{pid} {date}: {e}"));
+            let text = String::from_utf8_lossy(&wire.bytes);
+            assert!(text.contains(expected), "{pid} {date}: {text}");
+        }
+    }
+
+    /// A payload that already carries a `303` instant must name a day
+    /// beginning in its Sparte; UTC midnight is refused rather than sent.
+    #[test]
+    fn a_process_instant_that_begins_no_day_is_refused() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 55001_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "202701010000+00",
+                "transaktionsgrund": "E03",
+                "bilanzkreis": "11XBK-STD------Y",
+            }),
+        );
+        let err = render_to_wire_bytes(&msg, &test_registry("9900123456789"))
+            .expect_err("UTC midnight is not a Strom day start");
+        assert!(err.to_string().contains("process_date"), "{err}");
     }
 
     /// **Three Strom shapes a Gas UTILMD must not carry**, each a segment or a
@@ -1535,7 +1725,10 @@ mod tests {
                 "Prüfidentifikator: {wire}"
             );
             assert!(wire.contains(&format!("IMD++{abo}")), "IMD 7081: {wire}");
-            assert!(wire.contains("DTM+203:202603010000"), "DTM+203: {wire}");
+            assert!(
+                wire.contains("DTM+203:202602282300?+00:303"),
+                "DTM+203 — 01.03.2026 00:00 MEZ: {wire}"
+            );
             assert!(
                 !wire.contains("LOC+"),
                 "ORDERS {pid} carries no LOC (ORDERS AHB 1.1b §4.15): {wire}"
@@ -1661,8 +1854,8 @@ mod tests {
             "order ref SG15 RFF+AGI: {wire}"
         );
         assert!(
-            wire.contains("DTM+93:20260801"),
-            "Vertragsende SG15 DTM+93 (date part only): {wire}"
+            wire.contains("DTM+93:202607312200?+00:303"),
+            "Vertragsende SG15 DTM+93 — 01.08.2026 00:00 MESZ: {wire}"
         );
         edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
             .expect("validate")
@@ -1769,7 +1962,10 @@ mod tests {
             render_to_wire_bytes(&msg, &test_registry("9900555000005")).expect("35003 renders");
         let wire = String::from_utf8(wire.bytes).expect("utf-8");
         assert!(wire.contains("BGM+Z57+"), "BGM 1001 = Z57: {wire}");
-        assert!(wire.contains("DTM+76:202603010000"), "Wunschtermin: {wire}");
+        assert!(
+            wire.contains("DTM+76:202602282300?+00:303"),
+            "Wunschtermin: {wire}"
+        );
         assert!(wire.contains("NAD+DP"), "Liefer-/Bezugsort: {wire}");
         assert!(wire.contains("LOC+172+51238696781"), "Meldepunkt: {wire}");
         // `LIN+1+Z67` then `PIA+5+<code>:Z11` — 7143 is C212's *second*
@@ -1846,7 +2042,7 @@ mod tests {
         // `DTM+273` is a duration: DE 2380 a count, DE 2379 the unit
         // (802 Monat / 803 Woche / 804 Tag) — not a `CCYYMMDD` date.
         assert!(wire.contains("DTM+273:14:804"), "{wire}");
-        assert!(wire.contains("DTM+469:202603010000"), "{wire}");
+        assert!(wire.contains("DTM+469:202602282300?+00:303"), "{wire}");
         assert!(wire.contains("RFF+AAV:ESA-WA-1"), "ZG-T16: {wire}");
         assert!(wire.contains("BGM+Z57+"), "{wire}");
         assert!(wire.contains("NAD+DP"), "{wire}");

@@ -183,6 +183,14 @@ const ROLE_COLUMNS: &[(&str, &str, Site)] = &[
         Site::At("services/marktd/src/pg/subscription.rs", "= ANY(roles)"),
     ),
     (
+        "marktd",
+        "msb_rolle",
+        Site::At(
+            "services/makod/src/orchestrator/commands_api/eog_stammdaten.rs",
+            "(Some(MsbRolle::Grundzustaendig), _) => Some(\"Z39\")",
+        ),
+    ),
+    (
         "processd",
         "mdm_role",
         Site::At("services/processd/src/obs/pg.rs", "mdm_role = $4"),

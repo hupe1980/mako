@@ -78,6 +78,7 @@
 //! - **APERAK AHB 1.1 §2.4.1** — Strom UTILMD 45-min APERAK Frist
 
 use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::payload::{Stammdaten, UtilmdPayload};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -105,6 +106,22 @@ pub const EOG_ANTWORT_PIDS: &[u32] = &[55014, 55015];
 
 /// Deadline label for the E/G answer window (GPKE Teil 2 Kap. 2.3 SD Schritt 2).
 pub const EOG_RESPONSE_WINDOW_LABEL: &str = "gpke-eog-response-window";
+
+/// Correlation key of the NB's own EoG process — the one `gpke.eog.anmelden`
+/// opens with [`EogCommand::Anmelden`] — and under which each of
+/// [`EOG_ANTWORT_PIDS`] resumes it.
+///
+/// The E/G's process answering an inbound 55013 stays keyed by the bare
+/// Marktlokation. Both run the one workflow name on the one Marktlokation
+/// wherever a deployment is NB and LF at once: the NB's 55013 reaches its own
+/// LF side through the AS4 loopback. Keyed alike, the LF's copy of the 55013
+/// finds the NB's process waiting for the answer and is refused as an
+/// Anmeldung, and the LF's answer door finds two processes on its
+/// Marktlokation. Keyed apart, each door reaches only its own side.
+#[must_use]
+pub fn nb_anfrage_key(malo_id: &str) -> String {
+    format!("nb-anfrage:{malo_id}")
+}
 
 /// Derive the outbound ANTWORT PID for the EoG Anmeldung.
 #[must_use]
@@ -550,8 +567,16 @@ pub enum EogCommand {
         process_date: String,
         /// SG4 STS Transaktionsgrund (Z02/Z36/Z37/Z39/ZC6/ZC7/ZT6/ZT7/E06/ZZD).
         transaktionsgrund: String,
+        /// `SG4 STS+7` Transaktionsgrundergänzung — `ZW6` „Pauschale
+        /// Marktlokation" or `ZW7` „Gemessene Marktlokation" (UTILMD AHB
+        /// Strom 2.2, Anwendungsfall 55013).
+        transaktionsgrund_ergaenzung: String,
         /// Haushaltskunde flag (CCI Z15/Z18), if known.
         haushaltskunde: Option<bool>,
+        /// The Marktlokation's Stammdaten as the NB holds them — the `SG5`
+        /// Messlokationen, the `SG8` groups and the `SG12` Anschriften the
+        /// 55013 carries. Read at the transport boundary, never here.
+        stammdaten: Stammdaten,
     },
     /// NB (initiator): the E/G's response (55014/55015) arrived.
     ReceiveAntwort {
@@ -810,7 +835,9 @@ impl Workflow for GpkeEogWorkflow {
                 location_id,
                 process_date,
                 transaktionsgrund,
+                transaktionsgrund_ergaenzung,
                 haushaltskunde,
+                stammdaten,
             } => {
                 if !matches!(state, EogState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -826,20 +853,29 @@ impl Workflow for GpkeEogWorkflow {
                     ));
                 }
 
+                if transaktionsgrund_ergaenzung.trim().is_empty() {
+                    return Err(WorkflowError::rejected(
+                        "EoG Anmeldung requires a Transaktionsgrundergänzung (SG4 STS+7 \
+                         DE 9013, ZW6 Pauschale / ZW7 Gemessene Marktlokation)"
+                            .to_owned(),
+                    ));
+                }
+
                 // Outbound UTILMD 55013 — rendered by the makod EDIFACT
-                // renderer (`message_type = "UTILMD"`).
-                let utilmd = PendingOutbox::new(
-                    "UTILMD",
+                // renderer from its typed payload.
+                let utilmd = PendingOutbox::typed(
                     receiver.as_str(),
-                    serde_json::json!({
-                        "direction":         "outbound",
-                        "pid":               pid.as_u32(),
-                        "sender":            sender.as_str(),
-                        "receiver":          receiver.as_str(),
-                        "malo":              location_id.as_str(),
-                        "process_date":      process_date,
-                        "transaktionsgrund": transaktionsgrund,
-                    }),
+                    &UtilmdPayload {
+                        pid: pid.as_u32(),
+                        sender: sender.as_str().to_owned(),
+                        receiver: Some(receiver.as_str().to_owned()),
+                        malo: Some(location_id.as_str().to_owned()),
+                        process_date: Some(process_date.clone()),
+                        transaktionsgrund: Some(transaktionsgrund.clone()),
+                        transaktionsgrund_ergaenzung: Some(transaktionsgrund_ergaenzung),
+                        stammdaten,
+                        ..UtilmdPayload::default()
+                    },
                 );
                 // Notify observers (processd's read model, ERP) that the statutory fallback
                 // process has been initiated.
@@ -1129,7 +1165,9 @@ mod tests {
             location_id: malo("51238696781"),
             process_date: "20260615".to_owned(), // retroactive Zuordnungsbeginn
             transaktionsgrund: "ZT7".to_owned(), // Kündigung durch Kunde
+            transaktionsgrund_ergaenzung: "ZW6".to_owned(),
             haushaltskunde: Some(true),
+            stammdaten: Stammdaten::default(),
         }
     }
 
@@ -1332,6 +1370,78 @@ mod tests {
         ));
     }
 
+    /// The 55013 carries the Transaktionsgrundergänzung and the
+    /// Marktlokation's Stammdaten the command was given, in the typed UTILMD
+    /// payload the renderer reads — a key renamed on either side is a compile
+    /// error, not a 55013 without its SG8 groups.
+    #[test]
+    fn initiator_carries_ergaenzung_and_stammdaten_in_the_typed_payload() {
+        let stammdaten = Stammdaten {
+            lokationen: vec![mako_engine::payload::StammdatenLokation {
+                qualifier: "Z17".to_owned(),
+                id: "DE0000000000000000000000000000042".to_owned(),
+            }],
+            ..Stammdaten::default()
+        };
+        let cmd = match anmelden_cmd() {
+            EogCommand::Anmelden {
+                pid,
+                sender,
+                receiver,
+                location_id,
+                process_date,
+                transaktionsgrund,
+                haushaltskunde,
+                ..
+            } => EogCommand::Anmelden {
+                pid,
+                sender,
+                receiver,
+                location_id,
+                process_date,
+                transaktionsgrund,
+                transaktionsgrund_ergaenzung: "ZW7".to_owned(),
+                haushaltskunde,
+                stammdaten: stammdaten.clone(),
+            },
+            _ => unreachable!(),
+        };
+        let out = GpkeEogWorkflow::handle(&EogState::New, cmd).unwrap();
+        let payload: UtilmdPayload =
+            serde_json::from_value(out.outbox[0].payload.clone()).expect("a typed UTILMD payload");
+        assert_eq!(payload.transaktionsgrund_ergaenzung.as_deref(), Some("ZW7"));
+        assert_eq!(payload.stammdaten, stammdaten);
+    }
+
+    #[test]
+    fn initiator_requires_transaktionsgrund_ergaenzung() {
+        let cmd = match anmelden_cmd() {
+            EogCommand::Anmelden {
+                pid,
+                sender,
+                receiver,
+                location_id,
+                process_date,
+                transaktionsgrund,
+                haushaltskunde,
+                stammdaten,
+                ..
+            } => EogCommand::Anmelden {
+                pid,
+                sender,
+                receiver,
+                location_id,
+                process_date,
+                transaktionsgrund,
+                transaktionsgrund_ergaenzung: " ".to_owned(),
+                haushaltskunde,
+                stammdaten,
+            },
+            _ => unreachable!(),
+        };
+        assert!(GpkeEogWorkflow::handle(&EogState::New, cmd).is_err());
+    }
+
     #[test]
     fn initiator_requires_transaktionsgrund() {
         let result = GpkeEogWorkflow::handle(
@@ -1343,7 +1453,9 @@ mod tests {
                 location_id: malo("51238696781"),
                 process_date: "20260701".to_owned(),
                 transaktionsgrund: "  ".to_owned(),
+                transaktionsgrund_ergaenzung: "ZW6".to_owned(),
                 haushaltskunde: None,
+                stammdaten: Stammdaten::default(),
             },
         );
         assert!(result.is_err());
@@ -1360,7 +1472,9 @@ mod tests {
                 location_id: malo("51238696781"),
                 process_date: "20260701".to_owned(),
                 transaktionsgrund: "ZT7".to_owned(),
+                transaktionsgrund_ergaenzung: "ZW6".to_owned(),
                 haushaltskunde: None,
+                stammdaten: Stammdaten::default(),
             },
         );
         assert!(result.is_err());

@@ -250,7 +250,9 @@ impl<S, R> MsconsBuilder<S, R> {
         self
     }
 
-    /// Set the document date for DTM+137 (`YYYYMMDD`).
+    /// Set the document date for DTM+137 — the UTC instant `CCYYMMDDHHMM`
+    /// (format 303, optionally `+00`); a bare `CCYYMMDD` is refused with
+    /// [`Error::DtmNotAnInstant`](crate::Error::DtmNotAnInstant).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -334,7 +336,11 @@ impl<S, R> MsconsBuilder<S, R> {
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
         // The `?+` escapes the plus for the EDIFACT release character, which
         // the writer applies.
-        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        emit_comp!(
+            w,
+            "DTM",
+            ["137", &super::ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
+        );
         // The MIG lists `SG1 RFF` Referenz (`AGI`, …) before the Prüfidentifikator's.
         for (qualifier, value) in &self.inner.header_references {
             emit_comp!(w, "RFF", [qualifier, value]);
@@ -375,8 +381,16 @@ impl<S, R> MsconsBuilder<S, R> {
                     // says what the message covers, the second where each
                     // value sits inside it. Both are Muss on a Lastgang.
                     if let Some((start, end)) = &mp.messperiode {
-                        emit_comp!(w, "DTM", ["163", &super::ccyymmddhhmm_utc(start), "303"]);
-                        emit_comp!(w, "DTM", ["164", &super::ccyymmddhhmm_utc(end), "303"]);
+                        emit_comp!(
+                            w,
+                            "DTM",
+                            ["163", &super::ccyymmddhhmm_utc("163", start)?, "303"]
+                        );
+                        emit_comp!(
+                            w,
+                            "DTM",
+                            ["164", &super::ccyymmddhhmm_utc("164", end)?, "303"]
+                        );
                     }
                     if let Some(period) = &mp.balancing_period {
                         emit_comp!(w, "DTM", ["492", period, "610"]);
@@ -420,9 +434,13 @@ impl<S, R> MsconsBuilder<S, R> {
                                 emit_comp!(
                                     w,
                                     "DTM",
-                                    ["163", &super::ccyymmddhhmm_utc(start), "303"]
+                                    ["163", &super::ccyymmddhhmm_utc("163", start)?, "303"]
                                 );
-                                emit_comp!(w, "DTM", ["164", &super::ccyymmddhhmm_utc(end), "303"]);
+                                emit_comp!(
+                                    w,
+                                    "DTM",
+                                    ["164", &super::ccyymmddhhmm_utc("164", end)?, "303"]
+                                );
                             }
                         }
                         // The Leistungsperiode belongs to the line item's

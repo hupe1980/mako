@@ -2441,7 +2441,9 @@ pub async fn anonymize_account(
         "sepa_mandates.iban",
         "sepa_mandates.kontoinhaber",
         "sepa_mandates.bic",
-        "sepa_mandates.debtor_*"
+        "sepa_mandates.debtor_*",
+        "eeg_belege.bank_iban",
+        "eeg_belege.zahlungsempfaenger"
     ]);
 
     let mut tx = pool.begin().await.context("anonymize: begin tx")?;
@@ -2491,7 +2493,21 @@ pub async fn anonymize_account(
     .await
     .context("anonymize: update sepa_mandates")?;
 
-    // 3. Write immutable audit log (GDPR Art. 5(2) accountability).
+    // 3. The creditor einsd forwarded with each EEG receipt. It is a routing
+    //    hint, not a Buchungsbeleg — the order snapshots what was sent — so it
+    //    is erased with the account; an outstanding chain then waits for a
+    //    new zahlungsinformation.
+    sqlx::query(
+        "UPDATE eeg_belege SET bank_iban = NULL, zahlungsempfaenger = NULL
+         WHERE account_id = $1 AND tenant = $2",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .execute(&mut *tx)
+    .await
+    .context("anonymize: update eeg_belege")?;
+
+    // 4. Write immutable audit log (GDPR Art. 5(2) accountability).
     sqlx::query(
         "INSERT INTO anonymization_log
              (account_id, tenant, malo_id, requested_by, legal_basis, anonymized_fields, anonymized_at)

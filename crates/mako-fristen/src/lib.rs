@@ -9,6 +9,7 @@
 //! | Question | Answer |
 //! |---|---|
 //! | *What is today's date, in the market's terms?* | [`heute`], [`berlin_date`], [`berlin_midnight`], [`berlin_now`] |
+//! | *Which UTC instant does an EDIFACT process date carry for this German date, and back?* | [`tagesbeginn_utc`], [`tag_des_beginns`] — 00:00 in Strom, the Gastag's 06:00 in Gas |
 //! | *When is the 4th Werktag after this instant?* | [`add_werktage`], [`deadline_at_werktage`], [`end_of_werktag_after`], [`next_werktag_at`] |
 //! | *Which window does PID 55001 carry?* | [`antwort`] |
 //! | *Which messages does receiving it oblige me to send?* | [`meldung`] |
@@ -86,7 +87,10 @@ pub mod antwort;
 pub mod e_rechnung;
 pub mod empfaengerland;
 pub mod meldung;
+mod tagesbeginn;
 pub mod vorlauf;
+
+pub use tagesbeginn::{KeinTagesbeginn, Sparte, tag_des_beginns, tagesbeginn_utc};
 
 use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time, Weekday};
 use time_tz::{OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, timezones};
@@ -741,7 +745,8 @@ pub fn heute() -> Date {
 /// different date for the six hours before it opens. Use
 /// `mako_gabi_gas::GasDay` — or `metering::DayBoundary::Gas` — for
 /// anything settled on a gas day; this function is the electricity and
-/// calendar-date answer only.
+/// calendar-date answer only. For the UTC instant an EDIFACT process date
+/// carries in either Sparte, [`tagesbeginn_utc`] answers both.
 ///
 /// # Panics
 ///

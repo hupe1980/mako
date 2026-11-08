@@ -15,7 +15,7 @@ export type Handlung =
   // Neu buchen and Verwerfen are one Cedar action (`post-entry`): a refusal
   // of either is a refusal of both.
   | { dienst: "accountingd"; aktion: "buchen" }
-  | { dienst: "agentd"; aktion: "fragen" | "bewerten" };
+  | { dienst: "agentd"; aktion: "fragen" | "bewerten" | "stoppen" };
 
 /** The service refused the person this action: its reason, as it wrote it. */
 export class Verweigert extends Error {
@@ -53,16 +53,21 @@ export function verweigern(h: Handlung, reason: string): Verweigert {
   return new Verweigert(h, reason);
 }
 
+function subscribe(l: () => void): () => void {
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
+
 /** The service's reason when it refused this action this session, else null. */
 export function useVerweigert(h: Handlung): string | null {
   const k = key(h);
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => refused[k] ?? null,
-  );
+  return useSyncExternalStore(subscribe, () => refused[k] ?? null);
+}
+
+/** Every refusal at once — for a list of actions, each asked by its own Handlung. */
+export function useVerweigerungen(): (h: Handlung) => string | null {
+  const alle = useSyncExternalStore(subscribe, () => refused);
+  return (h) => alle[key(h)] ?? null;
 }
 
 /** Forget every refusal — for tests, which share one module. */

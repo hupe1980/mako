@@ -448,6 +448,13 @@ pub fn build_settlement_ce(
         ce_type,
         tr_id,
         serde_json::json!({
+            // The receipt chain is the period — `tr_id`, `billing_year`,
+            // `billing_month` — and every receipt in it states the period's
+            // whole amount. accountingd pays and books the difference to what
+            // the chain already holds, ordered by this event's `time`, so a
+            // correction is never paid in full a second time.
+            "receipt_id": result.id,
+            "korrektur_von": result.korrektur_von,
             "tr_id": tr_id,
             "malo_id": malo_id,
             "billing_year": year,

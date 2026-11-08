@@ -4131,10 +4131,11 @@ async fn the_payout_filters_narrow_instead_of_failing() {
     ] {
         sqlx::query(
             r"INSERT INTO eeg_payout_orders
-                  (malo_id, account_id, billing_year, billing_month, amount_ct,
-                   creditor_iban, creditor_name, payment_type, end_to_end_ref, tenant)
-              VALUES ($1, $2, $3, $4, 1000, 'DE02120300000000202051', 'Betreiber',
-                      $5, $6, $7)",
+                  (malo_id, account_id, tr_id, billing_year, billing_month, amount_ct,
+                   creditor_iban, creditor_name, payment_type, end_to_end_ref, source_ce_id,
+                   tenant)
+              VALUES ($1, $2, 'TR-1', $3, $4, 1000, 'DE02120300000000202051', 'Betreiber',
+                      $5, $6, $6, $7)",
         )
         .bind(&malo)
         .bind(account)
@@ -4555,10 +4556,10 @@ async fn enfg_zahlungen_serve_settled_payouts_and_aufrechnungen_only() {
         sqlx::query(
             "INSERT INTO eeg_payout_orders
                  (malo_id, account_id, tr_id, billing_year, billing_month, amount_ct,
-                  creditor_iban, creditor_name, payment_type, end_to_end_ref,
+                  creditor_iban, creditor_name, payment_type, end_to_end_ref, source_ce_id,
                   pain002_status, tenant)
              VALUES ($1, $2, $3, 2026, 3, 1234, 'DE02120300000000202051', 'X', 'SCT_CORE',
-                     $4, $5, $6)",
+                     $4, $4, $5, $6)",
         )
         .bind(&malo)
         .bind(account_id)
@@ -4591,13 +4592,12 @@ async fn enfg_zahlungen_serve_settled_payouts_and_aufrechnungen_only() {
     let out = accountingd::enfg::zahlungen_im_monat(&pool, &tenant, 2026, 3)
         .await
         .expect("read");
-    let got: Vec<(Quelle, Option<&str>)> =
-        out.iter().map(|z| (z.quelle, z.tr_id.as_deref())).collect();
+    let got: Vec<(Quelle, &str)> = out.iter().map(|z| (z.quelle, z.tr_id.as_str())).collect();
     assert_eq!(
         got,
         vec![
-            (Quelle::Auszahlung, Some("TR-PAID")),
-            (Quelle::Aufrechnung, Some("TR-SET-OFF")),
+            (Quelle::Auszahlung, "TR-PAID"),
+            (Quelle::Aufrechnung, "TR-SET-OFF"),
         ]
     );
 }

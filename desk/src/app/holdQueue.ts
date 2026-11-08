@@ -1,21 +1,21 @@
-// A routine decision waits in the browser before it leaves: the
-// person sees it take effect at once, has five seconds to take it back, and no
-// service needs a reverse action, because nothing was sent. An action that
-// emits a market message never goes through here — it asks for confirmation
-// and is sent at once.
+// Every decision waits in the browser before it leaves — a market message
+// included: the person sees it take effect at once, has five seconds to take
+// it back, and no service needs a reverse action, because nothing was sent.
+// No decision asks for confirmation, in its view or in ⌘K; the hold is the way
+// back.
 
-/** How long a routine decision waits before it is sent. */
+/** How long a decision waits before it is sent. */
 export const HOLD_MS = 5_000;
 
 export interface Hold {
   readonly id: number;
+  /** One decision per key: a later hold on the same key replaces this one. */
+  readonly key: string;
   /** What the toast says was decided: „Vorschlag verworfen". */
   readonly label: string;
 }
 
 interface Entry extends Hold {
-  /** One decision per key: a later hold on the same key replaces this one. */
-  readonly key: string;
   readonly send: (keepalive: boolean) => Promise<unknown>;
   readonly undo: () => void;
   readonly timer: ReturnType<typeof setTimeout>;

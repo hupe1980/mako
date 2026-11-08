@@ -65,16 +65,22 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                     .and_then(|d| d.value_str())
                     .unwrap_or("")
                     .to_owned(),
-                process_date: u
-                    .transactions()
-                    .first()
-                    // `SG4 DTM+92` „Beginn zum" — the Lieferbeginn. UTILMD AHB
-                    // Strom 2.1 names only `92` and `157 (Änderung zum)` in SG4;
-                    // `163` is an MSCONS qualifier. Reading the wrong one yields
-                    // an empty `process_date`, which `processd` cannot decide on.
-                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::BEGINN_ZUM))
-                    .unwrap_or("")
-                    .to_owned(),
+                // `SG4 DTM+92` „Beginn zum" — the Lieferbeginn of an
+                // Anmeldung — or `DTM+93` „Ende zum", the Lieferende of an
+                // Abmeldung (55004 / 44004), which carries no `92`. `163` is
+                // an MSCONS qualifier. Reading the wrong one yields an empty
+                // `process_date`, which `processd` cannot decide on and the
+                // answer cannot restate.
+                process_date: {
+                    let first = u.transactions().first();
+                    super::prozesstag(
+                        super::sg4_dtm(first, edi_energy::utilmd_codes::dtm::BEGINN_ZUM).or_else(
+                            || super::sg4_dtm(first, edi_energy::utilmd_codes::dtm::ENDE_ZUM),
+                        ),
+                        super::utilmd_sparte(u),
+                    )?
+                    .unwrap_or_default()
+                },
                 // `SG4 IDE+24` DE 7402 — echoed in `SG6 RFF+TN` on the NB's
                 // 55036 Information über existierende Zuordnung, where the AHB
                 // marks it Muss.
@@ -605,13 +611,14 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                     .and_then(|d| d.value_str())
                     .unwrap_or("")
                     .to_owned(),
-                process_date: u
-                    .transactions()
-                    .first()
-                    .and_then(|t| t.dtm.iter().find(|d| d.qualifier == "92"))
-                    .and_then(|d| d.value_str())
-                    .unwrap_or("")
-                    .to_owned(),
+                process_date: super::prozesstag(
+                    super::sg4_dtm(
+                        u.transactions().first(),
+                        edi_energy::utilmd_codes::dtm::BEGINN_ZUM,
+                    ),
+                    super::utilmd_sparte(u),
+                )?
+                .unwrap_or_default(),
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
@@ -799,14 +806,16 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                 // Anwendungsfall. `DTM+92` is the Beginn of an Anmeldung and is
                 // absent here, so reading it left every `E_0609` walk without
                 // the date its Prüfschritte 30, 40, 85 and 120 compare against.
-                process_date: u
-                    .transactions()
-                    .first()
-                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::ENDE_ZUM))
-                    .unwrap_or("")
-                    .to_owned(),
+                process_date: super::prozesstag(
+                    super::sg4_dtm(
+                        u.transactions().first(),
+                        edi_energy::utilmd_codes::dtm::ENDE_ZUM,
+                    ),
+                    super::utilmd_sparte(u),
+                )?
+                .unwrap_or_default(),
                 message_ref: MessageRef::new(msg.message_ref()),
-                vorgang: Box::new(super::lf_vorgangsdaten(u)),
+                vorgang: Box::new(super::lf_vorgangsdaten(u)?),
                 validation_passed,
                 validation_errors,
             })
@@ -871,14 +880,16 @@ pub fn gpke_beendigung_zuordnung_registry() -> AdapterRegistry<GpkeBeendigungZuo
                     .to_owned(),
                 // 55010 names a Zuordnungs**ende** — `DTM+93` Ende zum, the
                 // qualifier the AHB marks Muss on this Anwendungsfall.
-                process_date: u
-                    .transactions()
-                    .first()
-                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::ENDE_ZUM))
-                    .unwrap_or("")
-                    .to_owned(),
+                process_date: super::prozesstag(
+                    super::sg4_dtm(
+                        u.transactions().first(),
+                        edi_energy::utilmd_codes::dtm::ENDE_ZUM,
+                    ),
+                    super::utilmd_sparte(u),
+                )?
+                .unwrap_or_default(),
                 message_ref: MessageRef::new(msg.message_ref()),
-                vorgang: Box::new(super::lf_vorgangsdaten(u)),
+                vorgang: Box::new(super::lf_vorgangsdaten(u)?),
                 validation_passed,
                 validation_errors,
             })
@@ -1012,14 +1023,16 @@ pub fn gpke_kuendigung_registry() -> AdapterRegistry<mako_gpke::GpkeKuendigungWo
                     .unwrap_or("")
                     .to_owned(),
                 // The Kündigungstermin: `DTM+93` Ende zum.
-                process_date: u
-                    .transactions()
-                    .first()
-                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::ENDE_ZUM))
-                    .unwrap_or("")
-                    .to_owned(),
+                process_date: super::prozesstag(
+                    super::sg4_dtm(
+                        u.transactions().first(),
+                        edi_energy::utilmd_codes::dtm::ENDE_ZUM,
+                    ),
+                    super::utilmd_sparte(u),
+                )?
+                .unwrap_or_default(),
                 message_ref: MessageRef::new(msg.message_ref()),
-                vorgang: Box::new(super::lf_vorgangsdaten(u)),
+                vorgang: Box::new(super::lf_vorgangsdaten(u)?),
                 validation_passed,
                 validation_errors,
             })
@@ -1113,14 +1126,16 @@ pub fn gpke_ankuendigung_zuordnung_lf_registry()
                     .unwrap_or("")
                     .to_owned(),
                 // 55607 announces a Zuordnungs**beginn**: `DTM+92` „Beginn zum".
-                process_date: u
-                    .transactions()
-                    .first()
-                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::BEGINN_ZUM))
-                    .unwrap_or("")
-                    .to_owned(),
+                process_date: super::prozesstag(
+                    super::sg4_dtm(
+                        u.transactions().first(),
+                        edi_energy::utilmd_codes::dtm::BEGINN_ZUM,
+                    ),
+                    super::utilmd_sparte(u),
+                )?
+                .unwrap_or_default(),
                 message_ref: MessageRef::new(msg.message_ref()),
-                vorgang: Box::new(super::lf_vorgangsdaten(u)),
+                vorgang: Box::new(super::lf_vorgangsdaten(u)?),
                 validation_passed,
                 validation_errors,
             })
@@ -2124,15 +2139,15 @@ pub fn gpke_eog_registry(
                             .and_then(|d| d.value_str())
                             .unwrap_or("")
                             .to_owned(),
-                        process_date: first_tx
-                            .and_then(|t| {
+                        process_date: super::prozesstag(
+                            first_tx.and_then(|t| {
                                 t.dtm
                                     .iter()
                                     .find(|d| d.qualifier == "92" || d.qualifier == "163")
-                            })
-                            .and_then(|d| d.value_str())
-                            .unwrap_or("")
-                            .to_owned(),
+                            }),
+                            super::utilmd_sparte(u),
+                        )?
+                        .unwrap_or_default(),
                         message_ref: MessageRef::new(msg.message_ref()),
                         transaktionsgrund,
                         // SG10 CCI Z15/Z18 household indicator (best-effort).
@@ -2217,10 +2232,11 @@ pub fn gpke_stammdaten_registry(
             // `SG4 DTM+157` „Änderung zum" — the Stammdatenänderung's own date,
             // and what makod's renderer writes for this PID family. `163` is an
             // MSCONS qualifier and appears in no UTILMD Anwendungsfall.
-            let aenderungsdatum = first_tx
-                .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::AENDERUNG_ZUM))
-                .unwrap_or("")
-                .to_owned();
+            let aenderungsdatum = super::prozesstag(
+                super::sg4_dtm(first_tx, edi_energy::utilmd_codes::dtm::AENDERUNG_ZUM),
+                super::utilmd_sparte(u),
+            )?
+            .unwrap_or_default();
 
             let pid_u32 = pid.as_u32();
             if mako_gpke::is_rueckmeldung_pid(pid_u32) {
@@ -2387,9 +2403,10 @@ pub fn gpke_beendigung_zuordnung_antwort_registry()
                 }),
                 // **Fall b** — the LFA agreed to an earlier Zuordnungsende and
                 // „teilt sein Lieferendedatum in der Antwort mit" (`A34`).
-                zuordnungsende: vorgang
-                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::ENDE_ZUM))
-                    .map(ToOwned::to_owned),
+                zuordnungsende: super::prozesstag(
+                    super::sg4_dtm(vorgang, edi_energy::utilmd_codes::dtm::ENDE_ZUM),
+                    super::utilmd_sparte(u),
+                )?,
             })
         },
     ));

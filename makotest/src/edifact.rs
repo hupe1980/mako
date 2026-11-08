@@ -132,10 +132,12 @@ pub struct Vorgang {
     /// `(DE 2005 qualifier, DE 2380 value)` for every `SG4 DTM`, **as written**.
     ///
     /// The value is not the `YYYYMMDD` a builder takes: UTILMD SG4 dates are
-    /// DE 2379 format `303`, so the wire carries `CCYYMMDDHHMMZZZ` —
-    /// `"202605010000+00"` for 1 May 2026. Ask `iso_date()` for the calendar
-    /// day; this stays raw because a zone-less `303` is malformed and a
-    /// normalised view would hide that.
+    /// DE 2379 format `303`, so the wire carries the UTC instant at which the
+    /// German day begins — `"202604302200+00"` for a Strom 1 May 2026,
+    /// `"202605010400+00"` for a Gas one (Allgemeine Festlegungen V6.1d
+    /// Kap. 3.1). Ask `iso_date()` for the calendar day; this stays raw
+    /// because a zone-less `303` is malformed and a normalised view would hide
+    /// that.
     pub dates: Vec<(String, String)>,
     /// `(DE 1153 qualifier, DE 1154 value)` for every `SG6 RFF`.
     pub references: Vec<(String, String)>,
@@ -147,6 +149,9 @@ pub struct Vorgang {
     /// the EBD number only for the GPKE and GeLi Gas trees; every WiM answer
     /// names an `S_xxxx` / `G_xxxx` list instead.
     pub antwort_codeliste: Option<String>,
+    /// `"STROM"` or `"GAS"`, read off the release — it decides where the day
+    /// a `303` process date names begins.
+    pub sparte: String,
 }
 
 #[pymethods]
@@ -167,9 +172,9 @@ impl Vorgang {
 
     /// The raw DE 2380 value of the first `SG4 DTM` with that qualifier.
     ///
-    /// Format `303`, so `"202605010000+00"` rather than `"20260501"`. Use this
-    /// to assert what is really on the wire, and `iso_date()` to assert which
-    /// day the Vorgang names.
+    /// Format `303`, so `"202604302200+00"` rather than `"20260501"` for a
+    /// Strom 1 May. Use this to assert what is really on the wire, and
+    /// `iso_date()` to assert which day the Vorgang names.
     fn date(&self, qualifier: &str) -> Option<String> {
         self.dates
             .iter()
@@ -177,18 +182,35 @@ impl Vorgang {
             .map(|(_, v)| v.clone())
     }
 
-    /// The calendar day of that `SG4 DTM`, as `YYYY-MM-DD`.
+    /// The German calendar day that `SG4 DTM` names, as `YYYY-MM-DD`.
     ///
-    /// `None` when the segment is absent or its value does not start with a
-    /// `CCYYMMDD` — an unparseable date reads as absent rather than as a
-    /// plausible-looking wrong day.
+    /// A `303` value is the UTC instant at which that day begins in the
+    /// Vorgang's Sparte, so `"202604302200+00"` is a Strom 1 May — its first
+    /// eight digits are the day before. `None` when the segment is absent, its
+    /// value is not a date, or the instant begins no German day in the Sparte
+    /// — an unparseable date reads as absent rather than as a plausible-looking
+    /// wrong day. An eight-digit value is the date itself.
     fn iso_date(&self, qualifier: &str) -> Option<String> {
         let raw = self.date(qualifier)?;
-        let day = raw.get(..8)?;
-        if !day.bytes().all(|b| b.is_ascii_digit()) {
+        let stamp = raw.strip_suffix("+00").unwrap_or(&raw);
+        if !stamp.bytes().all(|b| b.is_ascii_digit()) {
             return None;
         }
-        Some(format!("{}-{}-{}", &day[..4], &day[4..6], &day[6..8]))
+        let day = match stamp.len() {
+            8 => parse_ccyymmdd(stamp)?,
+            12 => {
+                let t = time::Time::from_hms(
+                    stamp[8..10].parse().ok()?,
+                    stamp[10..12].parse().ok()?,
+                    0,
+                )
+                .ok()?;
+                let instant = parse_ccyymmdd(&stamp[..8])?.with_time(t).assume_utc();
+                mako_fristen::tag_des_beginns(instant, sparte_named(&self.sparte)).ok()?
+            }
+            _ => return None,
+        };
+        fmt_date(day).ok()
     }
 
     /// The value of the first `SG6 RFF` with that DE 1153 qualifier.
@@ -212,6 +234,11 @@ impl Vorgang {
 fn vorgaenge_of(msg: &edi_energy::AnyMessage) -> Vec<Vorgang> {
     let edi_energy::AnyMessage::Utilmd(m) = msg else {
         return Vec::new();
+    };
+    let sparte = if m.assoc_code().starts_with('G') {
+        "GAS"
+    } else {
+        "STROM"
     };
     m.transactions()
         .iter()
@@ -243,8 +270,63 @@ fn vorgaenge_of(msg: &edi_energy::AnyMessage) -> Vec<Vorgang> {
             transaktionsgrund: tx.transaktionsgrund().map(|g| g.grund),
             antwort_code: tx.antwort().map(|a| a.code.clone()),
             antwort_codeliste: tx.antwort().and_then(|a| a.codeliste.clone()),
+            sparte: sparte.to_owned(),
         })
         .collect()
+}
+
+/// `CCYYMMDD` as a date.
+fn parse_ccyymmdd(d: &str) -> Option<time::Date> {
+    time::Date::from_calendar_date(
+        d.get(0..4)?.parse().ok()?,
+        time::Month::try_from(d.get(4..6)?.parse::<u8>().ok()?).ok()?,
+        d.get(6..8)?.parse().ok()?,
+    )
+    .ok()
+}
+
+fn sparte_named(sparte: &str) -> mako_fristen::Sparte {
+    if sparte.eq_ignore_ascii_case("GAS") {
+        mako_fristen::Sparte::Gas
+    } else {
+        mako_fristen::Sparte::Strom
+    }
+}
+
+/// `CCYYMMDDHHMM` of a UTC instant.
+fn ccyymmddhhmm(instant: time::OffsetDateTime) -> String {
+    let u = instant.to_offset(time::UtcOffset::UTC);
+    format!(
+        "{:04}{:02}{:02}{:02}{:02}",
+        u.year(),
+        u.month() as u8,
+        u.day(),
+        u.hour(),
+        u.minute()
+    )
+}
+
+/// The `303` value for a process date given as `YYYYMMDD` / `YYYY-MM-DD`: the
+/// UTC instant at which that German day begins in `sparte` — 00:00 Berlin in
+/// Strom, the Gastag's 06:00 in Gas (Allgemeine Festlegungen V6.1d Kap. 3.1).
+/// Any other value is handed through for the builder to judge, so a test can
+/// still write a deliberately malformed one.
+fn prozess_303(value: &str, sparte: mako_fristen::Sparte) -> String {
+    let digits = value.replace('-', "");
+    match parse_ccyymmdd(&digits).filter(|_| digits.len() == 8) {
+        Some(day) => ccyymmddhhmm(mako_fristen::tagesbeginn_utc(day, sparte)),
+        None => value.to_owned(),
+    }
+}
+
+/// [`prozess_303`] for an `SG4 DTM` — only where the qualifier's format is
+/// `303`; a `102` place (`154`) takes the date as written.
+fn sg4_value(qualifier: &str, value: &str, sparte: mako_fristen::Sparte) -> String {
+    if edi_energy::utilmd_codes::dtm::sg4_format(qualifier) == "303" {
+        prozess_303(value, sparte)
+    } else {
+        value.to_owned()
+    }
 }
 
 // ── Per-message report ────────────────────────────────────────────────────────
@@ -749,27 +831,23 @@ fn lokationstyp_from_str(s: &str) -> PyResult<Lokationstyp> {
     })
 }
 
-/// The `DTM+137` document date to write, as `YYYYMMDD`.
+/// The `DTM+137` document date to write, as the `303` instant `CCYYMMDDHHMM`.
 ///
-/// Defaults to the send date `on` rather than to the builders' "today". A
+/// A date — `document_date` as `YYYYMMDD` or the send date `on` — becomes the
+/// instant that German day begins (00:00 Europe/Berlin); an instant is written
+/// as given. Defaults to the send date `on` rather than to the builders' "today". A
 /// document date read from the clock makes every rendered message differ
 /// between runs, which defeats golden-file comparison and turns a reproducible
 /// failure into an intermittent one. `on` is the date the message would really
 /// be sent, so it is also the date the document carries.
 fn document_date_for(document_date: Option<&str>, on: Option<&str>) -> PyResult<Option<String>> {
     if let Some(d) = document_date {
-        return Ok(Some(d.to_owned()));
+        return Ok(Some(prozess_303(d, mako_fristen::Sparte::Strom)));
     }
     match on {
-        Some(date) => {
-            let d = parse_date(date)?;
-            Ok(Some(format!(
-                "{:04}{:02}{:02}",
-                d.year(),
-                d.month() as u8,
-                d.day()
-            )))
-        }
+        Some(date) => Ok(Some(ccyymmddhhmm(mako_fristen::berlin_midnight(
+            parse_date(date)?,
+        )))),
         None => Ok(None),
     }
 }
@@ -857,8 +935,13 @@ pub fn build_utilmd(
     let gas = rel.as_str().starts_with('G');
     for tx in transactions.unwrap_or_default() {
         let mut t = b.transaction(&tx.vorgangsnummer);
+        let sparte = if gas {
+            mako_fristen::Sparte::Gas
+        } else {
+            mako_fristen::Sparte::Strom
+        };
         for (q, d) in &tx.dates {
-            t = t.date(q.as_str(), d.as_str());
+            t = t.date(q.as_str(), sg4_value(q, d, sparte));
         }
         if let Some(grund) = &tx.transaktionsgrund {
             let erg = tx
@@ -1421,6 +1504,11 @@ pub fn build_answer(
         ));
     };
 
+    let answer_sparte = if rel.as_str().starts_with('G') {
+        mako_fristen::Sparte::Gas
+    } else {
+        mako_fristen::Sparte::Strom
+    };
     let mut b = UtilmdBuilder::new(rel.clone())
         .pruefidentifikator(pid(answer_pid)?)
         // Mirrored: the request's receiver is the one answering.
@@ -1463,7 +1551,7 @@ pub fn build_answer(
             }
         }
         for (q, d) in process_dates.iter().flatten() {
-            a = a.date(q.as_str(), d.as_str());
+            a = a.date(q.as_str(), sg4_value(q, d, answer_sparte));
         }
         if let Some(code) = antwort_code {
             a = a.antwort(antwort_status(code, antwort_ebd, &rel, answer_pid));
@@ -1799,7 +1887,9 @@ pub fn build_orders(
         b = b.abonnement(a);
     }
     if let Some(d) = ausfuehrungsdatum {
-        b = b.ausfuehrungsdatum(d);
+        // `DTM+203` is a `303` process date; the ORDERS families built here
+        // are Strom ones.
+        b = b.ausfuehrungsdatum(prozess_303(d, mako_fristen::Sparte::Strom));
     }
     if let Some(c) = document_code
         .map(str::to_owned)
@@ -1873,7 +1963,8 @@ pub fn build_iftsta(
         b = b.order_reference(r);
     }
     if let Some(d) = vertragsende {
-        b = b.vertragsende(d);
+        // `DTM+93` is a `303` process date; 21042 is MSB → ESA, a Strom role.
+        b = b.vertragsende(prozess_303(d, mako_fristen::Sparte::Strom));
     }
     if let Some(c) = document_code
         .map(str::to_owned)
@@ -2354,7 +2445,8 @@ mod tests {
             "the answer carries its own Prüfidentifikator, not the request's: {text}"
         );
         // `92` Beginn zum, not the Messperioden-Qualifier `163`.
-        assert!(text.contains("DTM+92:20261101"), "{text}");
+        // 01.11.2026 00:00 MEZ is 31.10.2026 23:00 UTC.
+        assert!(text.contains("DTM+92:202610312300?+00:303"), "{text}");
         // Every Antwortnachricht carries its EBD Antwortcode — AHB Muss.
         assert!(text.contains("STS+E01++A10:E_0609"), "{text}");
 

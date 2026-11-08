@@ -20,6 +20,11 @@
 //!   untrusted arguments — *after* a human has approved the call. 108 grants
 //!   across 27 manifests were in this state, each reading as an ability the
 //!   agent did not have.
+//! * **Any grant to a mutating tool while the recorded posture is advisory.**
+//!   The AI Act Annex III position rests on the agent plane reaching no
+//!   mutating tool, so the first such grant — approved, `planned`, and
+//!   declared correctly or not — is refused, naming the page that records the
+//!   posture, until the posture and the classification change together.
 //!
 //! The server's annotation is the authority: it sits beside the code that does
 //! or does not write. This check makes the manifests agree with it.
@@ -60,10 +65,7 @@ pub fn run(workspace_root: &Path) -> bool {
         return false;
     };
 
-    let mut missing: Vec<String> = Vec::new();
-    let mut wrong: Vec<String> = Vec::new();
-    let mut unapproved: Vec<String> = Vec::new();
-    let mut unreachable: Vec<String> = Vec::new();
+    let mut findings = Findings::default();
     let mut grants = 0usize;
 
     let mut files: Vec<_> = entries
@@ -81,74 +83,20 @@ pub fn run(workspace_root: &Path) -> bool {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-
-        // `planned` is the only shape that can dispatch a mutating call: its
-        // step arguments are `$input/…` references the runtime resolves, so
-        // they keep the run input's labels. A tool-calling agent's arguments
-        // come out of a model completion, which agentplane labels untrusted by
-        // construction, and the taint gate refuses a mutating sink with
-        // untrusted arguments — after the human approved it, which is worse
-        // than refusing before.
-        let Some((planned, manifest_grants)) = parse_manifest(&src) else {
-            missing.push(format!(
-                "{name}: not loadable as an agentplane manifest — the runtime would refuse it, \
-                 so its grants cannot be checked"
-            ));
-            continue;
-        };
-
-        for grant in manifest_grants {
-            grants += 1;
-            let key = format!("{}/{}", grant.server, grant.tool);
-            // agentplane's ToolId refuses `-` in a server component (hyphens
-            // are reserved so the model-facing wire rendering stays injective),
-            // so a hyphenated service directory would be granted with an
-            // underscore. The inventory is keyed by directory name;
-            // fall back to the hyphen spelling before calling a grant missing.
-            let dir_key = format!("{}/{}", grant.server.replace('_', "-"), grant.tool);
-            let Some(read_only) = tools.get(&key).or_else(|| tools.get(&dir_key)) else {
-                missing.push(format!("{name}: tool://{key} — no MCP server declares it"));
-                continue;
-            };
-            let mutating = !read_only;
-            if grant.mutates != mutating {
-                wrong.push(format!(
-                    "{name}: tool://{key} declares mutates: {}, but the server declares it {}",
-                    grant.mutates,
-                    if *read_only { "read-only" } else { "mutating" }
-                ));
-            }
-            if mutating && !grant.requires_approval {
-                unapproved.push(format!(
-                    "{name}: tool://{key} changes the world and asks nobody"
-                ));
-            }
-            if mutating && !planned {
-                unreachable.push(format!(
-                    "{name}: tool://{key} is mutating, but this agent is `tool-calling` — the \
-                     call can never be dispatched (model-written arguments are untrusted, and \
-                     the taint gate refuses them). Move the agent to `execution.kind: planned` \
-                     or drop the grant."
-                ));
-            }
-        }
+        grants += check_manifest(&mut findings, &name, &src, &tools, POSTURE);
     }
 
-    let failures = missing.len() + wrong.len() + unapproved.len() + unreachable.len();
+    let failures = findings.len();
     if failures == 0 {
         println!(
             "check-tool-grants: {grants} grants across the specialist manifests resolve and \
-             agree with the servers' own read-only hints"
+             agree with the servers' own read-only hints; none reaches a mutating tool while \
+             the recorded posture is {POSTURE:?}"
         );
         return true;
     }
 
-    for line in missing
-        .iter()
-        .chain(&wrong)
-        .chain(&unapproved)
-        .chain(&unreachable)
-    {
+    for line in findings.lines() {
         eprintln!("  {line}");
     }
     eprintln!(
@@ -157,6 +105,143 @@ pub fn run(workspace_root: &Path) -> bool {
          the annotation if the tool was mis-declared."
     );
     false
+}
+
+/// What the agent plane may do with a grant, as recorded beside the AI Act
+/// Annex III classification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Posture {
+    /// No grant reaches a mutating tool: the plane reads, drafts and proposes,
+    /// and a human acts.
+    Advisory,
+    /// A grant may reach a mutating tool, subject to the approval and
+    /// `planned` rules every mutating grant meets anyway.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no recorded classification admits dispatch; the tests construct it to \
+                      prove the refusal comes from the posture alone"
+        )
+    )]
+    Dispatching,
+}
+
+/// The posture in force.
+///
+/// It changes only together with the Annex III classification recorded on
+/// [`DETERMINATION`]: an advisory plane is what Art. 6(1a) of Regulation (EU)
+/// 2024/1689, as inserted by Regulation (EU) 2026/1744, describes, and a
+/// dispatching one must first be tested against Art. 6(1b). Keying the rule on
+/// the server's annotation rather than on the manifest's `mutates` flag means a
+/// grant mis-declared `mutates: false` cannot widen the posture either.
+const POSTURE: Posture = Posture::Advisory;
+
+/// The page that records the posture and the Annex III classification.
+const DETERMINATION: &str = "site/content/docs/compliance/eu-regulations.md";
+
+/// The section of [`DETERMINATION`] a refusal points at.
+const DETERMINATION_SECTION: &str = "the-agent-plane-is-advisory";
+
+/// Every finding, by the rule that produced it.
+#[derive(Default)]
+struct Findings {
+    missing: Vec<String>,
+    wrong: Vec<String>,
+    unapproved: Vec<String>,
+    unreachable: Vec<String>,
+    beyond_posture: Vec<String>,
+}
+
+impl Findings {
+    fn len(&self) -> usize {
+        self.missing.len()
+            + self.wrong.len()
+            + self.unapproved.len()
+            + self.unreachable.len()
+            + self.beyond_posture.len()
+    }
+
+    fn lines(&self) -> impl Iterator<Item = &String> {
+        self.missing
+            .iter()
+            .chain(&self.wrong)
+            .chain(&self.unapproved)
+            .chain(&self.unreachable)
+            .chain(&self.beyond_posture)
+    }
+}
+
+/// Check one manifest's grants against the server inventory and the recorded
+/// posture, returning how many grants it holds.
+fn check_manifest(
+    findings: &mut Findings,
+    name: &str,
+    src: &str,
+    tools: &BTreeMap<String, bool>,
+    posture: Posture,
+) -> usize {
+    // `planned` is the only shape that can dispatch a mutating call: its
+    // step arguments are `$input/…` references the runtime resolves, so
+    // they keep the run input's labels. A tool-calling agent's arguments
+    // come out of a model completion, which agentplane labels untrusted by
+    // construction, and the taint gate refuses a mutating sink with
+    // untrusted arguments — after the human approved it, which is worse
+    // than refusing before.
+    let Some((planned, manifest_grants)) = parse_manifest(src) else {
+        findings.missing.push(format!(
+            "{name}: not loadable as an agentplane manifest — the runtime would refuse it, \
+             so its grants cannot be checked"
+        ));
+        return 0;
+    };
+
+    let count = manifest_grants.len();
+    for grant in manifest_grants {
+        let key = format!("{}/{}", grant.server, grant.tool);
+        // agentplane's ToolId refuses `-` in a server component (hyphens
+        // are reserved so the model-facing wire rendering stays injective),
+        // so a hyphenated service directory would be granted with an
+        // underscore. The inventory is keyed by directory name;
+        // fall back to the hyphen spelling before calling a grant missing.
+        let dir_key = format!("{}/{}", grant.server.replace('_', "-"), grant.tool);
+        let Some(read_only) = tools.get(&key).or_else(|| tools.get(&dir_key)) else {
+            findings
+                .missing
+                .push(format!("{name}: tool://{key} — no MCP server declares it"));
+            continue;
+        };
+        let mutating = !read_only;
+        if grant.mutates != mutating {
+            findings.wrong.push(format!(
+                "{name}: tool://{key} declares mutates: {}, but the server declares it {}",
+                grant.mutates,
+                if *read_only { "read-only" } else { "mutating" }
+            ));
+        }
+        if mutating && !grant.requires_approval {
+            findings.unapproved.push(format!(
+                "{name}: tool://{key} changes the world and asks nobody"
+            ));
+        }
+        if mutating && !planned {
+            findings.unreachable.push(format!(
+                "{name}: tool://{key} is mutating, but this agent is `tool-calling` — the \
+                 call can never be dispatched (model-written arguments are untrusted, and \
+                 the taint gate refuses them). Move the agent to `execution.kind: planned` \
+                 or drop the grant."
+            ));
+        }
+        if mutating && posture == Posture::Advisory {
+            findings.beyond_posture.push(format!(
+                "{name}: tool://{key} is mutating, and the recorded posture is advisory — the \
+                 AI Act Annex III position rests on no grant reaching a mutating tool \
+                 ({DETERMINATION}#{DETERMINATION_SECTION}). Record the Annex III \
+                 classification there and change `POSTURE` with it before granting one."
+            ));
+        }
+    }
+    count
 }
 
 /// The two facts this check reads out of a specialist manifest.
@@ -918,6 +1003,90 @@ mod tests {
         let names: Vec<String> = super::tools_in(src).into_iter().map(|(n, _)| n).collect();
         assert_eq!(names, vec!["get_x".to_owned()]);
         assert_eq!(super::misplaced_tools_in(src), vec!["get_y".to_owned()]);
+    }
+
+    /// One manifest, checked against a fixture inventory: `einsd/set_x`
+    /// mutates, `einsd/get_x` is read-only. Nothing here reads the real
+    /// manifests, so the documented grant counts are untouched.
+    fn findings_for(manifest: &str, posture: super::Posture) -> Vec<String> {
+        let tools = std::collections::BTreeMap::from([
+            ("einsd/set_x".to_owned(), false),
+            ("einsd/get_x".to_owned(), true),
+        ]);
+        let mut findings = super::Findings::default();
+        super::check_manifest(&mut findings, "fixture.yaml", manifest, &tools, posture);
+        findings.lines().cloned().collect()
+    }
+
+    fn planned_granting(tool: &str, mutates: bool) -> String {
+        format!(
+            "spec:\n  execution:\n    kind: planned\n  tools:\n    - ref: tool://einsd/{tool}\n      \
+             mutates: {mutates}\n      requires_approval: true\n"
+        )
+    }
+
+    /// The posture the gate enforces is the one the determination records.
+    #[test]
+    fn the_recorded_posture_is_advisory() {
+        assert_eq!(super::POSTURE, super::Posture::Advisory);
+    }
+
+    /// An approved mutating grant on a `planned` agent meets every other rule,
+    /// so only the posture refuses it — and the refusal names the page that
+    /// records the classification.
+    #[test]
+    fn an_approved_planned_mutating_grant_is_refused_while_advisory() {
+        let manifest = planned_granting("set_x", true);
+        assert!(
+            findings_for(&manifest, super::Posture::Dispatching).is_empty(),
+            "the fixture must satisfy every rule but the posture"
+        );
+        let refused = findings_for(&manifest, super::Posture::Advisory);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].contains(super::DETERMINATION) && refused[0].contains("Annex III"),
+            "{}",
+            refused[0]
+        );
+    }
+
+    /// The posture rule reads the server's annotation, not the manifest's
+    /// flag: a grant that calls a mutating tool read-only is refused for both.
+    #[test]
+    fn a_mutating_tool_declared_read_only_is_refused_while_advisory() {
+        let refused = findings_for(&planned_granting("set_x", false), super::Posture::Advisory);
+        assert!(
+            refused.iter().any(|f| f.contains(super::DETERMINATION)),
+            "{refused:?}"
+        );
+        assert!(
+            refused
+                .iter()
+                .any(|f| f.contains("declares mutates: false")),
+            "{refused:?}"
+        );
+    }
+
+    /// A grant to a read-only tool is what the advisory posture admits.
+    #[test]
+    fn a_read_only_grant_passes_while_advisory() {
+        let manifest = "spec:\n  execution:\n    kind: tool-calling\n  tools:\n    \
+                        - ref: tool://einsd/get_x\n      mutates: false\n";
+        assert!(findings_for(manifest, super::Posture::Advisory).is_empty());
+    }
+
+    /// The page a refusal names exists and carries the section it links to.
+    #[test]
+    fn the_determination_a_refusal_names_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let page = std::fs::read_to_string(root.join(super::DETERMINATION))
+            .expect("the determination page is tracked");
+        assert!(
+            page.contains("### The agent plane is advisory"),
+            "{} no longer carries #{}",
+            super::DETERMINATION,
+            super::DETERMINATION_SECTION
+        );
     }
 
     /// The split that decides whether a missing file fails the build.

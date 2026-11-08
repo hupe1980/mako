@@ -17,6 +17,7 @@
 --   bank_import_log      — CAMT.054 deduplication (bank transaction IDs already imported)
 --   anonymization_log    — GDPR Art. 17 erasure audit trail (INSERT-only)
 --   auto_dunning_runs    — daily auto-dunning idempotency + audit
+--   eeg_belege           — the EEG settlement receipts einsd announced, per receipt chain
 --   eeg_payout_orders    — EEG SCT/SCT Inst payout pipeline
 --   eeg_aufrechnungen    — EEG claims extinguished by Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG)
 --   sepa_collection_runs — pain.008 XML archive for audit + replay
@@ -557,10 +558,53 @@ COMMENT ON TABLE auto_dunning_runs IS
     'Idempotency guard and audit trail for automatic Mahnwesen escalation. '
     'One row per (tenant, calendar day) — prevents double-dunning on restart.';
 
+-- ── EEG settlement receipts (einsd) ──────────────────────────────────────────
+--
+-- One row per `de.eeg.verguetung.berechnet` / `de.eeg.marktpraemie.berechnet`
+-- CloudEvent. A settlement period — plant (`tr_id`), billing year and month —
+-- is one **receipt chain**: einsd's initial receipt and every § 147 AO
+-- correction after it each state the *whole* amount owed for the period
+-- (`anspruch_ct`), so the chain's current receipt is the one einsd issued last
+-- (`beleg_zeit`, the CloudEvent `time`), whatever order the events arrive in.
+--
+-- `gutschrift_delta_ct` is what the receipt changed the period's claim by, and
+-- is what its ledger entry books: the initial receipt books its amount, a
+-- correction the difference, a receipt overtaken by a later one nothing.
+-- Booking a correction's whole amount would credit the period twice.
+CREATE TABLE eeg_belege (
+    tenant              TEXT        NOT NULL,
+    source_ce_id        TEXT        NOT NULL,
+    art                 TEXT        NOT NULL CHECK (art IN ('VERGUETUNG', 'MARKTPRAEMIE')),
+    receipt_id          UUID        NOT NULL,
+    -- The einsd receipt this one corrects; NULL for an initial receipt.
+    korrektur_von       UUID,
+    tr_id               TEXT        NOT NULL,
+    malo_id             TEXT        NOT NULL,
+    account_id          UUID        NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    billing_year        SMALLINT    NOT NULL,
+    billing_month       SMALLINT    NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
+    -- The receipt's settlement in EUR-cent, rounded kaufmännisch (DIN 1333).
+    -- Negative when the period nets to a claim on the plant operator.
+    anspruch_ct         BIGINT      NOT NULL,
+    gutschrift_delta_ct BIGINT      NOT NULL,
+    beleg_zeit          TIMESTAMPTZ NOT NULL,
+    -- Creditor as einsd forwarded it; NULL → the account's zahlungsinformation.
+    bank_iban           TEXT,
+    zahlungsempfaenger  TEXT,
+    received_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, source_ce_id)
+);
+
+CREATE INDEX eeg_belege_kette ON eeg_belege (tenant, tr_id, billing_year, billing_month, beleg_zeit);
+
 -- ── EEG Einspeisevergütung payout orders (§25 EEG 2023) ─────────────────────
 --
--- Every EEG Vergütung settlement triggers one row here.  The row tracks the
--- full lifecycle from ledger credit → pain.001 generation → bank submission →
+-- A payout order pays a receipt chain's **outstanding difference**: the current
+-- receipt's `anspruch_ct` less what was already paid or ordered for the chain
+-- (every order not `RJCT`/`CANC`, plus every Aufrechnung). A correction is
+-- therefore paid as the difference, never as its whole amount again; a
+-- rejected order is no longer counted, so the next run pays the chain again.
+-- The row tracks the lifecycle from pain.001 generation → bank submission →
 -- pain.002 confirmation.
 --
 -- Two payment types:
@@ -572,7 +616,7 @@ COMMENT ON TABLE auto_dunning_runs IS
 --              D+1 settlement. Fallback when bank does not support SCT Inst.
 --
 -- `end_to_end_ref` carries the ISO 20022 EndToEndId used in the pain.001 XML.
--- It is constructed as: EEG-{malo_id_short}-{year}-{month}-{ce_id_short}
+-- It is constructed as: EEG-{malo_id_short}-{year}-{month}-{payout_id_short}
 -- Unique per payout order; used to correlate pain.002 status reports.
 --
 -- `pain001_xml` stores the generated XML verbatim for bank audit and replay.
@@ -594,9 +638,12 @@ CREATE TABLE eeg_payout_orders (
     payout_id       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     malo_id         TEXT        NOT NULL,
     account_id      UUID        NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    tr_id           TEXT,               -- EEG plant ID (Anlagen-ID from einsd)
+    -- The plant and billing month of the receipt chain the order pays — NOT
+    -- NULL, because an order without them is one the EnFG ledger cannot
+    -- attribute to a plant, a month or a head.
+    tr_id           TEXT        NOT NULL,
     billing_year    SMALLINT    NOT NULL,
-    billing_month   SMALLINT    NOT NULL,
+    billing_month   SMALLINT    NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
     -- Amount in EUR-cent (positive = payout to plant operator)
     amount_ct       BIGINT      NOT NULL CHECK (amount_ct > 0),
     creditor_iban   TEXT        NOT NULL,
@@ -633,20 +680,21 @@ CREATE TABLE eeg_payout_orders (
     submitted_at    TIMESTAMPTZ,
     -- When ACCP confirmation was received (funds credited to plant operator)
     settled_at      TIMESTAMPTZ,
-    -- Source CloudEvent ID for idempotency (de.eeg.verguetung.berechnet ce_id)
-    source_ce_id    TEXT,
+    -- The CloudEvent of the chain's current receipt when the order was made.
+    source_ce_id    TEXT        NOT NULL,
     tenant          TEXT        NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 COMMENT ON TABLE eeg_payout_orders IS
     'EEG Einspeisevergütung SEPA Credit Transfer orders. '
-    'One row per settlement CE. Full pain.001 XML + pain.002 lifecycle. '
+    'Each order pays a receipt chain''s outstanding difference. Full pain.001 XML + pain.002 lifecycle. '
     'Regulatory: §25 Abs. 1 EEG 2023 (unverzüglich), EU Reg 2024/886 (SCT Inst).';
 
--- Idempotency: one payout per source CE
-CREATE UNIQUE INDEX eeg_payout_source_ce   ON eeg_payout_orders (source_ce_id) WHERE source_ce_id IS NOT NULL;
--- Also unique on EndToEndId (ISO 20022 requirement)
+-- Idempotency is the chain difference, computed under a per-chain advisory
+-- lock: a replayed receipt finds nothing outstanding.
+CREATE INDEX eeg_payout_kette ON eeg_payout_orders (tenant, tr_id, billing_year, billing_month);
+-- Unique on EndToEndId (ISO 20022 requirement)
 CREATE UNIQUE INDEX eeg_payout_e2e         ON eeg_payout_orders (end_to_end_ref);
 -- Fast status monitoring (bank integration health dashboard)
 CREATE INDEX eeg_payout_status    ON eeg_payout_orders (tenant, payment_type, pain002_status);
@@ -689,6 +737,31 @@ CREATE TABLE eeg_aufrechnungen (
 );
 
 CREATE INDEX eeg_aufrechnungen_month ON eeg_aufrechnungen (tenant, billing_year, billing_month);
+
+-- ── EEG receipt chains ───────────────────────────────────────────────────────
+--
+-- Each settlement period's current receipt beside what was paid or ordered for
+-- it. `geleistet_ct` counts every payout order the bank has not rejected or
+-- that was not cancelled, and every Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG counts
+-- a claim extinguished by set-off as paid). What the chain still earns, or
+-- what the plant operator owes back, is `anspruch_ct − geleistet_ct`
+-- (`accountingd::eeg_auszahlung::ausgleich`).
+CREATE VIEW eeg_ketten AS
+SELECT b.tenant, b.tr_id, b.billing_year, b.billing_month, b.malo_id, b.account_id,
+       b.art, b.receipt_id, b.source_ce_id, b.anspruch_ct, b.beleg_zeit,
+       b.bank_iban, b.zahlungsempfaenger,
+       (COALESCE((SELECT sum(o.amount_ct) FROM eeg_payout_orders o
+                   WHERE o.tenant = b.tenant AND o.tr_id = b.tr_id
+                     AND o.billing_year = b.billing_year AND o.billing_month = b.billing_month
+                     AND o.pain002_status IS DISTINCT FROM 'RJCT'
+                     AND o.pain002_status IS DISTINCT FROM 'CANC'), 0)
+      + COALESCE((SELECT sum(a.amount_ct) FROM eeg_aufrechnungen a
+                   WHERE a.tenant = b.tenant AND a.tr_id = b.tr_id
+                     AND a.billing_year = b.billing_year AND a.billing_month = b.billing_month), 0)
+       )::bigint AS geleistet_ct
+  FROM (SELECT DISTINCT ON (tenant, tr_id, billing_year, billing_month) *
+          FROM eeg_belege
+         ORDER BY tenant, tr_id, billing_year, billing_month, beleg_zeit DESC, source_ce_id DESC) b;
 
 -- ── SEPA pain.008 collection runs (persist for audit + replay) ─────────
 --

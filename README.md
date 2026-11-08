@@ -35,7 +35,7 @@ proposes while code computes every Frist, amount and verdict.
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer management** | `accountingd` ledger · `portald` portal · `outputd` documents · `vertragd` contracts · `productd` catalogue |
 | **Agent surface** | 11 of the 14 services expose an MCP server — **169 tools** — and `agentd` is the governed consumer: 29 specialists (27 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
-| **Operator UI** | `desk/` — mako Desk: processes and their Verlauf, customers, Heute, Freigaben, and an assistant that cites every sentence and has a proposal waiting on every decision a person sends. The `mako-desk` image runs behind an OIDC gateway; `just desk` for development ([guide](https://hupe1980.github.io/mako/docs/guide/desk/), [AGENTS](desk/AGENTS.md)) |
+| **Operator UI** | `desk/` — mako Desk: processes and their Verlauf, customers, Heute, Freigaben, and an assistant that cites every sentence and proposes decisions on Freigaben, invoice disputes and geparkte Buchungen. The `mako-desk` image runs behind an OIDC gateway; `just desk` for development ([guide](https://hupe1980.github.io/mako/docs/guide/desk/), [AGENTS](desk/AGENTS.md)) |
 | **Testing** | `makotest` — Python toolkit over the same Rust core: check digits, the answer Fristen, Entscheidungsbaum codes, AHB-validated EDIFACT, answering counterparties, a `pytest` plugin ([README](makotest/README.md)) |
 
 ## Quick start
@@ -131,7 +131,7 @@ Each crate's README carries its scope, PIDs and regulatory sources.
 | [`mako-as4`](crates/mako-as4/) | BDEW AS4-Profil over `asx-rs` — sign, encrypt, signed receipts |
 | [`mako-engine`](crates/mako-engine/) | Event-sourced runtime — `Workflow`, `Process`, event store, outbox, deadlines |
 | [`mako-fristen`](crates/mako-fristen/) | BDEW Werktage, the MaKo holiday table, the per-PID Antwortfristen |
-| [`mako-markt`](crates/mako-markt/) | Master data — 95 active `rubo4e::current` types behind one gate, validated `MaloId` / `MeloId` / `MarktpartnerId`, the master-data record types |
+| [`mako-markt`](crates/mako-markt/) | Master data — 99 active `rubo4e::current` types behind one gate, validated `MaloId` / `MeloId` / `MarktpartnerId`, the master-data record types |
 | [`mako-gpke`](crates/mako-gpke/) | GPKE Strom — Lieferantenwechsel, Stammdatenänderung, Sperrung, PARTIN, INVOIC |
 | [`mako-geli-gas`](crates/mako-geli-gas/) | GeLi Gas — Lieferantenwechsel Gas, Stammdatenänderung, Sperrprozesse |
 | [`mako-wim`](crates/mako-wim/) | WiM, Strom and Gas — MSB-Wechsel, Geräteübernahme, Preisanfrage, INSRPT, ESA |

@@ -16,7 +16,9 @@
     "format": "biome check --write .",
     "test": "vitest run",
     "check": "node scripts/gen.ts --check && tsc --noEmit && biome ci . && vitest run",
-    "screenshots": "node scripts/screenshots.ts"
+    "screenshots": "node scripts/screenshots.ts",
+    "budgets": "node scripts/budgets.ts",
+    "zugang": "node scripts/zugang.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "5.105.3",
@@ -28,6 +30,7 @@
     "uplot": "1.6.32"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@biomejs/biome": "2.6.4",
     "@tailwindcss/vite": "4.3.4",
     "@testing-library/react": "16.3.3",

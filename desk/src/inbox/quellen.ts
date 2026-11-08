@@ -425,9 +425,12 @@ export function useBenannt(eintraege: Eintrag[], aktiv: boolean): Eintrag[] {
   });
 }
 
-/** Every source of the active Rolle, in the order its table names them. */
-export function useQuellen(rolle: Rolle): Stand[] {
-  const liest = new Set(QUELLEN[rolle]);
+/**
+ * Every source of the active Rolle, in the order its table names them — or
+ * only those in `nur`, the rest asking nothing.
+ */
+export function useQuellen(rolle: Rolle, nur?: readonly QuelleId[]): Stand[] {
+  const liest = new Set(QUELLEN[rolle].filter((q) => !nur || nur.includes(q)));
   const alle = [
     useAnmeldungen(liest.has("anmeldungen")),
     useFreigaben(liest.has("freigaben")),
@@ -439,5 +442,5 @@ export function useQuellen(rolle: Rolle): Stand[] {
     usePruefposten(liest.has("pruefposten")),
     useGeparkt(liest.has("geparkt")),
   ];
-  return QUELLEN[rolle].flatMap((id) => alle.filter((s) => s.quelle === id));
+  return [...liest].flatMap((id) => alle.filter((s) => s.quelle === id));
 }

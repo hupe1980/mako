@@ -99,13 +99,16 @@ pub(super) fn bytes_to_segments(
         .map_err(crate::Error::Parse)
 }
 
-/// Normalise a date or timestamp into the `CCYYMMDDHHMM+00` shape DE 2379
-/// format `303` asks for, with the offset the `[931]` condition fixes to UTC.
+/// The `CCYYMMDDHHMM+00` value DE 2379 format `303` asks for, with the offset
+/// the `[931]` condition fixes to UTC.
 ///
-/// Callers hand in either a `CCYYMMDD` date (midnight is assumed) or an
-/// already-minute-precise `CCYYMMDDHHMM`; a value that already carries a zone
-/// is passed through untouched. The `+` is escaped by the writer, which treats
-/// it as the EDIFACT release character.
+/// `value` is a minute-precise UTC instant, `CCYYMMDDHHMM`, optionally already
+/// suffixed `+00`. Anything else — above all a bare `CCYYMMDD` — is
+/// [`crate::Error::DtmNotAnInstant`]: a process date is the instant its German day
+/// begins (Allgemeine Festlegungen V6.1d Kap. 3.1: `2300`/`2200` UTC in Strom,
+/// `0500`/`0400` in Gas), and padding a date to `0000` states UTC midnight,
+/// which is neither. The `+` is escaped by the writer, which treats it as the
+/// EDIFACT release character.
 #[cfg(any(
     feature = "utilmd",
     feature = "mscons",
@@ -123,13 +126,15 @@ pub(super) fn bytes_to_segments(
     feature = "comdis",
     feature = "utilts",
 ))]
-pub(super) fn ccyymmddhhmm_utc(value: &str) -> String {
-    if value.contains('+') || value.contains('-') {
-        return value.to_owned();
-    }
-    match value.len() {
-        8 => format!("{value}0000+00"),
-        _ => format!("{value}+00"),
+pub(super) fn ccyymmddhhmm_utc(qualifier: &str, value: &str) -> Result<String, crate::Error> {
+    let stamp = value.strip_suffix("+00").unwrap_or(value);
+    if stamp.len() == 12 && stamp.bytes().all(|b| b.is_ascii_digit()) {
+        Ok(format!("{stamp}+00"))
+    } else {
+        Err(crate::Error::DtmNotAnInstant {
+            qualifier: qualifier.to_owned(),
+            value: value.to_owned(),
+        })
     }
 }
 

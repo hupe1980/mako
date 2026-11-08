@@ -543,6 +543,8 @@ impl Daemon for Agentd {
             // Manual trigger (OIDC-protected)
             .route("/api/v1/runs", post(handlers::start_runs))
             .route("/api/v1/runs/{run}/antwort", get(handlers::answer))
+            .route("/api/v1/runs/{run}/schritte", get(handlers::schritte))
+            .route("/api/v1/runs/{run}/stopp", post(handlers::stopp))
             .route("/api/v1/runs/{run}/bewertung", post(handlers::bewerten))
             .route("/api/v1/hinweise", get(handlers::hinweise))
             .route("/api/v1/vorschlaege", get(handlers::vorschlaege))

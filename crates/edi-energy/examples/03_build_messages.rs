@@ -98,12 +98,12 @@ fn build_utilmd() -> Result<(), Box<dyn std::error::Error>> {
         .sender(LF)
         .receiver(NB_STROM)
         .message_ref("MSG-001")
-        .document_date("20260701")
+        .document_date("202607011000")
         .document_code("E01")
         // SG4 — one Vorgang per Geschäftsvorfall, keyed by the sender's
         // Vorgangsnummer. `IDE+24` DE 7402 is that number and not the MaLo.
         .transaction("VORGANG0001")
-        .date(dtm::BEGINN_ZUM, "20261001") // DTM+92 — the Lieferbeginn
+        .date(dtm::BEGINN_ZUM, "202609302200") // DTM+92 — the Lieferbeginn
         .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(
             transaktionsgrund::EIN_AUSZUG,
         ))
@@ -150,7 +150,7 @@ fn build_mscons() -> Result<(), Box<dyn std::error::Error>> {
         .sender(NB_GAS)
         .receiver(LF)
         .message_ref("MSG-002")
-        .document_date("20260701")
+        .document_date("202607011000")
         // `LOC+172` carries a **Messlokations-ID** — 33 characters. An 11-digit
         // MaLo here is refused by `SEM-MSCONS-LOCATION-FORMAT`.
         .metering_point("DE00056266802AO6G56M11SN51G21M24S")
@@ -180,7 +180,7 @@ fn build_aperak() -> Result<(), Box<dyn std::error::Error>> {
         .sender(NB_STROM)
         .receiver(LF)
         .message_ref("MSG-003")
-        .document_date("20260701")
+        .document_date("202607011000")
         // `SG2` — which message is being answered. Muss in both
         // Anwendungsfälle: an acknowledgement that does not say what it
         // acknowledges is refused.

@@ -839,6 +839,9 @@ AO / GoBD). `reason` is one of `MeterDataCorrected`, `TariffCorrected`,
 `MastrRegistrationConfirmed`, `CapacityCorrected`, `RegulatoryReprocessing`,
 `FoerderendedatumCorrected`, `Other`. „The receipt for a month" is the latest
 row (`ORDER BY is_correction DESC, settled_at DESC`).
+The correction's event names the receipt it supersedes (`korrektur_von`) and
+states the corrected amount; accountingd pays only the difference to what the
+period already received, and records an overpayment as owed back.
 
 ### Repowering and Zusammenlegung
 
@@ -937,11 +940,12 @@ rebuild adds payments made since and never moves a booked row.
 `nicht_gehalten`; an item mako does not hold carries no figure and is named in
 `nicht_gehalten` — the KWKG-Boni, the vermiedene Netzentgelte (§ 13 Abs. 2),
 the KWK-Strom Verwertung, the umlagenpflichtige Netzentnahmen, the § 52
-payments not collected by set-off and § 55b, and Buchst. g. Within it, § 72
-Abs. 1, 2 EEG 2023: each plant's § 21b Abs. 1 Veräußerungsform, a switch in
+payments not collected by set-off and § 55b, and Buchst. g.
+
+Within it, § 72 Abs. 1, 2 EEG 2023: each plant's § 21b Abs. 1 Veräußerungsform, a switch in
 the month, the § 72 Abs. 1 Nr. 2 facts on a switch into the Ausfallvergütung,
 and the Spannungsebene (marktd's `netzebene_messung`); a plant without one is
-named. The ÜNB's Formularvorlage (§ 54 Satz 2 EnFG) is not yet read, so the
+named. einsd does not read the ÜNB's Formularvorlage (§ 54 Satz 2 EnFG); the
 Mitteilung is mako's JSON shape.
 
 ---
@@ -1096,12 +1100,17 @@ nothing sets it from capacity.
 
 | Type | When | Payload |
 |---|---|---|
-| `de.eeg.verguetung.berechnet` | Einspeisevergütung, KWKG or post-EEG settled | `tr_id`, `malo_id`, `billing_year/month`, `settlement_model`, `einspeisemenge_kwh`, `settlement_eur` (net), `status`, `pflichtzahlung_kumuliert_eur` (the running § 52 claim), `gutschrift_nummer`, `gutschrift_steuer_eur`, `gutschrift_brutto_eur`, `bank_iban`, `bank_bic`, `zahlungsempfaenger` |
+| `de.eeg.verguetung.berechnet` | Einspeisevergütung, KWKG or post-EEG settled | `receipt_id`, `korrektur_von` (the receipt a correction supersedes, else null), `tr_id`, `malo_id`, `billing_year/month`, `settlement_model`, `einspeisemenge_kwh`, `settlement_eur` (net), `status`, `pflichtzahlung_kumuliert_eur` (the running § 52 claim), `gutschrift_nummer`, `gutschrift_steuer_eur`, `gutschrift_brutto_eur`, `bank_iban`, `bank_bic`, `zahlungsempfaenger` |
 | `de.eeg.marktpraemie.berechnet` | Marktprämie settled | the same payload |
 | `de.eeg.anlage.mastr-registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
 | `de.eeg.anlage.foerderung-auslaufend` | EEG Förderende within 180 days, once per plant (worker every 6 h; never for KWKG) | `tr_id`, `foerderendedatum`, `days_remaining` |
 | `de.eeg.veraeusserungsform.gewechselt` | § 21b switch accepted | `tr_id`, new model, effective date |
 | `de.eeg.settlement.batch-due` | Monthly batch due | `billing_year`, `billing_month` |
+
+The period — `tr_id`, `billing_year`, `billing_month` — is the receipt chain:
+the initial receipt and each correction state the period's whole amount, and the
+event `time` orders them. accountingd books and pays the difference to what the
+chain already holds, so a correction is never paid in full a second time.
 
 The bank fields come from `einspeiser` so accountingd can build the pain.001;
 they are null for `EIGENVERBRAUCH`. Deliveries are
@@ -1115,7 +1124,10 @@ they are null for `EIGENVERBRAUCH`. Deliveries are
   "source":      "urn:mako:einsd:tenant:9910000000002",
   "id":          "a1b2c3d4-...",
   "subject":     "TR-SOLAR-001",
+  "time":        "2026-08-03T06:00:00Z",
   "data": {
+    "receipt_id":      "0f6b2c1e-4d5a-4f7e-9a3b-2c1d0e9f8a7b",
+    "korrektur_von":   null,
     "tr_id":           "TR-SOLAR-001",
     "malo_id":         "51238696012",
     "billing_year":    2026,

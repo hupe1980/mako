@@ -106,8 +106,9 @@ pub struct ReceiptContext<'m> {
     pub message_ref: &'m str,
     /// Wire release code of the message being acknowledged.
     pub release: Release,
-    /// Transmission date of the original interchange, if available.
-    pub transmission_date: Option<time::Date>,
+    /// Transmission instant of the original interchange (`UNB` S004, UTC),
+    /// if available.
+    pub transmission_datetime: Option<time::OffsetDateTime>,
 }
 
 // ── MessageEnvelope ───────────────────────────────────────────────────────────
@@ -221,7 +222,7 @@ impl MessageEnvelope {
             original_receiver: &self.header.receiver_id,
             message_ref: EdiEnergyMessage::message_ref(&self.message),
             release,
-            transmission_date: self.header.transmission_date(),
+            transmission_datetime: self.header.transmission_datetime,
         }
     }
 }

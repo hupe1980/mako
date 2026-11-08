@@ -139,6 +139,22 @@ pub mod dtm {
     pub const KUENDIGUNGSTERMIN: &str = "Z10";
     /// `DTM+137` — Dokumenten-/Nachrichtendatum (message header).
     pub const NACHRICHTENDATUM: &str = "137";
+
+    /// DE 2379 — the format code the builder writes for an `SG4 DTM` with
+    /// this DE 2005 qualifier.
+    ///
+    /// `154` is `102` (`CCYYMMDD`) and `Z10` `106` (`MMDD`); every other
+    /// process date is `303`, whose value is the UTC instant at which the
+    /// German day begins (Allgemeine Festlegungen V6.1d Kap. 3.1) — a caller
+    /// holding a calendar date converts it before handing it over.
+    #[must_use]
+    pub fn sg4_format(qualifier: &str) -> &'static str {
+        match qualifier {
+            UET_LIEFERANMELDUNG => "102",
+            KUENDIGUNGSTERMIN => "106",
+            _ => "303",
+        }
+    }
 }
 
 // ── SG4 STS ───────────────────────────────────────────────────────────────────

@@ -200,7 +200,9 @@ fn the_dokumentendatum_is_never_emitted_as_102() {
 /// `CCYYMMDDHHMMZZZ` without the `ZZZ` is not a `303` value — mako's own
 /// `parse_dtm_datetime` rejects it, and so does a conformant counterparty. Every
 /// emit site therefore goes through `ccyymmddhhmm_utc`, which appends `+00` to a
-/// zone-less stamp and passes an explicit zone through untouched.
+/// zone-less `CCYYMMDDHHMM` stamp and refuses anything else — a bare `CCYYMMDD`
+/// above all, which padding would turn into UTC midnight (see
+/// `roundtrip::utilmd_transaction_tests::a_bare_date_in_a_303_dtm_is_refused`).
 #[test]
 fn every_303_value_is_zone_normalised() {
     let builders = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/builders");

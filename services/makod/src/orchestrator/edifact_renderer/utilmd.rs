@@ -23,7 +23,7 @@ use super::*;
 /// | `vorgangsnummer`| no       | `IDE+24` DE 7402 (defaults to the message ref) |
 /// | `referenz_vorgangsnummer` | on answers | `SG4 SG6 RFF+TN` — the **request's** `IDE+24` |
 /// | `geplantes_produktpaket` | on a Bestätigung Anmeldung | `SG4 SG6 RFF+Z60` — the Produktpaket-ID the NB will implement |
-/// | `process_date`  | yes      | Process date (`YYYYMMDD` or `YYYY-MM-DD`)     |
+/// | `process_date`  | yes      | Process date — the German calendar date (`YYYYMMDD` or `YYYY-MM-DD`); goes out as the UTC instant that day begins in the Sparte |
 /// | `document_date` | no       | Document date (defaults to today at dispatch time) |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent  |
 /// | `transaktionsgrund` | no   | `SG4 STS+7` DE 9013 element 2                  |
@@ -158,7 +158,11 @@ pub(super) fn render_utilmd(
         None
     };
 
-    let doc_date_owned = u.document_date.as_deref().map(normalise_date);
+    let doc_date_owned = u
+        .document_date
+        .as_deref()
+        .map(|d| dokumentdatum_303(mt, d))
+        .transpose()?;
     let message_ref = u
         .message_ref
         .as_deref()
@@ -175,7 +179,23 @@ pub(super) fn render_utilmd(
     // `STS+7++ZH1` and „Ende zum" under `ZC8` (UTILMD AHB Strom Kap. 8.11
     // Bedingungen `[475]` / `[474]`), so the qualifier follows the **Grund** and
     // only the workflow knows it. An explicit value therefore wins.
-    let process_date_yyyymmdd = process_date.map(normalise_date);
+    //
+    // A `303` process date is the UTC instant at which the German day begins —
+    // 00:00 Berlin in Strom, the Gastag's 06:00 in Gas (Allgemeine Festlegungen
+    // V6.1d Kap. 3.1); `154` is a `102` date and goes out as one.
+    let sparte = match track {
+        ReleaseTrack::Gas => mako_fristen::Sparte::Gas,
+        _ => mako_fristen::Sparte::Strom,
+    };
+    let process_date_wire = process_date
+        .map(|d| {
+            if edi_energy::utilmd_codes::dtm::sg4_format(dtm_qualifier) == "303" {
+                prozessdatum_303(mt, "process_date", d, sparte)
+            } else {
+                Ok(normalise_date(d))
+            }
+        })
+        .transpose()?;
 
     // `SG4 SG6 RFF+Z13` carries the Prüfidentifikator and the builder emits it
     // per Vorgang from `pruefidentifikator` — DE 1154 is `R n5`, so nothing but
@@ -213,7 +233,7 @@ pub(super) fn render_utilmd(
     let vorgangsnummer = u.vorgangsnummer.as_deref().unwrap_or(message_ref.as_str());
 
     let mut tx = builder.transaction(vorgangsnummer);
-    if let Some(date) = process_date_yyyymmdd.as_deref() {
+    if let Some(date) = process_date_wire.as_deref() {
         tx = tx.date(dtm_qualifier, date);
     }
 
@@ -225,18 +245,20 @@ pub(super) fn render_utilmd(
     // |---|---|---|
     // | `bilanzierungsbeginn` | `158` | UTILMD 55238/55239 — AHB Strom 2.2 Kap. 11, Bedingung `[317]` makes it carry the same value as `DTM+92` |
     // | `bilanzierungsende` | `159` | Gas 44037/44038 „wenn eine Bilanzierung stattfindet" (AHB Gas Kap. 5.8 Bedingung `[29]`); UTILMD 55240–55243 beside `DTM+93` |
-    for (field, qualifier) in [
+    for (name, field, qualifier) in [
         (
+            "bilanzierungsbeginn",
             u.bilanzierungsbeginn.as_deref(),
             edi_energy::utilmd_codes::dtm::BILANZIERUNGSBEGINN,
         ),
         (
+            "bilanzierungsende",
             u.bilanzierungsende.as_deref(),
             edi_energy::utilmd_codes::dtm::BILANZIERUNGSENDE,
         ),
     ] {
         if let Some(date) = field.filter(|s| !s.is_empty()) {
-            tx = tx.date(qualifier, normalise_date(date));
+            tx = tx.date(qualifier, prozessdatum_303(mt, name, date, sparte)?);
         }
     }
 
@@ -546,8 +568,9 @@ pub(super) fn render_utilmd(
         None => tx,
     };
 
-    // Stammdaten carried whole: every `SG5 LOC`, `SG8` block and `SG12`
-    // segment as the sender holds them — the answer to a Geschäftsdatenanfrage.
+    // Stammdaten carried whole: every `SG5 LOC`, `SG6` segment, `SG8` block and
+    // `SG12` segment as the sender holds them — the answer to a
+    // Geschäftsdatenanfrage, and the Anmeldung EoG 55013 / 44013.
     let mut tx = tx;
     for lokation in &u.stammdaten.lokationen {
         let typ = edi_energy::Lokationstyp::from_qualifier_code(&lokation.qualifier).ok_or_else(
@@ -561,6 +584,9 @@ pub(super) fn render_utilmd(
             },
         )?;
         tx = tx.location(typ, &lokation.id);
+    }
+    for segment in &u.stammdaten.sg6 {
+        tx = tx.sg6_segment(&segment.tag, segment.elemente.clone());
     }
     for block in &u.stammdaten.bloecke {
         let mut sg8 = tx.stammdaten(&block.seq);
@@ -583,7 +609,14 @@ pub(super) fn render_utilmd(
     let melos = &u.messlokationen;
     let gemessen = u.transaktionsgrund_ergaenzung.as_deref()
         == Some(edi_energy::utilmd_codes::ergaenzung::GEMESSENE_MALO);
-    if gemessen && melos.is_empty() && !names_messlokation {
+    // Stammdaten carried whole name their Messlokationen in their own `SG5
+    // LOC+Z17` (the Anmeldung EoG 55013), so the check reads both.
+    let carries_messlokation = u
+        .stammdaten
+        .lokationen
+        .iter()
+        .any(|l| l.qualifier == edi_energy::Lokationstyp::Messlokation.qualifier_code());
+    if gemessen && melos.is_empty() && !names_messlokation && !carries_messlokation {
         return Err(RenderError::MissingField {
             message_type: mt.into(),
             field: "messlokationen — a ZW7 \u{201e}Gemessene Marktlokation\u{201c} answer must \
@@ -717,7 +750,7 @@ fn render_utilmd_liste(
         // `BGM+Z05` — every Clearingliste and every answer to one.
         .document_code(edi_energy::utilmd_codes::BGM_CLEARINGLISTE);
     if let Some(dd) = u.document_date.as_deref() {
-        builder = builder.document_date(normalise_date(dd));
+        builder = builder.document_date(dokumentdatum_303("UTILMD", dd)?);
     }
     // `DTM+157` in `610` — the Bilanzierungsmonat, `CCYYMM`.
     if let Some(monat) = u.billing_period.as_deref().filter(|s| !s.is_empty()) {
@@ -1105,4 +1138,46 @@ fn ergaenzung_admitted(release: &edi_energy::Release, pid: u32, code: &str) -> b
     admitted_ergaenzungen(release, pid)
         .iter()
         .any(|c| c == code)
+}
+
+/// What the pre-send AHB gate would say about a UTILMD a command is about to
+/// write: render `pending` as the outbox worker will, parse it back and
+/// validate it against its profile on today's date.
+///
+/// `Ok(findings)` — empty when the message passes. `Err` when it does not
+/// render or parse at all. A command door that runs this before the spawn
+/// refuses a request the gate would dead-letter, naming what is missing,
+/// instead of writing a message nobody can send.
+///
+/// # Errors
+///
+/// The render or parse failure, as text.
+pub(crate) fn utilmd_ahb_findings(
+    pending: &mako_engine::outbox::PendingOutbox,
+    tenant_id: mako_engine::ids::TenantId,
+) -> Result<Vec<String>, String> {
+    use edi_energy::EdiEnergyMessage as _;
+    use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
+    let process_id = ProcessId::new();
+    let msg = OutboxMessage::new(
+        StreamId::for_process(tenant_id, &process_id),
+        process_id,
+        tenant_id,
+        CorrelationId::new(),
+        ConversationId::new(),
+        EventId::new(),
+        pending.message_type.clone(),
+        pending.recipient.clone(),
+        pending.payload.clone(),
+    );
+    let rendered = render_utilmd(&pending.payload, &msg).map_err(|e| e.to_string())?;
+    let parsed = edi_energy::parse(&rendered.bytes).map_err(|e| e.to_string())?;
+    let report = parsed
+        .validate_on_date(mako_fristen::heute())
+        .map_err(|e| e.to_string())?;
+    Ok(report
+        .errors()
+        .iter()
+        .map(|e| e.message.to_string())
+        .collect())
 }

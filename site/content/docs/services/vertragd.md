@@ -189,7 +189,9 @@ none. Without one, processd fills in the single `standard` entry of its
 `[[lf.bilanzkreise]]` and refuses the Anmeldung (`MISSING_BILANZKREIS`) when it
 lists none or several — the UTILMD AHB Strom 2.2 Kap. 5.3 makes the Bilanzkreis
 Muss on a 55001, so the refusal is dead-lettered for the operator rather than
-sent. The Lieferbeginn and Lieferende bodies are processd's request types field
+sent.
+
+The Lieferbeginn and Lieferende bodies are processd's request types field
 for field, pinned by `tests/it/processd_supply_contract.rs`; a gas component's
 Lieferende carries its Messlokation as the Zählpunktbezeichnung, as its
 Lieferbeginn does. `vertragsart`, `kuendigung_grund` and the outbound task `kind` are

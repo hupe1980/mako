@@ -7,6 +7,7 @@ mod db_scenarios;
 mod demo_config;
 mod demo_payloads;
 mod dev_config;
+mod eeg_payout;
 mod integration_tests;
 mod request_bodies;
 mod router_builds;

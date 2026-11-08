@@ -13,134 +13,111 @@ History before this file is in `git log`.
 
 ### Added
 
-- **The EnFG Belastungsausgleich**: `eeg_billing::enfg` maps each settlement
-  model to its EnFG head (`POST_EEG_SPOT` and `GGV` refuse until their payment
-  basis is cited); accountingd serves the EEG/KWKG payments made
-  (`GET /api/v1/eeg/enfg-zahlungen` — only `ACSC`-settled payouts and every
-  Aufrechnung) and records an Aufrechnung (`POST /api/v1/eeg/aufrechnungen`);
-  einsd books them per ÜNB, month and head (`POST/GET
-  /api/v1/enfg/ledger/{year}/{month}`), reconciles the cents against the
-  receipts, refuses a plant without a Regelzone or a month across two, and
-  produces the § 50 Nr. 1 EnFG Mitteilung with the § 72 EEG 2023 items
-  (`GET /api/v1/enfg/mitteilung/{year}/{month}`), naming every item it does not
-  hold. New Cedar actions `read-enfg`, `record-aufrechnung`,
-  `build-enfg-ledger` (NB); einsd takes `accountingd_url` and `marktd_url`.
-- productd's quotation discloses the § 4 Abs. 1 CO2KostAufG price of each Gas
-  position (`co2kostaufg_preis_eur_per_t`, `co2kostaufg_rechtsgrundlage`) —
-  60 €/t in 2026 whatever the auctions cleared at; a year whose figure is not
-  published yet (2027, until the UBA's § 4 Abs. 2 publication is recorded) is
-  quoted without one and says so in `co2kostaufg_hinweis`.
-  `energy_billing::co2kostaufg_preis_eur_per_t(year)` holds the series.
-- A GNB records the LF's answer to its own GeLi Gas request: inbound
-  44008/44009, 44011/44012 and 44014/44015 resume the GNB's process through
-  `ReceiveGnbAntwort`, keeping the `STS+E01` code with its tree (`E_3002`,
-  `E_3020`, `E_3008`). They were read as requests and refused.
-- **A contract names its Bilanzkreis**: a vertragd Vertragskomponente carries
-  `bilanzkreis` — an X-type EIC with its check character for Strom, the
-  Marktgebietsverantwortlicher's code for Gas — and sends it with the
-  Lieferbeginn; without one, processd fills in its single `standard`
-  `[[lf.bilanzkreise]]` entry and refuses the Anmeldung otherwise
-  (`MISSING_BILANZKREIS`, `processd::lf_module::anmeldung_bilanzkreis`).
-- billingd and outputd refuse an invoice whose Rechnungsempfänger is not in
-  Germany instead of taxing it as a domestic supply: another EU Member State
-  answers `422 CROSS_BORDER_SUPPLY_UNSUPPORTED` (the Art. 369aa MwStSystRL OSS
-  treatment is not built), a third country `EXPORT_SUPPLY_UNSUPPORTED`, a
-  malformed code `RECIPIENT_COUNTRY_INVALID`; outputd also refuses an INVOICE
-  model without BT-55 (`RECIPIENT_COUNTRY_MISSING`). One rule,
-  `mako_fristen::empfaengerland`, serves both.
-- The Verlauf shows the BDEW wording for every remaining answer: the
-  Geschäftsdatenanfrage refusals (`E_0441` / `E_0443`, now in the
-  `mako-pruefung` catalogue — `E_0443` with its `A03`), the Listenabgleich
-  Gesamtablehnung (`E_0047` / `E_0004` by sender), the Weiterverpflichtung
-  answer (`E_0203` / `E_2004` by Sparte) and the GeLi Gas answers a GNB sends
-  and receives.
-- `mako_service::json_from_value` reads a value as `Json` reads a request body,
-  refusing an undeclared key; processd re-exports its supply request types
-  (`processd::server::StartSupplyRequest` and the other three).
+- **The assistant at work** (Desk, agentd): a question's reads stream in as a
+  trail, one line per read with its source chip, and fold into „n Quellen
+  gelesen ▸"; Send becomes Stop and Esc stops the run; each answer sentence
+  carries its sources' numbers and focusing one outlines the row it cites; a
+  question left mid-answer rides along as a pill. agentd serves the stream
+  (`GET /api/v1/runs/{run}/schritte`, Server-Sent Events read from the run's
+  journal, resumable by `Last-Event-ID`) and the stop (`POST …/stopp`); no
+  service is read after a stop.
+- **⌘K acts on what it finds** (Desk): an identifier or the focused entry opens
+  its actions — ↵ primary, ⌘↵ secondary — with their parameters in place, the
+  answer code limited to its tree's codes, prefilled from the assistant's
+  waiting proposal and marked as the assistant's until changed.
+- `just desk-budgets` (first streamed step ≤ 1 s, ⌘K actions and a keyboard
+  decision's INP ≤ 100 ms at p95) and `just desk-axe` (WCAG 2.2 A/AA, light and
+  dark, reduced motion) run in the Desk's CI job.
+- **The EnFG Belastungsausgleich**: einsd books the EEG/KWKG payments
+  accountingd made (`ACSC`-settled payouts and Aufrechnungen) per ÜNB, month
+  and EnFG head, reconciles them to the cent and produces the § 50 Nr. 1 EnFG
+  Mitteilung with the § 72 EEG 2023 items, naming every item it does not hold
+  (`/api/v1/enfg/ledger/{year}/{month}`, `/api/v1/enfg/mitteilung/…`).
+- marktd serves a Marktlokation's UTILMD Stammdaten for a Stichtag
+  (`GET /api/v1/malos/{id}/utilmd-stammdaten`) and stores the NB's
+  Netznutzungsdaten; the Anmeldung EoG 55013/44013 is filled from them and
+  passes its AHB profile, a missing fact refused by name.
+- A GNB records the LF's answer to its own GeLi Gas request (44008/09,
+  44011/12, 44014/15) with its code and tree.
+- The Verlauf words every remaining answer code: the Geschäftsdatenanfrage
+  refusals (`E_0441`/`E_0443` catalogued), the Listenabgleich
+  Gesamtablehnung, the Weiterverpflichtung and the GeLi Gas GNB answers.
+- productd's quotation and the Gas/Fernwärme invoice state the § 4 Abs. 1
+  CO2KostAufG price, the invoice also the § 3 Abs. 3 amount; a quotation for a
+  year whose figure is unpublished omits it and says so.
+- The project's Cyber Resilience Act position is published (compliance page
+  „CRA and AI Act"): outside the scope of Regulation (EU) 2024/2847, as not
+  supplied in a commercial activity (Art. 2(1), 3(22), recitals 15 and 18);
+  `SECURITY.md` states it and how a vulnerability is reported.
+- `mako_service::json_from_value` reads a value as `Json` reads a body.
 
 ### Changed
 
-- **Breaking:** a Gas or Fernwärme invoice's CO2KostAufG statement states the
-  § 4 Abs. 1 price of the delivery year and the § 3 Abs. 3 Preisbestandteil
-  (emissions × that price, net and with Umsatzsteuer at the charged rate).
-  `energy_billing::position::co2kostaufg_disclosures` is fallible: a period
-  whose year has no recorded § 4 price, or that runs into a year with another
-  one, is `RATE_REFUSED` (satz `CO2KostAufG`) — 2027 Gas and Fernwärme invoices
-  refuse until the UBA's 2027 figure is recorded.
-- **Breaking:** productd reads the BEHG regime from billingd's `[policy]
-  behg_regime` (`GET /api/v1/policy`, new `billingd_url` / `billingd_api_key`)
-  for a year § 10 BEHG fixes no price for, and refuses its own `behg_regime`
-  key at startup; without an answer the Gas position is `BEHG_PREIS_FEHLT`.
-- **Breaking:** `energy-billing` refuses a billing period that straddles a USt
-  Stichtag (Strom, Gas, Fernwärme) or a BEHG year boundary:
-  `MWST_STICHTAG_IM_ZEITRAUM` and `BEHG_JAHRESGRENZE_IM_ZEITRAUM` are `Error`
-  and name the Stichtage, so a direct caller gets `ValidationBlocked`.
-  billingd's `[rates] mwst_rate` waives no Stichtag: a straddling period is
-  split and each leg billed at the pinned rate.
-- **Breaking:** VPP settlements (`POST /api/v1/billing/vpp/{vpp_id}` and the
-  `vpp-dispatch` webhook) take VAT at the period's statutory rate; a manual
-  period across a USt Stichtag is `422 ZEITRAUM_UEBERSCHREITET_SATZGRENZE`.
-- **Breaking:** a marktd `SOMMER`/`WINTER` Zählzeit window carries its
-  season's days as `saison_von` (inclusive) and `saison_bis` (exclusive),
-  `"MM-DD"`, from the operator's Preisblatt — no published rule fixes a Zählzeit
-  season; `zaehler_saisons_season_dated` refuses an undated SOMMER/WINTER window
-  and a dated GESAMT one. `mako-markt` gains `MonatTag`, and
-  `ZaehlzeitSaisonUpsert` / `ZaehlzeitSaisonRecord` the two fields.
-- `GET …/tariff-zone` resolves against the registers valid on the instant's day
-  and the windows of that day's season; windows of different zones over one
-  instant are a `422`, not whichever row came first.
-- **Breaking:** `GeliGasModule` routes 44008/44009, 44011/44012 and
-  44014/44015 only with the `Nb` role; `GNB_ANTWORT_PIDS` and
-  `gnb_antwort_accepted` are public.
-- **Breaking:** a marktd Zählzeit window may cross midnight. NT 22:00–06:00 is
-  one row holding every time at or after `zeit_von` or before `zeit_bis` on the
-  Europe/Berlin wall clock, across both DST nights, and it belongs to the day
-  it opens on („Mo–Fr 22:00–06:00" holds Friday night into Saturday, not
-  Monday 00:00–06:00). `zaehler_saisons_window_ordered` is replaced by
-  `zaehler_saisons_window_nonempty` (`zeit_von <> zeit_bis`).
-- **Breaking:** a vertragd `outbound_tasks` payload to processd is
-  `{endpoint, body}`, and the worker posts `body` alone; a task without one is
-  refused rather than posted whole.
-- **Breaking:** the answer events name their tree:
-  `GasSupplierChangeCommand::SendAntwort` takes `antwort_ebd`,
-  `ReceiveGnbAntwort` takes `antwort_code`, `GdaCommand::ReceiveAblehnung`
-  takes `codeliste`, and `GesamtAblehnungGesendet` /
-  Weiterverpflichtung `AntwortGesendet` carry theirs.
-- **Breaking:** makod's `geli.eog.bestaetigen` / `geli.eog.ablehnen` validate
-  the code against `E_3008` like every other Gas answer and take the Zustimmung
-  from its Cluster; the `zustimmung` flag no longer decides.
-- vertragd dead-letters a task at once when the peer refuses it (a 4xx other
-  than 408 or 429), with the answer in `last_error`, instead of retrying the
-  same body eight times.
-- `check-malo-ids` also reports an EIC-shaped token of any other length than
-  16, which no EIC can be; the 34 fixture codes that were one character short
-  or long — `11XBK-STD-----9` among them, in the edi-energy README and examples
-  — are valid EICs, and a Bilanzkreis fixture carrying a `Y` code is an `X`.
+- **Breaking:** edi-energy refuses a bare `CCYYMMDD` in a `303` DTM
+  (`Error::DtmNotAnInstant`) instead of padding it to UTC midnight;
+  `ReceiptContext::transmission_date` is `transmission_datetime`.
+  `mako_fristen::tagesbeginn_utc` / `tag_des_beginns` convert between a German
+  process date and its UTC instant per Sparte.
+- **Breaking:** every Desk decision — a market message included — is held for
+  undo (countdown ring, ⌘Z) and asks no confirmation, in its view as in ⌘K.
+- **Breaking:** agentd records who starts a run; a run a person started is read
+  and stopped only by them (`403 not_the_starter`); a run nobody started stays
+  readable under `api:run.read`.
+- **Breaking:** `energy-billing` refuses a billing period across a USt Stichtag
+  or a BEHG year boundary, naming the Stichtage; billingd's pinned `[rates]
+  mwst_rate` waives none. VPP settlements take the statutory VAT rate.
+- **Breaking:** a Gas or Fernwärme invoice whose year has no recorded § 4
+  CO2KostAufG price is refused (`RATE_REFUSED`) — 2027 until the UBA's figure
+  is recorded. productd reads the BEHG regime from billingd's `[policy]
+  behg_regime` and refuses its own key.
+- **Breaking:** accountingd pays an EEG correction as the difference to what
+  its chain (plant, billing month) was paid; a lower one is listed by
+  `GET /api/v1/eeg/rueckforderungen`. The receipt events carry `receipt_id` and
+  `korrektur_von`; `POST /api/v1/eeg/payouts/run` requires the billing period.
+  accountingd refuses `auto_payout` without a valid `debtor_iban`.
+- **Breaking:** a marktd Zählzeit window may cross midnight and belongs to the
+  day it opens on; a SOMMER/WINTER window carries its season's days
+  (`saison_von`/`saison_bis`, `MM-DD`, from the Preisblatt); the tariff zone
+  resolves against the instant's day, register and season, and windows of
+  different zones over one instant are a `422`.
+- **Breaking:** a vertragd contract component carries its `bilanzkreis`
+  (an X-type EIC for Strom) and its supply bodies are processd's request types;
+  a 4xx refusal dead-letters at once.
+- **Breaking:** the EoG commands take only `malo_id`, `gv_mp_id`,
+  `process_date` and `transaktionsgrund` — makod reads the Stammdaten from
+  marktd — and each Sparte's NB side is keyed apart (`nb-anfrage:` /
+  `gnb-anfrage:{MaLo}`), so a combined NB+LF deployment runs both sides.
+- **Breaking:** the GeLi EoG answer is validated against `E_3008`, and the GeLi
+  answer PIDs a GNB receives route only with the `Nb` role.
+- **Breaking:** `check-tool-grants` refuses any grant to a tool whose server
+  does not declare `read_only_hint = true`; `check-malo-ids` refuses an
+  EIC-shaped token of any length but 16.
 
 ### Removed
 
-- **Breaking:** `mwst_rate_override` is gone from the VPP request body and from
-  vertragd's Aggregatorvertrag (the `aggregatorvertraege` column is dropped);
-  both refuse the field.
-- **Breaking:** a vertragd portal identity has no `rolle`. The
-  `kunden_identitaeten.rolle` column and its CHECK list are gone, an identity
-  upsert carrying `rolle` is a `422`, and the `authenticate`, `by-sub` and
-  upsert responses no longer return it. `standort_filter` is the one
-  restriction on a portal identity.
+- **Breaking:** `mwst_rate_override` on the VPP request and the
+  Aggregatorvertrag; the portal identity's `rolle`.
 
 ### Fixed
 
-- billingd credited the 2026 nEHS auction price to § 4 Abs. 1 Nr. 2
-  CO2KostAufG on the invoice's CO₂ line; its basis is the auction under § 10
-  Abs. 1 BEHG, and the § 4 price is stated on its own line.
-- No vertragd contract activation reached the NB: the Lieferbeginn body carried
-  `endpoint`, `nb_mp_id` and `lf_mp_id`, which processd's request type does not
-  declare, so every one was refused with a `422` and dead-lettered. The bodies
-  are processd's request types field for field, pinned by
-  `tests/it/processd_supply_contract.rs`.
-- A Gas Lieferende from vertragd sent `lieferende_datum`, where processd's
-  `end-supply-gas` requires the `zaehlpunkt` and a `YYYYMMDD` `process_date`;
-  it carries both, and a gas component without a Messlokation is refused.
+- **Every UTILMD process date left as UTC midnight**: Beginn, Ende and
+  Bilanzierungsbeginn are now the UTC instant their German day begins —
+  `2300`/`2200` Strom, `0500`/`0400` Gas (Allgemeine Festlegungen V6.1d
+  Kap. 3.1) — and inbound ones are read back to the German date; the ESA
+  REQOTE/ORDERS/QUOTES/IFTSTA dates likewise. An Abmeldung 55004/44004 was
+  read with an empty date. PRICAT/UTILTS wrote a malformed `+0000` zone.
+- No vertragd contract activation reached the NB: every Lieferbeginn body
+  carried keys processd refuses. The Gas Lieferende sent the wrong fields.
+- accountingd paid an EEG correction in full on top of the original and paid a
+  negative settlement out as a positive amount.
+- billingd and outputd taxed a cross-border supply as domestic; they refuse it
+  (`CROSS_BORDER_SUPPLY_UNSUPPORTED`, `EXPORT_SUPPLY_UNSUPPORTED`).
+- billingd credited the 2026 nEHS auction price to § 4 CO2KostAufG.
+- The Desk: ↵ on a focused answer code in ⌘K sent nothing; ⌘K's search lost
+  letters over views with letter shortcuts; the hold's ring never emptied; an
+  Überblick tile showed „NaN" for a figure its service did not return; content
+  scrolled into view could stop under the sticky top bar; the sidebar kept the
+  previous view marked after navigating.
 
 ## [0.28.0] — 2026-11-07
 

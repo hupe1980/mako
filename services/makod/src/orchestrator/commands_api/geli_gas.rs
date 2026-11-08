@@ -227,38 +227,63 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
 /// gemeldeten Termin dem Ersatz-/ Grundversorger zu", so its lapse completes
 /// the Zuordnung.
 ///
-/// ## Required payload fields
+/// The process is keyed by [`mako_geli_gas::gnb_anfrage_key`], not the bare
+/// Marktlokation: on a deployment that is GNB and LF at once the 44013 returns
+/// through the loopback and opens the LF's own process on that Marktlokation,
+/// under the same workflow name.
+///
+/// The 44013 carries the Marktlokation's Stammdaten whole (UTILMD AHB Gas 1.2
+/// Kap. 5.9; GeLi Gas 3.0 Kap. 3.3.2). They are read from marktd for the
+/// Zuordnungsbeginn ([`super::eog_stammdaten`]) — the caller sends none, and a
+/// fact marktd does not hold refuses the command naming it, as does a marktd
+/// that does not answer. Before the spawn the 44013 is rendered and checked
+/// against its AHB profile — the check the pre-send gate runs — so a command
+/// whose message lacks a Muss part is refused here, naming it, rather than
+/// written as a message the gate dead-letters.
+///
+/// ## Payload — [`mako_markt::commands::GeliEogAnmelden`]
 ///
 /// | Field          | Type   | Notes |
 /// |----------------|--------|-------|
 /// | `malo_id`      | string | Gas Marktlokations-ID |
 /// | `gv_mp_id`     | string | MP-ID of the E/G Lieferant (message receiver) |
-/// | `process_date` | string | Zuordnungsbeginn, ISO-8601 or `YYYYMMDD` |
+/// | `process_date` | string | Zuordnungsbeginn `SG4 DTM+92`, ISO-8601 or `YYYYMMDD` |
+/// | `bilanzierungsbeginn` | string | `SG4 DTM+158`, ISO-8601 or `YYYYMMDD` |
+/// | `transaktionsgrund` | string | `SG4 STS+7` DE 9013 (`E06`/`Z02`/`Z36`/`Z37`/`Z39`/`ZC6`/`ZC7`/`ZT6`/`ZT7`/`ZZD`) |
+///
+/// Any other key is refused.
 pub(super) async fn dispatch_geli_eog_anmelden(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     const EOG_GAS_PID: u32 = 44013;
 
-    let malo_id = extract_malo_id(payload)?;
-    let gv_mp_id = payload
-        .get("gv_mp_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"gv_mp_id\" (MP-ID of the E/G Lieferant)".into(),
-            )
-        })?
-        .to_owned();
-    let process_date = payload
-        .get("process_date")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"process_date\" (Zuordnungsbeginn, ISO-8601)".into(),
-            )
-        })?
-        .to_owned();
+    let body: mako_markt::commands::GeliEogAnmelden =
+        mako_service::json_from_value(payload.clone()).map_err(|e| {
+            DispatchError::InvalidPayload(format!(
+                "geli.eog.anmelden payload: {e} — Muss on the Anmeldung EoG 44013 \
+                 (UTILMD AHB Gas 1.2 Kap. 5.9)"
+            ))
+        })?;
+    let malo_id = extract_malo_id(&serde_json::json!({ "malo_id": body.malo_id }))?;
+    let nonempty = |v: &str, field: &str| {
+        let v = v.trim();
+        if v.is_empty() {
+            Err(DispatchError::InvalidPayload(format!(
+                "\"{field}\" must not be empty — Muss on the Anmeldung EoG 44013 \
+                 (UTILMD AHB Gas 1.2 Kap. 5.9)"
+            )))
+        } else {
+            Ok(v.to_owned())
+        }
+    };
+    let transaktionsgrund = nonempty(&body.transaktionsgrund, "transaktionsgrund")?;
+    let bilanzierungsbeginn = nonempty(&body.bilanzierungsbeginn, "bilanzierungsbeginn")?;
+    let gv_mp_id = nonempty(&body.gv_mp_id, "gv_mp_id")?;
+    let process_date = body.process_date;
+    let stichtag = super::eog_stammdaten::stichtag(&process_date)?;
+    let record = super::eog_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
+    let stammdaten = super::eog_stammdaten::gas_44013(&record, &transaktionsgrund)?;
 
     let today = mako_fristen::heute();
     let document_date = format!(
@@ -278,15 +303,27 @@ pub(super) async fn dispatch_geli_eog_anmelden(
         document_date,
         process_date,
         message_ref,
+        transaktionsgrund: Some(transaktionsgrund),
+        bilanzierungsbeginn: Some(bilanzierungsbeginn),
+        stammdaten,
     };
+    {
+        use mako_engine::workflow::Workflow as _;
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &mako_geli_gas::GasSupplierChangeState::New,
+            domain_cmd.clone(),
+        )
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+    }
 
-    // Duplicate guard: refuse only while a supplier-change process is still
-    // running for this Gas-MaLo. A GNB rejection is terminal and must not retire
-    // the MaLo — the corrected Anmeldung that follows is a normal GeLi Gas flow.
-    // See `find_occupying_process`.
+    // Duplicate guard: refuse only while an Anfrage this GNB sent for the
+    // Gas-MaLo is still running. An LF rejection is terminal and must not retire
+    // the MaLo. See `find_occupying_process`.
+    let gnb_key = mako_geli_gas::gnb_anfrage_key(malo_id.as_str());
     let occupancy = find_occupying_process::<GeliGasSupplierChangeWorkflow>(
         state,
-        malo_id.as_str(),
+        &gnb_key,
         mako_geli_gas::WORKFLOW_NAME,
     )
     .await?;
@@ -317,7 +354,7 @@ pub(super) async fn dispatch_geli_eog_anmelden(
         workflow_id,
         domain_cmd,
         &[(mako_geli_gas::LIEFERBEGINN_RESPONSE_WINDOW_LABEL, due_at)],
-        &[malo_id.as_str()],
+        &[&gnb_key],
     )
     .await?;
 

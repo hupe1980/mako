@@ -61,3 +61,20 @@ export function quelle(ref: string): string {
   const was = WERKZEUG[tool];
   return was ? `${dienst} · ${was}` : dienst;
 }
+
+/**
+ * One read of the assistant's trail as a line: what the tool reads as an
+ * operator calls it, agentd's verb, then the object agentd names —
+ * „Verlauf gelesen · Prozess 4711". A read whose source is hidden keeps
+ * agentd's verb and object alone.
+ */
+export function schrittZeile(s: {
+  was: string;
+  objekt: string | null;
+  quelle: { dienst: string; werkzeug: string } | null;
+}): string {
+  const was = s.quelle
+    ? `${WERKZEUG[s.quelle.werkzeug] ?? ALLE[s.quelle.dienst] ?? "Dienst"} ${s.was}`
+    : `${s.was.charAt(0).toUpperCase()}${s.was.slice(1)}`;
+  return s.objekt ? `${was} · ${s.objekt}` : was;
+}

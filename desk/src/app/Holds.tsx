@@ -42,7 +42,7 @@ export function HoldProvider({ children, queue }: { children: ReactNode; queue?:
 }
 
 /**
- * Hold a routine decision: `send(keepalive)` runs when the hold ends, `undo`
+ * Hold a decision: `send(keepalive)` runs when the hold ends, `undo`
  * restores the screen when the person takes it back. One decision per `key`.
  */
 export function useHold() {
@@ -58,6 +58,19 @@ export function useHold() {
     [q],
   );
 }
+
+/** The hold pending under `key`, with how long a hold lasts; null when none is. */
+export function useGehalten(key: string): { hold: Hold; ms: number } | null {
+  const q = useContext(Queue);
+  const holds = useSyncExternalStore(
+    (l) => q?.subscribe(l) ?? (() => undefined),
+    () => q?.list() ?? KEINE,
+  );
+  const hold = holds.find((h) => h.key === key);
+  return hold && q ? { hold, ms: q.ms } : null;
+}
+
+const KEINE: readonly Hold[] = [];
 
 function HoldToasts({ queue }: { queue: HoldQueue }) {
   const holds = useSyncExternalStore(

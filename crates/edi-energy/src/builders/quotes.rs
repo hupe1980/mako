@@ -237,7 +237,9 @@ impl<S, R> QuotesBuilder<S, R> {
         self
     }
 
-    /// Set the document date for DTM+137 (`YYYYMMDD`).
+    /// Set the document date for DTM+137 — the UTC instant `CCYYMMDDHHMM`
+    /// (format 303, optionally `+00`); a bare `CCYYMMDD` is refused with
+    /// [`Error::DtmNotAnInstant`](crate::Error::DtmNotAnInstant).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -384,6 +386,10 @@ impl<S, R> QuotesBuilder<S, R> {
         self
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+    )]
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = self
             .inner
@@ -418,10 +424,18 @@ impl<S, R> QuotesBuilder<S, R> {
         // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
         // `+00`; `[494]` requires the stamp to be the creation moment or
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
-        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        emit_comp!(
+            w,
+            "DTM",
+            ["137", &super::ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
+        );
         // `DTM+469` — frühester Start der Übermittlung, format 303.
         if let Some(start) = &self.inner.fruehester_start {
-            emit_comp!(w, "DTM", ["469", &super::ccyymmddhhmm_utc(start), "303"]);
+            emit_comp!(
+                w,
+                "DTM",
+                ["469", &super::ccyymmddhhmm_utc("469", start)?, "303"]
+            );
         }
         // `DTM+279` — Einrichtungszeitspanne (count + 802/803/804 unit).
         if let Some((count, unit)) = &self.inner.einrichtungszeit {

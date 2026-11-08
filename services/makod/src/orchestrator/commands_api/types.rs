@@ -204,8 +204,18 @@ pub enum DispatchError {
     /// Abs. 1 Satz 6 Nr. 2, § 27 Abs. 38 UStG) — the rule's sentence, or the
     /// missing record it turns on.
     EdiUnzulaessig(String),
-    /// marktd, which holds the recipient's EDI agreement, did not answer.
+    /// marktd, which holds what the command needs (the recipient's EDI
+    /// agreement, a Marktlokation's Stammdaten), did not answer.
     MarktdUnavailable(String),
+    /// The message the command sends carries a Marktlokation's Stammdaten
+    /// whole, and marktd does not hold every fact of it the AHB makes Muss.
+    /// Nothing is sent: a missing input is a refusal, not a guessed value.
+    StammdatenUnvollstaendig {
+        /// The Marktlokation.
+        malo_id: String,
+        /// Each missing fact, named with the segment it fills.
+        fehlend: Vec<String>,
+    },
     /// The `Rechnung` cannot go out as the INVOIC of its PID: the AHB requires
     /// a place it does not fill, or the built message fails its Prüfschablone.
     InvoicNichtDarstellbar {

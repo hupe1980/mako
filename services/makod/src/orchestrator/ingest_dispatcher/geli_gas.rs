@@ -112,23 +112,32 @@ impl EdifactIngestDispatcher {
             // ── GeLi Gas SupplierChange ──────────────────────────────────────
             // 44008/44009, 44011/44012, 44014/44015: the LF's answer to an
             // Anfrage this GNB sent (44007, 44010, 44013) — resume the GNB's
-            // own process by MaLo, the key `geli.eog.anmelden` spawned it
-            // under. Never a spawn: an answer with no Anfrage behind it has
+            // own process under `gnb_anfrage_key`, the key `geli.eog.anmelden`
+            // spawned it under. Never the bare MaLo: on a combined NB+LF
+            // deployment the LF's process answering the same Anfrage runs
+            // there. Never a spawn: an answer with no Anfrage behind it has
             // nothing to answer. Routed only on an NB deployment
             // (`GeliGasModule::register_pids_with_roles`).
             "geli-gas-supplier-change" if mako_geli_gas::GNB_ANTWORT_PIDS.contains(&pid) => {
                 let cmd = adapters::geli_gas_gnb_antwort_registry().dispatch(raw, &fv)?;
                 let malo_id = extract_malo_from_msg(msg);
+                let key = if malo_id.as_str().is_empty() {
+                    String::new()
+                } else {
+                    mako_geli_gas::gnb_anfrage_key(malo_id.as_str())
+                };
                 self.resume_by_key::<GeliGasSupplierChangeWorkflow>(
                     inbound,
-                    malo_id.as_str(),
+                    &key,
                     "geli-gas-supplier-change",
                     cmd,
                 )
                 .await
             }
             // Every other PID 44001–44021 — spawn by MaLo, or resume the
-            // process still occupying it.
+            // process still occupying it. A process the GNB opened itself is
+            // not on this key (`gnb_anfrage_key`), so an Anfrage never resumes
+            // one.
             "geli-gas-supplier-change" => match pid {
                 44001..=44021 => {
                     let cmd = adapters::geli_gas_registry(received_at).dispatch(raw, &fv)?;

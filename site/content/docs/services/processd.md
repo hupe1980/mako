@@ -1,6 +1,6 @@
 +++
 title = "processd Operator Guide"
-description = "Operator guide for processd, the process decision engine: NB Anmeldung straight-through processing, LF and MSB answers, the process read model with its KPIs and § 7a Abs. 5 EnWG evidence, the NB Sperrauftrag queue, role-gated binaries and Cedar ABAC."
+description = "processd operator guide: NB Anmeldung STP, LF and MSB answers, the process read model and its KPIs, the NB Sperrauftrag queue, role-gated builds and Cedar."
 weight = 23
 +++
 `processd` is the **process decision engine**. It receives the market messages
@@ -355,7 +355,11 @@ de.markt.versorgung.gap-detected           (marktd: an interval no supplier
   ├─ [eog.auto_activate] GET /api/v1/grundversorger/{nb_mp_id}?sparte=…
   │    └─ found → Strom: gpke.eog.anmelden → UTILMD 55013;
   │             Gas:   geli.eog.anmelden → UTILMD G 44013 → makod → E/G
-  │       (Zuordnungsbeginn = day after Lieferende — retroactive allowed)
+  │       (the command names MaLo, E/G, dates and Grund; makod reads the
+  │        Marktlokation's Stammdaten from marktd and refuses the command
+  │        naming what marktd does not hold)
+  │       (Zuordnungsbeginn = day after Lieferende — retroactive allowed;
+  │        Gas Bilanzierungsbeginn = Zuordnungsbeginn, GeLi Gas 3.0 Kap. 3.3.1)
   │    └─ missing → case stays `detected`; operator provisions the
   │       §36 Abs. 2 Feststellung and re-triggers
   └─ de.markt.versorgung.eog-begonnen → case `active`

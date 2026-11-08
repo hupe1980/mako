@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { useBelegZiel } from "../app/belege";
 import { fristArt } from "../app/prozesse";
 import { useRolle } from "../app/rollen";
 import type { DeadlineView, HistoryEntry } from "../data/gen/makod";
@@ -118,11 +119,14 @@ export function Verlauf({
     queryKey: [rolle, "makod", "get_process_history", processId],
     queryFn: () => call("makod", "get_process_history", { process_id: processId }),
   });
+  // An answer citing this Verlauf marks it while the citation has focus.
+  const beleg = useBelegZiel(`makod/get_process_history/${processId}`);
   const pending = deadlines.flatMap((d) => (d.due_at ? [{ ...d, due_at: d.due_at }] : []));
   pending.sort((a, b) => epochMs(a.due_at) - epochMs(b.due_at));
 
   return (
     <section
+      {...beleg}
       aria-labelledby={`verlauf-${processId}`}
       className="border-t border-separator px-6 py-5"
     >

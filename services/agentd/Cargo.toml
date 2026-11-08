@@ -75,6 +75,8 @@ rmcp = { version = "3.1", default-features = false, features = [
     "client", "transport-streamable-http-client", "transport-streamable-http-client-reqwest",
 ] }
 async-trait = "0.1.91"
+# `stream::unfold`, the shape the `schritte` SSE body is read through.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 mako-service = { workspace = true, features = ["testing"] }

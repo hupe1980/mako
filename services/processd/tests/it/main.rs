@@ -5,6 +5,8 @@
 mod authorization_guard;
 mod demo_config;
 mod dev_config;
+#[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+mod eog_command_contract;
 mod esa_pid_contract;
 mod former_actions;
 mod mcp_route_contract;

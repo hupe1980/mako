@@ -556,6 +556,17 @@ pub enum BewertungError {
     Journal(String),
 }
 
+/// Why a stop was not recorded.
+#[derive(Debug)]
+pub enum StoppError {
+    /// No such run.
+    Unbekannt,
+    /// The run has concluded, with this outcome; its answer stands.
+    Abgeschlossen(String),
+    /// The journal could not be read or written.
+    Journal(String),
+}
+
 /// One sentence of an answer.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AnswerSentence {
@@ -857,6 +868,7 @@ impl Plane {
         let tenant = cfg.tenant.clone();
         let keyring = cfg.keyring.clone();
         let memory = Arc::clone(&stores.memory);
+        let journal = Arc::clone(&stores.journal);
 
         let mut builder = Runtime::builder(stores.journal)
             .owner(cfg.owner.to_owned())
@@ -885,7 +897,12 @@ impl Plane {
             builder = builder.provider(name, driver);
         }
         for (name, client) in cfg.tool_servers {
-            builder = builder.tool_server(name, client);
+            // Every server behind the stop: a call of a stopped run never
+            // leaves (`tools::StopGuard`).
+            builder = builder.tool_server(
+                name,
+                super::tools::StopGuard::guarding(client, Arc::clone(&journal)),
+            );
         }
         // Registrations are made at **admission**, so no run exists unwatched,
         // and delivery reads the run's own journal records past a cursor that
@@ -1043,6 +1060,28 @@ impl Plane {
     /// [`Accepted::refused`] rather than as a failure of the whole call, because
     /// one specialist's refusal must not discard the ones that were admitted.
     pub async fn accept(&self, event: Envelope<'_>, payload: Value) -> Vec<Accepted> {
+        self.accept_for(event, payload, None).await
+    }
+
+    /// [`Self::accept`] for a person: each run journals `starter` as the one
+    /// who asked for it (`RunAdmitted.admitted_by`), which is who may follow
+    /// its steps and stop it ([`Self::starter`]) — and who agentplane's
+    /// four-eyes rule bars from deciding a task the run opens.
+    pub async fn accept_by(
+        &self,
+        event: Envelope<'_>,
+        payload: Value,
+        starter: &str,
+    ) -> Vec<Accepted> {
+        self.accept_for(event, payload, Some(starter)).await
+    }
+
+    async fn accept_for(
+        &self,
+        event: Envelope<'_>,
+        payload: Value,
+        starter: Option<&str>,
+    ) -> Vec<Accepted> {
         let matched = self.router.matching(event.event_type);
         if matched.is_empty() {
             info!(
@@ -1054,7 +1093,10 @@ impl Plane {
 
         let mut accepted = Vec::with_capacity(matched.len());
         for route in matched {
-            accepted.push(self.accept_one(route, event, payload.clone()).await);
+            accepted.push(
+                self.accept_one(route, event, payload.clone(), starter)
+                    .await,
+            );
         }
         accepted
     }
@@ -1316,7 +1358,75 @@ impl Plane {
         payload: Value,
     ) -> Option<Accepted> {
         let route = self.router.routes.iter().find(|r| r.name == name)?;
-        Some(self.accept_one(route, event, payload).await)
+        Some(self.accept_one(route, event, payload, None).await)
+    }
+
+    /// [`Self::accept_named`] for a person, journaled as the run's starter —
+    /// see [`Self::accept_by`].
+    pub async fn accept_named_by(
+        &self,
+        name: &str,
+        event: Envelope<'_>,
+        payload: Value,
+        starter: &str,
+    ) -> Option<Accepted> {
+        let route = self.router.routes.iter().find(|r| r.name == name)?;
+        Some(self.accept_one(route, event, payload, Some(starter)).await)
+    }
+
+    /// Who asked for `run`: `None` for a run nobody has heard of, `Some(None)`
+    /// for one admitted without a person — an event's, or a proposal tick's —
+    /// and `Some(Some(sub))` for one a person started through
+    /// [`Self::accept_by`]. Read from the run's `RunAdmitted` record.
+    ///
+    /// # Errors
+    ///
+    /// The journal failing.
+    pub async fn starter(&self, run: &str) -> Result<Option<Option<String>>, String> {
+        let Ok(id) = agentplane::core::RunId::parse(run) else {
+            return Ok(None);
+        };
+        let records = self
+            .runtime
+            .journal()
+            .read(id, 0)
+            .await
+            .map_err(|e| e.to_string())?;
+        if records.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(records.iter().find_map(|r| match r.kind() {
+            agentplane::journal::RecordKind::RunAdmitted { admitted_by, .. } => admitted_by.clone(),
+            _ => None,
+        })))
+    }
+
+    /// Ask `run` to stop, as the person `by`, with `reason` on the record.
+    ///
+    /// agentplane's `request_cancel`: the request is durable at once, and the
+    /// run's owner acts on it at the run's next step boundary — it journals
+    /// `RunCancelled` with `by` and concludes `cancelled`. `Ok(false)` when a
+    /// stop already stands, so the name on the record is the first asker's.
+    ///
+    /// # Errors
+    ///
+    /// [`StoppError::Abgeschlossen`] for a run that has already concluded,
+    /// [`StoppError::Unbekannt`] for one nobody has heard of.
+    pub async fn stoppen(&self, run: &str, by: &str, reason: &str) -> Result<bool, StoppError> {
+        use agentplane::core::{Operator, RuntimeError, StoreError};
+        let id = agentplane::core::RunId::parse(run).map_err(|_| StoppError::Unbekannt)?;
+        let by = Operator::authenticated(by).map_err(|e| StoppError::Journal(e.to_string()))?;
+        match self.runtime.request_cancel(id, &by, reason).await {
+            Ok(fresh) => Ok(fresh),
+            Err(RuntimeError::Store(StoreError::NotFound(_))) => Err(StoppError::Unbekannt),
+            Err(RuntimeError::AlreadyConcluded { outcome, .. }) => {
+                Err(StoppError::Abgeschlossen(outcome))
+            }
+            Err(RuntimeError::CannotUnwind { .. }) => {
+                Err(StoppError::Abgeschlossen("quarantined".to_owned()))
+            }
+            Err(e) => Err(StoppError::Journal(e.to_string())),
+        }
     }
 
     /// Admit the desk assistant's proposal for one open entry of `art` — once.
@@ -1404,7 +1514,13 @@ impl Plane {
         Reception::Unprocessable
     }
 
-    async fn accept_one(&self, route: &Route, event: Envelope<'_>, payload: Value) -> Accepted {
+    async fn accept_one(
+        &self,
+        route: &Route,
+        event: Envelope<'_>,
+        payload: Value,
+        starter: Option<&str>,
+    ) -> Accepted {
         let refused = |why: String, retryable: bool| Accepted {
             agent_name: route.name.to_owned(),
             run_id: String::new(),
@@ -1421,13 +1537,15 @@ impl Plane {
             Err(why) => return refused(why.to_owned(), false),
         };
 
+        let mut terms = agentplane::runtime::RunTerms::default()
+            .correlated(correlation.kind, &correlation.keys);
+        if let Some(starter) = starter {
+            terms = terms.admitted_by(starter);
+        }
         match self
             .runtime
             .start(route.capability.as_str(), input)
-            .terms(
-                agentplane::runtime::RunTerms::default()
-                    .correlated(correlation.kind, &correlation.keys),
-            )
+            .terms(terms)
             .once(event.admission_key(route.name))
             .spawn()
             .await

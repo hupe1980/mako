@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
+import { LaufPill } from "../app/LaufPills";
+import type { Lauf } from "../app/laeufe";
 import { ROLLEN, type Rolle } from "../app/rollen";
-import type { Answer, Bilanz, Vorschlag } from "../data/agent";
+import type { Answer, Bilanz, Schritt, Vorschlag } from "../data/agent";
 import type { GeparkteBuchung } from "../data/gen/accountingd";
 import { Abgelehnt } from "../data/rechnung";
 import { AiNote } from "../design/AiNote";
@@ -15,7 +17,9 @@ import { Tile } from "../design/Tile";
 import type { BusinessDate, Instant } from "../format/brands";
 import { epochMs } from "../format/date";
 import { GeparktEntscheiden } from "../views/Buchungen";
+import { SpurAnsicht } from "../views/Spur";
 import { WarumAntwort } from "../views/Warum";
+import { AktionenVorschau } from "./Aktionen";
 
 // Every control in every state, in both appearances side by side: the Desk's
 // visual regression fixture, and the page a design change is reviewed on.
@@ -96,6 +100,58 @@ const WARUM_ANTWORT = {
     { text: "Entscheiden Sie: neu buchen oder verwerfen.", quelle: null, belegt: false },
   ],
   schritte: [{ quelle: "accountingd/get_parked_booking", fertig: true }],
+};
+
+/**
+ * A trail as agentd's stream sends it: three reads, the second one hidden
+ * from the person (a forward case — agentd sends none hidden yet).
+ */
+const SPUR: Schritt[] = [
+  {
+    seq: 3,
+    art: "lesen",
+    was: "gelesen",
+    objekt: "Buchung R-2026-0815",
+    quelle: { dienst: "accountingd", werkzeug: "get_parked_booking", ref: "R-2026-0815" },
+    verborgen: false,
+    um: at("2026-11-03T09:00:00.300Z"),
+  },
+  {
+    seq: 5,
+    art: "lesen",
+    was: "gelesen",
+    objekt: "Kunde k-1",
+    quelle: null,
+    verborgen: true,
+    um: at("2026-11-03T09:00:00.900Z"),
+  },
+  {
+    seq: 7,
+    art: "lesen",
+    was: "aufgelistet",
+    objekt: "MaLo 51238696012",
+    quelle: { dienst: "accountingd", werkzeug: "list_ledger", ref: "51238696012" },
+    verborgen: false,
+    um: at("2026-11-03T09:00:02.400Z"),
+  },
+];
+
+const LAUF: Lauf = {
+  run: "r-p",
+  frage: "Was ist hier offen?",
+  anker: '{"malo":"51238696012"}',
+  rolle: "netz",
+  zurueck: "/prozess?key=51238696012",
+  pille: true,
+  nr: 1,
+  schritte: SPUR.slice(0, 1),
+  antwort: null,
+  abgebrochen: null,
+  unlesbar: false,
+  stoppt: false,
+  stoppFehler: null,
+  gelesen: false,
+  zuschauer: 0,
 };
 
 function Specimen({ title, children }: { title: string; children: ReactNode }) {
@@ -272,6 +328,45 @@ function Specimens() {
           />
         </div>
       </Specimen>
+      <Specimen title="Spur des Assistenten">
+        <div className="grid w-full gap-3">
+          <WarumAntwort
+            stand={{ kind: "liest", schritte: [], spur: SPUR.slice(0, 2) }}
+            stopp={{ run: "r-g", lauf: undefined }}
+          />
+          <WarumAntwort
+            stand={{ kind: "liest", schritte: [], spur: SPUR.slice(0, 1) }}
+            stopp={{ run: "r-g", lauf: { ...LAUF, stoppt: true } }}
+          />
+          <WarumAntwort stand={{ kind: "antwort", a: WARUM_ANTWORT, spur: SPUR }} />
+          <WarumAntwort
+            stand={{
+              kind: "abgebrochen",
+              spur: [...SPUR.slice(0, 1), { ...(SPUR[2] as Schritt), art: "fehlgeschlagen" }],
+            }}
+          />
+          <div className="rounded-panel border border-ai-border bg-ai-fill p-4">
+            <SpurAnsicht schritte={SPUR} stand="beantwortet" anfangsOffen />
+          </div>
+        </div>
+      </Specimen>
+
+      <Specimen title="Laufende Frage in der Leiste">
+        <LaufPill lauf={LAUF} onPress={() => undefined} />
+        <LaufPill
+          lauf={{ ...LAUF, schritte: SPUR, antwort: WARUM_ANTWORT }}
+          onPress={() => undefined}
+        />
+        <LaufPill
+          lauf={{ ...LAUF, abgebrochen: { durch: "sb", um: at("2026-11-03T09:00:01Z") } }}
+          onPress={() => undefined}
+        />
+      </Specimen>
+
+      <Specimen title="Aktionen in ⌘K">
+        <AktionenVorschau bilanz={BILANZ} />
+      </Specimen>
+
       <Specimen title="Geparkte Buchung">
         <div className="grid w-full gap-3">
           <GeparktEntscheiden
@@ -296,7 +391,7 @@ function Specimens() {
           <GeparktEntscheiden
             b={GEPARKT}
             onDone={() => undefined}
-            anfang={{ aktion: "verwerfen", grund: "Doppelt erfasst", bestaetigen: true }}
+            anfang={{ aktion: "verwerfen", grund: "Doppelt erfasst", gehalten: true }}
           />
           <GeparktEntscheiden
             b={GEPARKT}
@@ -341,6 +436,8 @@ function Specimens() {
             "copy",
             "check",
             "warn",
+            "lock",
+            "stop",
           ] as const
         ).map((n) => (
           <Icon key={n} name={n} size={20} />

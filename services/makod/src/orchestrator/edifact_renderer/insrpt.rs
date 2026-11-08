@@ -111,7 +111,7 @@ pub(super) fn render_insrpt(
     builder = builder.doc_reference(doc_qualifier, doc_id);
 
     if let Some(d) = p.get("document_date").and_then(|v| v.as_str()) {
-        builder = builder.document_date(normalise_date(d));
+        builder = builder.document_date(dokumentdatum_303("INSRPT", d)?);
     }
 
     finish_interchange(builder.serialize(), sender, receiver, msg)

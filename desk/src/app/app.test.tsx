@@ -36,6 +36,15 @@ afterEach(() => {
   localStorage.removeItem("mako-desk.rolle");
 });
 
+/** The hold ends at once: `pagehide` sends every held decision. */
+const flush = () =>
+  act(() => {
+    window.dispatchEvent(new Event("pagehide"));
+  });
+
+/** ⌘Z: the newest hold taken back. */
+const zurueck = () => fireEvent.keyDown(document.body, { key: "z", metaKey: true });
+
 describe("the Desk", () => {
   it("opens on Heute with the Rolle badge in the toolbar", async () => {
     await open("/");
@@ -437,19 +446,19 @@ describe("the Desk", () => {
     await open("/ueberblick");
     // A capped answer is shown as the floor it is; the total is vertragd's,
     // not the length of the page it sent.
-    const fristen = await screen.findByRole("link", { name: "Fristen überschritten: 500+" });
+    const fristen = await screen.findByRole("link", { name: /^Fristen überschritten\s*500\+/ });
     expect(fristen.getAttribute("href")).toBe("/fristen");
-    const offen = await screen.findByRole("link", { name: "Anmeldungen offen: 1.284" });
+    const offen = await screen.findByRole("link", { name: /^Anmeldungen offen\s*1\.284/ });
     expect(offen.getAttribute("href")).toBe("/heute");
-    const pruefung = await screen.findByRole("link", { name: "Rechnungsprüfung: 50+" });
+    const pruefung = await screen.findByRole("link", { name: /^Rechnungsprüfung\s*50\+/ });
     expect(pruefung.getAttribute("href")).toBe("/heute");
     expect(
-      (await screen.findByRole("link", { name: "Rechnungsdispute: 3" })).getAttribute("href"),
+      (await screen.findByRole("link", { name: /^Rechnungsdispute\s*3/ })).getAttribute("href"),
     ).toBe("/heute");
     // accountingd's count is every parked booking, not the page it sent: exact
     // even when the page is full.
     expect(
-      (await screen.findByRole("link", { name: "Geparkte Buchungen: 120" })).getAttribute("href"),
+      (await screen.findByRole("link", { name: /^Geparkte Buchungen\s*120/ })).getAttribute("href"),
     ).toBe("/heute");
     // One read per tile, and none of another Rolle's sources.
     for (const tool of [
@@ -492,11 +501,11 @@ describe("the Desk", () => {
     );
     await open("/ueberblick");
     // The total the service holds, not the one row of the page it sent.
-    const dead = await screen.findByRole("link", { name: "Dead Letters: 23" });
+    const dead = await screen.findByRole("link", { name: /^Dead Letters\s*23/ });
     expect(dead.getAttribute("href")).toBe("/dead-letters");
     expect(
       await screen.findByRole("link", {
-        name: "Fristen überschritten: Prozessüberwachung nicht erreichbar",
+        name: /^Fristen überschritten\s*—.*Prozessüberwachung nicht erreichbar/,
       }),
     ).toBeTruthy();
   });
@@ -960,7 +969,7 @@ describe("the Desk", () => {
     });
   }
 
-  it("decides a Freigabe with a code its tree defines, sent only after the confirm", async () => {
+  it("decides a Freigabe with a code its tree defines: no dialog, held, ⌘Z sends nothing, the hold's end sends it", async () => {
     const posts: { url: string; body: unknown }[] = [];
     vi.stubGlobal("fetch", freigabeFetch({ posts }));
     await open("/freigaben");
@@ -969,9 +978,26 @@ describe("the Desk", () => {
     // The codes are the tree's own, each with its wording.
     expect(screen.getByText("E_0622")).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: /A02/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
+    // What sending does is said beside the send — there is no dialog to say it.
+    expect(screen.getByText(/Sendet die Antwort als Marktnachricht/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen" }));
+    // A market message too is held, its ring on the entry; no dialog asks.
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.getAllByRole("timer", { name: /Gleich gesendet: Freigabe abgelehnt/ }),
+    ).not.toHaveLength(0);
     expect(posts).toEqual([]);
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    // ⌘Z within the hold sends nothing and gives the form back as it was.
+    zurueck();
+    await waitFor(() => expect(screen.queryAllByRole("timer")).toHaveLength(0));
+    flush();
+    expect(posts).toEqual([]);
+    expect((screen.getByRole("radio", { name: /A02/ }) as HTMLInputElement).checked).toBe(true);
+    // Sent again, the hold's end sends the registry's request.
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen" }));
+    expect(posts).toEqual([]);
+    flush();
     await waitFor(() =>
       expect(posts).toEqual([
         {
@@ -1010,8 +1036,8 @@ describe("the Desk", () => {
       true,
     );
     fireEvent.click(screen.getByRole("radio", { name: /A02/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen" }));
+    flush();
     expect(await screen.findByText("Schon entschieden")).toBeTruthy();
     expect(
       screen.getByText(/erika hat diese Freigabe am 02\.01\.2031, 09:15 Uhr freigegeben/),
@@ -1043,8 +1069,8 @@ describe("the Desk", () => {
     expect((screen.getByRole("radio", { name: /A02/ }) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByText(/Vom Assistenten vorgeschlagen/)).toBeTruthy();
     expect(posts).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen" }));
+    flush();
     // The same request the manual form sends, then what became of the proposal.
     await waitFor(() =>
       expect(posts).toEqual([
@@ -1097,8 +1123,8 @@ describe("the Desk", () => {
     );
     expect(screen.getByText(/Vom Assistenten vorgeschlagen/)).toBeTruthy();
     expect(posts).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen" }));
+    flush();
     await waitFor(() =>
       expect(posts).toEqual([
         {
@@ -1122,8 +1148,8 @@ describe("the Desk", () => {
     expect(screen.getByRole("heading", { name: "Heute", level: 1 })).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: "Ablehnen" }));
     fireEvent.click(screen.getByRole("radio", { name: /A02/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen" }));
+    flush();
     await waitFor(() =>
       expect(posts).toEqual([
         {
@@ -1135,13 +1161,13 @@ describe("the Desk", () => {
     expect(screen.getByRole("heading", { name: "Heute", level: 1 })).toBeTruthy();
   });
 
-  /** Choose „Ablehnen" with A02 and send it past the confirm. */
+  /** Choose „Ablehnen" with A02, send it, and end the hold. */
   async function ablehnenSenden() {
     await screen.findByRole("heading", { name: /verbundenen Lieferanten/ });
     fireEvent.click(screen.getByRole("radio", { name: "Ablehnen" }));
     fireEvent.click(screen.getByRole("radio", { name: /A02/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Ablehnen …" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnen" }));
+    flush();
   }
 
   it("shows processd's own sentence when it refuses a decision, not the status", async () => {
@@ -1415,7 +1441,7 @@ describe("the Desk", () => {
     localStorage.removeItem("mako-desk.rolle");
   });
 
-  it("takes the proposal waiting on a Disput in, with its finding, and confirms the REMADV", async () => {
+  it("takes the proposal waiting on a Disput in, with its finding, and holds the REMADV with no confirmation", async () => {
     localStorage.setItem("mako-desk.rolle", "lieferant");
     const posts: { url: string; body: unknown }[] = [];
     const fetch = rechnungFetch({
@@ -1455,9 +1481,10 @@ describe("the Desk", () => {
     );
     expect(screen.getByText(/Vom Assistenten vorgeschlagen/)).toBeTruthy();
     expect(screen.queryByText(/TariffDeviation/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Ablehnung senden …" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ablehnung senden" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(posts).toEqual([]);
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    flush();
     await waitFor(() =>
       expect(posts).toEqual([
         { url: "/svc/invoicd/api/v1/receipts/rc-1/dispatch-answer", body: null },
@@ -1467,7 +1494,7 @@ describe("the Desk", () => {
     localStorage.removeItem("mako-desk.rolle");
   });
 
-  it("decides Prüfposten in place: a held invoice after the confirm, a reviewed one on a hold", async () => {
+  it("decides Prüfposten in place: a held invoice and a reviewed one, each on a hold with no confirmation", async () => {
     localStorage.setItem("mako-desk.rolle", "lieferant");
     const posts: { url: string; body: unknown }[] = [];
     vi.stubGlobal(
@@ -1485,9 +1512,10 @@ describe("the Desk", () => {
     );
     await open("/heute");
     fireEvent.click(await screen.findByRole("button", { name: /Befund AMOUNT_SPIKE/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Freigeben …" }));
+    fireEvent.click(screen.getByRole("button", { name: "Freigeben" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(posts).toEqual([]);
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt senden" }));
+    flush();
     await waitFor(() =>
       expect(posts).toEqual([{ url: "/svc/billingd/api/v1/billing/b-held/release", body: null }]),
     );
@@ -1509,7 +1537,7 @@ describe("the Desk", () => {
     localStorage.removeItem("mako-desk.rolle");
   });
 
-  it("resolves a geparkte Buchung in place: rebooked on the date it fills in, discarded with a Grund, each confirmed", async () => {
+  it("resolves a geparkte Buchung in place: rebooked on the date it fills in, discarded with a Grund, each held and never confirmed", async () => {
     localStorage.setItem("mako-desk.rolle", "lieferant");
     const posts: { url: string; body: unknown }[] = [];
     let versuche = 0;
@@ -1560,9 +1588,10 @@ describe("the Desk", () => {
     // The first open day the service names is filled in, and stays editable.
     const datum = screen.getByLabelText(/Neu buchen am/) as HTMLInputElement;
     expect(datum.value).toBe("2031-02-01");
-    fireEvent.click(screen.getByRole("button", { name: "Neu buchen …" }));
+    fireEvent.click(screen.getByRole("button", { name: "Neu buchen" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(posts).toEqual([]);
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt buchen" }));
+    flush();
     // The ledger's refusal, in its words, where the decision is.
     expect(await screen.findByText(/period sealed through 2031-02-28/)).toBeTruthy();
     expect(posts).toEqual([
@@ -1571,26 +1600,30 @@ describe("the Desk", () => {
         body: { buchungsdatum: "2031-02-01" },
       },
     ]);
-    fireEvent.change(datum, { target: { value: "2031-03-01" } });
-    fireEvent.click(screen.getByRole("button", { name: "Neu buchen …" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt buchen" }));
+    // The form is back as it was sent, its date kept, to send again.
+    const wieder = screen.getByLabelText(/Neu buchen am/) as HTMLInputElement;
+    expect(wieder.value).toBe("2031-02-01");
+    fireEvent.change(wieder, { target: { value: "2031-03-01" } });
+    fireEvent.click(screen.getByRole("button", { name: "Neu buchen" }));
+    flush();
     await waitFor(() => expect(erste.getAttribute("aria-expanded")).toBe("false"));
     expect(posts.at(-1)).toEqual({
       url: "/svc/accountingd/api/v1/bookings/rechnung%3AR-1/rebook",
       body: { buchungsdatum: "2031-03-01" },
     });
 
-    // R chooses Verwerfen; it waits for a Grund, then for the confirm.
+    // R chooses Verwerfen; it waits for a Grund, then holds — no confirm.
     fireEvent.click(zweite);
     fireEvent.keyDown(window, { key: "r" });
-    const verwerfen = await screen.findByRole("button", { name: "Verwerfen …" });
+    const verwerfen = await screen.findByRole("button", { name: "Buchung verwerfen" });
     expect(verwerfen.hasAttribute("disabled")).toBe(true);
     fireEvent.change(screen.getByRole("textbox", { name: /Warum wird sie verworfen/ }), {
       target: { value: "Doppelt erfasst" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Verwerfen …" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buchung verwerfen" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(posts).toHaveLength(2);
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt verwerfen" }));
+    flush();
     await waitFor(() =>
       expect(posts.at(-1)).toEqual({
         url: "/svc/accountingd/api/v1/bookings/rechnung%3AR-2/discard",
@@ -1641,7 +1674,7 @@ describe("the Desk", () => {
     vorschlag: { sent: 14, edited: 2, dismissed: 1 },
   };
 
-  it("takes the proposal waiting on a geparkte Buchung into its decision, marked, sent only on the confirm", async () => {
+  it("takes the proposal waiting on a geparkte Buchung into its decision, marked, sent when its hold ends", async () => {
     localStorage.setItem("mako-desk.rolle", "lieferant");
     const posts: { url: string; body: unknown }[] = [];
     const wartend = (
@@ -1724,9 +1757,10 @@ describe("the Desk", () => {
     expect(screen.getByText("Kundenkonten · geparkte Buchung")).toBeTruthy();
     expect(screen.getByText("In 30 Tagen: 14 von 17 Vorschlägen übernommen")).toBeTruthy();
     expect(posts).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: "Neu buchen …" }));
+    fireEvent.click(screen.getByRole("button", { name: "Neu buchen" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(posts).toEqual([]);
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt buchen" }));
+    flush();
     await waitFor(() =>
       expect(posts).toEqual([
         {
@@ -1748,9 +1782,10 @@ describe("the Desk", () => {
     expect(screen.getByText("nicht belegt")).toBeTruthy();
     fireEvent.change(grund, { target: { value: "Doppelt erfasst, R-2 steht am 14.01.2031." } });
     expect(screen.queryByText(/Grund vom Assistenten vorgeschlagen/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Verwerfen …" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buchung verwerfen" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(posts).toHaveLength(2);
-    fireEvent.click(await screen.findByRole("button", { name: "Jetzt verwerfen" }));
+    flush();
     await waitFor(() =>
       expect(posts.slice(2)).toEqual([
         {
@@ -2138,7 +2173,7 @@ describe("the Desk", () => {
       ),
     );
     await open("/ueberblick");
-    const tile = await screen.findByRole("link", { name: /^Assistent: 86\s%/ });
+    const tile = await screen.findByRole("link", { name: /^Assistent\s*86\s%/ });
     expect(tile.getAttribute("href")).toBe("/assistent");
     expect(tile.textContent).toContain("hilfreich · 7 Bewertungen in 30 Tagen");
     expect(tile.textContent).toContain("14 von 17 Vorschlägen übernommen");
@@ -2147,7 +2182,7 @@ describe("the Desk", () => {
     bilanz = { ...BILANZ, hilfreich: { ja: 2, nein: 0 }, vorschlag: {} };
     await open("/ueberblick");
     const wenig = await screen.findByRole("link", {
-      name: /^Assistent: 2 Bewertungen in 30 Tagen/,
+      name: /^Assistent\s*2 Bewertungen in 30 Tagen/,
     });
     expect(wenig.textContent).not.toMatch(/%/);
     expect(wenig.textContent).toContain("Noch kein Vorschlag entschieden");
@@ -2270,6 +2305,8 @@ describe("the Desk", () => {
     await open("/dev/gallery");
     expect(await screen.findByText("Hell")).toBeTruthy();
     expect(screen.getByText("Dunkel")).toBeTruthy();
-    expect(screen.getAllByText("Freigeben")).toHaveLength(2);
+    // The primary button once per appearance; ⌘K's panels list „Freigeben" as an option too.
+    expect(screen.getAllByRole("button", { name: "Freigeben" })).toHaveLength(2);
+    expect(screen.getAllByRole("listbox", { name: "Aktionen" })).toHaveLength(4);
   });
 });

@@ -248,6 +248,15 @@ fn geli_gas_lieferbeginn_survives_every_interleaving() {
                 document_date: "20260302".to_owned(),
                 process_date: "20260401".to_owned(),
                 message_ref: MessageRef::new("EOG-1"),
+                transaktionsgrund: Some("Z36".to_owned()),
+                bilanzierungsbeginn: Some("20260401".to_owned()),
+                stammdaten: mako_engine::payload::Stammdaten {
+                    sg12: vec![mako_engine::payload::StammdatenSegment {
+                        tag: "NAD".to_owned(),
+                        elemente: vec![vec!["DP".to_owned()]],
+                    }],
+                    ..Default::default()
+                },
             },
             C::ReceiveGnbAntwort {
                 response_pid: pid(44_014),

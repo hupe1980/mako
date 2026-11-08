@@ -140,6 +140,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "futures-util",
  "mako-events",
  "mako-fristen",
  "mako-service",

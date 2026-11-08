@@ -660,64 +660,6 @@ pub async fn describe(
         .collect())
 }
 
-/// One booked entry of a given type, with the customer it belongs to.
-#[derive(Debug, Clone)]
-pub struct KindEntry {
-    /// The LF market-partner id of the owning Kontokorrent.
-    pub lf_mp_id: String,
-    /// The Marktlokation of the owning Kontokorrent.
-    pub malo_id: String,
-    /// The ledger entry.
-    pub entry_id: Uuid,
-    /// The signed amount in minor units.
-    pub amount_ct: i64,
-    /// The originating CloudEvent id, if any.
-    pub correlation: Option<String>,
-}
-
-/// Every booked entry of `art` dated in `(year, month)` — the input to the
-/// batch EEG-payout run.
-///
-/// Read from the drafts that booked them: a draft is `gebucht` only once the
-/// ledger recorded it, and it carries the customer, the amount and the
-/// correlation the ledger entry holds as postings and dimensions — one indexed
-/// query instead of a scan of the log.
-///
-/// # Errors
-///
-/// A database failure, or a stored draft that does not decode.
-pub async fn booked_of_kind_in_month(
-    pool: &PgPool,
-    tenant: &str,
-    art: &str,
-    year: i32,
-    month: u8,
-) -> anyhow::Result<Vec<KindEntry>> {
-    let rows = sqlx::query(
-        "SELECT entry_id, entwurf FROM booking_drafts          WHERE tenant = $1 AND status = 'gebucht' AND entwurf->>'entry_type' = $2          AND date_part('year', (entwurf->>'booking_date')::date) = $3          AND date_part('month', (entwurf->>'booking_date')::date) = $4          ORDER BY created_at",
-    )
-    .bind(tenant)
-    .bind(art)
-    .bind(year)
-    .bind(i32::from(month))
-    .fetch_all(pool)
-    .await
-    .context("list booked entries of a type")?;
-    rows.into_iter()
-        .map(|r| {
-            let draft: PostEntry =
-                serde_json::from_value(r.get("entwurf")).context("decode booked draft")?;
-            Ok(KindEntry {
-                lf_mp_id: draft.lf_mp_id,
-                malo_id: draft.malo_id,
-                entry_id: r.get("entry_id"),
-                amount_ct: draft.amount_ct,
-                correlation: draft.correlation,
-            })
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

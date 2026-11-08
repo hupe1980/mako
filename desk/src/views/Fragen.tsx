@@ -1,10 +1,12 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { useRouter } from "@tanstack/react-router";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Button as AriaButton, Form, Input, TextField } from "react-aria-components";
 import { quelle } from "../app/dienste";
 import { fragenAnmelden } from "../app/frage";
 import { useHold } from "../app/Holds";
 import { FRAGEN } from "../app/keys";
+import { folgen, offenerLauf } from "../app/laeufe";
 import { useRolle } from "../app/rollen";
 import {
   AgentAbgelehnt,
@@ -13,7 +15,6 @@ import {
   type AnkerArt,
   type Answer,
   ankerArt,
-  antwort,
   type Bilanz,
   fragen,
   schicksal,
@@ -25,6 +26,15 @@ import type { BusinessDate } from "../format/brands";
 import { formatBusinessDate } from "../format/date";
 import { Bewertung } from "./Bewertung";
 import { DESK_ASSISTANT, useKatalog, VorschlagBilanz } from "./Bilanz";
+import {
+  Belege,
+  SpurAnsicht,
+  StoppKnopf,
+  spurStand,
+  useLaufStand,
+  useOeffnen,
+  useStoppTaste,
+} from "./Spur";
 
 const VORSCHLAEGE: Record<AnkerArt, string[]> = {
   freigabe: ["Was schlägst du vor?", "Warum liegt das bei uns?", "Was kam zuletzt an?"],
@@ -43,8 +53,11 @@ const VORSCHLAEGE: Record<AnkerArt, string[]> = {
   ],
 };
 
-/** One sentence of an answer, with the read it cites and agentd's check of it. */
-export function Satz({ s }: { s: Answer["saetze"][number] }) {
+/**
+ * One sentence of an answer, with the read it cites and agentd's check of it —
+ * and, from a streamed run, the numbers of the trail's steps it rests on.
+ */
+export function Satz({ s, belege }: { s: Answer["saetze"][number]; belege?: ReactNode }) {
   return (
     <li className="flex flex-col gap-1.5 py-2 first:pt-0 last:pb-0">
       <p className={`m-0 text-callout ${s.quelle ? "text-text" : "text-text-2 italic"}`}>
@@ -52,6 +65,7 @@ export function Satz({ s }: { s: Answer["saetze"][number] }) {
       </p>
       {s.quelle && (
         <span className="flex flex-wrap items-center gap-2">
+          {belege}
           <span className="inline-flex h-5 items-center gap-1 rounded-full border border-ai-border px-2 text-caption font-medium text-ai">
             <Icon name="doc" size={11} />
             {quelle(s.quelle)}
@@ -77,7 +91,10 @@ function modellName(m: string): string {
   return name ? `${name} · ${anbieter}` : m;
 }
 
-/** What the run is reading, each read ticked off once it answered. */
+/**
+ * What the run is reading, each read ticked off once it answered — read off
+ * the answer where agentd's stream of steps cannot be.
+ */
 export function Lesen({ schritte }: { schritte: Answer["schritte"] }) {
   if (schritte.length === 0) {
     return (
@@ -226,10 +243,13 @@ export function VorschlagKarte({
 }
 
 /**
- * Fragen: ask the assistant about the Anker on screen. The answer comes
- * sentence by sentence, each with the service read it rests on, and a sentence
- * whose figures that read does not carry is marked — agentd checked it, the
- * Desk only shows the verdict.
+ * Fragen: ask the assistant about the Anker on screen. Each read the run
+ * makes arrives as a line of the trail while it reads, Send turns into Stop
+ * (Esc too), and the answer comes sentence by sentence, each with the steps it
+ * rests on and the service read it cites; a sentence whose figures that read
+ * does not carry is marked — agentd checked it, the Desk only shows the
+ * verdict. Leaving mid-answer keeps the run going as a pill in the top bar,
+ * and coming back picks it up.
  */
 export function Fragen({
   anker,
@@ -240,7 +260,11 @@ export function Fragen({
   onVorschlag?: (v: Vorschlag, run: string) => void;
 }) {
   const { rolle } = useRolle();
-  const [frage, setFrage] = useState("");
+  const router = useRouter({ warn: false }) as ReturnType<typeof useRouter> | undefined;
+  const ankerKey = JSON.stringify(anker);
+  // A run this view left behind unread is picked up again.
+  const [run, setRun] = useState<string | undefined>(() => offenerLauf(ankerKey, rolle)?.run);
+  const [frage, setFrage] = useState(() => offenerLauf(ankerKey, rolle)?.frage ?? "");
   const feld = useRef<HTMLInputElement>(null);
   // The catalog names the model that answers, and a catalog that cannot be
   // read means agentd is absent: then Fragen is not offered at all.
@@ -257,24 +281,33 @@ export function Fragen({
   }, []);
   const verweigert = useVerweigert({ dienst: "agentd", aktion: "fragen" });
   const kind = ankerArt(anker);
-  const start = useMutation({ mutationFn: (q: string) => fragen(q, anker) });
-  const run = start.data;
-  const answer = useQuery({
-    queryKey: [rolle, "agentd", "antwort", run],
-    queryFn: () => antwort(run ?? ""),
-    enabled: Boolean(run),
-    refetchInterval: (q) => (q.state.data?.status === "running" ? 1000 : false),
+  const start = useMutation({
+    mutationFn: (q: string) => fragen(q, anker),
+    onSuccess: (id, q) => {
+      folgen(id, {
+        frage: q,
+        anker: ankerKey,
+        rolle,
+        zurueck: router?.state.location.href ?? `${location.pathname}${location.search}`,
+        pille: true,
+      });
+      setRun(id);
+    },
   });
+  const stand = useLaufStand(run);
+  const { lauf, live } = stand;
+  useStoppTaste(run, live);
+  const [oeffnen, aufSchritt] = useOeffnen();
   const ask = (q: string) => {
     if (!q.trim()) return;
     setFrage(q);
+    setRun(undefined);
     start.mutate(q.trim());
   };
   // ⌘K can ask too: the palette offers it while this panel is on screen.
   const askRef = useRef(ask);
   askRef.current = ask;
   useEffect(() => fragenAnmelden((q) => askRef.current(q)), []);
-  const reading = start.isPending || answer.data?.status === "running" || (run && !answer.data);
   if (skill.isError) return null;
   if (verweigert) {
     return (
@@ -287,7 +320,9 @@ export function Fragen({
       </section>
     );
   }
-  const fehler = start.error ?? answer.error;
+  const fehler = start.error ?? stand.fehler;
+  const antwortDa = stand.antwort;
+  const schritte = lauf?.schritte ?? [];
 
   return (
     <section
@@ -297,7 +332,7 @@ export function Fragen({
       <Form
         onSubmit={(e) => {
           e.preventDefault();
-          ask(frage);
+          if (!live) ask(frage);
         }}
         className="flex items-center gap-2"
       >
@@ -314,18 +349,27 @@ export function Fragen({
             className="h-9 w-full rounded-control bg-surface px-3 text-callout text-text outline-none placeholder:text-text-2 focus:ring-2 focus:ring-ai-border"
           />
         </TextField>
-        <AriaButton
-          type="submit"
-          isDisabled={!frage.trim() || Boolean(reading)}
-          className="focus-ring h-9 rounded-control bg-ai px-3 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
-        >
-          Fragen
-        </AriaButton>
+        {live && run ? (
+          <StoppKnopf lauf={lauf} run={run} />
+        ) : (
+          <AriaButton
+            type="submit"
+            isDisabled={!frage.trim() || start.isPending}
+            className="morph focus-ring h-9 rounded-control border border-ai bg-ai px-3 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
+          >
+            Fragen
+          </AriaButton>
+        )}
       </Form>
 
       {modell && (
         <p className="m-0 mt-2 pl-6 text-caption text-text-2">
           Antwortet mit {modellName(modell)} · liest nur, handelt nie
+        </p>
+      )}
+      {lauf?.stoppFehler && (
+        <p className="m-0 mt-2 pl-6 text-caption text-critical">
+          Der Assistent ließ sich nicht stoppen: {lauf.stoppFehler}
         </p>
       )}
 
@@ -343,7 +387,11 @@ export function Fragen({
         </div>
       )}
 
-      {reading && <Lesen schritte={answer.data?.schritte ?? []} />}
+      {stand.gestreamt ? (
+        <SpurAnsicht schritte={schritte} stand={spurStand(stand)} oeffnen={oeffnen} />
+      ) : (
+        (start.isPending || (run && live)) && <Lesen schritte={stand.gelesen} />
+      )}
 
       {fehler && !(fehler instanceof Verweigert) && (
         <p className="m-0 mt-4 text-callout text-critical">
@@ -353,37 +401,41 @@ export function Fragen({
         </p>
       )}
 
-      {answer.data && answer.data.status !== "running" && (
+      {antwortDa && (
         <div className="mt-4">
-          <p className="m-0 mb-2 text-caption font-semibold text-ai">{answer.data.disclosure}</p>
-          {answer.data.status === "succeeded" ? (
+          <p className="m-0 mb-2 text-caption font-semibold text-ai">{antwortDa.disclosure}</p>
+          {antwortDa.status === "succeeded" ? (
             <>
-              <ul className="m-0 list-none divide-y divide-ai-border p-0">
-                {answer.data.saetze.map((s) => (
-                  <Satz key={s.text} s={s} />
+              <ul aria-label="Antwort" className="m-0 list-none divide-y divide-ai-border p-0">
+                {antwortDa.saetze.map((s) => (
+                  <Satz
+                    key={s.text}
+                    s={s}
+                    belege={<Belege satz={s} schritte={schritte} onOeffnen={aufSchritt} />}
+                  />
                 ))}
               </ul>
-              {answer.data.vorschlag && onVorschlag && (
+              {antwortDa.vorschlag && onVorschlag && (
                 <VorschlagKarte
-                  v={answer.data.vorschlag}
-                  run={answer.data.run}
+                  v={antwortDa.vorschlag}
+                  run={antwortDa.run}
                   onUebernehmen={onVorschlag}
                 />
               )}
-              {answer.data.schritte.length > 0 && (
+              {!stand.gestreamt && antwortDa.schritte.length > 0 && (
                 <p className="m-0 mt-3 text-caption text-text-2">
                   Gelesen:{" "}
-                  {[...new Set(answer.data.schritte.map((s) => quelle(s.quelle)))].join(", ")}
+                  {[...new Set(antwortDa.schritte.map((s) => quelle(s.quelle)))].join(", ")}
                 </p>
               )}
               <div className="mt-3">
-                <Bewertung run={answer.data.run} initial={answer.data.hilfreich} />
+                <Bewertung run={antwortDa.run} initial={antwortDa.hilfreich} />
               </div>
             </>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
               <p className="m-0 text-callout text-text-2">
-                Der Assistent hat keine Antwort gefunden ({answer.data.status}).
+                Der Assistent hat keine Antwort gefunden ({antwortDa.status}).
               </p>
               <AriaButton
                 onPress={() => ask(frage)}

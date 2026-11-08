@@ -380,26 +380,21 @@ pub fn wim_registry(received_at: time::OffsetDateTime) -> AdapterRegistry<WimDev
                 // MSB. Looking only for `76` left every Kündigung and every
                 // Abmeldung with no process date, and with it no
                 // Vorlauffrist-Prüfung and no date for the answer to confirm.
-                process_date: u
-                    .transactions()
-                    .first()
-                    .and_then(|t| {
-                        use edi_energy::utilmd_codes::dtm;
+                process_date: {
+                    use edi_energy::utilmd_codes::dtm;
+                    let first = u.transactions().first();
+                    super::prozesstag(
                         [
                             dtm::LEISTUNGSBEGINN_GEPLANT,
                             dtm::ENDE_ZUM,
-                            "471",
+                            dtm::ENDE_NAECHSTMOEGLICH,
                             dtm::BEGINN_ZUM,
                         ]
                         .into_iter()
-                        .find_map(|q| {
-                            t.dtm
-                                .iter()
-                                .find(|d| d.qualifier == q)
-                                .and_then(|d| d.value_str())
-                        })
-                    })
-                    .map(ToOwned::to_owned),
+                        .find_map(|q| super::sg4_dtm(first, q).filter(|d| d.value.is_some())),
+                        super::utilmd_sparte(u),
+                    )?
+                },
                 // `SG4 STS+7` DE 9013 — Muss on every WiM MSB-Wechsel PID, and
                 // the answer echoes it.
                 transaktionsgrund: u
@@ -805,27 +800,37 @@ fn extract_angebot(msg: &AnyMessage) -> mako_wim::esa::Angebot {
     }
 }
 
-/// Read a `DTM` of the given DE 2005 qualifier as a date.
+/// Read a `DTM` of the given DE 2005 qualifier as a German calendar date.
 ///
-/// Kapitel 4 uses format `303` (`CCYYMMDDHHMMZZZ`) throughout, so only the
-/// leading eight digits are the date.
+/// Kapitel 4 uses format `303` (`CCYYMMDDHHMMZZZ`) throughout, and a `303`
+/// value is a UTC instant, so its leading eight digits are not the date. A
+/// process date (`76`, `93`, `203`, `469`) is the instant its German day
+/// begins (Allgemeine Festlegungen V6.1d Kap. 3.1) — the ESA is a Strom role,
+/// so 00:00 Europe/Berlin — and is read back with
+/// [`mako_fristen::tag_des_beginns`]; one that begins no day reads as absent,
+/// never as the day it falls in. The document date `137` is a point in time
+/// and reads as its Europe/Berlin date. A `102` value is the date itself.
 fn extract_dtm_date(msg: &AnyMessage, qualifier: &str) -> Option<time::Date> {
-    msg.segments()
+    let segment = msg
+        .segments()
         .iter()
-        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
-        .and_then(|s| s.component_str(0, 1))
-        .and_then(|v| {
-            let d: String = v.chars().filter(char::is_ascii_digit).take(8).collect();
-            (d.len() == 8).then_some(d)
-        })
-        .and_then(|d| {
-            time::Date::from_calendar_date(
-                d[0..4].parse().ok()?,
-                time::Month::try_from(d[4..6].parse::<u8>().ok()?).ok()?,
-                d[6..8].parse().ok()?,
-            )
-            .ok()
-        })
+        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))?;
+    let value = segment.component_str(0, 1)?;
+    let format = segment.component_str(0, 2);
+    if format == Some("102") {
+        return super::parse_ccyymmdd(value).map(time::OffsetDateTime::date);
+    }
+    let instant = super::parse_dtm_datetime(value, Some("303"))?;
+    if qualifier == "137" {
+        return Some(mako_fristen::berlin_date(instant));
+    }
+    match mako_fristen::tag_des_beginns(instant, mako_fristen::Sparte::Strom) {
+        Ok(day) => Some(day),
+        Err(e) => {
+            tracing::warn!(qualifier, value, error = %e, "ESA process date names no German day");
+            None
+        }
+    }
 }
 
 /// Read `IMD++<7081>` — the Abonnement mode.

@@ -79,6 +79,7 @@ use crate::{
             test_subscription,
         },
         tranche::{get_tranche, list_tranchen, put_tranche},
+        utilmd_stammdaten,
         versorgung::{get_versorgungsstatus, get_versorgungsstatus_history, put_versorgungsstatus},
     },
     openapi::openapi_router,
@@ -283,6 +284,17 @@ fn malo_routes() -> Router<S> {
         .route(
             "/api/v1/malos/{malo_id}/technische-ressourcen",
             get(list_technische_ressourcen_by_malo),
+        )
+        // The UTILMD Stammdaten of a Marktlokation on a Stichtag (makod reads
+        // them for the Anmeldung EoG 55013/44013), and the NB's facts of that
+        // record no BO4E object carries.
+        .route(
+            "/api/v1/malos/{id}/utilmd-stammdaten",
+            get(utilmd_stammdaten::get_utilmd_stammdaten),
+        )
+        .route(
+            "/api/v1/malos/{id}/netznutzungsdaten",
+            put(utilmd_stammdaten::put_netznutzungsdaten),
         )
         .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
         .route("/api/v1/malos/{id}/buendel", get(get_malo_buendel))
@@ -613,6 +625,7 @@ fn repository_layers(app: Router, pool: &PgPool) -> Router {
         PgNetzzugangRepository,
         PgMsbRahmenvertragGasRepository,
         PgZaehlzeitRepository,
+        PgUtilmdStammdatenRepository,
     )
 }
 

@@ -38,7 +38,9 @@ a model-backed specialist.
 | `POST /webhook` | CloudEvent ingest. Admission commits before the answer: `202` admitted, `204` no subscriber, `429` transient (quota), `422` unprocessable, dead-lettered |
 | `GET /api/v1/hinweise` | the open worklist rows the caller may answer, each filed under its Anker |
 | `GET /api/v1/vorschlaege?freigabe=…&disput=…&buchung=…` | each Freigabe's, Rechnungsdisput's and geparkte Buchung's waiting proposal, computed once per entry by the `[vorschlaege]` tick; starts no run |
-| `GET /api/v1/runs/{run}/antwort` | the answer, sentence by sentence, each checked against the call it cites |
+| `GET /api/v1/runs/{run}/antwort` | the answer, sentence by sentence, each checked against the call it cites; a run a person started is theirs alone to read, a run nobody started the tenant's |
+| `GET /api/v1/runs/{run}/schritte` | the run's reads as Server-Sent Events from its journal (`schritt` …, then `antwort` or `abgebrochen`), the journal sequence as the event id, resumed from `Last-Event-ID`; read as the answer is |
+| `POST /api/v1/runs/{run}/stopp` | the starter stops their run: `202`, `409` once it has concluded; a run nobody started is stopped on the oversight surface |
 | `POST /api/v1/runs/{run}/bewertung` | a person's „hilfreich" verdict on an answer or a Hinweis, or what became of a proposal (sent, edited, dismissed), kept beside the run |
 | `POST /api/v1/runs` | start a run: `202` with the run ids, read at `/api/v1/oversight/runs/{run}`; honours `Idempotency-Key`, refuses an unknown field |
 | `GET /api/v1/agents`, `/api/v1/agents/catalog` | what runs here; the catalog adds each specialist's title, purpose, model, reads and 30-day record (`bilanz`) for the Desk's Beipackzettel |

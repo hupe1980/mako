@@ -112,9 +112,9 @@ fn render_utilmd(
         .sender(sender)
         .receiver(receiver)
         .message_ref(msg_ref)
-        .document_date("20250115")
+        .document_date("202501151000")
         .transaction("VORGANG-0001")
-        .date(edi_energy::utilmd_codes::dtm::BEGINN_ZUM, "20261101")
+        .date(edi_energy::utilmd_codes::dtm::BEGINN_ZUM, "202610312300")
         .transaktionsgrund(
             edi_energy::utilmd_codes::Transaktionsgrund::verbrauchende_malo(
                 edi_energy::utilmd_codes::transaktionsgrund::WECHSEL,

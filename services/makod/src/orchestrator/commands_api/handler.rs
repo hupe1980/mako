@@ -348,10 +348,21 @@ pub(crate) async fn handle_command(
         Err(DispatchError::MarktdUnavailable(e)) => {
             tracing::warn!(error = %e, command = %cmd_lower, "ERP dispatch: marktd unavailable");
             return ApiError::unavailable(
-                "marktd, which holds the recipient's EDI agreement, did not answer — the \
-                 INVOIC is not sent without it. Retry.",
+                "marktd, which holds what this command needs (the recipient's EDI agreement, \
+                 the Marktlokation's Stammdaten), did not answer — nothing is sent without \
+                 it. Retry.",
             )
             .with_code("marktd_unavailable")
+            .into_response();
+        }
+        Err(DispatchError::StammdatenUnvollstaendig { malo_id, fehlend }) => {
+            return ApiError::unprocessable(format!(
+                "marktd does not hold every Stammdatum the message for MaLo {malo_id} carries \
+                 — nothing is sent: {}",
+                fehlend.join("; ")
+            ))
+            .with_code("stammdaten_unvollstaendig")
+            .with_fields(serde_json::json!({ "malo_id": malo_id, "fehlend": fehlend }))
             .into_response();
         }
         Err(DispatchError::NotImplemented(cmd)) => {

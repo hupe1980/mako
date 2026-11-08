@@ -284,7 +284,7 @@ msg = build_utilmd(
     55001,
     sender="4012345000023",
     receiver="9900357000003",
-    on="2026-04-01",                     # → release S2.1, DTM+137:202604010000?+00:303
+    on="2026-04-01",                     # → release S2.1, DTM+137:202603312200?+00:303
     transactions=[
         UtilmdTransaction(
             "VORGANG-1",                  # IDE+24 — never a location ID

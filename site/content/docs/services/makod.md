@@ -1198,8 +1198,8 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | Command | Required ERP payload fields |
 |---------|-----------------------------|
 | `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum`, `bilanzkreis`, `transaktionsgrund`¹ |
-| `gpke.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `transaktionsgrund`, `haushaltskunde`¹ |
-| `geli.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date` |
+| `gpke.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `transaktionsgrund` — nothing else³ |
+| `geli.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `bilanzierungsbeginn`, `transaktionsgrund` — nothing else³ |
 | `gpke.eog.bestaetigen` | `malo_id`, `versorgungsart` (ZC9/ZD0/ZE3/ZZD), `bilanzkreis`¹ |
 | `gpke.eog.ablehnen` | `malo_id`, `reason` |
 | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
@@ -1221,7 +1221,7 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `gpke.stornierung.bestaetigen` · `geli.stornierung.bestaetigen` | `vorgang_id` (the Anfrage's `IDE+24` Vorgangsnummer) |
 | `gpke.stornierung.ablehnen` · `geli.stornierung.ablehnen` | `vorgang_id`, `antwortcode` (`E14`/`Z14`/`ZE1`), `bemerkung` (with `E14` only) |
 | `gpke.geschaeftsdatenanfrage.anfragen` | `lokation_id`, `nb_mp_id`, `anfrage_nummer` (optional, an..35) |
-| `gpke.geschaeftsdatenanfrage.beantworten` | `anfragender_mp_id`, `anfrage_nummer`, `antwort_pid`, `stammdaten` (`lokationen`, `bloecke`, `sg12`), `transaktionsgrund_ergaenzung` (optional) |
+| `gpke.geschaeftsdatenanfrage.beantworten` | `anfragender_mp_id`, `anfrage_nummer`, `antwort_pid`, `stammdaten` (`lokationen`, `sg6`, `bloecke`, `sg12`), `transaktionsgrund_ergaenzung` (optional) |
 | `gpke.geschaeftsdatenanfrage.ablehnen` | `anfragender_mp_id`, `anfrage_nummer`, `anfragender` (`LF`/`MSB`), `antwortcode` |
 | `wim.ersteinbau.vorabinformation-senden` | `melo_id`, `wmsb_mp_id`, `umstellungszeitpunkt` (YYYY-MM-DD) |
 | `wim.ersteinbau.beantworten` | `melo_id`, `antwortcode` (`E_0233`) |
@@ -1234,6 +1234,16 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 entity — the ERP derives it from contract data.
 ² WiM Gerätewechsel is keyed by `melo_id`; NB and MSB MP-IDs come from the MeLo
 cache entry.
+³ The Anmeldung EoG takes only the command's facts; makod reads the
+Marktlokation's Stammdaten from marktd for the Zuordnungsbeginn
+(`GET /api/v1/malos/{id}/utilmd-stammdaten`) and sets them down as the AHB
+column lists them (UTILMD AHB Strom 2.2 55013, Gas 1.2 Kap. 5.9) — `ZW7` when
+marktd assigns a Messlokation, `ZW6` when it assigns none. A missing Muss fact
+answers `422 stammdaten_unvollstaendig` naming each one; no marktd answers
+`503 marktd_unavailable`. A Gas Marktlokation with Lastprofildaten (`SEQ+Z35`),
+a Strom TLP Marktlokation and an OBIS whose `[257]`/`[274]` needs a
+Wertegranularität are refused by name. The message passes the pre-send AHB
+gate before the spawn, or the command is `invalid_payload` with each finding.
 
 ### Integrated operators (NB + MSB, same MP-ID)
 
@@ -1262,10 +1272,24 @@ and no `[[as4.partner]]` entry. Self-addressed by design:
 | 19116, 19117 (ORDRSP Strom / Gas) | resume by MaLo | `gpke-sperrung-lf` / `geli-gas-sperrung-lf` — `ReceiveOrdrsp` |
 | 55001, 55004, 55077 | spawn by MaLo | `gpke-supplier-change` — `ReceiveUtilmd` |
 | 55016 | spawn by MaLo | `gpke-kuendigung` — `ReceiveKuendigung` |
+| 55013 | spawn by MaLo | `gpke-eog` — `ReceiveAnmeldung` |
+| 55014/55015 | resume by `nb-anfrage:{MaLo}` | `gpke-eog` — `ReceiveAntwort` |
 | 55003–55006, 55017, 55018 | resume by MaLo | `gpke-lf-anmeldung` — `ReceiveAntwort` |
 | 44001–44021 except the six below | spawn by MaLo | `geli-gas-supplier-change` — `ReceiveUtilmd` |
-| 44008/44009, 44011/44012, 44014/44015 (NB role only) | resume by MaLo | `geli-gas-supplier-change` — `ReceiveGnbAntwort`, keeping the `STS+E01` code and its tree (`E_3002` / `E_3020` / `E_3008`) |
+| 44008/44009, 44011/44012, 44014/44015 (NB role only) | resume by `gnb-anfrage:{MaLo}` | `geli-gas-supplier-change` — `ReceiveGnbAntwort`, keeping the `STS+E01` code and its tree (`E_3002` / `E_3020` / `E_3008`) |
 | 55036–55038 · 44036–44038 | spawn per Meldung | `gpke-zuordnungsmeldung` / `geli-gas-zuordnungsmeldung` — `Empfangen` |
+
+A process the Netzbetreiber opens itself is keyed apart from the bare MaLo:
+`gpke.eog.anmelden` (55013) under `nb-anfrage:{MaLo}`
+(`mako_gpke::eog_nb_anfrage_key`), `geli.eog.anmelden` (44013) under
+`gnb-anfrage:{MaLo}` (`mako_geli_gas::gnb_anfrage_key`); every process
+answering an inbound Anfrage stays on the bare MaLo. On a deployment that is NB
+and LF at once both sides of one EoG run one workflow name (`gpke-eog`,
+`geli-gas-supplier-change`) on the same Marktlokation: the LF's copy of the
+55013/44013 opens the LF's own process, `gpke.eog.bestaetigen` /
+`geli.eog.bestaetigen` and the `…ablehnen` twins answer it, and the
+55014/55015 or 44014/44015 resumes the Netzbetreiber's. The MCP `get_process`
+lookup by MaLo lists both sides.
 
 Other combined-role pairs (`wim-rechnungsabwicklung` 17005/17006 ↔ 19009/19010,
 the ESA Wertebestellung) follow the same pattern. **Runaway guard:** loopback
@@ -1573,10 +1597,32 @@ flowchart LR
 ### Dates on the wire
 
 `DTM+137` is DE 2379 **`303`** (`CCYYMMDDHHMMZZZ`) in every EDI@Energy AHB,
-`[931]` fixes the zone to `+00`. In UTILMD `SG4`, `92`, `93`, `76` and `157` are
-`303`; `154` (Annahmedatum) is `102` and `Z10` (Kündigungstermin) `106`. A
-command may pass `YYYYMMDD`; builders normalise it to `CCYYMMDD0000+00`. Inbound,
-a counterparty's `102` document date is accepted.
+`[931]` fixes the zone to `+00`. In UTILMD `SG4`, `92`, `93`, `76`, `157`,
+`158`, `159` and `471` are `303`; `154` (Annahmedatum) is `102` and `Z10`
+(Kündigungstermin) `106`.
+
+A `303` process date is the **UTC instant at which the German day begins**
+(Allgemeine Festlegungen V6.1d Kap. 3.1): 00:00 MEZ/MESZ in Strom, the
+Gastag's 06:00 in Gas. A payload carries the German calendar date (`YYYYMMDD`
+or `YYYY-MM-DD`) and the renderer converts it with
+`mako_fristen::tagesbeginn_utc`:
+
+| Sparte | Process date | On the wire |
+|---|---|---|
+| Strom | 01.01.2027 (MEZ) | `DTM+92:202612312300?+00:303` |
+| Strom | 01.07.2027 (MESZ) | `DTM+92:202706302200?+00:303` |
+| Gas | 01.10.2027 (MESZ) | `DTM+92:202710010400?+00:303` |
+
+A payload instant that begins no German day in its Sparte is refused, and the
+`edi-energy` builder refuses a bare `CCYYMMDD` in any `303` DTM rather than
+padding it to UTC midnight. A document date given as a date goes out as its
+Europe/Berlin midnight. The ESA dates (REQOTE `DTM+76`, ORDERS `DTM+203`,
+QUOTES `DTM+469`, IFTSTA 21042 `DTM+93`) are Strom dates.
+
+Inbound, the UTILMD adapters read a `303` process date back to the German date
+it names with `mako_fristen::tag_des_beginns` — `202612312300+00` on a Strom
+Anmeldung is 01.01.2027 — and refuse one that begins no day rather than reading
+its first eight digits. A counterparty's `102` document date is accepted.
 
 ### MSCONS use cases
 

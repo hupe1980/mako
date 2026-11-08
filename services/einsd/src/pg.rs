@@ -1001,7 +1001,14 @@ pub struct SettleInput {
 
 #[derive(Debug, Serialize)]
 pub struct SettleResult {
+    /// The receipt this run wrote — for an initial settle the period's one
+    /// initial receipt (a re-settle keeps its id), for a correction a new row.
     pub id: Uuid,
+    /// § 147 AO / GoBD — the receipt a correction supersedes; `None` for an
+    /// initial settle. The receipt chain itself is the period
+    /// (`tr_id`, `billing_year`, `billing_month`): every receipt in it states
+    /// the period's whole amount, and the last one issued is the one in force.
+    pub korrektur_von: Option<Uuid>,
     pub tr_id: String,
     pub billing_year: i16,
     pub billing_month: i16,
@@ -2251,6 +2258,7 @@ pub async fn run_settlement(
         apply_period_accrual(&mut *conn, &input, &PeriodAccrual::default(), STATUS).await?;
         return Ok(SettleResult {
             id,
+            korrektur_von: input.correction.as_ref().and_then(|k| k.original_id),
             tr_id: input.tr_id,
             billing_year: input.billing_year,
             billing_month: input.billing_month,
@@ -2876,6 +2884,7 @@ pub async fn run_settlement(
 
     Ok(SettleResult {
         id,
+        korrektur_von: input.correction.as_ref().and_then(|k| k.original_id),
         tr_id: input.tr_id,
         billing_year: input.billing_year,
         billing_month: input.billing_month,

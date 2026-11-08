@@ -100,7 +100,7 @@ fn render_utilmd(pid_u32: u32, sender: &str, receiver: &str, malo: &str, msg_ref
         .sender(sender)
         .receiver(receiver)
         .message_ref(msg_ref)
-        .document_date("20250115")
+        .document_date("202501151000")
         .rff("Z13", msg_ref)
         .transaction("VORGANG-0001")
         .marktlokation(malo)

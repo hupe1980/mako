@@ -326,6 +326,7 @@ fn remadv_antwort(payload: &serde_json::Value) -> Option<mako_invoic::RemadvAntw
 // is re-exported here so the flat `crate::commands_api::*` paths keep working.
 
 mod e_rechnung;
+mod eog_stammdaten;
 mod ersteinbau;
 mod esa;
 mod gabi_gas;

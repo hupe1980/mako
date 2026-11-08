@@ -77,13 +77,16 @@ copy of a document that also went out electronically and is queued.
 
 An `INVOICE` is issued only to a buyer in Germany. It is the operator's energy
 invoice — gas, electricity or heating/cooling, taxed as a domestic supply — so
-a model whose buyer country (BT-55) names another EU Member State is refused
-with **`422 CROSS_BORDER_SUPPLY_UNSUPPORTED`** (the OSS treatment under
-Art. 369aa MwStSystRL is not built), one outside the EU with
-**`422 EXPORT_SUPPLY_UNSUPPORTED`**, a model without BT-55 with
-**`422 RECIPIENT_COUNTRY_MISSING`** (EN 16931 BR-11 makes it mandatory, and
-outputd does not read it as `DE`), and a code that is not two letters with
-**`422 RECIPIENT_COUNTRY_INVALID`**. The postal `recipient.address` is where a
+the buyer country (BT-55) decides:
+
+| BT-55 | Answer |
+|---|---|
+| another EU Member State | **`422 CROSS_BORDER_SUPPLY_UNSUPPORTED`** — the OSS treatment under Art. 369aa MwStSystRL is not built |
+| outside the EU | **`422 EXPORT_SUPPLY_UNSUPPORTED`** |
+| absent | **`422 RECIPIENT_COUNTRY_MISSING`** — EN 16931 BR-11 makes it mandatory, and outputd does not read it as `DE` |
+| not two letters | **`422 RECIPIENT_COUNTRY_INVALID`** |
+
+The postal `recipient.address` is where a
 letter goes, not who is invoiced, and does not decide. billingd asks the same
 rule before it stores an invoice; `POST /api/v1/render/{kind}` issues nothing
 and does not ask it.

@@ -106,7 +106,12 @@ fn test_config() -> einsd::config::EinsdConfig {
 /// the Cedar decision — which [`the_policy_gates_settlement_writes_by_role`]
 /// covers separately, against the policy itself.
 fn test_router(pool: PgPool) -> axum::Router {
-    let cfg = std::sync::Arc::new(test_config());
+    test_router_with(pool, test_config())
+}
+
+/// [`test_router`] over `cfg`.
+fn test_router_with(pool: PgPool, cfg: einsd::config::EinsdConfig) -> axum::Router {
+    let cfg = std::sync::Arc::new(cfg);
     let http = std::sync::Arc::new(reqwest::Client::new());
     let cedar = std::sync::Arc::new(
         mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
@@ -4462,4 +4467,51 @@ async fn the_enfg_ledger_refuses_an_unattributable_month() {
         .await
         .expect_err("second zone after booking");
     assert!(err.to_string().contains("more than one Regelzone"), "{err}");
+}
+
+/// Every settlement receipt's CloudEvent names the receipt and the one it
+/// corrects, so accountingd can pay a correction as the difference to its
+/// chain — the period — instead of its whole amount again.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_correction_event_names_its_receipt_and_the_one_it_corrects() {
+    let Some((pool, _pg)) = test_pool("correction_event").await else {
+        return;
+    };
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
+    seed_plant(&pool, "TR-KORR", TENANT, "", "").await;
+    let mut cfg = test_config();
+    cfg.erp_webhook_url = Some("http://127.0.0.1:9/erp".to_owned());
+    let app = test_router_with(pool.clone(), cfg);
+
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/TR-KORR/settle/2026/3",
+        serde_json::json!({ "einspeisemenge_kwh": "500" }),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {body}");
+    let original: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/TR-KORR/settlements/2026/3/correction",
+        serde_json::json!({ "einspeisemenge_kwh": "600", "reason": "METER_DATA_CORRECTED" }),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {body}");
+    let korrektur: serde_json::Value = serde_json::from_str(&body).expect("json");
+
+    let daten: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT envelope->'data' FROM event_outbox ORDER BY created_at, id")
+            .fetch_all(&pool)
+            .await
+            .expect("outbox");
+    assert_eq!(daten.len(), 2, "{daten:?}");
+    assert_eq!(daten[0]["receipt_id"], original["id"], "{daten:?}");
+    assert!(daten[0]["korrektur_von"].is_null(), "{daten:?}");
+    assert_eq!(daten[1]["receipt_id"], korrektur["id"], "{daten:?}");
+    assert_eq!(daten[1]["korrektur_von"], original["id"], "{daten:?}");
+    assert_eq!(daten[1]["billing_month"], 3, "{daten:?}");
 }

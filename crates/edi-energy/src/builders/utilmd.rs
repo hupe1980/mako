@@ -76,6 +76,9 @@ struct UtilmdTransactionSpec {
     /// `SG12` segments the typed fields do not cover — each `(tag, data
     /// elements)`, written after every other `SG12` in the order given.
     sg12_segmente: Vec<(String, Vec<Vec<String>>)>,
+    /// `SG6` segments the typed fields do not cover — each `(tag, data
+    /// elements)`, written after every other `SG6` in the order given.
+    sg6_segmente: Vec<(String, Vec<Vec<String>>)>,
 }
 
 /// An `SG12 NAD` with an address: `NAD+Z04+++Name:::::Z01+Straße+Ort++PLZ+DE`.
@@ -266,7 +269,9 @@ impl<S, R> UtilmdBuilder<S, R> {
         self
     }
 
-    /// Set the document date for DTM+137 (`YYYYMMDD`).
+    /// Set the document date for DTM+137 — the UTC instant `CCYYMMDDHHMM`
+    /// (format 303, optionally `+00`); a bare `CCYYMMDD` is refused with
+    /// [`Error::DtmNotAnInstant`](crate::Error::DtmNotAnInstant).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -396,6 +401,9 @@ fn emit_sg6<W: std::io::Write>(
     for (rff_q, rff_ref, dtm_q, value, format) in &tx.dated_references {
         emit_comp!(w, "RFF", [rff_q, rff_ref]);
         emit_comp!(w, "DTM", [dtm_q, value, format]);
+    }
+    for (tag, elemente) in &tx.sg6_segmente {
+        write_elements(w, tag, elemente)?;
     }
     Ok(())
 }
@@ -623,7 +631,7 @@ fn emit_sg4<W: std::io::Write>(
     for (qualifier, date_val) in &tx.process_dates {
         let fmt = sg4_dtm_format(qualifier);
         let value = if fmt == "303" {
-            super::ccyymmddhhmm_utc(date_val)
+            super::ccyymmddhhmm_utc(qualifier, date_val)?
         } else {
             date_val.clone()
         };
@@ -854,7 +862,11 @@ impl<S, R> UtilmdBuilder<S, R> {
         // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
         // `+00`; `[494]` requires the stamp to be the creation moment or
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
-        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        emit_comp!(
+            w,
+            "DTM",
+            ["137", &super::ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
+        );
         // `DTM+157` Gültigkeit, Beginndatum in `610` `CCYYMM` — the
         // Bilanzierungsmonat a Clearingliste covers.
         if let Some(monat) = &self.inner.gueltigkeit_beginn {
@@ -962,14 +974,15 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     ///     .sender("9900987654321")
     ///     .receiver("9900123456789")
     ///     .transaction("VORGANG-0001")
-    ///     .date(dtm::BEGINN_ZUM, "20261101")
+    ///     .date(dtm::BEGINN_ZUM, "202610312300")
     ///     .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(transaktionsgrund::WECHSEL))
     ///     .marktlokation("51238696012")
     ///     .done()
     ///     .serialize()?;
     /// let text = String::from_utf8(edi).unwrap();
     /// assert!(text.contains("IDE+24+VORGANG-0001"));
-    /// assert!(text.contains("DTM+92:202611010000?+00:303"));
+    /// // 01.11.2026 00:00 MEZ is 31.10.2026 23:00 UTC.
+    /// assert!(text.contains("DTM+92:202610312300?+00:303"));
     /// assert!(text.contains("STS+7++E03+ZW4"));
     /// assert!(text.contains("LOC+Z16+51238696012"));
     /// # Ok::<(), edi_energy::Error>(())
@@ -1013,8 +1026,13 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     ///
     /// `qualifier` is DE 2005 — use the [`dtm`](crate::utilmd_codes::dtm)
     /// constants (`92` Beginn zum, `93` Ende zum, `154` ÜT der
-    /// Lieferanmeldung, …). `value` is `CCYYMMDD`, or `CCYYMMDDHHMM+00` when
-    /// the process needs the UTC instant; the DE 2379 format code follows.
+    /// Lieferanmeldung, …); the DE 2379 format code follows from it. For a
+    /// `303` place `value` is the UTC instant `CCYYMMDDHHMM` (optionally
+    /// `+00`) at which the German day begins — `2300`/`2200` of the day before
+    /// in Strom, `0500`/`0400` in Gas (Allgemeine Festlegungen V6.1d Kap. 3.1);
+    /// `mako_fristen::tagesbeginn_utc` computes it. A bare `CCYYMMDD` there is
+    /// refused at serialization with [`Error::DtmNotAnInstant`] rather than
+    /// padded to UTC midnight. The `102` place (`154`) takes `CCYYMMDD`.
     pub fn date(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
         self.spec
             .process_dates
@@ -1073,7 +1091,7 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     ///     .sender("9900987654321")
     ///     .receiver("9900123456789")
     ///     .transaction("ANTWORT-0001")
-    ///     .date(dtm::ENDE_ZUM, "20261101")
+    ///     .date(dtm::ENDE_ZUM, "202610312300")
     ///     .referenz_vorgangsnummer("NNV1234")
     ///     .marktlokation("51238696012")
     ///     .done()
@@ -1182,7 +1200,7 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     ///     .sender("9900987654321")
     ///     .receiver("9900123456789")
     ///     .transaction("VORGANG-0001")
-    ///     .date(dtm::BEGINN_ZUM, "20261101")
+    ///     .date(dtm::BEGINN_ZUM, "202610312300")
     ///     .produktpaket(Produktpaket::bilanzkreis("11XBK-EEG------Q"))
     ///     .marktlokation("51238696012")
     ///     .done()
@@ -1324,6 +1342,18 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
         self
     }
 
+    /// Add an `SG6` segment the typed methods do not cover — an `RFF` and the
+    /// `DTM`s of its group, each `tag` with its data elements
+    /// (`RFF+Z18:51238696012'DTM+Z21:1001:106'` is `"RFF", [["Z18",
+    /// "51238696012"]]` then `"DTM", [["Z21", "1001", "106"]]`).
+    ///
+    /// Written after every typed `SG6` segment, in the order added. Which
+    /// segment goes where is the caller's; the profile's validation checks it.
+    pub fn sg6_segment(mut self, tag: impl Into<String>, elemente: Vec<Vec<String>>) -> Self {
+        self.spec.sg6_segmente.push((tag.into(), elemente));
+        self
+    }
+
     /// Finalize this Vorgang and return to the parent [`UtilmdBuilder`].
     pub fn done(mut self) -> UtilmdBuilder<S, R> {
         self.parent.inner.transactions.push(self.spec);
@@ -1341,13 +1371,9 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
 /// this builder writes through a different path.
 ///
 /// The code follows the qualifier, never the value's length: a `YYYYMMDD`
-/// Vorgangsdatum is still `303`, padded and zoned on the way out.
+/// handed to a `303` place is refused, not padded to UTC midnight.
 fn sg4_dtm_format(qualifier: &str) -> &'static str {
-    match qualifier {
-        "154" => "102",
-        "Z10" => "106",
-        _ => "303",
-    }
+    crate::utilmd_codes::dtm::sg4_format(qualifier)
 }
 
 // ── Sg8Builder ────────────────────────────────────────────────────────────────

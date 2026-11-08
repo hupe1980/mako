@@ -225,11 +225,18 @@ pub fn catalogue_uses(src: &str) -> Vec<(usize, String)> {
         let mut rest = line.as_str();
         while let Some(at) = rest.find("commands::") {
             let tail = &rest[at + "commands::".len()..];
+            // The whole identifier: `commands::GpkeEogAnmelden` is a body
+            // type, and reading its leading capital as a constant `G` would
+            // report a command nobody named.
             let name: String = tail
                 .chars()
-                .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                 .collect();
-            if !name.is_empty() {
+            let constant = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+            if constant {
                 out.push((i + 1, name));
             }
             rest = &rest[at + "commands::".len()..];
@@ -519,6 +526,16 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// A body type in the catalogue is not a command constant.
+    #[test]
+    fn a_body_type_is_not_read_as_a_constant() {
+        let uses = super::catalogue_uses(
+            "serde_json::to_value(mako_markt::commands::GpkeEogAnmelden { malo_id })\n\
+             (mako_markt::commands::GPKE_EOG_ANMELDEN, body)",
+        );
+        assert_eq!(uses, vec![(2, "GPKE_EOG_ANMELDEN".to_owned())]);
     }
 
     #[test]

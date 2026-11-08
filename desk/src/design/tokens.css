@@ -50,6 +50,11 @@
   --shadow-popover:
     0 12px 40px light-dark(rgb(0 0 0 / 0.14), rgb(0 0 0 / 0.5)), 0 0 0 1px var(--separator);
 
+  /* The top bar's height, border included. The view scrolling under it keeps
+     this much clear at its top, so nothing scrolled into view lands beneath
+     the translucent bar. */
+  --topbar: 52px;
+
   /* Motion */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --dur-move: 240ms;
@@ -208,10 +213,83 @@
     transform-origin: left;
     animation: drain linear forwards;
   }
+  /* A held decision's ring on its entry empties the same way (`HaltRing`);
+     under reduced motion it stands full and the label says what it counts. */
+  .ring-drain {
+    stroke-dashoffset: 0;
+    animation: ring-drain linear forwards;
+  }
   @media (prefers-reduced-motion: reduce) {
-    .drain {
+    .drain,
+    .ring-drain {
       animation: none;
     }
+  }
+
+  /* The assistant at work: a step arriving, the hairline under a live
+     question, Send turning into Stop, a pill joining the top bar. Every one
+     runs on --dur-move, which reduced motion sets to 0 — and the endless
+     hairline is stilled outright. */
+  .einblenden {
+    animation: einblenden var(--dur-move) var(--ease-out) both;
+  }
+  .morph {
+    transition-property: background-color, color, border-color, box-shadow, transform;
+    transition-duration: var(--dur-move);
+    transition-timing-function: var(--ease-out);
+  }
+  .haarlinie {
+    position: relative;
+    height: 1px;
+    overflow: hidden;
+    background: var(--ai-border);
+  }
+  .haarlinie::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    background: var(--ai);
+    animation: haarlinie calc(var(--dur-move) * 6) var(--ease-out) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .einblenden,
+    .haarlinie::after {
+      animation: none;
+    }
+    .haarlinie::after {
+      width: 100%;
+    }
+  }
+
+  /* A row a focused or hovered citation points at, wherever it is on screen. */
+  [data-beleg] {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    transition: outline-color var(--dur-move) var(--ease-out);
+  }
+  [data-beleg][data-markiert] {
+    outline-color: var(--ai);
+  }
+}
+
+@keyframes einblenden {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes haarlinie {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
   }
 }
 
@@ -221,6 +299,12 @@
   }
   to {
     transform: scaleX(0);
+  }
+}
+
+@keyframes ring-drain {
+  to {
+    stroke-dashoffset: 1;
   }
 }
 

@@ -34,11 +34,18 @@ export const FRAGEN: Shortcut = {
   match: (e) => command(e) && e.key.toLowerCase() === "j",
 };
 
-/** The key went to a field the person types into. */
-const typing = (e: KeyboardEvent) => {
-  const t = e.target as HTMLElement | null;
-  return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
-};
+const feld = (t: Element | null) =>
+  !!t &&
+  (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || (t as HTMLElement).isContentEditable);
+
+/**
+ * The key went to a field the person types into — or to the list of one: a
+ * search that keeps the focus in its field (React Aria's Autocomplete, ⌘K's
+ * search) re-dispatches each key to its list, so the focus says whose it is.
+ */
+const typing = (e: KeyboardEvent) =>
+  feld(e.target as Element | null) ||
+  (typeof document !== "undefined" && feld(document.activeElement));
 
 /** A bare letter, and not while the person types into a field. */
 const letter = (k: string) => (e: KeyboardEvent) =>
@@ -106,13 +113,31 @@ export const ROLLE: Shortcut = {
   match: (e) => e.ctrlKey && !e.metaKey && !e.altKey && /^[1-4]$/.test(e.key),
 };
 
+/**
+ * Esc closes what is open — a dialog, a popover, the palette — and, with
+ * nothing open, stops the assistant's live run: the key that already means
+ * „back". The Desk listens only for the second; the first is React Aria's.
+ */
+export const STOPP: Shortcut = {
+  keys: "esc",
+  label: "Schließen — oder die laufende Antwort des Assistenten stoppen",
+  group: "Überall",
+  match: (e) =>
+    e.key === "Escape" &&
+    !e.defaultPrevented &&
+    !e.metaKey &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    !document.querySelector('[role="dialog"], [role="alertdialog"]'),
+};
+
 export const SHORTCUTS: Shortcut[] = [
   PALETTE,
   FRAGEN,
   ROLLE,
   UNDO,
   SHEET,
-  { keys: "esc", label: "Schließen", group: "Überall" },
+  STOPP,
   { keys: "↑ ↓", label: "Zeile wählen", group: "Listen" },
   { keys: "↵", label: "Zeile öffnen", group: "Listen" },
   NAECHSTE,
@@ -121,5 +146,6 @@ export const SHORTCUTS: Shortcut[] = [
   FREIGEBEN,
   ABLEHNEN,
   UEBERNEHMEN,
-  { keys: "↵", label: "Senden bestätigen", group: "Entscheiden" },
+  { keys: "↵", label: "Senden — fünf Sekunden lang mit ⌘Z zurückzunehmen", group: "Entscheiden" },
+  { keys: "⌘↵", label: "In ⌘K: die zweite Aktion des Eintrags wählen", group: "Entscheiden" },
 ];

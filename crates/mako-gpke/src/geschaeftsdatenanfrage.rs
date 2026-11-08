@@ -880,6 +880,7 @@ mod tests {
                 }],
             }],
             sg12: vec![],
+            ..Stammdaten::default()
         }
     }
 

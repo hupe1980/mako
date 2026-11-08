@@ -188,6 +188,14 @@ CREATE TABLE melo_msb_zuordnungen (
     tenant       TEXT        NOT NULL,
     melo_id      TEXT        NOT NULL REFERENCES melo (melo_id) ON DELETE CASCADE,
     msb_mp_id    TEXT        NOT NULL,              -- 13-digit MSB GLN
+    -- What a UTILMD `SG10 CAV+Z91` states beside the MP-ID: which kind of MSB
+    -- it is and on which footing it operates the Messstelle, and `CAV+ZF0`
+    -- the grundzuständiger MSB behind it. NULL when nobody has stated it; a
+    -- message that needs it is refused rather than given a default. The CHECK
+    -- lists are `mako_markt::utilmd_stammdaten::{MsbRolle, MsbGrundlage}::VARIANTS`.
+    msb_rolle    TEXT        CHECK (msb_rolle IN ('GRUNDZUSTAENDIG', 'WETTBEWERBLICH', 'AUFFANG')),
+    grundlage    TEXT        CHECK (grundlage IN ('VERTRAG', 'WEITERVERPFLICHTUNG')),
+    gmsb_mp_id   TEXT,
     valid_from   DATE        NOT NULL,
     valid_to     DATE,                              -- NULL = currently valid
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -254,6 +262,45 @@ COMMENT ON TABLE bilanzierungen IS
 CREATE INDEX biz_malo_at ON bilanzierungen (tenant, malo_id, bilanzierungsbeginn DESC);
 CREATE INDEX biz_bilanzkreis ON bilanzierungen (bilanzkreis) WHERE bilanzkreis IS NOT NULL;
 CREATE INDEX biz_data_gin ON bilanzierungen USING GIN (data jsonb_path_ops);
+
+-- ── Netznutzungsdaten der Marktlokation (UTILMD Stammdaten BO4E does not model) ─
+-- The facts a Netzbetreiber transmits with a Marktlokation's UTILMD record
+-- (Anmeldung EoG 55013/44013, Stammdaten answers) that no BO4E object carries:
+-- the Gruppenzuordnung nach EnWG, the Betriebszustand, the Termine and the
+-- Intervall der Netznutzungsabrechnung, the Abrechnungsvariante and the
+-- Gemeinderabatt. Everything else of that record is read from the BO4E
+-- objects marktd already holds (Marktlokation, Bilanzierung, Messlokation,
+-- Zähler). A NULL column is a fact nobody has stated, and a message that
+-- needs it is refused naming it.
+CREATE TABLE malo_netznutzungsdaten (
+    tenant                       TEXT        NOT NULL,
+    malo_id                      TEXT        NOT NULL REFERENCES malo (malo_id) ON DELETE CASCADE,
+    valid_from                   DATE        NOT NULL,
+    valid_to                     DATE,                   -- NULL = open; half-open [from, to)
+    haushaltskunde               BOOLEAN,                -- § 3 Nr. 22 EnWG
+    -- `mako_markt::utilmd_stammdaten::Betriebszustand::VARIANTS`.
+    betriebszustand              TEXT CHECK (betriebszustand IN ('REGELBETRIEB', 'GESPERRT')),
+    -- UTILMD `DTM+Z21` format 106 (MMDD).
+    abrechnungstermin            TEXT CHECK (abrechnungstermin ~ '^(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])$'),
+    naechste_abrechnung_jahr     INTEGER CHECK (naechste_abrechnung_jahr BETWEEN 2000 AND 2999),
+    -- UTILMD MIG Gas `DTM+Z22` DE 2380: „Erlaubte Einträge: 1 3 6 12".
+    abrechnungsintervall_monate  SMALLINT CHECK (abrechnungsintervall_monate IN (1, 3, 6, 12)),
+    -- `mako_markt::utilmd_stammdaten::Abrechnungsvariante::VARIANTS`.
+    abrechnungsvariante          TEXT CHECK (abrechnungsvariante IN (
+                                     'ARBEITSPREIS_GRUNDPREIS', 'ARBEITSPREIS_LEISTUNGSPREIS')),
+    -- UTILMD `QTY+Z16` Bedingungen [930] (two decimals) and [938] (≤ 10).
+    gemeinderabatt_prozent       NUMERIC(4, 2) CHECK (gemeinderabatt_prozent BETWEEN 0 AND 10),
+    updated_at                   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, malo_id, valid_from),
+    CHECK (valid_to IS NULL OR valid_to > valid_from),
+    -- One row covers a date at most, so the UTILMD record of a Stichtag is
+    -- one record and not whichever row a query happened to read first.
+    CONSTRAINT malo_netznutzungsdaten_no_overlap EXCLUDE USING gist (
+        tenant  WITH =,
+        malo_id WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
+);
 
 -- ── NB network contracts ──────────────────────────────────────────────────────
 --

@@ -260,7 +260,7 @@ fn utilmd_builder_constructs_valid_message() {
         .sender("9900987654321")
         .receiver("9900123456789")
         .message_ref("BLDTEST")
-        .document_date("20230901")
+        .document_date("202309011000")
         .build()
         .expect("UtilmdBuilder::build must succeed");
 
@@ -287,7 +287,7 @@ fn mscons_builder_constructs_valid_message() {
         .pruefidentifikator(pid)
         .sender("9900111222333")
         .receiver("9900444555666")
-        .document_date("20230901")
+        .document_date("202309011000")
         .build()
         .expect("MsconsBuilder::build must succeed");
 
@@ -320,7 +320,7 @@ fn aperak_builder_constructs_valid_message() {
         .acw_ref("REF-BUILD-001")
         .error_code("Z43")
         .error_text("Ungueltige Marktlokation")
-        .document_date("20230901")
+        .document_date("202309011000")
         .build()
         .expect("AperakBuilder::build must succeed");
 
@@ -451,7 +451,7 @@ fn mscons_builder_metering_point_sub_builder() {
         .pruefidentifikator(Pruefidentifikator::new(13003).unwrap())
         .sender("9900111222333")
         .receiver("9900444555666")
-        .document_date("20230901")
+        .document_date("202309011000")
         .metering_point("DE0001234567890")
         .location_id("12345678989")
         .quantity("220", "1000.500", "KWH")
@@ -487,7 +487,7 @@ fn utilmd_builder_serialize_roundtrip() {
         .pruefidentifikator(Pruefidentifikator::new(11001).unwrap())
         .sender("9900987654321")
         .receiver("9900123456789")
-        .document_date("20230901")
+        .document_date("202309011000")
         .transaction("VORGANG0001")
         .done()
         .serialize()

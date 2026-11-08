@@ -84,6 +84,27 @@ impl Daemon for Accountingd {
         Ok(())
     }
 
+    /// `[eeg] auto_payout = true` pays every Vergütung receipt as it arrives,
+    /// so the account it pays from and the pain.001 version it writes must be
+    /// usable before the first receipt does: a payout owed is never skipped
+    /// for want of either.
+    fn validate(cfg: &config::AccountingdConfig) -> anyhow::Result<()> {
+        crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref())
+            .context("SEPA pain.001 schema config")?;
+        match cfg.eeg.debtor_iban.as_deref() {
+            Some(iban) => {
+                crate::sepa::validate_iban(iban)
+                    .map_err(|e| anyhow::anyhow!("[eeg].debtor_iban is not a valid IBAN: {e}"))?;
+            }
+            None if cfg.eeg.auto_payout => anyhow::bail!(
+                "[eeg] auto_payout = true needs [eeg].debtor_iban — the account EEG payouts \
+                 are debited from"
+            ),
+            None => {}
+        }
+        Ok(())
+    }
+
     async fn build(
         cfg: Arc<config::AccountingdConfig>,
         ctx: ServiceContext,
@@ -340,7 +361,8 @@ impl Daemon for Accountingd {
             // ── §25 EEG 2023 — SEPA Credit Transfer payout pipeline ───────────────
             // GET  /api/v1/eeg/payouts             — list payout orders (?status=PDNG|ACCP|RJCT|CANC)
             // GET  /api/v1/eeg/payouts/{id}        — single order with pain.001 XML
-            // POST /api/v1/eeg/payouts/run         — batch-generate for unbatched EEG_GUTSCHRIFT entries
+            // POST /api/v1/eeg/payouts/run         — pay a billing month's outstanding receipt chains
+            // GET  /api/v1/eeg/rueckforderungen   — chains paid beyond their current receipt
             // PUT  /api/v1/eeg/payouts/{id}/status — process pain.002 ACCP/RJCT/CANC
             // EnFG Belastungsausgleich (§ 13 Abs. 1 EnFG): the payments made per
             // billing month, and the Aufrechnungen that count as made (Satz 2).
@@ -351,6 +373,10 @@ impl Daemon for Accountingd {
             .route(
                 "/api/v1/eeg/aufrechnungen",
                 post(handlers::post_eeg_aufrechnung),
+            )
+            .route(
+                "/api/v1/eeg/rueckforderungen",
+                get(handlers::get_eeg_rueckforderungen),
             )
             .route("/api/v1/eeg/payouts", get(handlers::get_eeg_payouts))
             .route(

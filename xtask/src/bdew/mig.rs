@@ -310,6 +310,8 @@ fn layouts<S: AsRef<str>>(
     // Which element the running Anwendung / code lines belong to.
     let mut last_el: Option<(usize, Option<usize>)> = None; // (element idx, component idx)
     let mut last_code_x: Option<usize> = None;
+    // The head of a code wrapped at its hyphen, waiting for its tail.
+    let mut wrapped: Option<WrappedHead> = None;
     #[derive(PartialEq)]
     enum Mode {
         Elements,
@@ -359,6 +361,7 @@ fn layouts<S: AsRef<str>>(
             });
             last_el = None;
             last_code_x = None;
+            wrapped = None;
             composite_x = None;
             mode = Mode::Elements;
             continue;
@@ -452,6 +455,7 @@ fn layouts<S: AsRef<str>>(
             let ei = seg.elements.len() - 1;
             last_el = Some((ei, None));
             last_code_x = None;
+            wrapped = None;
             if let Some(m) = c.get(5) {
                 let x = line[..m.start()].chars().count();
                 absorb_anwendung(
@@ -461,6 +465,7 @@ fn layouts<S: AsRef<str>>(
                     anw_x,
                     message_type,
                     &mut last_code_x,
+                    &mut wrapped,
                 );
             }
             continue;
@@ -493,13 +498,22 @@ fn layouts<S: AsRef<str>>(
             };
             last_el = Some((ei, ci));
             last_code_x = None;
+            wrapped = None;
             if let Some(m) = c.get(7) {
                 let x = line[..m.start()].chars().count();
                 let el = match ci {
                     Some(ci) => &mut seg.elements[ei].components[ci],
                     None => &mut seg.elements[ei],
                 };
-                absorb_anwendung(el, line, x, anw_x, message_type, &mut last_code_x);
+                absorb_anwendung(
+                    el,
+                    line,
+                    x,
+                    anw_x,
+                    message_type,
+                    &mut last_code_x,
+                    &mut wrapped,
+                );
             }
             continue;
         }
@@ -518,7 +532,15 @@ fn layouts<S: AsRef<str>>(
             el.name.push_str(&name_part.join(" "));
         }
         if let Some(anw) = toks.iter().find(|k| k.x + 1 >= anw_x) {
-            absorb_anwendung(el, line, anw.x, anw_x, message_type, &mut last_code_x);
+            absorb_anwendung(
+                el,
+                line,
+                anw.x,
+                anw_x,
+                message_type,
+                &mut last_code_x,
+                &mut wrapped,
+            );
         }
     }
     flush(&mut cur, &mut out);
@@ -526,6 +548,43 @@ fn layouts<S: AsRef<str>>(
         return Err("no Segmentlayout blocks found".into());
     }
     Ok(out)
+}
+
+/// The first line of a code too wide for the code column, which the PDF
+/// wraps at its hyphen: `GABi-` beside the start of its description, the rest
+/// of the code (`RLMmT`) at the head of the next line (UTILMD MIG Gas G1.2,
+/// `CCI+++Z17` DE 1131, whose own example writes `CCI+++Z17:GABi-SLPana'`).
+struct WrappedHead {
+    /// The line as read, replayed unchanged when no tail follows.
+    line: String,
+    x: usize,
+    /// The code's head, hyphen included.
+    head: String,
+    /// The description text beside it.
+    description: String,
+}
+
+/// A token that can only be the head of a hyphen-wrapped code: a short word
+/// of letters with an upper-case first letter and a lower-case letter in it,
+/// ending in the hyphen — `GABi-`. An all-caps head is not one: an all-caps
+/// code cannot end in a hyphen ([`super::looks_like_code`]), and a German
+/// word wrapped at its hyphen (`Abschlags-`) is longer.
+fn is_wrapped_code_head(t: &str) -> bool {
+    let Some(stem) = t.strip_suffix('-') else {
+        return false;
+    };
+    (2..=5).contains(&stem.chars().count())
+        && stem.chars().all(|c| c.is_ascii_alphabetic())
+        && stem.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && stem.chars().any(|c| c.is_ascii_lowercase())
+}
+
+/// The tail of a hyphen-wrapped code: letters and digits only, starting with
+/// an upper-case letter (`RLMmT`, `SLPana`).
+fn is_wrapped_code_tail(t: &str) -> bool {
+    t.chars().count() <= 8
+        && t.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && t.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// Classify the Anwendung / Bemerkung text starting at character `x`: a code
@@ -538,6 +597,7 @@ fn absorb_anwendung(
     anw_x: usize,
     message_type: &str,
     last_code_x: &mut Option<usize>,
+    wrapped: &mut Option<WrappedHead>,
 ) {
     let raw: String = line.chars().skip(x).collect();
     let text = collapse(&raw);
@@ -546,6 +606,50 @@ fn absorb_anwendung(
     }
     let toks = tokens(&text);
     let first = toks[0].text;
+    let rest_of = |toks: &[super::Tok<'_>]| -> String {
+        toks.get(1)
+            .map(|k| text.chars().skip(k.x).collect::<String>().trim().to_owned())
+            .unwrap_or_default()
+    };
+    // Both halves sit in the code column — the head's line starts its
+    // description a few cells right of the code it continues; a word wrapped
+    // at its hyphen inside a description sits further right still.
+    let in_code_column = x >= anw_x + 2 && last_code_x.is_none_or(|cx| x <= cx + 6);
+    if let Some(head) = wrapped.take() {
+        if in_code_column && is_wrapped_code_tail(first) {
+            let rest = rest_of(&toks);
+            let name = if rest.is_empty() {
+                head.description
+            } else {
+                format!("{} {rest}", head.description)
+            };
+            el.codes.push(Code {
+                code: format!("{}{first}", head.head),
+                name,
+            });
+            last_code_x.get_or_insert(x);
+            return;
+        }
+        // No tail: the head line was ordinary text after all.
+        absorb_anwendung(
+            el,
+            &head.line,
+            head.x,
+            anw_x,
+            message_type,
+            last_code_x,
+            &mut None,
+        );
+    }
+    if in_code_column && is_wrapped_code_head(first) {
+        *wrapped = Some(WrappedHead {
+            line: line.to_owned(),
+            x,
+            head: first.to_owned(),
+            description: rest_of(&toks),
+        });
+        return;
+    }
     // A code entry sits in the code column, right of the note column — on
     // the grid the column jitters by a few cells around the first code's
     // position; a token further right is the wrapped tail of the previous
@@ -685,5 +789,65 @@ LOC+Z16+20072281644:::2'
         assert_eq!(c.components[0].format.as_deref(), Some("n11"));
         assert_eq!(c.components[1].status, "N");
         assert_eq!(loc.example.as_deref(), Some("LOC+Z16+20072281644:::2'"));
+    }
+
+    /// A code too wide for its column wraps at its hyphen — `GABi-` beside the
+    /// start of the description, `RLMmT` on the next line (UTILMD MIG Gas
+    /// G1.2, `CCI+++Z17` DE 1131). Read as two lines, the code reduced to its
+    /// tail and the next ones vanished into a description, so the profile
+    /// admitted a code the MIG restricts to Liefermonate before 01.10.2016.
+    #[test]
+    fn a_code_wrapped_at_its_hyphen_is_read_whole() {
+        let mut el = Element {
+            id: "1131".to_owned(),
+            name: "Codeliste, Code".to_owned(),
+            status: "R".to_owned(),
+            format: Some("an..17".to_owned()),
+            note: String::new(),
+            codes: Vec::new(),
+            components: Vec::new(),
+        };
+        let mut cx = None;
+        let mut wrapped = None;
+        for (x, text) in [
+            (152, "GABi- Nominierungsersatzverfahren - Exit (Hinweis:"),
+            (147, "RLMNEV Dieser Code darf nur für Liefermonate vor dem"),
+            (160, "01.10.2016 genutzt werden)"),
+            (152, "GABi- RLM-Kunde in Tagesregime - Exit"),
+            (148, "RLMmT"),
+        ] {
+            let line = format!("{}{text}", " ".repeat(x));
+            absorb_anwendung(&mut el, &line, x, 145, "UTILMD", &mut cx, &mut wrapped);
+        }
+        let codes: Vec<&str> = el.codes.iter().map(|c| c.code.as_str()).collect();
+        assert_eq!(codes, ["GABi-RLMNEV", "GABi-RLMmT"]);
+        assert_eq!(el.codes[1].name, "RLM-Kunde in Tagesregime - Exit");
+        assert!(el.codes[0].name.ends_with("01.10.2016 genutzt werden)"));
+    }
+
+    /// A German word wrapped at its hyphen inside a description is not a code
+    /// head: it sits right of the code column.
+    #[test]
+    fn a_hyphenated_word_in_a_description_stays_text() {
+        let mut el = Element {
+            id: "7111".to_owned(),
+            name: "Merkmalswert, Code".to_owned(),
+            status: "R".to_owned(),
+            format: Some("an..3".to_owned()),
+            note: String::new(),
+            codes: Vec::new(),
+            components: Vec::new(),
+        };
+        let mut cx = None;
+        let mut wrapped = None;
+        for (x, text) in [
+            (147, "ZS0 Ersatzwertbildungsverfahren zwischen"),
+            (160, "Markt- und Messlokation"),
+        ] {
+            let line = format!("{}{text}", " ".repeat(x));
+            absorb_anwendung(&mut el, &line, x, 145, "MSCONS", &mut cx, &mut wrapped);
+        }
+        assert_eq!(el.codes.len(), 1);
+        assert!(el.codes[0].name.ends_with("Markt- und Messlokation"));
     }
 }

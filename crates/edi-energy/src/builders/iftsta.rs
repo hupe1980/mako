@@ -153,7 +153,9 @@ impl<S, R> IftstaBuilder<S, R> {
         self
     }
 
-    /// Set the document date for DTM+137 (`YYYYMMDD`).
+    /// Set the document date for DTM+137 — the UTC instant `CCYYMMDDHHMM`
+    /// (format 303, optionally `+00`); a bare `CCYYMMDD` is refused with
+    /// [`Error::DtmNotAnInstant`](crate::Error::DtmNotAnInstant).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -233,7 +235,10 @@ impl<S, R> IftstaBuilder<S, R> {
         self
     }
 
-    /// Set the SG15 `DTM+93` Datum Vertragsende (the Beendigung date, `YYYYMMDD`).
+    /// Set the SG15 `DTM+93` Datum Vertragsende — format `303`, so the UTC
+    /// instant `CCYYMMDDHHMM` at which the German Vertragsende day begins
+    /// (`2200`/`2300` UTC of the day before in Strom); a bare `YYYYMMDD` is
+    /// refused rather than padded to UTC midnight.
     pub fn vertragsende(mut self, date: impl Into<String>) -> Self {
         self.inner.vertragsende = Some(date.into());
         self
@@ -267,7 +272,11 @@ impl<S, R> IftstaBuilder<S, R> {
         // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
         // `+00`; `[494]` requires the stamp to be the creation moment or
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
-        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        emit_comp!(
+            w,
+            "DTM",
+            ["137", &super::ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
+        );
         // IFTSTA is the one message type whose MIG lists the Empfänger before
         // the Absender: `SG1 NAD+MR` is Nr 00004 and `SG1 NAD+MS` Nr 00005
         // (IFTSTA MIG 2.1 Nachrichtenstruktur), and the Nachrichtenstruktur is
@@ -338,7 +347,11 @@ impl<S, R> IftstaBuilder<S, R> {
         // IFTSTA AHB 2.1 gives DE 2379 as `303` here, like every other date in
         // the message; `[931]` fixes the zone to `+00`.
         if let Some(ende) = &self.inner.vertragsende {
-            emit_comp!(w, "DTM", ["93", &super::ccyymmddhhmm_utc(ende), "303"]);
+            emit_comp!(
+                w,
+                "DTM",
+                ["93", &super::ccyymmddhhmm_utc("93", ende)?, "303"]
+            );
         }
 
         w.finish_unt(&self.inner.message_ref)
@@ -394,7 +407,7 @@ mod tests {
             .status("Z21", "105")
             .vorgangsnummer("1")
             .order_reference("BEST-4711")
-            .vertragsende("20260801")
+            .vertragsende("202607312200")
             .build()
             .expect("build 21042");
 

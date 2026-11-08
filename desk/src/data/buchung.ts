@@ -1,7 +1,8 @@
 // A geparkte Buchung — a draft the ledger refused for good — is resolved
 // through accountingd's REST door, under the person's own token: the service
 // checks its Cedar policy (`post-entry`) and records who resolved it. Both
-// moves are final, so the Desk confirms each before it sends; neither is held.
+// moves are final once sent, so each is held for undo before it leaves — in
+// its view as in ⌘K — and neither asks confirmation.
 //
 // The draft's key carries `:`, so it is always encoded into the path.
 
@@ -18,11 +19,12 @@ export class ErneutGeparkt extends Error {
 const BOOKINGS = "/svc/accountingd/api/v1/bookings";
 const BUCHEN: Handlung = { dienst: "accountingd", aktion: "buchen" };
 
-async function senden(url: string, body: object): Promise<void> {
+async function senden(url: string, body: object, keepalive: boolean): Promise<void> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+    keepalive,
   });
   if (res.ok) return;
   const p = await problem(res);
@@ -33,13 +35,21 @@ async function senden(url: string, body: object): Promise<void> {
 }
 
 /** Book a parked draft on `buchungsdatum`, which must lie in an open month. */
-export function neuBuchen(key: string, buchungsdatum: BusinessDate): Promise<void> {
-  return senden(`${BOOKINGS}/${encodeURIComponent(key)}/rebook`, { buchungsdatum });
+export function neuBuchen(
+  key: string,
+  buchungsdatum: BusinessDate,
+  keepalive = false,
+): Promise<void> {
+  return senden(`${BOOKINGS}/${encodeURIComponent(key)}/rebook`, { buchungsdatum }, keepalive);
 }
 
 /** Drop a parked draft; `grund` is kept with it for the audit trail. */
-export function verwerfen(key: string, grund: string): Promise<void> {
-  return senden(`${BOOKINGS}/${encodeURIComponent(key)}/discard`, { grund: grund.trim() });
+export function verwerfen(key: string, grund: string, keepalive = false): Promise<void> {
+  return senden(
+    `${BOOKINGS}/${encodeURIComponent(key)}/discard`,
+    { grund: grund.trim() },
+    keepalive,
+  );
 }
 
 /** Each Buchungsart accountingd books, as the Lieferant reads it. */

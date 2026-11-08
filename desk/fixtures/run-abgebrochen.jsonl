@@ -1,0 +1,4 @@
+{"event":"schritt","id":"3","data":{"seq":3,"art":"lesen","was":"gelesen","objekt":"Prozessschlüssel 51238696012","quelle":{"dienst":"makod","werkzeug":"get_process","ref":"51238696012"},"verborgen":false,"um":"2026-11-04T09:20:00.400Z"}}
+{"event":"schritt","id":"5","data":{"seq":5,"art":"lesen","was":"gelesen","objekt":"Prozess 4712","quelle":{"dienst":"makod","werkzeug":"get_process_history","ref":"4712"},"verborgen":false,"um":"2026-11-04T09:20:01.300Z"}}
+{"event":"schritt","id":"7","data":{"seq":7,"art":"fehlgeschlagen","was":"gelesen","objekt":"Prozess 4711","quelle":{"dienst":"makod","werkzeug":"get_process_history","ref":"4711"},"verborgen":false,"um":"2026-11-04T09:20:01.700Z"}}
+{"event":"abgebrochen","id":"8","data":{"durch":"sachbearbeitung@example.org","um":"2026-11-04T09:20:01.800Z"}}

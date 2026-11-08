@@ -39,28 +39,62 @@ action over a report made in good faith under this policy.
 
 ## Regulatory reporting
 
-mako is a product with digital elements under **Verordnung (EU) 2024/2847**
-(Cyber Resilience Act). Its Article 14 reporting obligations have applied since
-**11 September 2026**, and they run on their own clock, independently of this
-page's timetable and of whether a fix exists yet.
+**mako is outside the scope of Regulation (EU) 2024/2847** (Cyber Resilience
+Act). It is free and open source and is not supplied in the course of a
+commercial activity — no price, no paid support, no hosting, no licence — so it
+is not „made available on the market" (Art. 2(1), Art. 3(22), recitals 15 and
+18). This is the owner's determination of **08.11.2026**; its basis, and what
+would reopen it, are on the
+[CRA and AI Act](https://hupe1980.github.io/mako/docs/compliance/eu-regulations/)
+page.
 
-For an **actively exploited vulnerability** in mako, or a **severe incident**
-affecting its security, the manufacturer notifies through the **CRA Single
-Reporting Platform**, addressed to the CSIRT of the Member State of its main
-establishment and made available to ENISA at the same time:
+**No Art. 14 early warning is owed for mako.** Art. 14 is headed „Reporting
+obligations of manufacturers", and while mako is outside scope it has no
+manufacturer. A report is handled under this page's timetable instead, and the
+maintainer may still notify an actively exploited vulnerability to a CSIRT
+designated as coordinator or to ENISA on a voluntary basis (Art. 15(1)).
 
-| | Actively exploited vulnerability | Severe incident |
+The CRA's three outcomes, and what each would ask:
+
+| Outcome | Source | Reporting duty |
 |---|---|---|
-| **Early warning** | within **24 hours** of becoming aware | within **24 hours** |
-| **Full notification** | within **72 hours** | within **72 hours** |
-| **Final report** | no later than **14 days** after a corrective measure is available | within **one month** of the 72-hour notification |
+| **Outside scope** — the current determination | Art. 2(1), Art. 3(22), recitals 15 and 18 | none |
+| **Manufacturer** — paid support, hosting or licensing makes the supply commercial | Art. 3(13) | Art. 14 in full, applicable since 11 September 2026 (Art. 71(2)), also for a product placed on the market before 11 December 2027 (Art. 69(3)) |
+| **Open-source software steward** — needs „a legal person, other than a manufacturer" to support mako | Art. 3(14) | Art. 14(1) „to the extent that they are involved in the development" (Art. 24(3)), from 11 December 2027 (Art. 71(2)) |
 
-"Becoming aware" starts the 24 hours, not "having confirmed" — so a credible
-report of exploitation is escalated before it is fully triaged.
+### If the determination changes
 
-Whether mako ships as **manufacturer** or as **open-source software steward**
-decides which obligations bind it. This page does not make that determination;
-it changes who files the notification above, not whether one is owed.
+The owner becomes the manufacturer the moment mako is supplied commercially, and
+the determination is reopened before that, not after. The manufacturer then
+notifies through ENISA's **CRA Single Reporting Platform**
+(<https://portal.cra-srp.enisa.europa.eu/>), using the electronic notification
+end-point of the CSIRT designated as coordinator of the Member State of its main
+establishment, simultaneously accessible to ENISA (Art. 14(7)). The
+manufacturer's duty under Art. 14(2) and (4):
+
+| | Actively exploited vulnerability — Art. 14(2) | Severe incident — Art. 14(4) |
+|---|---|---|
+| **Early warning** | within **24 hours** of becoming aware | within **24 hours** of becoming aware |
+| **Notification** | within **72 hours** of becoming aware | within **72 hours** of becoming aware |
+| **Final report** | no later than **14 days** after a corrective or mitigating measure is available | within **one month** after the incident notification |
+
+"Becoming aware" starts the 24 hours, not "having confirmed" — so under that
+outcome a credible report of exploitation is escalated before it is fully
+triaged.
+
+### Dependencies published by the same maintainer
+
+Twelve of mako's 87 direct external dependencies are published from the
+maintainer's own crates.io account and no other: `agentplane`, `asx-rs`,
+`billing`, `doubleentry`, `edifact-rs`, `en16931`, `en16931-formats`, `krafka`,
+`metering`, `meterstore`, `rubo4e` and `sepa`. Each is free and open source and
+supplied on the same terms as mako, so the determination above covers them too.
+
+They share mako's single point of failure: one person receives, assesses and
+fixes a report for any of them. A vulnerability in one of the twelve may be
+reported here or to that crate's own repository — both reach the same
+maintainer and run on the timetable above. The fix is released in the crate
+first, and mako takes it in its next release; the disclosure names both.
 
 ## Supported versions
 

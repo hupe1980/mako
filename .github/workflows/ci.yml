@@ -282,9 +282,9 @@ jobs:
       - run: just clippy-roles
 
   desk:
-    name: Desk (generated types, typecheck, lint, unit tests)
+    name: Desk (generated types, typecheck, lint, unit tests, budgets, axe)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -296,6 +296,11 @@ jobs:
         with:
           tool: just@1.58.0
       - run: just desk-check
+      - name: Playwright's Chromium
+        working-directory: desk
+        run: npx playwright install --with-deps chromium
+      - run: just desk-budgets
+      - run: just desk-axe
 
   makotest:
     name: makotest (Python toolkit)

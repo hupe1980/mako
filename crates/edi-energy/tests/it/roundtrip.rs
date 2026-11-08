@@ -311,6 +311,47 @@ mod utilmd_transaction_tests {
     use super::*;
     use edi_energy::{AnyMessage, builders::UtilmdBuilder};
 
+    /// A process date in a `303` DTM is the UTC instant its German day begins
+    /// (Allgemeine Festlegungen V6.1d Kap. 3.1). A bare `CCYYMMDD` is refused,
+    /// not padded: `20270101` padded to `202701010000+00` is 01:00 MEZ, one
+    /// hour into the Lieferbeginn, where the correct value is
+    /// `202612312300+00`. `DTM+137` refuses one the same way.
+    #[test]
+    fn a_bare_date_in_a_303_dtm_is_refused() {
+        let build = |qualifier: &str, value: &str, doc: &str| {
+            UtilmdBuilder::new(Release::new("S2.2"))
+                .pruefidentifikator(Pruefidentifikator::new(55001).unwrap())
+                .sender("4012345000023")
+                .receiver("9900357000004")
+                .document_date(doc)
+                .transaction("VORGANG-0001")
+                .date(qualifier, value)
+                .marktlokation("51238696012")
+                .done()
+                .serialize()
+                .map_err(Box::new)
+        };
+        for (qualifier, value, doc) in [
+            (dtm::BEGINN_ZUM, "20270101", "202611081000"),
+            (dtm::ENDE_ZUM, "2027-01-01", "202611081000"),
+            (dtm::BEGINN_ZUM, "202612312300+01", "202611081000"),
+            (dtm::BEGINN_ZUM, "202612312300", "20261108"),
+        ] {
+            let err = build(qualifier, value, doc).expect_err(value);
+            assert!(
+                matches!(*err, edi_energy::Error::DtmNotAnInstant { .. }),
+                "{qualifier} {value} {doc}: {err}"
+            );
+        }
+        // The converted instant goes out as itself.
+        let edi = String::from_utf8(
+            build(dtm::BEGINN_ZUM, "202612312300", "202611081000").expect("instant"),
+        )
+        .unwrap();
+        assert!(edi.contains("DTM+92:202612312300?+00:303"), "{edi}");
+        assert!(edi.contains("DTM+137:202611081000?+00:303"), "{edi}");
+    }
+
     /// A UTILMD S2.1 Vorgang (SG4) must round-trip: the `IDE+24` Vorgangsnummer,
     /// the `SG5 LOC+Z16` Marktlokation, the process date and the references all
     /// survive serialization and re-parsing.
@@ -322,9 +363,9 @@ mod utilmd_transaction_tests {
             .document_code("E01")
             .sender("4012345000023")
             .receiver("9900357000004")
-            .document_date("20241101")
+            .document_date("202411011000")
             .transaction("VORGANG-0001")
-            .date(dtm::BEGINN_ZUM, "20241101")
+            .date(dtm::BEGINN_ZUM, "202410312300")
             .marktlokation("51238696012")
             .reference("Z13", "55001")
             .done()
@@ -349,7 +390,7 @@ mod utilmd_transaction_tests {
         assert_eq!(tx.marktlokation(), Some("51238696012"));
         // `SG4 DTM+92` is DE 2379 `303` in both UTILMD AHBs, so the wire
         // value is the UTC minute with the `[931]` zone.
-        assert_eq!(tx.date(dtm::BEGINN_ZUM), Some("202411010000+00"));
+        assert_eq!(tx.date(dtm::BEGINN_ZUM), Some("202410312300+00"));
         assert!(
             tx.references.iter().any(|r| r.qualifier == "Z13"),
             "Z13 Pruefidentifikator reference must survive roundtrip"
@@ -1289,7 +1330,7 @@ mod pricat_roundtrip {
     #[test]
     fn pricat_dtm137_uses_format_303() {
         let bytes = PricatBuilder::new(Release::new("2.1"))
-            .document_date("20260601")
+            .document_date("202606011000")
             .serialize()
             .unwrap();
         let raw = String::from_utf8(bytes).unwrap();
@@ -1308,8 +1349,8 @@ mod pricat_roundtrip {
         use edi_energy::builders::{PricatLineItem, PricatPriceEntry, PricatPriceGroup};
 
         let price = PricatPriceEntry::new("CAL", "5.50", "EUR")
-            .valid_from("202504010000+0000")
-            .valid_to("202505010000+0000");
+            .valid_from("202503312200")
+            .valid_to("202504302200");
         let line = PricatLineItem::new(price)
             .schedule_id("AEP001")
             .description("Ausgleichsenergie positiv");
@@ -1477,7 +1518,7 @@ mod utilts_roundtrip {
     #[test]
     fn utilts_dtm137_uses_format_303() {
         let bytes = UtiltsBuilder::new(Release::new("1.1e"))
-            .document_date("20241001")
+            .document_date("202410011000")
             .add_vorgang(UtiltsVorgang::new("V001", 25001))
             .serialize()
             .unwrap();
@@ -1890,7 +1931,7 @@ fn a_strom_anmeldung_round_trips_its_bilanzkreis_produktpaket() {
         .receiver("9900357000004")
         .document_date("202608280900")
         .transaction("VORGANG-0001")
-        .date(dtm::BEGINN_ZUM, "20261101")
+        .date(dtm::BEGINN_ZUM, "202610312300")
         .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(
             transaktionsgrund::WECHSEL,
         ))
@@ -1985,7 +2026,7 @@ fn two_products_in_one_produktpaket_keep_their_own_values() {
         .receiver("9900357000004")
         .document_date("202608280900")
         .transaction("VORGANG-0001")
-        .date(dtm::BEGINN_ZUM, "20261101")
+        .date(dtm::BEGINN_ZUM, "202610312300")
         .transaktionsgrund(Transaktionsgrund::new(
             transaktionsgrund::WECHSEL,
             edi_energy::utilmd_codes::ergaenzung::GESCHAEFTSVORFALL_3,
@@ -2058,7 +2099,7 @@ fn a_gas_anmeldung_round_trips_its_bilanzkreis_cci() {
         .receiver("9870000000014")
         .document_date("202608280900")
         .transaction("VORGANG-0001")
-        .date(dtm::BEGINN_ZUM, "20261101")
+        .date(dtm::BEGINN_ZUM, "202610312300")
         // Gas states no Transaktionsgrundergänzung: `STS+7++E01`.
         .transaktionsgrund(Transaktionsgrund {
             grund: transaktionsgrund::WECHSEL.to_owned(),

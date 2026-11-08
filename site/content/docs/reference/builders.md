@@ -89,11 +89,13 @@ let bytes = UtilmdBuilder::new(Release::new("S2.2"))
     .sender("4012345000023")
     .receiver("9900357000004")
     .message_ref("MSG-001")
-    .document_date("20261001")
+    .document_date("202610010800")   // DTM+137 — a UTC instant
     // `IDE+24` DE 7402 is the Vorgangsnummer, never a Lokations-ID.
     .transaction("VORGANG-0001")
-    // `SG4 DTM+92` — the Lieferbeginn.
-    .date(dtm::BEGINN_ZUM, "20261101")
+    // `SG4 DTM+92` — the Lieferbeginn 01.11.2026: the UTC instant its German
+    // day begins (00:00 MEZ = 23:00 UTC the day before), from
+    // `mako_fristen::tagesbeginn_utc`. A bare `CCYYMMDD` is refused.
+    .date(dtm::BEGINN_ZUM, "202610312300")
     .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(transaktionsgrund::WECHSEL))
     // `SG8 SEQ+Z79` Produktpaket with the Bilanzkreis, and its `SEQ+ZH0`.
     .produktpaket(Produktpaket::bilanzkreis("11XBK-STD------Y"))
@@ -160,8 +162,8 @@ let bytes = MsconsBuilder::new(releases::mscons_fv20261001().clone())
         .quantity_for_period(
             QTY_ENERGIE_SUMMIERT,             // DE 6063 = "79"
             "12.5", "KWH",
-            "202606010000+00",                // DTM+163 interval start
-            "202606010015+00",                // DTM+164 interval end
+            "202605312200+00",                // DTM+163 interval start — 01.06. 00:00 MESZ
+            "202605312215+00",                // DTM+164 interval end
         )
         .done()
     .serialize()?;

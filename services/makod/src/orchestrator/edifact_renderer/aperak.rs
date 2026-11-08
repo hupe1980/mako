@@ -73,7 +73,9 @@ pub(super) fn render_aperak(
         builder = builder.ago_ref(d);
     }
     if let Some(d) = payload.orig_document_date.as_deref() {
-        builder = builder.reference_date(d);
+        // `DTM+171` restates the referenced message's `DTM+137`; a
+        // counterparty's `102` date becomes the instant its German day begins.
+        builder = builder.reference_date(dokumentdatum_303("APERAK", d)?);
     }
 
     finish_interchange(builder.serialize(), sender, receiver, msg)

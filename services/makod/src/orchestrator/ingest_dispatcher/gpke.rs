@@ -328,7 +328,11 @@ impl EdifactIngestDispatcher {
             // responder. The answer window (15:00 next Werktag) is registered
             // by the workflow itself from `received_at`.
             // PIDs 55014/55015 (Bestätigung/Ablehnung, LF → NB) — resume the
-            // NB initiator by MaLo.
+            // NB initiator under `eog_nb_anfrage_key`, the key
+            // `gpke.eog.anmelden` spawned it under. Never the bare MaLo: on a
+            // combined NB+LF deployment the E/G's process answering the same
+            // Anmeldung runs there. Never a spawn: an answer with no
+            // Anmeldung behind it has nothing to answer.
             "gpke-eog" => match pid {
                 55013 => {
                     let cmd = adapters::gpke_eog_registry(received_at).dispatch(raw, &fv)?;
@@ -347,13 +351,13 @@ impl EdifactIngestDispatcher {
                 55014 | 55015 => {
                     let cmd = adapters::gpke_eog_registry(received_at).dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_key::<mako_gpke::GpkeEogWorkflow>(
-                        inbound,
-                        malo_id.as_str(),
-                        "gpke-eog",
-                        cmd,
-                    )
-                    .await
+                    let key = if malo_id.as_str().is_empty() {
+                        String::new()
+                    } else {
+                        mako_gpke::eog_nb_anfrage_key(malo_id.as_str())
+                    };
+                    self.resume_by_key::<mako_gpke::GpkeEogWorkflow>(inbound, &key, "gpke-eog", cmd)
+                        .await
                 }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "gpke-eog",

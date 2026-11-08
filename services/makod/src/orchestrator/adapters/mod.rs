@@ -50,15 +50,19 @@ use rust_decimal::Decimal;
 /// notification carries, and the notification contract
 /// ([`mako_engine::lf_vorgang::LfVorgangsdaten`]) is Sparte-neutral — so an
 /// adapter that drops a field turns every decision into an escalation.
+///
+/// # Errors
+///
+/// A `DTM+471` that names no German day — see [`prozesstag`].
 pub(crate) fn lf_vorgangsdaten(
     u: &edi_energy::messages::utilmd::UtilmdMessage,
-) -> mako_engine::lf_vorgang::LfVorgangsdaten {
+) -> Result<mako_engine::lf_vorgang::LfVorgangsdaten, EngineError> {
     use edi_energy::messages::utilmd::UtilmdParty;
     use edi_energy::utilmd_codes::dtm;
 
     let first = u.transactions().first();
     let grund = first.and_then(|t| t.transaktionsgrund());
-    mako_engine::lf_vorgang::LfVorgangsdaten {
+    Ok(mako_engine::lf_vorgang::LfVorgangsdaten {
         transaktionsgrund: grund.as_ref().map(|g| g.grund.clone()),
         transaktionsgrund_ergaenzung: grund.and_then(|g| g.ergaenzung),
         vorgangsnummer: first
@@ -70,9 +74,10 @@ pub(crate) fn lf_vorgangsdaten(
         // `DTM+471` and `DTM+93` are mutually exclusive on a Kündigung. Its
         // presence *is* the answer to `E_0614` Prüfschritt 60, so it is carried
         // as its own field rather than folded into `process_date`.
-        naechstmoeglicher_termin: first
-            .and_then(|t| t.date(dtm::ENDE_NAECHSTMOEGLICH))
-            .map(ToOwned::to_owned),
+        naechstmoeglicher_termin: prozesstag(
+            sg4_dtm(first, dtm::ENDE_NAECHSTMOEGLICH),
+            utilmd_sparte(u),
+        )?,
         // `SG12 NAD+Z09` — the Kundenname the LFN put in its Anmeldung, which
         // the NB copies into the 55010. `E_0624` Prüfschritt 50 has no other
         // source for it, and without it the whole Ein-/Auszug arm escalates.
@@ -85,7 +90,69 @@ pub(crate) fn lf_vorgangsdaten(
         lfn_mp_id: first
             .and_then(|t| t.party(edi_energy::utilmd_codes::nad::ZUGEHOERIGE_PARTEI))
             .and_then(|p| p.nad.party_id.clone()),
+    })
+}
+
+/// The Sparte a UTILMD belongs to, read off its release: every Gas UTILMD
+/// release code begins `G`, every Strom one `S`.
+pub(crate) fn utilmd_sparte(
+    u: &edi_energy::messages::utilmd::UtilmdMessage,
+) -> mako_fristen::Sparte {
+    if u.assoc_code().starts_with('G') {
+        mako_fristen::Sparte::Gas
+    } else {
+        mako_fristen::Sparte::Strom
     }
+}
+
+/// The first `SG4 DTM` of `tx` with DE 2005 `qualifier`.
+pub(crate) fn sg4_dtm<'a>(
+    tx: Option<&'a edi_energy::messages::utilmd::UtilmdTransaction>,
+    qualifier: &str,
+) -> Option<&'a edi_energy::messages::segments::Dtm> {
+    tx?.dtm.iter().find(|d| d.qualifier == qualifier)
+}
+
+/// The German calendar date (`YYYYMMDD`) an inbound process date names.
+///
+/// A `303` process date is the UTC instant at which the German day begins —
+/// 00:00 Europe/Berlin in Strom, the Gastag's 06:00 in Gas (Allgemeine
+/// Festlegungen V6.1d Kap. 3.1, which also has the receiver convert UTC back
+/// into gesetzliche deutsche Zeit). So `DTM+92:202612312300?+00:303` on a
+/// Strom Anmeldung is 01.01.2027; its first eight digits are the day before.
+/// [`mako_fristen::tag_des_beginns`] is the inverse, and an instant that begins
+/// no day in the Sparte is refused rather than rounded to one. A `DTM` in any
+/// other format (`102`, `610`, …) is returned as written.
+///
+/// # Errors
+///
+/// [`EngineError::Deserialization`] for a `303` value that is not an instant,
+/// or not the beginning of a German day in `sparte`.
+pub(crate) fn prozesstag(
+    dtm: Option<&edi_energy::messages::segments::Dtm>,
+    sparte: mako_fristen::Sparte,
+) -> Result<Option<String>, EngineError> {
+    let Some(dtm) = dtm else { return Ok(None) };
+    let Some(value) = dtm.value.as_deref() else {
+        return Ok(None);
+    };
+    if dtm.format.as_deref() != Some("303") {
+        return Ok(Some(value.to_owned()));
+    }
+    let instant = parse_dtm_datetime(value, Some("303")).ok_or_else(|| {
+        EngineError::Deserialization(format!(
+            "DTM+{} {value:?} is not a CCYYMMDDHHMMZZZ instant",
+            dtm.qualifier
+        ))
+    })?;
+    let tag = mako_fristen::tag_des_beginns(instant, sparte)
+        .map_err(|e| EngineError::Deserialization(format!("DTM+{}: {e}", dtm.qualifier)))?;
+    Ok(Some(format!(
+        "{:04}{:02}{:02}",
+        tag.year(),
+        tag.month() as u8,
+        tag.day()
+    )))
 }
 
 /// Convert an `edi_energy::Pruefidentifikator` to the domain `Pruefidentifikator`.

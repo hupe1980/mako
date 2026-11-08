@@ -29,15 +29,60 @@ Port: **`:9580`**
 | `POST /webhook` | Inbound CloudEvent trigger (Standard Webhooks-verified). Admits durably, then answers `202` with the run ids |
 | `GET /api/v1/hinweise` | The open worklist rows the caller's roles may answer, each with the skill that opened it, its title, the row's text, priority, due instant and Anker — the run's case's `malo`/`melo`/`process` key. Read under the worklist's verb; the Desk's Hinweise |
 | `GET /api/v1/vorschlaege?freigabe=<id>,…&disput=<id>,…&buchung=<key>,…` | Each Freigabe's, Rechnungsdisput's and geparkte Buchung's waiting proposal, under its kind — its run's answer (`running`, or concluded with the checked `vorschlag`), or `null` where none was admitted; at most 100 ids. Starts no run. `api:run.read` |
-| `GET /api/v1/runs/{run}/antwort` | The answer sentence by sentence, each with its cited call and `belegt` (Belegprüfung); the run's `schritte` (also while running); a `vorschlag` on a Freigabe; the reader's `hilfreich`. Read under `api:run.read` |
+| `GET /api/v1/runs/{run}/antwort` | The answer sentence by sentence, each with its cited call and `belegt` (Belegprüfung); the run's `schritte` (also while running); a `vorschlag` on a Freigabe; the reader's `hilfreich`. Read under `api:run.read`; a run a person started only by that person (`403` `not_the_starter`) |
+| `GET /api/v1/runs/{run}/schritte` | The run's reads as Server-Sent Events while it works, then its conclusion — see [Following and stopping a run](#following-and-stopping-a-run). Read as the answer is |
+| `POST /api/v1/runs/{run}/stopp` | The starter stops their run: no body or `{}`, `202` with `recorded` (`false` when a stop already stands); `409` `already_concluded` once the run has concluded. `api:run.start`, and only for the person who started the run |
 | `POST /api/v1/runs/{run}/bewertung` | `{hilfreich, begruendung?}` or `{vorschlag: sent\|edited\|dismissed}`, recorded as an assessment beside the concluded run under the caller's name; a later one replaces it. `204`, `409` while running. `api:run.assess` |
 | `POST /api/v1/runs` | Start a specialist by hand (OIDC JWT **and** Cedar `api:run.start`; honours `Idempotency-Key`). Admits durably, then answers `202` with the run ids; an unknown body field is `422` |
 | `POST /api/v1/erasure` | Destroy a case wrapping key and/or forget a memory subject (OIDC + `api:erasure.execute`; reason required). `409` when a case is named and no `[keyring]` is configured; a key-service or memory-store failure is a `500` carrying an `error_id` |
 | `GET /api/v1/agents` | Activated specialists and subscriptions. OIDC + `api:agent.list`; version and digest are in `/api/v1/agents/catalog` |
-| `GET /api/v1/agents/catalog` | Every specialist compiled into this binary, as the Desk's Beipackzettel shows it: `titel` and `zweck` (the manifest's `mako.de/` annotations), whether it is active here, what starts it, its model or none, every tool it may call with the reason, `nur_lesend`, and `bilanz` — the last 30 days from agentplane's track record: runs, open runs, outcomes, „hilfreich" verdicts (`ja`/`nein`) and what became of its proposals (`sent`/`edited`/`dismissed`); `null` for a skill not activated here. OIDC + `api:agent.list` |
+| `GET /api/v1/agents/catalog` | Every specialist compiled in, as the Desk's Beipackzettel shows it: `titel`, `zweck`, active here or not, trigger, model, each tool with its reason, `nur_lesend`, and `bilanz` — agentplane's 30-day record (runs, outcomes, „hilfreich" verdicts, proposals `sent`/`edited`/`dismissed`), `null` when not active. OIDC + `api:agent.list` |
 | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
 | `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, breached obligations, event delivery, and a skill's track record over a window — runs by outcome and each person's latest verdict per metric (`capabilities/{capability}/track-record`, `api:capability.track`) (OIDC required) |
 | `GET /health/live` · `GET /health/ready` · `GET /metrics` | Liveness, readiness, agentplane instruments (from the `mako_service` runner) |
+
+### Following and stopping a run
+
+`POST /api/v1/runs` journals the caller's `sub` as the run's starter
+(agentplane's `RunAdmitted.admitted_by`, which also bars them from deciding a
+task the run opens). One rule decides who reads a run here:
+
+| Run | Reads its answer and follows it (`api:run.read`) | Stops it here (`api:run.start`) |
+|---|---|---|
+| started by a person (`POST /api/v1/runs`) | that person only | that person only |
+| started by nobody — an event's, a waiting proposal's | every principal holding the verb | nobody: it is stopped on the oversight surface (`api:run.cancel`) |
+
+Anyone else is answered `403` `not_the_starter`. Operators read and stop anyone's
+run on the oversight surface, under its own verbs. `GET /api/v1/vorschlaege`
+reads proposal runs, which nobody starts, so it answers everyone holding
+`api:run.read`.
+
+The stream is read from the run's journal, never from an in-process channel: it
+wakes on the store's append hint and polls every 200 ms as the fallback, so any
+instance serves it and a dropped connection loses nothing. Each event's `id` is
+the journal sequence of the record it comes from; a reconnect sends it back as
+`Last-Event-ID` and receives only later events. An idle stream carries a
+keep-alive comment every 15 s and ends when the instance drains.
+
+| Event | Data |
+|---|---|
+| `schritt` | One settled tool call: `seq` (the journal sequence), `art` (`lesen`, or `fehlgeschlagen` for a call that did not answer), `was` (the verb the tool's name states — `gelesen`, `aufgelistet`, `geprüft`, `nachgeschlagen`, `berechnet`, else `aufgerufen`), `objekt` (`Prozess 4711`, `MaLo …` from the call's arguments, or `null`), `quelle` `{dienst, werkzeug, ref}`, `verborgen`, `um` |
+| `antwort` | The run's answer, exactly as `GET /api/v1/runs/{run}/antwort` returns it. Ends the stream |
+| `abgebrochen` | `{durch, um}` — the operator on the run's `RunCancelled` record. Ends the stream |
+
+`um` is when the serving instance read the record: the journal stamps no time
+on its records, so a later read of the same record carries a later `um`.
+`verborgen` is always `false` here — agentd's policy grants no per-person
+read of a tool server — so every step carries its `quelle`.
+
+A stop is agentplane's `request_cancel` with the person as operator: durable at
+once, carried out at the run's next step boundary. A tool-calling agent's whole
+tool loop is one step, so until the model next answers, every call the run asks
+for is refused before it leaves — every tool server sits behind a stop guard
+that reads the standing stop from the journal store — and shows in the stream
+as `fehlgeschlagen`. No service is read for a stopped run; its model is still
+called until it answers, within the manifest's `max_turns`. The run then concludes `cancelled`, the stream ends
+with `abgebrochen`, and the answer read reports `cancelled`.
 
 ---
 

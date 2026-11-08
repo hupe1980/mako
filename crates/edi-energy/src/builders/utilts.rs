@@ -14,10 +14,6 @@ use super::{Set, Unset, bytes_to_segments};
 // These return only the DE 2380 datetime value; qualifier and format code are
 // separate components at the emit site.
 
-fn midnight_303(date: &str) -> String {
-    format!("{date}0000+0000")
-}
-
 fn now_303() -> String {
     let now = time::OffsetDateTime::now_utc();
     let (y, mo, d, h, m) = (
@@ -27,7 +23,7 @@ fn now_303() -> String {
         now.hour(),
         now.minute(),
     );
-    format!("{y:04}{mo:02}{d:02}{h:02}{m:02}+0000")
+    format!("{y:04}{mo:02}{d:02}{h:02}{m:02}")
 }
 
 // ── Body structs (public, re-exported from mod.rs) ────────────────────────────
@@ -547,7 +543,8 @@ impl<S, R> UtiltsBuilder<S, R> {
         self
     }
 
-    /// Set the document date (`YYYYMMDD`) for DTM+137 (emitted in format 303, midnight UTC).
+    /// Set the document date for DTM+137 — the UTC instant `CCYYMMDDHHMM` (format
+    /// 303); a bare `CCYYMMDD` is refused with [`Error::DtmNotAnInstant`].
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -572,7 +569,7 @@ impl<S, R> UtiltsBuilder<S, R> {
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = match self.inner.document_date.as_deref() {
             Some(d) if d.starts_with("303:") => d["303:".len()..].to_owned(),
-            Some(d) => midnight_303(d),
+            Some(d) => d.to_owned(),
             None => now_303(),
         };
 
@@ -593,7 +590,11 @@ impl<S, R> UtiltsBuilder<S, R> {
             ["UTILTS", "D", "18A", "UN", self.inner.release.as_str()]
         );
         emit_seg!(w, "BGM", &self.inner.document_code, doc_id);
-        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        emit_comp!(
+            w,
+            "DTM",
+            ["137", &super::ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
+        );
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -620,7 +621,11 @@ impl<S, R> UtiltsBuilder<S, R> {
                 emit_seg!(w, "LOC", "Z09", code);
             }
             if let Some(vf) = &vorgang.valid_from {
-                emit_comp!(w, "DTM", ["157", &super::ccyymmddhhmm_utc(vf), "303"]);
+                emit_comp!(
+                    w,
+                    "DTM",
+                    ["157", &super::ccyymmddhhmm_utc("157", vf)?, "303"]
+                );
             }
             if let (Some(code), Some(pid)) =
                 (&vorgang.formula_status_code, &vorgang.formula_status_period)
@@ -640,10 +645,18 @@ impl<S, R> UtiltsBuilder<S, R> {
                 emit_comp!(
                     w,
                     "DTM",
-                    ["Z25", &super::ccyymmddhhmm_utc(&period.usage_from), "303"]
+                    [
+                        "Z25",
+                        &super::ccyymmddhhmm_utc("Z25", &period.usage_from)?,
+                        "303"
+                    ]
                 );
                 if let Some(to) = &period.usage_to {
-                    emit_comp!(w, "DTM", ["Z26", &super::ccyymmddhhmm_utc(to), "303"]);
+                    emit_comp!(
+                        w,
+                        "DTM",
+                        ["Z26", &super::ccyymmddhhmm_utc("Z26", to)?, "303"]
+                    );
                 }
             }
             for er in &vorgang.energy_amount_refs {
@@ -691,7 +704,11 @@ impl<S, R> UtiltsBuilder<S, R> {
                         "Z70" | "Z74" => "Z45",
                         _ => "Z33",
                     };
-                    emit_comp!(w, "DTM", [dtm_q, &super::ccyymmddhhmm_utc(ct), "303"]);
+                    emit_comp!(
+                        w,
+                        "DTM",
+                        [dtm_q, &super::ccyymmddhhmm_utc(dtm_q, ct)?, "303"]
+                    );
                 }
                 if let Some(rc) = &block.register_code {
                     emit_comp!(w, "RFF", ["Z28", rc]);

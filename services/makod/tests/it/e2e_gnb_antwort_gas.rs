@@ -24,7 +24,9 @@ use mako_engine::{
 };
 use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
-const GNB_MP: &str = "9900357000004";
+// A DVGW-Codenummer: NAD DE 3055 `332`, the code a Gas MIG admits — the
+// 44013 is checked against its profile before the spawn.
+const GNB_MP: &str = "9807317000007";
 const LF_MP: &str = "4012345000023";
 const MALO: &str = "51238696012";
 
@@ -62,7 +64,9 @@ async fn gnb() -> (
         malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
-        marktd_client: None,
+        marktd_client: Some(Arc::new(
+            crate::support::stub_marktd(Some(crate::support::gas_stammdaten(MALO, GNB_MP))).await,
+        )),
     };
     (state, dispatcher)
 }
@@ -127,11 +131,7 @@ async fn eog_anmelden(state: &makod::commands_api::CommandsApiState, malo: &str)
     let outcome = makod::commands_api::dispatch_command(
         state,
         "geli.eog.anmelden",
-        &serde_json::json!({
-            "malo_id": malo,
-            "gv_mp_id": LF_MP,
-            "process_date": "2026-12-01",
-        }),
+        &crate::support::geli_eog_anmeldung(malo, LF_MP),
     )
     .await
     .expect("geli.eog.anmelden spawns");

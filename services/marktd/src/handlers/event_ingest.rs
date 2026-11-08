@@ -385,8 +385,15 @@ pub async fn derive_msb_zuordnung(
     }
 
     debug!(%melo_id, %msb_mp_id, %valid_from, "event_ingest: applying WiM MSB-Zuordnung");
-    crate::pg::PgMeloMsbRepository::assign_msb_tx(conn, tenant, melo_id, msb_mp_id, valid_from)
-        .await
+    crate::pg::PgMeloMsbRepository::assign_msb_tx(
+        conn,
+        tenant,
+        melo_id,
+        msb_mp_id,
+        valid_from,
+        crate::pg::MsbDetails::default(),
+    )
+    .await
 }
 
 const ANMELDUNG_PIDS: &[u32] = &[55_001, 55_077, 44_001];

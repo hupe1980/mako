@@ -39,7 +39,7 @@ class TestVorgangOnTheWire:
         assert vorgang.vorgangsnummer == "VORGANG-1"
         assert vorgang.location("malo") == MALO
         # Format 303 on the wire, so the raw value carries time and zone.
-        assert vorgang.date("92") == "202605010000+00"
+        assert vorgang.date("92") == "202604302200+00"
         assert vorgang.iso_date("92") == "2026-05-01"
         assert vorgang.reference("Z13") == "55001"
 

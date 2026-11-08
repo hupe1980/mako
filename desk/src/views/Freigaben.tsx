@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -11,11 +11,21 @@ import {
   TextArea,
   TextField,
 } from "react-aria-components";
+import {
+  aktion,
+  type Entscheidbar,
+  fokussieren,
+  perTaste,
+  schluessel,
+  useFehlschlag,
+  useHalten,
+} from "../app/aktionen";
 import { DIENST, nichtErreichbar } from "../app/dienste";
-import { ABLEHNEN, FREIGEBEN, NAECHSTE, UEBERNEHMEN, VORIGE } from "../app/keys";
+import { Entscheidungsstand } from "../app/Entscheidungsstand";
+import { NAECHSTE, UEBERNEHMEN, VORIGE } from "../app/keys";
 import { ROLLEN, useRolle } from "../app/rollen";
-import { type Schicksal, schicksal, type Vorschlag } from "../data/agent";
-import { Abgelehnt, type Entscheidung, entscheiden, SchonEntschieden } from "../data/freigabe";
+import type { Vorschlag } from "../data/agent";
+import { Abgelehnt, SchonEntschieden } from "../data/freigabe";
 import type { Freigabe } from "../data/gen/processd";
 import { call, ServiceUnavailable } from "../data/mcp";
 import { useVerweigert, Verweigert } from "../data/verweigert";
@@ -27,6 +37,7 @@ import { formatCount } from "../format/count";
 import { formatInstant } from "../format/date";
 import { useVorschlaege } from "../inbox/quellen";
 import { Fragen, VorschlagKarte } from "./Fragen";
+import { Gehalten } from "./Rechnungen";
 import { Verlauf } from "./Verlauf";
 
 const ROW =
@@ -59,8 +70,9 @@ interface Herkunft {
 }
 
 /**
- * The decision on one Freigabe — action, code, Bemerkung, the confirm — with
- * the assistant beside it. Freigaben and Heute both decide through it.
+ * The decision on one Freigabe — action, code, Bemerkung — with the assistant
+ * beside it. Freigaben and Heute both decide through it. Sending holds it for
+ * undo, the market message included: no dialog asks, the hold is the way back.
  */
 export function Entscheiden({
   f,
@@ -72,10 +84,10 @@ export function Entscheiden({
   /** Take the waiting proposal into the form as soon as it is there (`U` on a Heute row). */
   sofort?: boolean;
 }) {
-  const [aktion, setAktion] = useState<"freigeben" | "ablehnen" | null>(null);
+  const [gewaehlt, setAktion] = useState<"freigeben" | "ablehnen" | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [bemerkung, setBemerkung] = useState("");
-  const [bestaetigen, setBestaetigen] = useState(false);
+  const [gehalten, setGehalten] = useState(false);
   const [herkunft, setHerkunft] = useState<Herkunft | null>(null);
   // processd's policy refused this person a decision once: the reason stands
   // where the controls were, for every Freigabe, for the rest of the session.
@@ -88,53 +100,50 @@ export function Entscheiden({
   // processd states, per action, the codes pressing it needs — none where the
   // answer goes as held — by the same rule it checks the code against.
   const codes =
-    aktion === "ablehnen" ? f.codes_ablehnen : aktion === "freigeben" ? f.codes_freigeben : null;
+    gewaehlt === "ablehnen"
+      ? f.codes_ablehnen
+      : gewaehlt === "freigeben"
+        ? f.codes_freigeben
+        : null;
   const brauchtCode = Boolean(codes);
-  const vollstaendig = aktion !== null && (!brauchtCode || code !== null);
+  const ding: Entscheidbar = { art: "freigabe", f };
+  const gewaehlteAktion = gewaehlt ? aktion(ding, gewaehlt) : undefined;
+  const vollstaendig = Boolean(gewaehlteAktion?.bereit({ code, text: bemerkung }));
 
-  const senden = useMutation({
-    mutationFn: async () => {
-      if (!aktion) return;
-      const e: Entscheidung = { aktion };
-      if (brauchtCode && code && codes) {
-        e.antwort_code = code;
-        e.antwort_tree = codes.ebd;
-      }
-      if (bemerkung.trim()) e.bemerkung = bemerkung.trim();
-      await entscheiden(f.id, e);
-      if (herkunft) {
-        const unveraendert =
-          herkunft.v.aktion === aktion && (herkunft.v.antwortcode ?? null) === (code ?? null);
-        const was: Schicksal = unveraendert ? "sent" : "edited";
-        // The decision went out; the record of what became of the proposal
-        // is the assistant's quality signal and never blocks it.
-        await schicksal(herkunft.run, was).catch(() => undefined);
-      }
-    },
-    onSuccess: onDone,
-  });
+  // The request and its hold are the action registry's, the ones ⌘K uses too.
+  const halte = useHalten();
+  const fehler = useFehlschlag(schluessel(ding))?.error ?? null;
+  function senden() {
+    if (!gewaehlteAktion || !vollstaendig) return;
+    setGehalten(true);
+    halte(
+      ding,
+      gewaehlteAktion,
+      { code, text: bemerkung },
+      {
+        herkunft,
+        gesendet: onDone,
+        zurueck: () => setGehalten(false),
+        fehlgeschlagen: () => setGehalten(false),
+      },
+    );
+  }
 
-  // A and R choose the action from the keyboard; the code and the confirm
+  // A and R choose the action from the keyboard; the code and the send
   // follow with the arrow keys and ↵, as everywhere else.
   useEffect(() => {
-    if (verweigert) return;
+    if (verweigert || gehalten) return;
     const onKey = (e: KeyboardEvent) => {
       if (UEBERNEHMEN.match?.(e) && wartet) {
         e.preventDefault();
         uebernehmen(wartet.v, wartet.run);
         return;
       }
-      const a =
-        FREIGEBEN.match?.(e) && f.kann_freigeben
-          ? "freigeben"
-          : ABLEHNEN.match?.(e) && f.kann_ablehnen
-            ? "ablehnen"
-            : null;
-      if (!a) return;
+      const a = perTaste(ding, e)?.id;
+      if (a !== "freigeben" && a !== "ablehnen") return;
       e.preventDefault();
       setAktion(a);
       setCode(null);
-      setBestaetigen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -147,7 +156,6 @@ export function Entscheiden({
     setHerkunft({ run, v });
     setAktion(v.aktion);
     setCode(v.antwortcode);
-    setBestaetigen(false);
   }
 
   // `U` on the Heute row opened this form: take the proposal once it is read.
@@ -194,130 +202,100 @@ export function Entscheiden({
             <Icon name="sparkle" size={12} /> Vom Assistenten vorgeschlagen — prüfen, dann senden.
           </p>
         )}
-        <RadioGroup
-          aria-label="Entscheidung"
-          value={aktion}
-          onChange={(v) => {
-            setAktion(v as "freigeben" | "ablehnen");
-            setCode(null);
-            setBestaetigen(false);
-          }}
-          orientation="horizontal"
-          className="flex gap-2"
-        >
-          {(["freigeben", "ablehnen"] as const).map((a) => (
-            <Radio
-              key={a}
-              value={a}
-              isDisabled={a === "freigeben" ? !f.kann_freigeben : !f.kann_ablehnen}
-              className="focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body font-medium text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent"
-            >
-              {a === "freigeben" ? "Freigeben" : "Ablehnen"}
-            </Radio>
-          ))}
-        </RadioGroup>
-
-        {aktion === "freigeben" && f.art === "gehalten" && f.antwort && (
-          <p className="m-0 text-callout text-text">
-            Gesendet wird die festgehaltene Antwort:{" "}
-            <span className="font-mono">{f.antwort.code}</span>
-            {f.antwort.bedeutung && <> — {f.antwort.bedeutung}</>}
-          </p>
-        )}
-
-        {brauchtCode && codes && (
-          <RadioGroup
-            value={code}
-            onChange={(c) => {
-              setCode(c);
-              setBestaetigen(false);
-            }}
-            className="flex flex-col gap-1.5"
-          >
-            <Label className="text-caption text-text-2">
-              Antwortcode aus <span className="font-mono">{codes.ebd}</span>
-            </Label>
-            {codes.codes.map((c) => (
-              <Radio
-                key={c.code}
-                value={c.code}
-                className="focus-ring flex cursor-default items-start gap-3 rounded-[10px] border border-separator px-3 py-2 data-[hovered]:bg-fill data-[selected]:border-accent"
-              >
-                <span className="font-mono text-body font-semibold text-text">{c.code}</span>
-                <span className="text-body text-text-2">{c.bedeutung}</span>
-              </Radio>
-            ))}
-          </RadioGroup>
-        )}
-
-        {aktion && (
-          <TextField value={bemerkung} onChange={setBemerkung} className="flex flex-col gap-1">
-            <Label className="text-caption text-text-2">Bemerkung (optional)</Label>
-            <TextArea
-              rows={2}
-              maxLength={512}
-              className="focus-ring rounded-control border border-separator bg-surface px-3 py-2 text-body text-text outline-none"
-            />
-          </TextField>
-        )}
-
-        {senden.isError &&
-          !(senden.error instanceof Verweigert) &&
-          (senden.error instanceof SchonEntschieden ? (
-            <Notice tone="info" title="Schon entschieden">
-              {senden.error.decidedBy ?? "Jemand"} hat diese Freigabe
-              {senden.error.decidedAt
-                ? ` am ${formatInstant(senden.error.decidedAt as Instant)} Uhr`
-                : ""}{" "}
-              {senden.error.status === "Rejected" ? "abgelehnt" : "freigegeben"}. Ihre Entscheidung
-              wurde nicht gesendet.
-            </Notice>
-          ) : (
-            <Notice
-              tone="refusal"
-              title="Die Prozessüberwachung hat die Entscheidung nicht angenommen"
-            >
-              {senden.error instanceof Abgelehnt
-                ? senden.error.message
-                : nichtErreichbar("processd")}
-            </Notice>
-          ))}
-
-        {!bestaetigen ? (
-          <div className="flex justify-end">
-            <AriaButton
-              isDisabled={!vollstaendig}
-              onPress={() => setBestaetigen(true)}
-              className="focus-ring h-9 rounded-control bg-accent px-4 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
-            >
-              {aktion === "ablehnen" ? "Ablehnen …" : "Freigeben …"}
-            </AriaButton>
-          </div>
+        {gehalten && gewaehlteAktion ? (
+          <Gehalten text={gewaehlteAktion.gehalten} />
         ) : (
-          <div
-            role="alertdialog"
-            aria-label="Senden bestätigen"
-            className="flex flex-wrap items-center gap-3 rounded-[10px] bg-fill px-3 py-2"
-          >
-            <p className="m-0 flex-1 text-body text-text">
-              Das sendet die Antwort als Marktnachricht an den Marktpartner — sie lässt sich nicht
-              zurückholen.
-            </p>
-            <AriaButton
-              onPress={() => setBestaetigen(false)}
-              className="focus-ring h-8 rounded-control px-3 text-body text-text-2 data-[hovered]:bg-fill-strong"
+          <>
+            <RadioGroup
+              aria-label="Entscheidung"
+              value={gewaehlt}
+              onChange={(v) => {
+                setAktion(v as "freigeben" | "ablehnen");
+                setCode(null);
+              }}
+              orientation="horizontal"
+              className="flex gap-2"
             >
-              Abbrechen
-            </AriaButton>
-            <AriaButton
-              autoFocus
-              isDisabled={senden.isPending}
-              onPress={() => senden.mutate()}
-              className="focus-ring h-8 rounded-control bg-accent px-3 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
-            >
-              {senden.isPending ? "Sendet …" : "Jetzt senden"}
-            </AriaButton>
-          </div>
+              {(["freigeben", "ablehnen"] as const).map((a) => (
+                <Radio
+                  key={a}
+                  value={a}
+                  isDisabled={a === "freigeben" ? !f.kann_freigeben : !f.kann_ablehnen}
+                  className="focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body font-medium text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent"
+                >
+                  {a === "freigeben" ? "Freigeben" : "Ablehnen"}
+                </Radio>
+              ))}
+            </RadioGroup>
+
+            {gewaehlt === "freigeben" && f.art === "gehalten" && f.antwort && (
+              <p className="m-0 text-callout text-text">
+                Gesendet wird die festgehaltene Antwort:{" "}
+                <span className="font-mono">{f.antwort.code}</span>
+                {f.antwort.bedeutung && <> — {f.antwort.bedeutung}</>}
+              </p>
+            )}
+
+            {brauchtCode && codes && (
+              <RadioGroup value={code} onChange={setCode} className="flex flex-col gap-1.5">
+                <Label className="text-caption text-text-2">
+                  Antwortcode aus <span className="font-mono">{codes.ebd}</span>
+                </Label>
+                {codes.codes.map((c) => (
+                  <Radio
+                    key={c.code}
+                    value={c.code}
+                    className="focus-ring flex cursor-default items-start gap-3 rounded-[10px] border border-separator px-3 py-2 data-[hovered]:bg-fill data-[selected]:border-accent"
+                  >
+                    <span className="font-mono text-body font-semibold text-text">{c.code}</span>
+                    <span className="text-body text-text-2">{c.bedeutung}</span>
+                  </Radio>
+                ))}
+              </RadioGroup>
+            )}
+
+            {gewaehlt && (
+              <TextField value={bemerkung} onChange={setBemerkung} className="flex flex-col gap-1">
+                <Label className="text-caption text-text-2">Bemerkung (optional)</Label>
+                <TextArea
+                  rows={2}
+                  maxLength={512}
+                  className="focus-ring rounded-control border border-separator bg-surface px-3 py-2 text-body text-text outline-none"
+                />
+              </TextField>
+            )}
+
+            {fehler &&
+              !(fehler instanceof Verweigert) &&
+              (fehler instanceof SchonEntschieden ? (
+                <Notice tone="info" title="Schon entschieden">
+                  {fehler.decidedBy ?? "Jemand"} hat diese Freigabe
+                  {fehler.decidedAt ? ` am ${formatInstant(fehler.decidedAt as Instant)} Uhr` : ""}{" "}
+                  {fehler.status === "Rejected" ? "abgelehnt" : "freigegeben"}. Ihre Entscheidung
+                  wurde nicht gesendet.
+                </Notice>
+              ) : (
+                <Notice
+                  tone="refusal"
+                  title="Die Prozessüberwachung hat die Entscheidung nicht angenommen"
+                >
+                  {fehler instanceof Abgelehnt ? fehler.message : nichtErreichbar("processd")}
+                </Notice>
+              ))}
+
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              {gewaehlteAktion && (
+                <p className="m-0 flex-1 text-caption text-text-2">{gewaehlteAktion.was}</p>
+              )}
+              <AriaButton
+                isDisabled={!vollstaendig}
+                onPress={senden}
+                className="focus-ring h-9 rounded-control bg-accent px-4 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
+              >
+                {gewaehlt === "ablehnen" ? "Ablehnen" : "Freigeben"}
+              </AriaButton>
+            </div>
+          </>
         )}
       </Panel>
       <Fragen anker={{ freigabe: f.id }} onVorschlag={uebernehmen} />
@@ -350,7 +328,10 @@ function Detail({ f }: { f: Freigabe }) {
           </div>
           <span className="flex flex-col items-end gap-1 text-caption text-text-2">
             entscheiden bis
-            <FristUhr due={f.expires_at} />
+            <span className="flex items-center gap-2">
+              <Entscheidungsstand ding={{ art: "freigabe", f }} fehlschlag={false} />
+              <FristUhr due={f.expires_at} />
+            </span>
           </span>
         </div>
         {f.malo_id && (
@@ -381,8 +362,8 @@ function Detail({ f }: { f: Freigabe }) {
 /**
  * Freigaben: the decisions processd held for a person — the earliest Frist
  * first, as processd orders them. Each opens with its facts, the codes its
- * Entscheidungsbaum allows, the process's Verlauf and the assistant; nothing
- * is sent until the person confirms.
+ * Entscheidungsbaum allows, the process's Verlauf and the assistant; a
+ * decision is held for undo before it is sent, the market message included.
  */
 export function FreigabenView() {
   const router = useRouter();
@@ -391,6 +372,22 @@ export function FreigabenView() {
   const rows = list.data?.freigaben ?? [];
   const selected = rows.find((f) => f.id === id) ?? rows[0];
   const vorschlaege = useVorschlaege({ freigabe: rows.slice(0, 100).map((f) => f.id) }).freigabe;
+
+  // The selected Freigabe is what ⌘K opens on.
+  useEffect(() => {
+    fokussieren(
+      selected
+        ? {
+            titel: selected.malo_id ?? `Prozess ${selected.process_id}`,
+            kennung: true,
+            grund: selected.grund,
+            frist: selected.expires_at,
+            ding: { art: "freigabe", f: selected },
+          }
+        : null,
+    );
+  });
+  useEffect(() => () => fokussieren(null), []);
 
   // J and K walk the queue in processd's order.
   useEffect(() => {

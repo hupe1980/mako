@@ -131,12 +131,17 @@ impl<S, R> AperakBuilder<S, R> {
         self.inner.sender_id = Some(ctx.original_receiver.to_owned());
         self.inner.receiver_id = Some(ctx.original_sender.to_owned());
         self.inner.acw_ref = Some(ctx.message_ref.to_owned());
-        if let Some(date) = ctx.transmission_date {
+        // `DTM+137` is a `303` instant: the original's UTC transmission minute,
+        // never its bare date padded to UTC midnight.
+        if let Some(at) = ctx.transmission_datetime {
+            let at = at.to_offset(time::UtcOffset::UTC);
             self.inner.document_date = Some(format!(
-                "{:04}{:02}{:02}",
-                date.year(),
-                date.month() as u8,
-                date.day()
+                "{:04}{:02}{:02}{:02}{:02}",
+                at.year(),
+                at.month() as u8,
+                at.day(),
+                at.hour(),
+                at.minute()
             ));
         }
         self.transition()
@@ -202,8 +207,9 @@ impl<S, R> AperakBuilder<S, R> {
         self
     }
 
-    /// The Dokumentendatum of the message answered (`CCYYMMDD` or
-    /// `CCYYMMDDHHMM`, UTC) — `SG2 DTM+171`. Defaults to this message's date.
+    /// The Dokumentendatum of the message answered (`CCYYMMDDHHMM`, UTC) —
+    /// `SG2 DTM+171`, format `303`; a bare `CCYYMMDD` is refused. Defaults to
+    /// this message's date.
     pub fn reference_date(mut self, ccyymmddhhmm: impl Into<String>) -> Self {
         self.inner.reference_date = Some(ccyymmddhhmm.into());
         self
@@ -253,7 +259,9 @@ impl<S, R> AperakBuilder<S, R> {
         self
     }
 
-    /// Set the document date for DTM+137 (`YYYYMMDD`).
+    /// Set the document date for DTM+137 — the UTC instant `CCYYMMDDHHMM`
+    /// (format 303, optionally `+00`); a bare `CCYYMMDD` is refused with
+    /// [`Error::DtmNotAnInstant`](crate::Error::DtmNotAnInstant).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -313,7 +321,11 @@ impl<S, R> AperakBuilder<S, R> {
         // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
         // `+00`; `[494]` requires the stamp to be the creation moment or
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
-        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        emit_comp!(
+            w,
+            "DTM",
+            ["137", &super::ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
+        );
         // `SG2` — the message answered, by reference and date, before the
         // parties (APERAK MIG Nr 00004/00005).
         if let Some(r) = &self.inner.acw_ref {
@@ -322,7 +334,11 @@ impl<S, R> AperakBuilder<S, R> {
             emit_comp!(
                 w,
                 "DTM",
-                ["171", &super::ccyymmddhhmm_utc(reference_date), "303"]
+                [
+                    "171",
+                    &super::ccyymmddhhmm_utc("171", reference_date)?,
+                    "303"
+                ]
             );
             // `RFF+AGO` has two places, and which one it takes is decided by
             // `SG4`: Nr 00006 in `SG2` for an Anerkennungsmeldung, Nr 00015
