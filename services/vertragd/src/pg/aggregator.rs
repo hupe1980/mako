@@ -21,7 +21,6 @@ pub struct AggregatorvertragRow {
     pub capacity_price_eur_per_kwh: rust_decimal::Decimal,
     pub vertragsbeginn: Date,
     pub vertragsende: Option<Date>,
-    pub mwst_rate_override: Option<rust_decimal::Decimal>,
     pub kunden_id: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
@@ -39,14 +38,12 @@ pub struct UpsertAggregatorvertragInput {
     #[serde(default)]
     pub vertragsende: Option<Date>,
     #[serde(default)]
-    pub mwst_rate_override: Option<rust_decimal::Decimal>,
-    #[serde(default)]
     pub kunden_id: Option<Uuid>,
 }
 
 const AGG_COLS: &str = "id, tenant, sr_id, vpp_id, malo_id, aggregator_mp_id,
      capacity_price_eur_per_kwh, vertragsbeginn, vertragsende,
-     mwst_rate_override, kunden_id, updated_at";
+     kunden_id, updated_at";
 
 /// Upsert an Aggregatorvertrag, keyed on `(tenant, sr_id, vertragsbeginn)`.
 ///
@@ -67,15 +64,14 @@ pub async fn upsert_aggregatorvertrag(
         r"INSERT INTO aggregatorvertraege
               (tenant, sr_id, vpp_id, malo_id, aggregator_mp_id,
                capacity_price_eur_per_kwh, vertragsbeginn, vertragsende,
-               mwst_rate_override, kunden_id)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               kunden_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
           ON CONFLICT (tenant, sr_id, vertragsbeginn) DO UPDATE
           SET vpp_id                     = EXCLUDED.vpp_id,
               malo_id                    = EXCLUDED.malo_id,
               aggregator_mp_id           = EXCLUDED.aggregator_mp_id,
               capacity_price_eur_per_kwh = EXCLUDED.capacity_price_eur_per_kwh,
               vertragsende               = EXCLUDED.vertragsende,
-              mwst_rate_override         = EXCLUDED.mwst_rate_override,
               kunden_id                  = EXCLUDED.kunden_id,
               updated_at                 = now()
           RETURNING id",
@@ -88,7 +84,6 @@ pub async fn upsert_aggregatorvertrag(
     .bind(input.capacity_price_eur_per_kwh)
     .bind(input.vertragsbeginn)
     .bind(input.vertragsende)
-    .bind(input.mwst_rate_override)
     .bind(input.kunden_id)
     .fetch_one(pool)
     .await?;
@@ -145,4 +140,27 @@ pub async fn list_aggregatorvertraege(
         .fetch_all(pool)
         .await?,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UpsertAggregatorvertragInput;
+
+    /// The Aggregatorvertrag carries no VAT rate: `billingd` taxes a § 41e
+    /// settlement at the period's statutory rate, so a contract that named one
+    /// would be a setting nothing reads — and a body naming one is refused.
+    #[test]
+    fn a_contract_naming_a_vat_rate_is_refused() {
+        let body = serde_json::json!({
+            "vpp_id": "VPP-PORTFOLIO-001",
+            "malo_id": "51238696012",
+            "aggregator_mp_id": "9910000000002",
+            "capacity_price_eur_per_kwh": "0.12",
+            "vertragsbeginn": "2026-01-01",
+            "mwst_rate_override": "0"
+        });
+        let err = serde_json::from_value::<UpsertAggregatorvertragInput>(body)
+            .expect_err("mwst_rate_override is not a field of the contract");
+        assert!(err.to_string().contains("mwst_rate_override"), "{err}");
+    }
 }

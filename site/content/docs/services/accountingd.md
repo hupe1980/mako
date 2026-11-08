@@ -217,6 +217,8 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `GET` | `/api/v1/eeg/payouts` · `/{payout_id}` | EEG payout orders (`?status=`); one with its pain.001 |
 | `POST` | `/api/v1/eeg/payouts/run` | Build pain.001 for every unbatched `EEG_GUTSCHRIFT` |
 | `PUT` | `/api/v1/eeg/payouts/{payout_id}/status` | Decoded pain.002 status (`ACCP`/`RJCT`/`CANC`) |
+| `GET` | `/api/v1/eeg/enfg-zahlungen` | EEG/KWKG payments made in a billing month (`?year=&month=`, both required): `ACSC` payouts and Aufrechnungen |
+| `POST` | `/api/v1/eeg/aufrechnungen` | Record an Aufrechnung against an EEG claim; `409` on a repeat |
 | `POST` | `/api/v1/jahresabschluss/{malo_id}` | Annual settlement (`?year=`, `?dry_run=true`) |
 | `GET` | `/accountingd/metrics` | Ledger and dunning gauges |
 | `GET` | `/health/live` · `/health/ready` | Liveness; readiness |
@@ -866,6 +868,35 @@ curl -X PUT "http://accountingd:9380/api/v1/eeg/payouts/a1b2c3d4-.../status" \
 With `auto_payout = false` (default) payouts run through
 `POST /api/v1/eeg/payouts/run`.
 
+### Payments made, for the EnFG Belastungsausgleich
+
+The ÜNB reimburses the Netzbetreiber „die … geleisteten Zahlungen" (§ 13 Abs. 1
+Satz 1 EnFG). `GET /api/v1/eeg/enfg-zahlungen?year=&month=` serves exactly
+those for one billing month, and einsd builds its EnFG ledger from them:
+
+- a payout order whose `pain002_status` is `ACSC` — `ACCP`, `ACSP`, `ACWC`,
+  `PART`, `PDNG`, `RJCT`, `CANC` and no status are not a payment made;
+- every recorded Aufrechnung — „Als geleistete Zahlungen im Sinn des Satzes 1
+  gelten auch Forderungen eines Anlagenbetreibers auf Zahlung, die durch
+  Aufrechnung erloschen sind" (§ 13 Abs. 1 Satz 2 EnFG).
+
+`POST /api/v1/eeg/aufrechnungen` records one in `eeg_aufrechnungen`:
+
+```json
+{ "tr_id": "TR-1", "malo_id": "51238696012", "billing_year": 2026, "billing_month": 3,
+  "amount_ct": 3000, "gegenforderung": "EEG_52_PFLICHTZAHLUNG", "erklaert_am": "2026-04-10" }
+```
+
+`gegenforderung` is the claim it was set off against, one per set-off the EEG
+2023 admits: `EEG_52_PFLICHTZAHLUNG` (§ 52 Abs. 6 Satz 2), `ENFG_UMLAGE`
+(§ 27 Abs. 1 Satz 2), `UNBESTRITTEN` (§ 27 Abs. 1 Satz 1, „soweit die Forderung
+unbestritten oder rechtskräftig festgestellt ist"). A positive `amount_ct`, a
+month 1–12 and a declaration date no later than today are required; the same
+plant, month, Gegenforderung and day twice is `409`.
+
+A payout order created by `POST /api/v1/eeg/payouts/run` carries no `tr_id`, so
+einsd refuses to attribute it; the per-CloudEvent auto-payout carries one.
+
 ---
 
 ## GDPR Art. 17
@@ -923,6 +954,7 @@ Emitted through the outbox to `erp_webhook_url`:
 | `sepa_reversals` | One per pain.007; `UNIQUE (collection_entry_id)` |
 | `sepa_recalls` | One per camt.055, with its camt.029 outcome |
 | `eeg_payout_orders` | pain.001 payouts |
+| `eeg_aufrechnungen` | EEG claims extinguished by Aufrechnung, with the Gegenforderung; `UNIQUE (tenant, tr_id, billing_year, billing_month, gegenforderung, erklaert_am)` |
 | `interest_charges` | § 288 BGB charges with `rate_segments`; `UNIQUE (tenant, account_id, period_from, period_to)` |
 | `ecb_base_rates` | Bundesbank Basiszinssatz series |
 | `payment_plans` · `payment_plan_installments` | Zahlungsvereinbarungen |
@@ -952,6 +984,8 @@ Every handler extracts `Claims` (a JWT) and checks one Cedar action from
 | `manage-sepa` | Mandates, collection run, pain.002, pain.007 | `LF`, `MSB` |
 | `import-payments` | camt and flat imports | `LF`, `MSB` |
 | `run-payout` | EEG payout run and status | `LF`, `MSB` |
+| `read-enfg` | EEG/KWKG payments made per month (`/eeg/enfg-zahlungen`) | **`NB`** |
+| `record-aufrechnung` | Record an Aufrechnung (`/eeg/aufrechnungen`) | **`NB`** |
 | `manage-dunning` | Escalation, resolution, Abwendung offer, Mahnsperren, Einwände | **`LF`** |
 | `close-period` | Jahresabschluss, seal | **`LF`** |
 | `erase-pii` | Anonymization | **`LF`** |

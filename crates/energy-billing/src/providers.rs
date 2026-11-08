@@ -261,15 +261,19 @@ impl BillingProvider for ElectricityProvider {
         }
 
         // Electricity was 16 % in H2/2020 (§28 Abs. 1 UStG a.F.), 19 % otherwise.
-        // A period straddling that boundary has no single correct rate — split at
-        // the Stichtag and merge, the same discipline the gas/heat providers apply.
+        // A period straddling that boundary has no single correct rate, so it is
+        // refused with the Stichtage — split there and merge, the same
+        // discipline the gas/heat providers apply.
         if crate::rates::mwst_rate_for_period(ctx.period_from(), ctx.period_to()).is_none() {
             w.push(BillingWarning {
                 code: "MWST_STICHTAG_IM_ZEITRAUM",
-                severity: WarningSeverity::Warning,
-                message: "Abrechnungszeitraum überschreitet eine USt-Satzgrenze für Strom \
-                          (§28 UStG) — am Stichtag splitten und Teilrechnungen zusammenführen"
-                    .to_owned(),
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "Abrechnungszeitraum überschreitet eine USt-Satzgrenze für Strom \
+                     (§28 UStG) — kein einzelner Satz ist korrekt; am Stichtag splitten \
+                     und Teilrechnungen zusammenführen. Stichtage: {}",
+                    stichtage_im_zeitraum("STROM", ctx)
+                ),
             });
         }
         w
@@ -1271,17 +1275,19 @@ impl BillingProvider for GasProvider {
         }
         // Gas carried 7 % USt from 01.10.2022 to 31.03.2024 (§28 Abs. 5
         // UStG) and 16 % in H2/2020. A period straddling a window boundary
-        // has no single correct rate — split at the Stichtag and merge.
+        // has no single correct rate, so it is refused with the Stichtage.
         if crate::rates::mwst_rate_for_gas_waerme_period(ctx.period_from(), ctx.period_to())
             .is_none()
         {
             w.push(BillingWarning {
                 code: "MWST_STICHTAG_IM_ZEITRAUM",
-                severity: WarningSeverity::Warning,
-                message: "Abrechnungszeitraum überschreitet eine USt-Satzgrenze für Gas \
-                          (§28 Abs. 5 UStG) — am Stichtag splitten und Teilrechnungen \
-                          zusammenführen"
-                    .to_owned(),
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "Abrechnungszeitraum überschreitet eine USt-Satzgrenze für Gas \
+                     (§28 Abs. 5 UStG) — kein einzelner Satz ist korrekt; am Stichtag \
+                     splitten und Teilrechnungen zusammenführen. Stichtage: {}",
+                    stichtage_im_zeitraum("GAS", ctx)
+                ),
             });
         }
         // Volume → energy is the conversion that decides the whole gas bill, so
@@ -1320,18 +1326,22 @@ impl BillingProvider for GasProvider {
 
         // The BEHG CO₂ price (§10 BEHG) steps at each calendar-year boundary. A
         // period spanning a year-end where the rate changes has no single correct
-        // levy — split at 31.12./01.01. and bill each portion at its year's rate.
+        // levy, so it is refused — split at 31.12./01.01. and bill each portion
+        // at its year's rate.
         if ctx.period_from().year() != ctx.period_to().year()
             && crate::rates::behg_ct_per_kwh_for_year(ctx.period_from().year())
                 != crate::rates::behg_ct_per_kwh_for_year(ctx.period_to().year())
         {
             w.push(BillingWarning {
                 code: "BEHG_JAHRESGRENZE_IM_ZEITRAUM",
-                severity: WarningSeverity::Warning,
-                message: "Abrechnungszeitraum überschreitet eine BEHG-Jahresgrenze \
-                          (§10 BEHG, CO₂-Preis steigt zum Jahreswechsel) — am 31.12. \
-                          splitten und je Teilzeitraum den Jahressatz anwenden"
-                    .to_owned(),
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "Abrechnungszeitraum überschreitet eine BEHG-Jahresgrenze \
+                     (§10 BEHG, CO₂-Preis ändert sich zum Jahreswechsel) — kein \
+                     einzelner Satz ist korrekt; am 31.12. splitten und je \
+                     Teilzeitraum den Jahressatz anwenden. Stichtage: {}",
+                    stichtage_im_zeitraum("GAS", ctx)
+                ),
             });
         }
         w
@@ -1599,15 +1609,22 @@ impl BillingProvider for GasProvider {
                     .with_legal_basis(rates.behg_rechtsgrundlage.clone())
                     .with_tag("gas"),
                 );
-                // The levy line is § 3 Abs. 1 Nr. 2. The statute asks for five
-                // more figures beside it; Nr. 6 is the Vermieter's building
-                // fact and belongs to their Abrechnung, not to this supply.
+                // The levy line bills the supplier's own CO₂ cost. The § 3
+                // statement beside it states the § 4 Abs. 1 price of the
+                // delivery year and the § 3 Abs. 3 Preisbestandteil it gives;
+                // Nr. 6 is the Vermieter's building fact and belongs to their
+                // Abrechnung, not to this supply.
                 if let Some(faktor) =
                     crate::rates::erdgas_emissionsfaktor_kg_per_kwh(ctx.period_from().year())
                 {
                     positions.extend(crate::position::co2kostaufg_disclosures(
-                        kwh_hs, "kWh_Hs", faktor, "gas",
-                    ));
+                        kwh_hs,
+                        "kWh_Hs",
+                        faktor,
+                        "gas",
+                        ctx.period_from(),
+                        ctx.period_to(),
+                    )?);
                 }
             }
         }
@@ -1808,17 +1825,19 @@ impl BillingProvider for HeatProvider {
         ));
 
         // Fernwärme carried 7 % USt from 01.10.2022 to 31.03.2024 (§28
-        // Abs. 6 UStG) and 16 % in H2/2020 — same split discipline as gas.
+        // Abs. 6 UStG) and 16 % in H2/2020 — refused at the Stichtag like gas.
         if crate::rates::mwst_rate_for_gas_waerme_period(ctx.period_from(), ctx.period_to())
             .is_none()
         {
             w.push(BillingWarning {
                 code: "MWST_STICHTAG_IM_ZEITRAUM",
-                severity: WarningSeverity::Warning,
-                message: "Abrechnungszeitraum überschreitet eine USt-Satzgrenze für \
-                          Fernwärme (§28 Abs. 6 UStG) — am Stichtag splitten und \
-                          Teilrechnungen zusammenführen"
-                    .to_owned(),
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "Abrechnungszeitraum überschreitet eine USt-Satzgrenze für \
+                     Fernwärme (§28 Abs. 6 UStG) — kein einzelner Satz ist korrekt; am \
+                     Stichtag splitten und Teilrechnungen zusammenführen. Stichtage: {}",
+                    stichtage_im_zeitraum("WAERME", ctx)
+                ),
             });
         }
         w
@@ -1921,7 +1940,8 @@ impl BillingProvider for HeatProvider {
                 .with_tag("waerme"),
             );
         }
-        // § 3 Abs. 1 CO2KostAufG — the five figures that accompany the cost.
+        // § 3 CO2KostAufG — the statement that accompanies the cost, with the
+        // § 4 Abs. 1 price of the delivery year.
         //
         // The product states the Emissionsfaktor in g/kWh, which is how heat
         // networks publish it; Nr. 3 asks for kg CO₂/kWh, so it is converted
@@ -1935,7 +1955,9 @@ impl BillingProvider for HeatProvider {
                 "kWh_th",
                 g_per_kwh / dec!(1000),
                 "waerme",
-            ));
+                ctx.period_from(),
+                ctx.period_to(),
+            )?);
         }
         // § 14 WPG — the renewable share of the delivered heat.
         if let Some(pct) = product.waerme_erneuerbar_anteil_pct {
@@ -4075,6 +4097,20 @@ fn indexwert_warning(
             idx.index_name
         ),
     })
+}
+
+/// The Stichtage inside the billing period, as the refusal names them.
+///
+/// A period-rate helper that answers `None` says no single rate is correct, so
+/// the refusal names where to split — the same dates
+/// [`steuer_stichtage_im_zeitraum`](crate::rates::steuer_stichtage_im_zeitraum)
+/// gives a caller that splits the period itself.
+fn stichtage_im_zeitraum(category: &str, ctx: &BillingContext) -> String {
+    crate::rates::steuer_stichtage_im_zeitraum(category, ctx.period_from(), ctx.period_to())
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A 0-EUR informational position — a statement the invoice must carry that is

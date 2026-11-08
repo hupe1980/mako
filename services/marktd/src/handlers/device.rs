@@ -1438,9 +1438,11 @@ fn wochentage_key_to_wiederholungstyp(key: &str) -> rubo4e::current::Wiederholun
 /// Resolve the tariff zone (HT/NT/EINZEL) for a Zähler at a local datetime
 /// (`?datetime=ISO`, default: now in Europe/Berlin).
 ///
-/// A single-rate meter answers `EINZEL` from its own window. An instant no
-/// Zählzeit window covers is refused with `422`: answering `EINZEL` there
-/// would price a gap in the master data at a rate nobody configured.
+/// The windows are those of the registers valid on the instant's day, in the
+/// season of that day. A single-rate meter answers `EINZEL` from its own
+/// window. An instant no Zählzeit window covers is refused with `422`:
+/// answering `EINZEL` there would price a gap in the master data at a rate
+/// nobody configured. So is an instant two windows of different zones hold.
 pub async fn get_tariff_zone(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1468,7 +1470,7 @@ pub async fn get_tariff_zone(
     let zone = repo
         .resolve_tariff_zone(&zaehler_id, &tenant, local_dt)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?
+        .map_err(super::mdm_error)?
         .ok_or_else(|| {
             ApiError::unprocessable(format!(
                 "Zähler {zaehler_id}: no Zählzeit window covers {local_dt} — \

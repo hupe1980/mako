@@ -567,7 +567,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // ── GeLi Gas Ersatz-/Grundversorgung (GNB registers MaLo into E/G) ────────
     // GNB-initiator role: sends UTILMD G 44013 (EoG Anmeldung) to the E/G LF.
     // The Gas twin of `gpke.eog.anmelden`. Spawns GeliGasSupplierChangeWorkflow
-    // and tracks the 10-Werktage response window (BK7-24-01-009).
+    // and tracks the E/G's answer window, Ablauf des 2. Werktags (GeLi Gas 3.0 Kap. 3.3).
     CommandDescriptor {
         name: "geli.eog.anmelden",
         permitted_roles: &[Marktrolle::Gnb],

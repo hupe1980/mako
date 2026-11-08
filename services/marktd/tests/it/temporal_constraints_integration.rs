@@ -230,9 +230,10 @@ async fn a_tariff_window_must_be_a_real_interval() {
 
     // A start after the end crosses midnight: NT 22:00–06:00 is one row.
     sqlx::query(
-        "INSERT INTO zaehler_saisons (register_id, saison, wochentage, zeit_von, zeit_bis)
+        "INSERT INTO zaehler_saisons
+             (register_id, saison, wochentage, zeit_von, zeit_bis, saison_von, saison_bis)
          VALUES ('00000000-0000-0000-0000-000000000001', 'WINTER',
-                 ARRAY[1,2,3,4,5]::smallint[], '22:00', '06:00')",
+                 ARRAY[1,2,3,4,5]::smallint[], '22:00', '06:00', '10-01', '04-01')",
     )
     .execute(&pool)
     .await
@@ -241,9 +242,10 @@ async fn a_tariff_window_must_be_a_real_interval() {
     // A zero-length window classifies no reading at all, so the energy would
     // go missing rather than be mis-priced — a silent shortfall on the invoice.
     let err = sqlx::query(
-        "INSERT INTO zaehler_saisons (register_id, saison, wochentage, zeit_von, zeit_bis)
+        "INSERT INTO zaehler_saisons
+             (register_id, saison, wochentage, zeit_von, zeit_bis, saison_von, saison_bis)
          VALUES ('00000000-0000-0000-0000-000000000001', 'SOMMER',
-                 ARRAY[1,2,3,4,5]::smallint[], '07:00', '07:00')",
+                 ARRAY[1,2,3,4,5]::smallint[], '07:00', '07:00', '04-01', '10-01')",
     )
     .execute(&pool)
     .await
@@ -255,9 +257,10 @@ async fn a_tariff_window_must_be_a_real_interval() {
 
     // And a weekday outside ISO 1..=7 is not a weekday.
     let err = sqlx::query(
-        "INSERT INTO zaehler_saisons (register_id, saison, wochentage, zeit_von, zeit_bis)
+        "INSERT INTO zaehler_saisons
+             (register_id, saison, wochentage, zeit_von, zeit_bis, saison_von, saison_bis)
          VALUES ('00000000-0000-0000-0000-000000000001', 'WINTER',
-                 ARRAY[0,8]::smallint[], '07:00', '22:00')",
+                 ARRAY[0,8]::smallint[], '07:00', '22:00', '10-01', '04-01')",
     )
     .execute(&pool)
     .await
@@ -266,6 +269,32 @@ async fn a_tariff_window_must_be_a_real_interval() {
         err.to_string().contains("zaehler_saisons"),
         "expected the weekday CHECK to reject it, got: {err}"
     );
+
+    // An undated SOMMER window would hold in January, over the WINTER one; a
+    // dated GESAMT window says two contradictory things.
+    for (saison, von, bis) in [
+        ("SOMMER", None, None),
+        ("WINTER", Some("10-01"), None),
+        ("GESAMT", Some("04-01"), Some("10-01")),
+        ("SOMMER", Some("04-01"), Some("04-01")),
+    ] {
+        let err = sqlx::query(
+            "INSERT INTO zaehler_saisons
+                 (register_id, saison, wochentage, zeit_von, zeit_bis, saison_von, saison_bis)
+             VALUES ('00000000-0000-0000-0000-000000000001', $1,
+                     ARRAY[6,7]::smallint[], '07:00', '22:00', $2, $3)",
+        )
+        .bind(saison)
+        .bind(von)
+        .bind(bis)
+        .execute(&pool)
+        .await
+        .expect_err("a season must be dated exactly when it is SOMMER or WINTER");
+        assert!(
+            err.to_string().contains("zaehler_saisons_season_dated"),
+            "{saison} {von:?}–{bis:?}: expected the season CHECK, got: {err}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -454,6 +483,210 @@ async fn the_tariff_zone_resolves_from_typed_weekday_and_wall_clock_columns() {
         .await
         .expect("the HT window covers a Thursday morning");
     assert_eq!(thursday.0["tariff_zone"], "HT");
+}
+
+/// A seeded window: `(saison, saison_von, saison_bis, zeit_von, zeit_bis)`.
+type SeedWindow<'a> = (&'a str, Option<&'a str>, Option<&'a str>, &'a str, &'a str);
+
+/// Seed a register of Zähler `Z1` and its windows, each applying every day.
+async fn seed_register_with_windows(
+    pool: &PgPool,
+    tenant: &str,
+    zone: &str,
+    valid_from: &str,
+    valid_to: Option<&str>,
+    windows: &[SeedWindow<'_>],
+) {
+    let (id,): (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO zaehler_register
+             (zaehler_id, tenant, bezeichnung, zaehlerauspraegung, einheit, valid_from, valid_to)
+         VALUES ('Z1', $1, $2, $2, 'KWH', $3::date, $4::date)
+         RETURNING id",
+    )
+    .bind(tenant)
+    .bind(zone)
+    .bind(valid_from)
+    .bind(valid_to)
+    .fetch_one(pool)
+    .await
+    .expect("seed register");
+    for (saison, saison_von, saison_bis, von, bis) in windows {
+        sqlx::query(
+            "INSERT INTO zaehler_saisons
+                 (register_id, saison, wochentage, zeit_von, zeit_bis, saison_von, saison_bis)
+             VALUES ($1, $2, ARRAY[1,2,3,4,5,6,7]::smallint[], $3::time, $4::time, $5, $6)",
+        )
+        .bind(id)
+        .bind(saison)
+        .bind(von)
+        .bind(bis)
+        .bind(saison_von)
+        .bind(saison_bis)
+        .execute(pool)
+        .await
+        .expect("seed window");
+    }
+}
+
+/// SOMMER (01.04.–30.09.) HT 08:00–20:00 / NT 20:00–08:00 and WINTER
+/// (01.10.–31.03.) HT 06:00–22:00 / NT 22:00–06:00 on the same weekdays: at
+/// 07:00 the SOMMER NT and the WINTER HT window overlap. The SOMMER rows are
+/// written first, so a lookup without the season predicate meets them first.
+/// The season dates are this fixture's Preisblatt, not a published rule.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn overlapping_season_windows_resolve_to_the_instants_season() {
+    use marktd::pg::PgZaehlzeitRepository;
+    use time::macros::datetime;
+
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let tenant = "9900357000004";
+    let (apr, okt) = (Some("04-01"), Some("10-01"));
+    seed_register_with_windows(
+        &pool,
+        tenant,
+        "NT",
+        "2026-01-01",
+        None,
+        &[
+            ("SOMMER", apr, okt, "20:00", "08:00"),
+            ("WINTER", okt, apr, "22:00", "06:00"),
+        ],
+    )
+    .await;
+    seed_register_with_windows(
+        &pool,
+        tenant,
+        "HT",
+        "2026-01-01",
+        None,
+        &[
+            ("SOMMER", apr, okt, "08:00", "20:00"),
+            ("WINTER", okt, apr, "06:00", "22:00"),
+        ],
+    )
+    .await;
+    let repo = PgZaehlzeitRepository::new(pool.clone());
+    let zone = |at| {
+        let repo = repo.clone();
+        async move {
+            repo.resolve_tariff_zone("Z1", tenant, at)
+                .await
+                .expect("no contradiction")
+        }
+    };
+
+    assert_eq!(
+        zone(datetime!(2026-01-15 07:00)).await.as_deref(),
+        Some("HT"),
+        "WINTER"
+    );
+    assert_eq!(
+        zone(datetime!(2026-07-15 07:00)).await.as_deref(),
+        Some("NT"),
+        "SOMMER"
+    );
+
+    // A billing period 30.03.–03.04.2026 crosses SOMMER's first day: each
+    // quarter hour is classified by the season of its own day.
+    let mut at = datetime!(2026-03-30 00:00);
+    while at < datetime!(2026-04-03 00:00) {
+        let t = at.time();
+        let ht = if at.date() >= time::macros::date!(2026 - 04 - 01) {
+            (time::macros::time!(08:00)..time::macros::time!(20:00)).contains(&t)
+        } else {
+            (time::macros::time!(06:00)..time::macros::time!(22:00)).contains(&t)
+        };
+        assert_eq!(
+            zone(at).await.as_deref(),
+            Some(if ht { "HT" } else { "NT" }),
+            "{at}"
+        );
+        at += time::Duration::minutes(15);
+    }
+}
+
+/// A register replaced on 01.10.2026 still answers for the instants before
+/// its replacement with its own windows; validity is half-open
+/// `[valid_from, valid_to)`, so 01.10. itself is the successor's.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_replaced_register_answers_for_the_time_before_its_replacement() {
+    use marktd::pg::PgZaehlzeitRepository;
+    use time::macros::datetime;
+
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let tenant = "9900357000004";
+    let old = Some("2026-10-01");
+    seed_register_with_windows(
+        &pool,
+        tenant,
+        "HT",
+        "2026-01-01",
+        old,
+        &[("GESAMT", None, None, "06:00", "22:00")],
+    )
+    .await;
+    seed_register_with_windows(
+        &pool,
+        tenant,
+        "NT",
+        "2026-01-01",
+        old,
+        &[("GESAMT", None, None, "22:00", "06:00")],
+    )
+    .await;
+    seed_register_with_windows(
+        &pool,
+        tenant,
+        "HT",
+        "2026-10-01",
+        None,
+        &[("GESAMT", None, None, "08:00", "20:00")],
+    )
+    .await;
+    seed_register_with_windows(
+        &pool,
+        tenant,
+        "NT",
+        "2026-10-01",
+        None,
+        &[("GESAMT", None, None, "20:00", "08:00")],
+    )
+    .await;
+    let repo = PgZaehlzeitRepository::new(pool.clone());
+    let zone = |at| {
+        let repo = repo.clone();
+        async move {
+            repo.resolve_tariff_zone("Z1", tenant, at)
+                .await
+                .expect("no contradiction")
+        }
+    };
+
+    // 07:00 is HT under the old register and NT under its successor.
+    assert_eq!(
+        zone(datetime!(2026-09-15 07:00)).await.as_deref(),
+        Some("HT")
+    );
+    assert_eq!(
+        zone(datetime!(2026-09-30 21:00)).await.as_deref(),
+        Some("HT")
+    );
+    assert_eq!(
+        zone(datetime!(2026-10-01 07:00)).await.as_deref(),
+        Some("NT")
+    );
+    assert_eq!(
+        zone(datetime!(2026-10-15 07:00)).await.as_deref(),
+        Some("NT")
+    );
+    // Before any register was valid there is no window, not today's.
+    assert_eq!(zone(datetime!(2025-12-31 12:00)).await, None);
 }
 
 /// Master data that cannot all be true is refused with the shared problem

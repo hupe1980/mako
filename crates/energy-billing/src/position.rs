@@ -599,18 +599,30 @@ pub(crate) fn arbeitspreis_position(
     p
 }
 
-/// The § 3 Abs. 1 CO2KostAufG disclosures that accompany a CO₂ cost position.
+/// The tag of the § 3 Abs. 3 CO2KostAufG Preisbestandteil disclosure, whose
+/// Umsatzsteuer the engine states once the rate charged on the supply is known.
+pub(crate) const CO2KOSTAUFG_PREISBESTANDTEIL_TAG: &str = "co2kostaufg_preisbestandteil";
+
+/// The § 3 CO2KostAufG disclosures that accompany a CO₂ cost position.
 ///
 /// The statute lists six items a Brennstoff- or Wärmelieferant must show
-/// „in allgemeinverständlicher Form". Nr. 2 — the Preisbestandteil — is the
-/// levy position itself; this builds the informational ones that surround it:
+/// „in allgemeinverständlicher Form". This builds the informational ones:
 ///
 /// | Nr. | What | Unit |
 /// |---|---|---|
 /// | 1 | Brennstoffemissionen der Lieferung | kg CO₂ |
+/// | 2 | Preisbestandteil (§ 3 Abs. 3): Nr. 1 emissions × the § 4 Abs. 1 price, plus Umsatzsteuer | EUR |
 /// | 3 | heizwertbezogener Emissionsfaktor | kg CO₂/kWh |
 /// | 4 | Energiegehalt der Brennstoffmenge | kWh |
 /// | 5 | Hinweis auf die Erstattungsansprüche | — |
+///
+/// beside the § 4 Abs. 1 price itself ([`crate::co2kostaufg_preis_eur_per_t`]).
+/// The price is the delivery year's figure, never the auction point that
+/// priced the supplier's own CO₂ line: that line bills the supplier's cost,
+/// the Nr. 2 statement is the figure § 3 Abs. 3 defines. The statement is
+/// `Info` and moves no money; its Umsatzsteuer is added by the engine from the
+/// rate the supply is charged at
+/// ([`state_co2kostaufg_umsatzsteuer`]).
 ///
 /// Nr. 6 is conditional on the building being a vermietetes Wohngebäude with a
 /// § 43 GEG Heizungsanlage. That is a fact about the Vermieter's building, not
@@ -621,13 +633,26 @@ pub(crate) fn arbeitspreis_position(
 /// permits no other), and the emissions follow from it and the billed quantity
 /// rather than being supplied separately — one figure cannot then contradict
 /// the other.
+///
+/// # Errors
+///
+/// [`EngineError::RateRefused`](crate::EngineError::RateRefused) with
+/// `satz = "CO2KostAufG"` when the delivery year has no recorded § 4 Abs. 1
+/// price (from 2027 until the UBA publication is recorded), or when the period
+/// runs from one year into another whose price differs — the price is the one
+/// at the time of delivery, so no single figure is correct for such a period.
 pub(crate) fn co2kostaufg_disclosures(
     menge_kwh: Decimal,
     unit: &'static str,
     emissionsfaktor_kg_per_kwh: Decimal,
     tag: &'static str,
-) -> Vec<BillingPosition> {
+    period_from: time::Date,
+    period_to: time::Date,
+) -> Result<Vec<BillingPosition>, crate::EngineError> {
+    let (preis_eur_per_t, preis_quelle) = co2kostaufg_preis_fuer(period_from, period_to)?;
     let emissionen_kg = (menge_kwh * emissionsfaktor_kg_per_kwh).round_kfm(2);
+    let emissionen_t = (emissionen_kg / dec!(1000)).normalize();
+    let bestandteil_netto_eur = (emissionen_t * preis_eur_per_t).round_kfm(2);
     let info = |description: String, legal: &'static str| BillingPosition {
         description,
         legal_basis: Some(legal.to_owned()),
@@ -640,11 +665,34 @@ pub(crate) fn co2kostaufg_disclosures(
         applicable_tax_rate: None,
         trace: PositionTrace::default(),
     };
-    vec![
+    let mut bestandteil = info(
+        format!(
+            "Preisbestandteil CO₂-Kosten: {emissionen_t} t CO₂ × {preis_eur_per_t} EUR/t \
+             = {bestandteil_netto_eur} EUR netto"
+        ),
+        "CO2KostAufG § 3 Abs. 1 Nr. 2, Abs. 3",
+    );
+    bestandteil
+        .tags
+        .push(CO2KOSTAUFG_PREISBESTANDTEIL_TAG.to_owned());
+    // The figures the engine needs to add the Umsatzsteuer, carried as data
+    // rather than re-parsed from the text.
+    bestandteil.trace = PositionTrace::commodity(
+        emissionen_t,
+        "t CO₂",
+        preis_eur_per_t,
+        "CO2KostAufG § 3 Abs. 3",
+    );
+    Ok(vec![
         info(
             format!("Brennstoffemissionen der Lieferung: {emissionen_kg} kg CO₂"),
             "CO2KostAufG § 3 Abs. 1 Nr. 1",
         ),
+        info(
+            format!("Maßgeblicher CO₂-Preis: {preis_eur_per_t} EUR/t CO₂"),
+            preis_quelle,
+        ),
+        bestandteil,
         info(
             format!("Heizwertbezogener Emissionsfaktor: {emissionsfaktor_kg_per_kwh} kg CO₂/kWh"),
             "CO2KostAufG § 3 Abs. 1 Nr. 3",
@@ -659,7 +707,94 @@ pub(crate) fn co2kostaufg_disclosures(
                 .to_owned(),
             "CO2KostAufG § 3 Abs. 1 Nr. 5",
         ),
-    ]
+    ])
+}
+
+/// The § 4 Abs. 1 CO2KostAufG price for a period, or its refusal.
+///
+/// Both ends of the period must name the same figure: § 3 Abs. 3 prices the
+/// emissions at the § 4 price at the time of delivery, so a period running
+/// into a year with another price is split at 31.12., never billed at one
+/// year's figure.
+fn co2kostaufg_preis_fuer(
+    period_from: time::Date,
+    period_to: time::Date,
+) -> Result<(Decimal, &'static str), crate::EngineError> {
+    let refuse = |jahr: i32, grund: String| {
+        crate::EngineError::RateRefused(crate::rates::RateRefusal::new("CO2KostAufG", jahr, grund))
+    };
+    let preis = |jahr: i32| {
+        crate::rates::co2kostaufg_preis_eur_per_t(jahr).ok_or_else(|| {
+            refuse(
+                jahr,
+                format!(
+                    "kein maßgeblicher Preis nach § 4 Abs. 1 CO2KostAufG für {jahr} hinterlegt; \
+                     ab 2027 ist es der vom Umweltbundesamt nach § 4 Abs. 2 CO2KostAufG \
+                     veröffentlichte Preis"
+                ),
+            )
+        })
+    };
+    let (von, bis) = (period_from.year(), period_to.year());
+    let erster = preis(von)?;
+    for jahr in von + 1..=bis {
+        if preis(jahr)?.0 != erster.0 {
+            return Err(refuse(
+                jahr,
+                format!(
+                    "der Abrechnungszeitraum {period_from}..{period_to} überschreitet eine \
+                     Jahresgrenze, an der sich der Preis nach § 4 Abs. 1 CO2KostAufG ändert; \
+                     am 31.12. splitten"
+                ),
+            ));
+        }
+    }
+    Ok(erster)
+}
+
+/// Add the Umsatzsteuer to each § 3 Abs. 3 CO2KostAufG Preisbestandteil.
+///
+/// § 3 Abs. 3 states the Preisbestandteil plus Umsatzsteuer, and the rate is
+/// the one the supply is actually charged at — known only once the engine has
+/// stamped it: the CO₂ line's own rate (a product override, a § 13b reverse
+/// charge) or, without one, `charged`. No rate leaves the net figure alone:
+/// a run with no tax pass states no tax.
+pub(crate) fn state_co2kostaufg_umsatzsteuer(
+    positions: &mut [BillingPosition],
+    charged: Option<Decimal>,
+) {
+    let levy_rate = |tag: &str, positions: &[BillingPosition]| {
+        positions
+            .iter()
+            .find(|p| p.category == PositionCategory::Levy && p.has_tag("behg") && p.has_tag(tag))
+            .and_then(|p| p.applicable_tax_rate)
+    };
+    let pending: Vec<(usize, Option<Decimal>)> = positions
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.has_tag(CO2KOSTAUFG_PREISBESTANDTEIL_TAG))
+        .map(|(i, p)| {
+            let commodity = p
+                .tags
+                .iter()
+                .find(|t| {
+                    t.as_str() != "co2kostaufg" && t.as_str() != CO2KOSTAUFG_PREISBESTANDTEIL_TAG
+                })
+                .map_or("", String::as_str);
+            (i, levy_rate(commodity, positions).or(charged))
+        })
+        .collect();
+    for (i, rate) in pending {
+        let Some(rate) = rate else { continue };
+        let p = &mut positions[i];
+        let netto = (p.trace.input_quantity * p.trace.input_unit_price_eur).round_kfm(2);
+        let brutto = (netto * (Decimal::ONE + rate)).round_kfm(2);
+        let prozent = (rate * dec!(100)).normalize();
+        p.description = format!(
+            "{}, {brutto} EUR mit Umsatzsteuer ({prozent} %)",
+            p.description
+        );
+    }
 }
 
 /// Build a per-unit levy position (quantity × rate in ct/unit).

@@ -409,7 +409,17 @@ fn actions_forbidden_to_an_advisory_principal() -> BTreeSet<String> {
 }
 
 /// The reads an advisory principal keeps.
-const READS: [&str; 4] = ["read-account", "read-banking", "read-books", "use-mcp"];
+const READS: [&str; 5] = [
+    "read-account",
+    "read-banking",
+    "read-books",
+    "read-enfg",
+    "use-mcp",
+];
+
+/// The actions held to the Netzbetreiber: the EEG/KWKG payments are its own
+/// (§ 19 Abs. 1 EEG 2023, § 13 Abs. 1 EnFG), so an LF key holds neither.
+const NB_ACTIONS: [&str; 2] = ["read-enfg", "record-aufrechnung"];
 
 /// Every action the handlers check that is not a read is forbidden to an
 /// advisory principal, and no read is.
@@ -440,10 +450,26 @@ fn a_non_advisory_principal_keeps_its_permits() {
         tenant: "9900357000004".to_owned(),
         roles: vec!["LF".to_owned()],
     };
+    let nb = mako_service::cedar::CedarPrincipal {
+        sub: "nb-operator".to_owned(),
+        tenant: "9900357000004".to_owned(),
+        roles: vec!["NB".to_owned()],
+    };
     for action in actions_used_in_code() {
+        let (who, principal) = if NB_ACTIONS.contains(&action.as_str()) {
+            ("NB", &nb)
+        } else {
+            ("LF", &lf)
+        };
         assert!(
-            enforcer.check(&lf, &action, "9900357000004").is_ok(),
-            "an LF principal must keep {action}"
+            enforcer.check(principal, &action, "9900357000004").is_ok(),
+            "an {who} principal must keep {action}"
+        );
+    }
+    for action in NB_ACTIONS {
+        assert!(
+            enforcer.check(&lf, action, "9900357000004").is_err(),
+            "an LF principal must not hold the Netzbetreiber's {action}"
         );
     }
 }

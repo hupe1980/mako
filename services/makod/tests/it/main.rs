@@ -26,6 +26,7 @@ mod e2e_dvgw_gas_transport;
 mod e2e_emob_modellwechsel;
 mod e2e_esa_werteanfrage_reqote;
 mod e2e_esa_wertebestellung;
+mod e2e_gnb_antwort_gas;
 mod e2e_gpke_ankuendigung_zuordnung_lf;
 mod e2e_gpke_anmeldung_conformance;
 mod e2e_gpke_antwort_conformance;

@@ -18,6 +18,7 @@
 --   anonymization_log    — GDPR Art. 17 erasure audit trail (INSERT-only)
 --   auto_dunning_runs    — daily auto-dunning idempotency + audit
 --   eeg_payout_orders    — EEG SCT/SCT Inst payout pipeline
+--   eeg_aufrechnungen    — EEG claims extinguished by Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG)
 --   sepa_collection_runs — pain.008 XML archive for audit + replay
 --   jahresabschluss_runs — annual settlement idempotency
 --   account_audit_log    — §238 HGB master-data change trail
@@ -653,6 +654,41 @@ CREATE INDEX eeg_payout_malo      ON eeg_payout_orders (malo_id, billing_year, b
 -- Pending orders awaiting pain.002 confirmation (retry worker)
 CREATE INDEX eeg_payout_pending   ON eeg_payout_orders (tenant, created_at)
     WHERE pain002_status IS NULL OR pain002_status = 'PDNG';
+
+-- ── EEG Aufrechnungen (§ 13 Abs. 1 Satz 2 EnFG) ─────────────────────────────
+--
+-- A plant operator's EEG claim the Netzbetreiber extinguished by Aufrechnung
+-- instead of paying it. „Als geleistete Zahlungen im Sinn des Satzes 1 gelten
+-- auch Forderungen eines Anlagenbetreibers auf Zahlung, die durch Aufrechnung
+-- erloschen sind" (§ 13 Abs. 1 Satz 2 EnFG), so the ÜNB reimburses it like a
+-- settled payout; `GET /api/v1/eeg/enfg-zahlungen` serves both.
+--
+-- `gegenforderung` is the claim it was set off against, one per admissible
+-- set-off in the EEG 2023: EEG_52_PFLICHTZAHLUNG (§ 52 Abs. 6 Satz 2),
+-- ENFG_UMLAGE (§ 27 Abs. 1 Satz 2), UNBESTRITTEN (§ 27 Abs. 1 Satz 1 — only a
+-- claim „unbestritten oder rechtskräftig festgestellt"). A § 52 set-off is also
+-- the Netzbetreiber's § 52 income, which § 14 Satz 1 Nr. 3 EnFG makes owed to
+-- the ÜNB.
+CREATE TABLE eeg_aufrechnungen (
+    aufrechnung_id  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant          TEXT        NOT NULL,
+    tr_id           TEXT        NOT NULL,
+    malo_id         TEXT        NOT NULL,
+    billing_year    SMALLINT    NOT NULL,
+    billing_month   SMALLINT    NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
+    amount_ct       BIGINT      NOT NULL CHECK (amount_ct > 0),
+    gegenforderung  TEXT        NOT NULL CHECK (gegenforderung IN
+                        ('EEG_52_PFLICHTZAHLUNG', 'ENFG_UMLAGE', 'UNBESTRITTEN')),
+    erklaert_am     DATE        NOT NULL,
+    vermerk         TEXT,
+    erfasst_von     TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- One declaration per plant, month, Gegenforderung and day: a resent
+    -- request is a conflict, not a second set-off of the same claim.
+    UNIQUE (tenant, tr_id, billing_year, billing_month, gegenforderung, erklaert_am)
+);
+
+CREATE INDEX eeg_aufrechnungen_month ON eeg_aufrechnungen (tenant, billing_year, billing_month);
 
 -- ── SEPA pain.008 collection runs (persist for audit + replay) ─────────
 --

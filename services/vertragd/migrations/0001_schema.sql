@@ -697,8 +697,6 @@ CREATE TABLE aggregatorvertraege (
     -- contract that is never in force, and that overlaps nothing.
     vertragsende                DATE
                                 CHECK (vertragsende IS NULL OR vertragsbeginn < vertragsende),
-    -- MwSt override; NULL = use the billing default
-    mwst_rate_override          NUMERIC(5, 4),
     kunden_id                   UUID        REFERENCES kunden(id),
     created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),

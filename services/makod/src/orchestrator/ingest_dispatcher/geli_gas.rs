@@ -109,8 +109,26 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_resume_table",
                 }),
             },
-            // ── GeLi Gas SupplierChange — NB side ────────────────────────────
-            // PIDs 44001–44021: UTILMD G ANFRAGE (LFG → GNB) — spawn.
+            // ── GeLi Gas SupplierChange ──────────────────────────────────────
+            // 44008/44009, 44011/44012, 44014/44015: the LF's answer to an
+            // Anfrage this GNB sent (44007, 44010, 44013) — resume the GNB's
+            // own process by MaLo, the key `geli.eog.anmelden` spawned it
+            // under. Never a spawn: an answer with no Anfrage behind it has
+            // nothing to answer. Routed only on an NB deployment
+            // (`GeliGasModule::register_pids_with_roles`).
+            "geli-gas-supplier-change" if mako_geli_gas::GNB_ANTWORT_PIDS.contains(&pid) => {
+                let cmd = adapters::geli_gas_gnb_antwort_registry().dispatch(raw, &fv)?;
+                let malo_id = extract_malo_from_msg(msg);
+                self.resume_by_key::<GeliGasSupplierChangeWorkflow>(
+                    inbound,
+                    malo_id.as_str(),
+                    "geli-gas-supplier-change",
+                    cmd,
+                )
+                .await
+            }
+            // Every other PID 44001–44021 — spawn by MaLo, or resume the
+            // process still occupying it.
             "geli-gas-supplier-change" => match pid {
                 44001..=44021 => {
                     let cmd = adapters::geli_gas_registry(received_at).dispatch(raw, &fv)?;

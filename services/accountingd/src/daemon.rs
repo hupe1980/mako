@@ -342,6 +342,16 @@ impl Daemon for Accountingd {
             // GET  /api/v1/eeg/payouts/{id}        — single order with pain.001 XML
             // POST /api/v1/eeg/payouts/run         — batch-generate for unbatched EEG_GUTSCHRIFT entries
             // PUT  /api/v1/eeg/payouts/{id}/status — process pain.002 ACCP/RJCT/CANC
+            // EnFG Belastungsausgleich (§ 13 Abs. 1 EnFG): the payments made per
+            // billing month, and the Aufrechnungen that count as made (Satz 2).
+            .route(
+                "/api/v1/eeg/enfg-zahlungen",
+                get(handlers::get_enfg_zahlungen),
+            )
+            .route(
+                "/api/v1/eeg/aufrechnungen",
+                post(handlers::post_eeg_aufrechnung),
+            )
             .route("/api/v1/eeg/payouts", get(handlers::get_eeg_payouts))
             .route(
                 "/api/v1/eeg/payouts/run",

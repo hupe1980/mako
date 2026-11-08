@@ -1579,9 +1579,6 @@ pub struct Aggregatorvertrag {
     /// Aggregator market-partner ID — the invoicing party.
     pub aggregator_mp_id: String,
     pub capacity_price_eur_per_kwh: rust_decimal::Decimal,
-    /// `None` = use the billingd default MwSt rate.
-    #[serde(default)]
-    pub mwst_rate_override: Option<rust_decimal::Decimal>,
 }
 
 // ── OutputdClient ─────────────────────────────────────────────────────────────

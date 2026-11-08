@@ -90,6 +90,25 @@ pub const ANTWORT_PIDS: &[u32] = &[
     44021, // Antwort auf Änderungsmeldung
 ];
 
+/// The **Antwort** PIDs a GNB *receives*: the LF's Bestätigung or Ablehnung of
+/// an Anfrage the GNB sent itself — 44007 → 44008/44009, 44010 → 44011/44012,
+/// 44013 → 44014/44015 (UTILMD AHB Gas, LF → NB). Each resumes the GNB's own
+/// process through [`GasSupplierChangeCommand::ReceiveGnbAntwort`]; every other
+/// answer in [`ANTWORT_PIDS`] travels the other way and is sent from here.
+pub const GNB_ANTWORT_PIDS: &[u32] = &[44008, 44009, 44011, 44012, 44014, 44015];
+
+/// Whether a [`GNB_ANTWORT_PIDS`] answer is the Bestätigung (`Some(true)`) or
+/// the Ablehnung (`Some(false)`) — the Prüfidentifikator alone says which.
+/// `None` for any PID a GNB does not receive as an answer.
+#[must_use]
+pub fn gnb_antwort_accepted(pid: u32) -> Option<bool> {
+    match pid {
+        44008 | 44011 | 44014 => Some(true),
+        44009 | 44012 | 44015 => Some(false),
+        _ => None,
+    }
+}
+
 /// All UTILMD G PIDs handled by this workflow (union of ANFRAGE and ANTWORT).
 pub const UTILMD_PIDS: &[u32] = &[
     44001, 44002, 44003, 44004, 44005, 44006, 44007, 44008, 44009, 44010, 44011, 44012, 44013,
@@ -1532,6 +1551,25 @@ mod tests {
     fn pid(n: u32) -> Pruefidentifikator {
         Pruefidentifikator::new(n).expect("test PID")
     }
+
+    /// The answers a GNB receives are exactly the answers to the Anfragen it
+    /// sends, and the PID's acceptance agrees with `response_pid_for`. A pair
+    /// missing here leaves that answer built as an Anfrage, which the workflow
+    /// refuses — the GNB's Verlauf never shows it.
+    #[test]
+    fn gnb_antwort_pids_are_the_answers_to_the_gnb_anfragen() {
+        let mut derived: Vec<u32> = GNB_INITIATOR_PIDS
+            .iter()
+            .flat_map(|&a| [true, false].map(|ok| (response_pid_for(a, ok), ok)))
+            .filter_map(|(p, ok)| p.map(|p| (p.as_u32(), ok)))
+            .inspect(|&(p, ok)| assert_eq!(gnb_antwort_accepted(p), Some(ok), "{p}"))
+            .map(|(p, _)| p)
+            .collect();
+        derived.sort_unstable();
+        assert_eq!(derived, GNB_ANTWORT_PIDS);
+        assert_eq!(gnb_antwort_accepted(44002), None, "an answer the GNB sends");
+    }
+
     fn malo() -> MaLo {
         MaLo::new("DE0000000001234567890000000000001")
     }

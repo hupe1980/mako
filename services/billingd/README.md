@@ -41,7 +41,15 @@ just dev billingd      # dev/config/billingd.toml against the dev PostgreSQL
 
 A dynamic § 41a tariff is billed per market time unit or refused
 (`SECT41A_NO_LASTGANG`, `SECT41A_MISSING_EPEX_PRICES`); a period whose tax or
-BEHG rate is not in a dated series is refused, naming tax and year.
+BEHG rate is not in a dated series is refused, naming tax and year. A 2027 or
+later Gas period is priced only under `[policy] behg_regime`, never by an ETS2
+cut-over, and `check-behg-prices` refuses a table row for such a year. productd
+reads the same setting from `GET /api/v1/policy` to price its quotations. The
+CO2KostAufG price of § 4 Abs. 1 is `energy_billing::co2kostaufg_preis_eur_per_t`,
+not the auction point the CO₂ line is billed at: the invoice discloses it with
+the § 3 Abs. 3 Preisbestandteil beside the CO₂ line, and refuses a Gas or
+Fernwärme period whose delivery year has none (2027 until the UBA publication
+is recorded).
 
 ## Configuration
 

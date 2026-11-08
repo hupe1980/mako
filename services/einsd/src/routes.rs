@@ -134,6 +134,17 @@ pub fn build_router(
             "/api/v1/anlagen/{tr_id}/jahresabrechnung/{year}",
             post(crate::handlers::post_jahresabrechnung),
         )
+        // ── EnFG Belastungsausgleich (§§ 13, 14, 50 Nr. 1 EnFG) ───────────────
+        // The ledger is built from the payments accountingd reports as made;
+        // the Mitteilung is read from the booked ledger.
+        .route(
+            "/api/v1/enfg/ledger/{year}/{month}",
+            post(crate::handlers::post_enfg_ledger).get(crate::handlers::get_enfg_ledger),
+        )
+        .route(
+            "/api/v1/enfg/mitteilung/{year}/{month}",
+            get(crate::handlers::get_enfg_mitteilung),
+        )
         // ── Batch settlement ───────────────────────────────────────────────────
         .route(
             "/api/v1/settle/{year}/{month}",

@@ -18,6 +18,8 @@
 //                          §§53b–54 AW-Reduktionen, §36h Abs. 2 Wind-Reevaluierung
 //   "read-marktdaten"    — GET  EPEX / Jahresmarktwert / Vergütungssatz lookup
 //   "write-marktdaten"   — PUT  EPEX / Jahresmarktwert
+//   "read-enfg"          — GET  /api/v1/enfg/ledger/..., /api/v1/enfg/mitteilung/...
+//   "build-enfg-ledger"  — POST /api/v1/enfg/ledger/{year}/{month}
 //   "use-mcp"            — /mcp (Streamable HTTP MCP server)
 //   "read-policy"        — GET  /api/v1/policy (the operator policy report)
 
@@ -71,6 +73,20 @@ permit(
     context.principal_tenant == context.resource_tenant &&
     (context.principal_roles.contains("NB") ||
      context.principal_roles.contains("UENB"))
+};
+
+// ── EnFG Belastungsausgleich ──────────────────────────────────────────────────
+// The ÜNB reimburses „ihren nachgelagerten Verteilernetzbetreibern" (§ 13 Abs. 1
+// EnFG) and the § 50 Nr. 1 Mitteilung is the Verteilernetzbetreiber's, so the
+// ledger and the Mitteilung are the Netzbetreiber's alone. Reading them is held
+// to NB as well: they total every payment of the tenant, not one plant's.
+permit(
+    principal,
+    action in [Action::"read-enfg", Action::"build-enfg-ledger"],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("NB")
 };
 
 // Cross-tenant access is denied by the absence of any permitting policy: Cedar

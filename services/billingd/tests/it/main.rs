@@ -11,3 +11,4 @@ mod print_config;
 mod records_integration;
 mod router_builds;
 mod schema_code_guard;
+mod vpp_vat;

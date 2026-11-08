@@ -569,7 +569,9 @@ The feed accepts `BESTAETIGT` and `AKTIV` components.
 VPP contracts between an Aggregator and a plant operator or Letztverbraucher,
 the German transposition of Art. 17 RL (EU) 2019/944.
 `PUT /api/v1/aggregatorvertraege/{sr_id}` maps an SR-ID to the agreed
-Einsatzkosten and a validity window; `GET /api/v1/aggregatorvertraege` lists them. `billingd` reads them per dispatch and keeps no copy. An
+Einsatzkosten and a validity window; `GET /api/v1/aggregatorvertraege` lists them. `billingd` reads them per dispatch and keeps no copy. The
+contract carries no VAT rate: `billingd` taxes the settlement at the period's
+statutory rate. An
 `EXCLUDE USING gist` constraint makes two simultaneously active contracts per
 resource unrepresentable, surfaced as a `409`.
 

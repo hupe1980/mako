@@ -10,6 +10,10 @@ allow_insecure_no_auth = true
 tenant   = "9900357000004"
 lf_mp_id = "9900357000004"
 
+# A Gas quotation for a year § 10 BEHG fixes no price for is priced under
+# billingd's `[policy] behg_regime`, read from its GET /api/v1/policy.
+billingd_url = "http://127.0.0.1:9280"
+
 [http]
 addr = "127.0.0.1:9080"
 

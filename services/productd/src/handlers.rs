@@ -978,6 +978,19 @@ pub struct PositionCostBreakdown {
     pub ka_eur: Decimal,
     /// Statutory levies: Stromsteuer (Strom) or Energiesteuer + BEHG (Gas).
     pub levies_eur: Decimal,
+    /// The maßgeblicher Preis of § 4 Abs. 1 CO2KostAufG for the Stichtag's
+    /// year, EUR/t CO₂ — the figure the offer discloses as the CO2KostAufG
+    /// price. Disclosed beside the supplier's own CO₂ cost in `levies_eur`,
+    /// which follows its auction purchases; it never changes that price.
+    /// `None` for a position that carries no CO₂ cost (Strom, Wärme, Wasser).
+    pub co2kostaufg_preis_eur_per_t: Option<Decimal>,
+    /// The provision `co2kostaufg_preis_eur_per_t` comes from.
+    pub co2kostaufg_rechtsgrundlage: Option<&'static str>,
+    /// Why a Gas position discloses no CO2KostAufG price: its year's figure is
+    /// not published yet (from 2027 the UBA's, § 4 Abs. 2). The figure states
+    /// a price beside the CO₂ cost and changes no amount, so the position is
+    /// quoted without it rather than refused; the invoice is where it is owed.
+    pub co2kostaufg_hinweis: Option<String>,
     /// Supply + NNE + KA + levies (no MwSt).
     pub total_netto_eur: Decimal,
     /// `total_netto_eur × (1 + mwst_satz)`.
@@ -1099,6 +1112,13 @@ pub struct PricingContext {
     /// `behg_gas_ct_per_kwh`: a constant or a neighbouring year's auction point
     /// would quote a CO₂ cost that did not apply.
     pub behg_gas_ct_per_kwh: Result<Decimal, String>,
+    /// The § 4 Abs. 1 CO2KostAufG price of the Stichtag's year, EUR/t, and
+    /// its provision ([`energy_billing::co2kostaufg_preis_eur_per_t`]).
+    ///
+    /// `Err` carries why the year has none; a Gas position then states that
+    /// in `co2kostaufg_hinweis` — never a figure taken from the auction price
+    /// or a neighbouring year.
+    pub co2kostaufg_preis: Result<(Decimal, &'static str), String>,
     /// The recipient is a Wiederverkäufer i.S.d. § 3g UStG, so under
     /// § 13b Abs. 2 Nr. 5 Buchst. b i.V.m. Abs. 5 UStG they owe the tax and the
     /// quotation states none.
@@ -1112,6 +1132,7 @@ pub struct PricingContext {
 /// CO₂ component, and a household tariff, so never a reverse charge.
 const FEED_PRICING_CONTEXT: PricingContext = PricingContext {
     behg_gas_ct_per_kwh: Err(String::new()),
+    co2kostaufg_preis: Err(String::new()),
     reverse_charge_13b: false,
     steuerjahr: None,
 };
@@ -1121,18 +1142,22 @@ const FEED_PRICING_CONTEXT: PricingContext = PricingContext {
 /// The same resolution `billingd` bills a period with: a point of the nEHS
 /// series counts only when it was set in the Stichtag's own year (a 2026
 /// auction never prices 2027); without one the § 10 BEHG table prices the year;
-/// a year § 10 BEHG fixes no price for takes a series price only through the
-/// configured [`energy_billing::BehgRegime`], which checks it, and is refused
+/// a year § 10 BEHG fixes no price for takes a series price only through
+/// billingd's [`energy_billing::BehgRegime`], which checks it, and is refused
 /// otherwise. The price is converted at the year's EBeV emission factor
 /// ([`energy_billing::behg_ct_per_kwh_from_price`]).
 ///
+/// `regime` is consulted only for a year § 10 BEHG fixes no price for; its
+/// `Err` is why billingd gave none, and refuses that year.
+///
 /// # Errors
 ///
-/// Why the year has no price — the regime's refusal, or no EBeV factor.
+/// Why the year has no price — no regime, the regime's refusal, or no EBeV
+/// factor.
 pub fn behg_gas_fuer_stichtag(
     stichtag: time::Date,
     punkt: Option<(time::Date, Decimal)>,
-    regime: energy_billing::BehgRegime,
+    regime: Result<energy_billing::BehgRegime, String>,
 ) -> Result<Decimal, String> {
     let year = stichtag.year();
     let tabled = energy_billing::RegulatoryRates::for_year(year)
@@ -1144,7 +1169,7 @@ pub fn behg_gas_fuer_stichtag(
     };
     if let Some((datum, eur_per_t)) = punkt.filter(|(datum, _)| datum.year() == year) {
         if tabled.is_none() {
-            regime
+            regime?
                 .pruefe(eur_per_t, year)
                 .map_err(|e| format!("nEHS-Zertifikatspreis vom {datum}: {e}"))?;
         }
@@ -1153,7 +1178,16 @@ pub fn behg_gas_fuer_stichtag(
     if let Some(ct) = tabled {
         return Ok(ct);
     }
-    Err(regime.fehlender_preis(year).to_string())
+    Err(regime?.fehlender_preis(year).to_string())
+}
+
+/// Whether a quotation for `stichtag` needs billingd's regime: only a year
+/// § 10 BEHG fixes no price for does.
+#[must_use]
+pub fn braucht_behg_regime(stichtag: time::Date) -> bool {
+    energy_billing::RegulatoryRates::for_year(stichtag.year())
+        .behg_gas_ct_per_kwh
+        .is_err()
 }
 
 /// The Umsatzsteuersatz a position is quoted at, as a fraction of the net.
@@ -1395,6 +1429,8 @@ pub fn compute_cost_breakdown(
                 )
             })
     };
+    let mut co2kostaufg = None;
+    let mut co2kostaufg_hinweis = None;
     let levies_ct_per_kwh = if sparte_upper.contains("GAS") {
         // § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG, from the one dated series.
         let energiesteuer = steuer(
@@ -1419,6 +1455,12 @@ pub fn compute_cost_breakdown(
                 ));
             }
         };
+        // § 4 Abs. 1 CO2KostAufG — the price the offer discloses, keyed by the
+        // Stichtag's year and independent of the supplier's own cost above.
+        match &ctx.co2kostaufg_preis {
+            Ok(preis) => co2kostaufg = Some(*preis),
+            Err(warum) => co2kostaufg_hinweis = Some(warum.clone()),
+        }
         energiesteuer + behg
     } else if sparte_upper.contains("STROM") {
         // § 3 StromStG, from the one dated series.
@@ -1463,6 +1505,9 @@ pub fn compute_cost_breakdown(
         nne_netto_eur: nne_netto_eur.round_kfm(2),
         ka_eur: ka_eur.round_kfm(2),
         levies_eur: levies_eur.round_kfm(2),
+        co2kostaufg_preis_eur_per_t: co2kostaufg.map(|(p, _)| p),
+        co2kostaufg_rechtsgrundlage: co2kostaufg.map(|(_, q)| q),
+        co2kostaufg_hinweis,
         total_netto_eur: total_netto_eur.round_kfm(2),
         total_brutto_eur: total_brutto_eur.round_kfm(2),
         mwst_satz: satz,
@@ -1593,27 +1638,70 @@ fn unpreisbar_response(errors: &[PositionPricingError]) -> axum::response::Respo
 }
 
 /// Resolve the statutory inputs a quotation is priced under for its Stichtag.
+///
+/// billingd is asked for its `[policy] behg_regime` only when the Stichtag's
+/// year needs it ([`braucht_behg_regime`]).
 async fn pricing_context(
     pool: &PgPool,
-    regime: energy_billing::BehgRegime,
+    regime_quelle: &crate::billingd::BehgRegimeQuelle,
     stichtag: time::Date,
     reverse_charge_13b: bool,
 ) -> PricingContext {
-    let behg_gas_ct_per_kwh = match crate::pg::latest_nehs_price(pool, stichtag).await {
-        Ok(punkt) => behg_gas_fuer_stichtag(stichtag, punkt, regime),
+    let regime = if braucht_behg_regime(stichtag) {
+        regime_quelle.regime().await.inspect_err(|e| {
+            tracing::warn!(
+                error = %e,
+                "productd: kein BEHG-Regime von billingd — Gaspositionen des Jahres ohne \
+                 eigenen CO₂-Preis werden abgelehnt"
+            );
+        })
+    } else {
+        Err(format!(
+            "{} hat einen § 10 BEHG-Preis; das Regime wird nicht gefragt",
+            stichtag.year()
+        ))
+    };
+    match crate::pg::latest_nehs_price(pool, stichtag).await {
+        Ok(punkt) => pricing_context_fuer(stichtag, punkt, regime, reverse_charge_13b),
         Err(e) => {
             tracing::error!(
                 error = %e,
                 "productd: nEHS-Preisreihe nicht lesbar — Gaspositionen ohne eigenen \
                  CO₂-Preis werden abgelehnt"
             );
-            Err("die nEHS-Preisreihe ist nicht lesbar".to_owned())
+            PricingContext {
+                behg_gas_ct_per_kwh: Err("die nEHS-Preisreihe ist nicht lesbar".to_owned()),
+                ..pricing_context_fuer(stichtag, None, regime, reverse_charge_13b)
+            }
         }
-    };
+    }
+}
+
+/// The statutory inputs for `stichtag`, given the nEHS series point at or
+/// before it and billingd's regime — the pure half of the resolution.
+///
+/// The CO₂ line carries two figures: the supplier's own cost
+/// ([`behg_gas_fuer_stichtag`], from its auction point), and beside it the
+/// § 4 Abs. 1 CO2KostAufG price of the year, which is disclosed and never
+/// prices anything.
+#[must_use]
+pub fn pricing_context_fuer(
+    stichtag: time::Date,
+    punkt: Option<(time::Date, Decimal)>,
+    regime: Result<energy_billing::BehgRegime, String>,
+    reverse_charge_13b: bool,
+) -> PricingContext {
+    let jahr = stichtag.year();
     PricingContext {
-        behg_gas_ct_per_kwh,
+        behg_gas_ct_per_kwh: behg_gas_fuer_stichtag(stichtag, punkt, regime),
+        co2kostaufg_preis: energy_billing::co2kostaufg_preis_eur_per_t(jahr).ok_or_else(|| {
+            format!(
+                "für {jahr} ist kein maßgeblicher Preis nach § 4 Abs. 1 CO2KostAufG erfasst — ab \
+                 2027 der vom Umweltbundesamt nach § 4 Abs. 2 veröffentlichte Durchschnittspreis"
+            )
+        }),
         reverse_charge_13b,
-        steuerjahr: Some(stichtag.year()),
+        steuerjahr: Some(jahr),
     }
 }
 
@@ -1661,6 +1749,7 @@ pub async fn post_angebot(
     Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
+    Extension(regime_quelle): Extension<std::sync::Arc<crate::billingd::BehgRegimeQuelle>>,
     Json(req): Json<CreateAngebotRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = authorize(&cedar, &claims, "write-angebot", &cfg.tenant) {
@@ -1730,7 +1819,7 @@ pub async fn post_angebot(
     // Lieferbeginn where the quotation names one: the CO₂ certificate price it
     // is quoted at is the one in force when supply starts.
     let stichtag = lieferbeginn.unwrap_or_else(mako_fristen::heute);
-    let ctx = pricing_context(&pool, cfg.behg_regime, stichtag, req.wiederverkaeufer_13b).await;
+    let ctx = pricing_context(&pool, &regime_quelle, stichtag, req.wiederverkaeufer_13b).await;
     let mut cache = ProductCache::new();
 
     let priced = match price_positionen(
@@ -1962,6 +2051,7 @@ pub async fn get_angebot_comparison(
     Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
+    Extension(regime_quelle): Extension<std::sync::Arc<crate::billingd::BehgRegimeQuelle>>,
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = authorize(&cedar, &claims, "read-angebot", &cfg.tenant) {
@@ -2008,7 +2098,7 @@ pub async fn get_angebot_comparison(
     let stichtag = angebot.lieferbeginn.unwrap_or_else(mako_fristen::heute);
     let ctx = pricing_context(
         &pool,
-        cfg.behg_regime,
+        &regime_quelle,
         stichtag,
         angebot.wiederverkaeufer_13b,
     )
@@ -2385,6 +2475,7 @@ pub async fn put_angebot(
     Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
+    Extension(regime_quelle): Extension<std::sync::Arc<crate::billingd::BehgRegimeQuelle>>,
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<UpdateAngebotRequest>,
 ) -> impl IntoResponse {
@@ -2413,7 +2504,7 @@ pub async fn put_angebot(
             let stichtag = existing.lieferbeginn.unwrap_or_else(mako_fristen::heute);
             let ctx = pricing_context(
                 &pool,
-                cfg.behg_regime,
+                &regime_quelle,
                 stichtag,
                 existing.wiederverkaeufer_13b,
             )

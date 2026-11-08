@@ -202,6 +202,9 @@ impl BillingEngine {
                 }
             }
         }
+        // § 3 Abs. 3 CO2KostAufG states the Preisbestandteil plus Umsatzsteuer,
+        // at the rate just stamped on the supply.
+        crate::position::state_co2kostaufg_umsatzsteuer(&mut positions, charged_rate);
 
         // ── Pass 2: taxes (MwSt sees the full commodity/levy base) ─────────────
         let pre_tax_snap: Vec<BillingPosition> = positions.clone();

@@ -115,8 +115,9 @@ pub use rates::{
     ENERGIESTEUER_GAS_SERIE, ERDGAS_UMRECHNUNGSFAKTOR_GJ_PER_MWH, RateRefusal, RegulatoryRates,
     ResolvedRate, RoundMoney, STROMSTEUER_SERIE, SatzZeile, behg_ct_per_kwh_for_year,
     behg_ct_per_kwh_from_price, behg_eur_per_t_for_year, behg_rechtsgrundlage_for_year,
-    energiesteuer_gas_for_year, erdgas_emissionsfaktor_kg_per_kwh, mwst_rate_for_gas_waerme_period,
-    mwst_rate_for_period, round_money, steuer_stichtage_im_zeitraum, stromsteuer_for_year,
+    co2kostaufg_preis_eur_per_t, energiesteuer_gas_for_year, erdgas_emissionsfaktor_kg_per_kwh,
+    mwst_rate_for_gas_waerme_period, mwst_rate_for_period, round_money,
+    steuer_stichtage_im_zeitraum, stromsteuer_for_year,
 };
 pub use steuer::{
     EnergiesteuerBefreiung, EnergiesteuerTarif, Kleinanlage, KleinanlageEnergietraeger,

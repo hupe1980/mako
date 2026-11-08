@@ -961,6 +961,11 @@ impl BillingdConfig {
     /// Empty means one set of rates governs the whole period. Otherwise each
     /// date is the first day of a new regime, and the period must be split
     /// there and billed in parts.
+    ///
+    /// A pinned `[rates] mwst_rate` waives none of them: `energy-billing`
+    /// refuses a period straddling a USt Stichtag whatever rate it is handed
+    /// (`MWST_STICHTAG_IM_ZEITRAUM`), so the period is split here and each leg
+    /// is billed at the pinned rate.
     #[must_use]
     pub fn steuer_stichtage(
         &self,
@@ -968,28 +973,7 @@ impl BillingdConfig {
         period_from: time::Date,
         period_to: time::Date,
     ) -> Vec<time::Date> {
-        let stichtage =
-            energy_billing::steuer_stichtage_im_zeitraum(category, period_from, period_to);
-        // An operator who pinned an explicit VAT rate has taken the VAT
-        // decision themselves; splitting at a VAT Stichtag would contradict
-        // it. A tax or levy boundary is not theirs to waive.
-        if self.rates.as_ref().and_then(|r| r.mwst_rate).is_none() {
-            return stichtage;
-        }
-        stichtage
-            .into_iter()
-            .filter(|d| d.month() == time::Month::January && d.day() == 1)
-            .filter(|d| {
-                // Keep a 1 January only where a per-year rate changes there.
-                let y = d.year();
-                energy_billing::behg_ct_per_kwh_for_year(y - 1)
-                    != energy_billing::behg_ct_per_kwh_for_year(y)
-                    || energy_billing::stromsteuer_for_year(y - 1)
-                        != energy_billing::stromsteuer_for_year(y)
-                    || energy_billing::energiesteuer_gas_for_year(y - 1)
-                        != energy_billing::energiesteuer_gas_for_year(y)
-            })
-            .collect()
+        energy_billing::steuer_stichtage_im_zeitraum(category, period_from, period_to)
     }
 
     /// Resolve the statutory rates for a period.
@@ -1133,12 +1117,16 @@ impl BillingdConfig {
             nehs.filter(|p| matches!(category, "GAS" | "WAERME") && p.datum.year() == year);
 
         if let Some(p) = series {
-            let grundlage = format!(
-                "nEHS-Zertifikatspreis vom {} ({})",
-                p.datum,
-                energy_billing::behg_rechtsgrundlage_for_year(year)
-                    .unwrap_or(regime.rechtsgrundlage())
-            );
+            // The point is the supplier's own auction price. In 2026 that is a
+            // § 10 Abs. 1 BEHG auction, not the § 4 Abs. 1 Nr. 2 CO2KostAufG
+            // midpoint the invoice discloses beside it, so the 2026 basis is
+            // the auction's; a tabled Festpreis year keeps its own provision.
+            let basis = match year {
+                2026 => "Versteigerung nach § 10 Abs. 1 BEHG",
+                _ => energy_billing::behg_rechtsgrundlage_for_year(year)
+                    .unwrap_or(regime.rechtsgrundlage()),
+            };
+            let grundlage = format!("nEHS-Zertifikatspreis vom {} ({basis})", p.datum);
             let checked = if tabled.is_some() {
                 Ok(())
             } else {
@@ -1258,20 +1246,35 @@ mod straddle_tests {
         assert!(err.stichtage.contains(&date!(2024 - 01 - 01)), "{err:?}");
     }
 
-    /// An operator who pinned an explicit rate has taken the decision; splitting
-    /// would contradict it, so the refusal stands down.
+    /// A pinned rate is the rate each leg is billed at, not a waiver of the
+    /// split: `energy-billing` refuses a straddling period whatever rate it is
+    /// handed, so a period that passed here unsplit would be refused there.
     #[test]
-    fn an_explicitly_configured_rate_wins_over_the_split() {
+    fn a_pinned_rate_does_not_waive_the_vat_stichtag() {
         let c = cfg(Some("0.19"));
-        let rates = c
+        let err = c
             .try_regulatory_rates_for_period(
                 "GAS",
                 date!(2024 - 03 - 01),
                 date!(2024 - 04 - 30),
                 None,
             )
-            .expect("a pinned rate suppresses the refusal");
-        assert_eq!(rates.mwst_rate, rust_decimal::dec!(0.19));
+            .expect_err("a pinned rate must not let a straddling period through");
+        assert_eq!(err.stichtage, vec![date!(2024 - 04 - 01)]);
+
+        let leg = c
+            .try_regulatory_rates_for_period(
+                "GAS",
+                date!(2024 - 03 - 01),
+                date!(2024 - 03 - 31),
+                None,
+            )
+            .expect("a leg inside one regime resolves");
+        assert_eq!(
+            leg.mwst_rate,
+            rust_decimal::dec!(0.19),
+            "at the pinned rate"
+        );
     }
 
     /// A uniform period resolves normally.
@@ -1450,7 +1453,9 @@ mod dated_rate_tests {
         assert!(r.behg_gas_ct_per_kwh.is_ok());
         assert!(r.behg_rechtsgrundlage.contains("BT-Drs. 21/7869"));
 
-        // The CO₂ line itself names the regime.
+        // A 2027 invoice priced under either regime still states the § 4 Abs. 1
+        // CO2KostAufG price, which is the UBA's publication and is not
+        // recorded: the invoice is refused for it, not issued without it.
         let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
             "category": "GAS",
             "gas_arbeitspreis_ct_per_kwh_hs": "8.00"
@@ -1468,21 +1473,99 @@ mod dated_rate_tests {
             }),
             ..Default::default()
         };
-        let invoice = product
+        let err = product
             .build_engine(&energy_billing::GridInput::default(), &r)
             .bill(ctx, &quantities)
-            .expect("a 2027 period with a corridor price bills");
-        let co2 = invoice
-            .positions
-            .iter()
-            .find(|p| p.tags.iter().any(|t| t == "behg"))
-            .expect("a CO₂ line");
+            .expect_err("no § 4 Abs. 1 CO2KostAufG price is recorded for 2027");
         assert!(
-            co2.legal_basis
-                .as_deref()
-                .is_some_and(|b| b.contains("BT-Drs. 21/7869")),
-            "{:?}",
-            co2.legal_basis
+            matches!(&err, energy_billing::EngineError::RateRefused(x) if x.satz == "CO2KostAufG"),
+            "{err}"
+        );
+    }
+
+    /// A 2027 Gas invoice is refused under both regimes, for different
+    /// reasons: under `rvo_bezugspreis` the 70 EUR/t series point prices the
+    /// CO₂ line, and the invoice is refused only because the § 4 Abs. 1
+    /// CO2KostAufG price its statement discloses is not recorded; under
+    /// `korridor` the point itself is refused. The regime decides the levy,
+    /// and no statement is issued at a price it rejects.
+    #[test]
+    fn a_2027_co2kostaufg_statement_follows_the_regime() {
+        let (from, to) = gas_jan(2027);
+        let punkt = NehsPreis {
+            datum: date!(2027 - 01 - 06),
+            eur_per_t: dec!(70),
+        };
+        let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
+            "category": "GAS",
+            "gas_arbeitspreis_ct_per_kwh_hs": "8.00"
+        }))
+        .unwrap();
+        let quantities = energy_billing::Quantities {
+            gas: Some(energy_billing::GasMeterInput {
+                kwh_hs: Some(dec!(1000)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let refused = |c: &BillingdConfig| {
+            let r = c
+                .try_regulatory_rates_for_period("GAS", from, to, Some(punkt))
+                .expect("uniform period");
+            let ctx = energy_billing::BillingContext {
+                period: energy_billing::BillingPeriod::new(from, to).unwrap(),
+                regulatory_rates: r.clone(),
+                ..Default::default()
+            };
+            match product
+                .build_engine(&energy_billing::GridInput::default(), &r)
+                .bill(ctx, &quantities)
+                .expect_err("2027 is refused")
+            {
+                energy_billing::EngineError::RateRefused(x) => x.satz,
+                other => panic!("expected a rate refusal, got {other}"),
+            }
+        };
+
+        assert_eq!(
+            refused(&cfg(serde_json::Value::Null)),
+            "CO2KostAufG",
+            "the RVO regime admits 70 EUR/t; the § 4 price is what is missing"
+        );
+        assert_eq!(
+            refused(&cfg_korridor(serde_json::Value::Null)),
+            "BEHG",
+            "70 EUR/t lies outside the corridor"
+        );
+    }
+
+    /// The 2026 levy line priced from an auction point names the auction as
+    /// its basis. § 4 Abs. 1 CO2KostAufG fixes the disclosed figure (the
+    /// 60 EUR/t midpoint), not the supplier's cost, so crediting a 63 EUR/t
+    /// auction point to § 4 would state a figure the provision does not set.
+    #[test]
+    fn a_2026_auction_point_is_not_credited_to_section_4() {
+        let (from, to) = gas_jan(2026);
+        let punkt = NehsPreis {
+            datum: date!(2026 - 01 - 07),
+            eur_per_t: dec!(63),
+        };
+        let r = cfg(serde_json::Value::Null)
+            .try_regulatory_rates_for_period("GAS", from, to, Some(punkt))
+            .expect("uniform period");
+        assert_eq!(
+            r.behg_gas_ct_per_kwh.clone().unwrap(),
+            dec!(63) * dec!(0.18139464) / dec!(10)
+        );
+        assert!(
+            !r.behg_rechtsgrundlage.contains("CO2KostAufG"),
+            "{}",
+            r.behg_rechtsgrundlage
+        );
+        assert!(
+            r.behg_rechtsgrundlage.contains("§ 10 Abs. 1 BEHG"),
+            "{}",
+            r.behg_rechtsgrundlage
         );
     }
 

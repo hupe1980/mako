@@ -82,6 +82,10 @@ fn test_config() -> einsd::config::EinsdConfig {
         erp_hmac_secret: None,
         edmd_url: None,
         edmd_api_key: None,
+        accountingd_url: None,
+        accountingd_api_key: None,
+        marktd_url: None,
+        marktd_api_key: None,
         alert_interval_secs: None,
         jahresmarktwert_url: None,
         jahresmarktwert_import_interval_secs: None,
@@ -4279,4 +4283,183 @@ async fn a_settlement_without_an_inbetriebnahme_is_refused() {
         .await
         .expect_err("no Inbetriebnahme, no Marktwert series");
     assert!(format!("{err:#}").contains("Inbetriebnahme"), "{err:#}");
+}
+
+// ── EnFG ledger (§§ 13, 14, 50 Nr. 1 EnFG) ────────────────────────────────────
+
+const ZONE_A: &str = "10YDE-EON------1";
+const ZONE_B: &str = "10YDE-RWENET---I";
+
+/// A `calculated` receipt for March 2026.
+async fn seed_receipt(pool: &PgPool, tr_id: &str, model: &str, eur: &str) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO settlement_receipts
+             (tr_id, tenant, billing_year, billing_month, settlement_model, settlement_eur, status)
+         VALUES ($1, $2, 2026, 3, $3, $4::numeric, 'calculated')
+         RETURNING id",
+    )
+    .bind(tr_id)
+    .bind(TENANT)
+    .bind(model)
+    .bind(eur)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_else(|e| panic!("seed receipt {tr_id}: {e}"))
+}
+
+fn zahlung(json: serde_json::Value) -> einsd::enfg::Zahlung {
+    serde_json::from_value(json).expect("accountingd's wire shape")
+}
+
+fn melos(zones: &[(&str, &str)]) -> std::collections::BTreeMap<String, einsd::enfg::MeloFakten> {
+    zones
+        .iter()
+        .map(|(melo, zone)| {
+            (
+                (*melo).to_owned(),
+                einsd::enfg::MeloFakten {
+                    regelzone: Some((*zone).to_owned()),
+                    netzebene: Some("NSP".to_owned()),
+                },
+            )
+        })
+        .collect()
+}
+
+/// Of two settled receipts only the paid one
+/// is booked, at the cents paid; a § 52 set-off lands as a § 14 item; a rebuild
+/// books nothing twice.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_enfg_ledger_books_what_was_paid() {
+    let Some((pool, _pg)) = test_pool("enfg_ledger").await else {
+        return;
+    };
+    seed_plant(&pool, "TR-PAID", TENANT, ", melo_id", ", 'MELO-A'").await;
+    seed_plant(&pool, "TR-UNPAID", TENANT, ", melo_id", ", 'MELO-A2'").await;
+    seed_receipt(&pool, "TR-PAID", "VERGUETUNG", "100.00000").await;
+    seed_receipt(&pool, "TR-UNPAID", "VERGUETUNG", "55.55555").await;
+    let stammdaten = melos(&[("MELO-A", ZONE_A), ("MELO-A2", ZONE_A)]);
+    let zahlungen = [
+        zahlung(serde_json::json!({
+            "quelle": "AUSZAHLUNG", "id": "P-1", "tr_id": "TR-PAID", "malo_id": "51238696781",
+            "billing_year": 2026, "billing_month": 3, "amount_ct": 7000,
+            "gegenforderung": null, "erklaert_am": null, "end_to_end_ref": "E2E"
+        })),
+        zahlung(serde_json::json!({
+            "quelle": "AUFRECHNUNG", "id": "A-1", "tr_id": "TR-PAID", "malo_id": "51238696781",
+            "billing_year": 2026, "billing_month": 3, "amount_ct": 3000,
+            "gegenforderung": "EEG_52_PFLICHTZAHLUNG", "erklaert_am": "2026-04-10",
+            "end_to_end_ref": null
+        })),
+    ];
+    let rows = einsd::enfg::build_month(&pool, TENANT, 2026, 3, &zahlungen, &stammdaten)
+        .await
+        .expect("booked");
+    assert!(
+        rows.iter().all(|r| r.tr_id == "TR-PAID"),
+        "the unpaid receipt is not booked"
+    );
+    assert!(rows.iter().all(|r| r.uenb_regelzone == ZONE_A));
+    let mut got: Vec<(&str, &str, String)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.posten.token(),
+                r.quelle.as_str(),
+                r.betrag_eur.normalize().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            ("EEG_19_ABS1", "AUFRECHNUNG", "30".to_owned()),
+            ("EEG_19_ABS1", "AUSZAHLUNG", "70".to_owned()),
+            ("SECT14_EEG52", "AUFRECHNUNG", "30".to_owned()),
+        ]
+    );
+    let again = einsd::enfg::build_month(&pool, TENANT, 2026, 3, &zahlungen, &stammdaten)
+        .await
+        .expect("rebuilt");
+    assert_eq!(again.len(), 3, "a rebuild books nothing twice");
+
+    // The Mitteilung reads the booked month.
+    let m = einsd::enfg::mitteilung_monat(&pool, TENANT, 2026, 3, &stammdaten)
+        .await
+        .expect("Mitteilung");
+    assert_eq!(m.uenb_regelzone, ZONE_A);
+    assert!(
+        m.sect72_anlagen
+            .iter()
+            .any(|a| a.tr_id == "TR-PAID" && a.spannungsebene.as_deref() == Some("NSP"))
+    );
+}
+
+/// A plant whose MeLo carries no Regelzone refuses the month with its
+/// `tr_id`; plants in two Regelzonen refuse it too.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_enfg_ledger_refuses_an_unattributable_month() {
+    let Some((pool, _pg)) = test_pool("enfg_refusals").await else {
+        return;
+    };
+    seed_plant(&pool, "TR-A", TENANT, ", melo_id", ", 'MELO-A'").await;
+    seed_plant(&pool, "TR-B", TENANT, ", melo_id", ", 'MELO-B'").await;
+    seed_plant(&pool, "TR-NOMELO", TENANT, "", "").await;
+    for tr in ["TR-A", "TR-B", "TR-NOMELO"] {
+        seed_receipt(&pool, tr, "VERGUETUNG", "1.00000").await;
+    }
+    let paid = |tr: &str| {
+        zahlung(serde_json::json!({
+            "quelle": "AUSZAHLUNG", "id": format!("P-{tr}"), "tr_id": tr,
+            "amount_ct": 100, "gegenforderung": null
+        }))
+    };
+    let stammdaten = melos(&[("MELO-A", ZONE_A), ("MELO-B", ZONE_B)]);
+
+    let err = einsd::enfg::build_month(
+        &pool,
+        TENANT,
+        2026,
+        3,
+        &[paid("TR-A"), paid("TR-NOMELO")],
+        &stammdaten,
+    )
+    .await
+    .expect_err("no Regelzone");
+    assert!(err.to_string().contains("TR-NOMELO"), "{err}");
+
+    let err = einsd::enfg::build_month(
+        &pool,
+        TENANT,
+        2026,
+        3,
+        &[paid("TR-A"), paid("TR-B")],
+        &stammdaten,
+    )
+    .await
+    .expect_err("two Regelzonen");
+    assert!(
+        matches!(
+            err,
+            einsd::enfg::BuildFehler::Fachlich(einsd::enfg::EnfgFehler::MehrereRegelzonen { .. })
+        ),
+        "{err}"
+    );
+    let booked: i64 = sqlx::query_scalar("SELECT count(*) FROM enfg_ledger")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(booked, 0, "a refused month books nothing");
+
+    // A month booked under one Regelzone refuses a later payment from another.
+    einsd::enfg::build_month(&pool, TENANT, 2026, 3, &[paid("TR-A")], &stammdaten)
+        .await
+        .expect("one zone");
+    let err = einsd::enfg::build_month(&pool, TENANT, 2026, 3, &[paid("TR-B")], &stammdaten)
+        .await
+        .expect_err("second zone after booking");
+    assert!(err.to_string().contains("more than one Regelzone"), "{err}");
 }

@@ -469,7 +469,6 @@ fn agg_input(
         capacity_price_eur_per_kwh: rust_decimal::Decimal::from_str(price).unwrap(),
         vertragsbeginn: von,
         vertragsende: bis,
-        mwst_rate_override: None,
         kunden_id: None,
     }
 }

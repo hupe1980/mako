@@ -12,3 +12,4 @@ mod golden_scenarios;
 mod one_rounding_point;
 mod priceless_product_is_refused;
 mod proptest_invoice;
+mod stichtag_refusal;

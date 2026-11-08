@@ -43,6 +43,9 @@ grid-billing = { workspace = true }
 # The BEHG regime, the EBeV emission factor and the § 10 BEHG table — the same
 # resolution billingd bills with, so a quotation and its invoice agree.
 energy-billing = { workspace = true }
+# The billingd client the 2027 BEHG regime is read through.
+reqwest      = { workspace = true }
+secrecy      = "0.10"
 tracing      = "0.1"
 anyhow       = "1"
 tokio-util   = { workspace = true }

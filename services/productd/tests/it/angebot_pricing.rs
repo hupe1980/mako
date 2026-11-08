@@ -9,7 +9,9 @@
 //! These run without a database: the pricing takes the product's stored JSON
 //! and the position, and nothing else.
 
-use productd::handlers::{PricingContext, behg_gas_fuer_stichtag, compute_cost_breakdown, grund};
+use productd::handlers::{
+    PricingContext, behg_gas_fuer_stichtag, compute_cost_breakdown, grund, pricing_context_fuer,
+};
 use productd::pg::AngebotPositionInput;
 use rust_decimal::{Decimal, dec};
 
@@ -69,6 +71,7 @@ fn position(sparte: &str, jahresverbrauch_kwh: Decimal) -> AngebotPositionInput 
 /// No CO₂ price and no reverse charge — the default a Strom quotation runs in.
 const PLAIN: PricingContext = PricingContext {
     behg_gas_ct_per_kwh: Err(String::new()),
+    co2kostaufg_preis: Err(String::new()),
     reverse_charge_13b: false,
     steuerjahr: Some(2026),
 };
@@ -261,6 +264,7 @@ fn a_reverse_charge_quotation_states_no_umsatzsteuer() {
     let data = produkt(serde_json::json!([flat("ARBEITSPREIS_EINTARIF", "20")]));
     let ctx = PricingContext {
         behg_gas_ct_per_kwh: Err(String::new()),
+        co2kostaufg_preis: Err(String::new()),
         reverse_charge_13b: true,
         steuerjahr: Some(2026),
     };
@@ -292,6 +296,7 @@ fn a_tax_rate_comes_from_the_stichtag_year_or_refuses() {
     let jahr = |j| PricingContext {
         steuerjahr: Some(j),
         behg_gas_ct_per_kwh: Ok(dec!(1)),
+        co2kostaufg_preis: Ok((dec!(60), "test")),
         ..PLAIN.clone()
     };
     for sparte in ["STROM", "GAS"] {
@@ -339,6 +344,7 @@ fn a_gas_position_needs_a_certificate_price() {
     // 55 EUR/t against the EBeV Erdgas factor of 0,18139464 kg CO₂/kWh_Hs.
     let ctx = PricingContext {
         behg_gas_ct_per_kwh: Ok(dec!(0.99767)),
+        co2kostaufg_preis: Ok((dec!(60), "test")),
         reverse_charge_13b: false,
         steuerjahr: Some(2026),
     };
@@ -359,12 +365,13 @@ fn a_2027_lieferbeginn_is_not_priced_at_the_last_2026_auction_point() {
     use energy_billing::BehgRegime;
     let stichtag = time::macros::date!(2027 - 01 - 01);
     let punkt_2026 = Some((time::macros::date!(2026 - 12 - 16), dec!(65)));
-    let behg = behg_gas_fuer_stichtag(stichtag, punkt_2026, BehgRegime::RvoBezugspreis);
+    let behg = behg_gas_fuer_stichtag(stichtag, punkt_2026, Ok(BehgRegime::RvoBezugspreis));
     assert!(behg.is_err(), "{behg:?}");
 
     let data = produkt(serde_json::json!([flat("ARBEITSPREIS_EINTARIF", "5")]));
     let ctx = PricingContext {
         behg_gas_ct_per_kwh: behg,
+        co2kostaufg_preis: Err(String::new()),
         reverse_charge_13b: false,
         steuerjahr: Some(2026),
     };
@@ -384,7 +391,7 @@ fn a_2027_point_is_checked_against_the_configured_regime() {
     let ok = behg_gas_fuer_stichtag(
         stichtag,
         Some((time::macros::date!(2027 - 02 - 10), dec!(60))),
-        BehgRegime::Korridor,
+        Ok(BehgRegime::Korridor),
     )
     .expect("inside the corridor");
     let faktor = energy_billing::rates::erdgas_emissionsfaktor_kg_per_kwh(2027).unwrap();
@@ -394,7 +401,7 @@ fn a_2027_point_is_checked_against_the_configured_regime() {
         behg_gas_fuer_stichtag(
             stichtag,
             Some((time::macros::date!(2027 - 02 - 10), dec!(70))),
-            BehgRegime::Korridor,
+            Ok(BehgRegime::Korridor),
         )
         .is_err()
     );
@@ -405,20 +412,74 @@ fn a_2027_point_is_checked_against_the_configured_regime() {
 #[test]
 fn a_tabled_year_takes_its_own_point_or_the_table() {
     use energy_billing::BehgRegime;
-    let r = BehgRegime::RvoBezugspreis;
+    let r = || Ok(BehgRegime::RvoBezugspreis);
     let d2026 = time::macros::date!(2026 - 09 - 01);
     let faktor = energy_billing::rates::erdgas_emissionsfaktor_kg_per_kwh(2026).unwrap();
     assert_eq!(
         behg_gas_fuer_stichtag(
             d2026,
             Some((time::macros::date!(2026 - 08 - 26), dec!(63))),
-            r
+            r()
         ),
         Ok(dec!(63) * faktor / dec!(10))
     );
     assert_eq!(
-        behg_gas_fuer_stichtag(time::macros::date!(2025 - 06 - 01), None, r),
+        behg_gas_fuer_stichtag(time::macros::date!(2025 - 06 - 01), None, r()),
         Ok(energy_billing::behg_ct_per_kwh_for_year(2025).unwrap())
+    );
+}
+
+/// § 4 Abs. 1 Nr. 2 CO2KostAufG: the price a 2026 quotation discloses is the
+/// midpoint of the § 10 Abs. 2 Satz 4 BEHG corridor, 60 EUR/t, whatever the
+/// auctions cleared at. The supplier's own CO₂ cost stays at its 63 EUR/t
+/// point — the disclosure sits beside the price and never changes it.
+#[test]
+fn a_2026_gas_quotation_discloses_60_eur_per_t_after_a_63_auction_point() {
+    let ctx = pricing_context_fuer(
+        time::macros::date!(2026 - 09 - 01),
+        Some((time::macros::date!(2026 - 08 - 26), dec!(63))),
+        Err("2026 is tabled; billingd is not asked".to_owned()),
+        false,
+    );
+    let faktor = energy_billing::rates::erdgas_emissionsfaktor_kg_per_kwh(2026).unwrap();
+    assert_eq!(ctx.behg_gas_ct_per_kwh, Ok(dec!(63) * faktor / dec!(10)));
+
+    let data = produkt(serde_json::json!([flat("ARBEITSPREIS_EINTARIF", "5")]));
+    let bd =
+        compute_cost_breakdown(&data, &position("GAS", dec!(1000)), None, &ctx).expect("priced");
+    assert_eq!(bd.co2kostaufg_preis_eur_per_t, Some(dec!(60)));
+    assert!(
+        bd.co2kostaufg_rechtsgrundlage
+            .is_some_and(|q| q.contains("§ 4 Abs. 1 Nr. 2 CO2KostAufG")),
+        "{:?}",
+        bd.co2kostaufg_rechtsgrundlage
+    );
+}
+
+/// § 4 Abs. 1 Nr. 3 CO2KostAufG: from 2027 the disclosed price is the UBA's
+/// published auction average (§ 4 Abs. 2). No figure is recorded for 2027, so
+/// a 2027 Gas quotation discloses none and says why — it is still quoted,
+/// because the figure changes no amount, and never at a substituted price.
+#[test]
+fn a_2027_gas_quotation_states_that_no_uba_figure_is_published() {
+    let ctx = pricing_context_fuer(
+        time::macros::date!(2027 - 03 - 01),
+        Some((time::macros::date!(2027 - 02 - 10), dec!(60))),
+        Ok(energy_billing::BehgRegime::Korridor),
+        false,
+    );
+    assert!(ctx.behg_gas_ct_per_kwh.is_ok(), "the own cost is priced");
+    let data = produkt(serde_json::json!([flat("ARBEITSPREIS_EINTARIF", "5")]));
+    let mut pos = position("GAS", dec!(1000));
+    pos.energiesteuer_gas_ct_per_kwh = Some(dec!(0.55));
+    let bd = compute_cost_breakdown(&data, &pos, None, &ctx)
+        .expect("a missing disclosure figure changes no amount");
+    assert_eq!(bd.co2kostaufg_preis_eur_per_t, None);
+    assert_eq!(bd.co2kostaufg_rechtsgrundlage, None);
+    let hinweis = bd.co2kostaufg_hinweis.expect("the position says why");
+    assert!(
+        hinweis.contains("2027") && hinweis.contains("§ 4 Abs. 2"),
+        "{hinweis}"
     );
 }
 

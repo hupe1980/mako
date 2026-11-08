@@ -11,12 +11,14 @@
 //!
 //! | Module | Purpose |
 //! |---|---|
+//! | `billingd` | the 2027 BEHG regime, read from billingd's `[policy]` |
 //! | `daemon` | the [`Productd`] daemon `mako_service::run` starts |
 //! | `config` | see module docs |
 //! | `handlers` | see module docs |
 //! | `pg` | see module docs |
 
 pub mod behg;
+pub mod billingd;
 pub mod bo4e_angebot;
 pub mod config;
 pub mod daemon;

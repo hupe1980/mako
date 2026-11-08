@@ -4526,3 +4526,78 @@ async fn a_ledger_line_carries_its_beleg() {
         .unwrap();
     assert!(parked.is_none(), "an unknown key is not a parked booking");
 }
+
+/// `GET /api/v1/eeg/enfg-zahlungen` serves what was **paid**: a payout the bank
+/// settled (`ACSC`) and an Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG), never a payout
+/// still pending or rejected.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn enfg_zahlungen_serve_settled_payouts_and_aufrechnungen_only() {
+    use accountingd::enfg::{AufrechnungRequest, Gegenforderung, Quelle};
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let tenant = uniq("T");
+    let malo = uniq_malo();
+    let account_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO accounts (malo_id, lf_mp_id, tenant) VALUES ($1, '', $2) RETURNING account_id",
+    )
+    .bind(&malo)
+    .bind(&tenant)
+    .fetch_one(&pool)
+    .await
+    .expect("account");
+    for (tr, status) in [
+        ("TR-PAID", Some("ACSC")),
+        ("TR-PENDING", Some("PDNG")),
+        ("TR-NONE", None),
+    ] {
+        sqlx::query(
+            "INSERT INTO eeg_payout_orders
+                 (malo_id, account_id, tr_id, billing_year, billing_month, amount_ct,
+                  creditor_iban, creditor_name, payment_type, end_to_end_ref,
+                  pain002_status, tenant)
+             VALUES ($1, $2, $3, 2026, 3, 1234, 'DE02120300000000202051', 'X', 'SCT_CORE',
+                     $4, $5, $6)",
+        )
+        .bind(&malo)
+        .bind(account_id)
+        .bind(tr)
+        .bind(uniq("E2E"))
+        .bind(status)
+        .bind(&tenant)
+        .execute(&pool)
+        .await
+        .expect("payout");
+    }
+    let req = AufrechnungRequest {
+        tr_id: "TR-SET-OFF".to_owned(),
+        malo_id: malo.clone(),
+        billing_year: 2026,
+        billing_month: 3,
+        amount_ct: 900,
+        gegenforderung: Gegenforderung::Eeg52Pflichtzahlung,
+        erklaert_am: "2026-04-10".to_owned(),
+        vermerk: None,
+    };
+    accountingd::enfg::record_aufrechnung(&pool, &tenant, &req, Some("test"))
+        .await
+        .expect("aufrechnung");
+    assert!(matches!(
+        accountingd::enfg::record_aufrechnung(&pool, &tenant, &req, Some("test")).await,
+        Err(accountingd::enfg::AufrechnungFehler::Doppelt)
+    ));
+
+    let out = accountingd::enfg::zahlungen_im_monat(&pool, &tenant, 2026, 3)
+        .await
+        .expect("read");
+    let got: Vec<(Quelle, Option<&str>)> =
+        out.iter().map(|z| (z.quelle, z.tr_id.as_deref())).collect();
+    assert_eq!(
+        got,
+        vec![
+            (Quelle::Auszahlung, Some("TR-PAID")),
+            (Quelle::Aufrechnung, Some("TR-SET-OFF")),
+        ]
+    );
+}

@@ -3,7 +3,7 @@
 use mako_markt::{
     error::MdmError,
     repository::{
-        ZaehlzeitRegisterRecord, ZaehlzeitRegisterUpsert, ZaehlzeitSaisonRecord,
+        MonatTag, ZaehlzeitRegisterRecord, ZaehlzeitRegisterUpsert, ZaehlzeitSaisonRecord,
         ZaehlzeitSaisonUpsert,
     },
 };
@@ -100,15 +100,20 @@ impl PgZaehlzeitRepository {
     ) -> Result<ZaehlzeitSaisonRecord, MdmError> {
         let row = sqlx::query(
             r"INSERT INTO zaehler_saisons
-                  (register_id, saison, wochentage, zeit_von, zeit_bis, updated_at)
-              SELECT r.id, $3::text, $4::smallint[], $5::time, $6::time, now()
+                  (register_id, saison, wochentage, zeit_von, zeit_bis,
+                   saison_von, saison_bis, updated_at)
+              SELECT r.id, $3::text, $4::smallint[], $5::time, $6::time,
+                     $7::text, $8::text, now()
                 FROM zaehler_register r
                WHERE r.id = $1 AND r.tenant = $2
               ON CONFLICT (register_id, saison, zeit_von) DO UPDATE
               SET wochentage = EXCLUDED.wochentage,
                   zeit_bis   = EXCLUDED.zeit_bis,
+                  saison_von = EXCLUDED.saison_von,
+                  saison_bis = EXCLUDED.saison_bis,
                   updated_at = now()
-              RETURNING id, register_id, saison, wochentage, zeit_von, zeit_bis, updated_at",
+              RETURNING id, register_id, saison, wochentage, zeit_von, zeit_bis,
+                        saison_von, saison_bis, updated_at",
         )
         .bind(register_id)
         .bind(tenant)
@@ -116,6 +121,8 @@ impl PgZaehlzeitRepository {
         .bind(&body.wochentage)
         .bind(body.zeit_von)
         .bind(body.zeit_bis)
+        .bind(body.saison_von.map(|d| d.to_string()))
+        .bind(body.saison_bis.map(|d| d.to_string()))
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
@@ -140,7 +147,7 @@ impl PgZaehlzeitRepository {
     ) -> Result<Vec<ZaehlzeitSaisonRecord>, MdmError> {
         let rows = sqlx::query(
             r"SELECT s.id, s.register_id, s.saison, s.wochentage,
-                     s.zeit_von, s.zeit_bis, s.updated_at
+                     s.zeit_von, s.zeit_bis, s.saison_von, s.saison_bis, s.updated_at
               FROM zaehler_saisons  s
               JOIN zaehler_register r ON r.id = s.register_id
               WHERE s.register_id = $1 AND r.tenant = $2
@@ -156,51 +163,150 @@ impl PgZaehlzeitRepository {
     }
 
     /// Resolve the applicable tariff zone (`HT`|`NT`|`EINZEL`) for a Zähler at
-    /// `local_datetime`, a German (Europe/Berlin) wall-clock time. A window
-    /// applies on the weekdays it lists, dated by the day it opens on — see
-    /// [`window_holds`]. `None` when no window covers the instant; the endpoint
+    /// `local_datetime`, a German (Europe/Berlin) wall-clock time.
+    ///
+    /// The windows read are those of the registers valid on the instant's
+    /// calendar day — validity is half-open `[valid_from, valid_to)`, so a
+    /// register replaced since still answers for the time before its
+    /// replacement — and [`classify`] decides which of them holds it: the
+    /// weekday and the season of the day a window opens on, the wall clock
+    /// within it. `None` when no window covers the instant; the endpoint
     /// refuses that rather than answering `EINZEL`.
+    ///
+    /// # Errors
+    /// [`MdmError::Unprocessable`] when windows of different zones both hold
+    /// the instant — master data with two answers, which no row order may
+    /// settle.
     pub async fn resolve_tariff_zone(
         &self,
         zaehler_id: &str,
         tenant: &str,
         local_datetime: time::PrimitiveDateTime,
     ) -> Result<Option<String>, MdmError> {
-        // Every window of the register; which one holds the instant is decided
-        // by [`window_holds`], the one place a midnight-crossing window wraps
-        // and is dated to the day it opened.
         let rows = sqlx::query(
-            r"SELECT r.zaehlerauspraegung, s.zeit_von, s.zeit_bis, s.wochentage
+            r"SELECT r.zaehlerauspraegung, r.bezeichnung, r.valid_from,
+                     s.saison, s.saison_von, s.saison_bis,
+                     s.zeit_von, s.zeit_bis, s.wochentage
               FROM zaehler_register r
               JOIN zaehler_saisons  s ON s.register_id = r.id
               WHERE r.zaehler_id = $1 AND r.tenant = $2
-                AND r.valid_to IS NULL",
+                AND r.valid_from <= $3
+                AND (r.valid_to IS NULL OR $3 < r.valid_to)
+              ORDER BY r.valid_from, r.bezeichnung, s.saison, s.zeit_von, s.id",
         )
         .bind(zaehler_id)
         .bind(tenant)
+        .bind(local_datetime.date())
         .fetch_all(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
-        for row in rows {
-            let von: time::Time = row
-                .try_get("zeit_von")
-                .map_err(|e| MdmError::Internal(e.to_string()))?;
-            let bis: time::Time = row
-                .try_get("zeit_bis")
-                .map_err(|e| MdmError::Internal(e.to_string()))?;
-            let wochentage: Vec<i16> = row
-                .try_get("wochentage")
-                .map_err(|e| MdmError::Internal(e.to_string()))?;
-            if window_holds(von, bis, &wochentage, local_datetime) {
-                return row
-                    .try_get::<String, _>("zaehlerauspraegung")
-                    .map(Some)
-                    .map_err(|e| MdmError::Internal(e.to_string()));
-            }
-        }
-        Ok(None)
+        let windows = rows
+            .iter()
+            .map(row_to_fenster)
+            .collect::<Result<Vec<_>, _>>()?;
+        classify(&windows, local_datetime)
     }
+}
+
+/// One Zählzeit window as [`classify`] reads it: a `zaehler_saisons` row with
+/// the zone of its register.
+#[derive(Debug, Clone)]
+pub struct Zaehlzeitfenster {
+    /// The register's `zaehlerauspraegung`: `HT`, `NT` or `EINZEL`.
+    pub zone: String,
+    /// The register's `bezeichnung`, to name the window in a refusal.
+    pub register: String,
+    /// `SOMMER`, `WINTER` or `GESAMT`.
+    pub saison: String,
+    /// The season's first day, inclusive — `None` for `GESAMT`.
+    pub saison_von: Option<MonatTag>,
+    /// The day after the season, exclusive — `None` for `GESAMT`.
+    pub saison_bis: Option<MonatTag>,
+    /// ISO weekdays, Monday = 1.
+    pub wochentage: Vec<i16>,
+    /// Window start, German wall clock, inclusive.
+    pub zeit_von: time::Time,
+    /// Window end, German wall clock, exclusive.
+    pub zeit_bis: time::Time,
+}
+
+impl Zaehlzeitfenster {
+    /// Whether the window holds the German wall-clock instant `at`: the wall
+    /// clock is inside it, the day it opened on is one of its weekdays (see
+    /// [`window_holds`]), and the instant's own calendar day is inside its
+    /// season.
+    ///
+    /// The season is the instant's day, not the opening day's: each season's
+    /// windows tile its own days, so on 1 April a SOMMER night 20:00–08:00
+    /// that opened on 31 March takes over from WINTER's 22:00–06:00 at
+    /// midnight. Dating the season by the opening day instead leaves 06:00–08:00
+    /// on 1 April in no window and 06:00–08:00 on 1 October in two.
+    #[must_use]
+    pub fn holds(&self, at: time::PrimitiveDateTime) -> bool {
+        let in_season = match (self.saison_von, self.saison_bis) {
+            (Some(von), Some(bis)) => MonatTag::range_holds(von, bis, at.date()),
+            _ => true,
+        };
+        in_season
+            && opened_on(self.zeit_von, self.zeit_bis, at)
+                .is_some_and(|opened| weekday_listed(&self.wochentage, opened))
+    }
+}
+
+/// The tariff zone of the windows that hold `at`, independent of their order.
+///
+/// # Errors
+/// [`MdmError::Unprocessable`] when windows of different zones hold it.
+pub fn classify(
+    windows: &[Zaehlzeitfenster],
+    at: time::PrimitiveDateTime,
+) -> Result<Option<String>, MdmError> {
+    let holding: Vec<&Zaehlzeitfenster> = windows.iter().filter(|w| w.holds(at)).collect();
+    let Some(first) = holding.first() else {
+        return Ok(None);
+    };
+    if let Some(other) = holding.iter().find(|w| w.zone != first.zone) {
+        let name = |w: &Zaehlzeitfenster| {
+            format!("{} {} {}–{}", w.register, w.saison, w.zeit_von, w.zeit_bis)
+        };
+        return Err(MdmError::Unprocessable {
+            reason: format!(
+                "{at}: the windows {} ({}) and {} ({}) both hold it — the tariff zone is contradictory",
+                name(first),
+                first.zone,
+                name(other),
+                other.zone
+            ),
+        });
+    }
+    Ok(Some(first.zone.clone()))
+}
+
+fn row_to_fenster(row: &sqlx::postgres::PgRow) -> Result<Zaehlzeitfenster, MdmError> {
+    let get_err = |e: sqlx::Error| MdmError::Internal(e.to_string());
+    Ok(Zaehlzeitfenster {
+        zone: row.try_get("zaehlerauspraegung").map_err(get_err)?,
+        register: row.try_get("bezeichnung").map_err(get_err)?,
+        saison: row.try_get("saison").map_err(get_err)?,
+        saison_von: monat_tag(row, "saison_von")?,
+        saison_bis: monat_tag(row, "saison_bis")?,
+        wochentage: row.try_get("wochentage").map_err(get_err)?,
+        zeit_von: row.try_get("zeit_von").map_err(get_err)?,
+        zeit_bis: row.try_get("zeit_bis").map_err(get_err)?,
+    })
+}
+
+/// A stored `'MM-DD'` season boundary. The column's CHECK admits `02-30`,
+/// which no year has; reading it is an internal error, not a guess.
+fn monat_tag(row: &sqlx::postgres::PgRow, column: &str) -> Result<Option<MonatTag>, MdmError> {
+    row.try_get::<Option<String>, _>(column)
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .map(|raw| {
+            raw.parse()
+                .map_err(|e: MdmError| MdmError::Internal(format!("{column}: {e}")))
+        })
+        .transpose()
 }
 
 fn row_to_register(row: &sqlx::postgres::PgRow) -> Result<ZaehlzeitRegisterRecord, MdmError> {
@@ -256,6 +362,8 @@ fn row_to_saison(row: &sqlx::postgres::PgRow) -> Result<ZaehlzeitSaisonRecord, M
         zeit_bis: row
             .try_get("zeit_bis")
             .map_err(|e| MdmError::Internal(e.to_string()))?,
+        saison_von: monat_tag(row, "saison_von")?,
+        saison_bis: monat_tag(row, "saison_bis")?,
         updated_at: row
             .try_get("updated_at")
             .map_err(|e| MdmError::Internal(e.to_string()))?,
@@ -292,22 +400,178 @@ pub fn window_holds(
     wochentage: &[i16],
     at: time::PrimitiveDateTime,
 ) -> bool {
+    opened_on(zeit_von, zeit_bis, at).is_some_and(|opened| weekday_listed(wochentage, opened))
+}
+
+/// The day the occurrence of `[zeit_von, zeit_bis)` holding `at` opened on —
+/// the day before for the after-midnight part of a wrapping window — or
+/// `None` when the wall clock of `at` is outside the window.
+fn opened_on(
+    zeit_von: time::Time,
+    zeit_bis: time::Time,
+    at: time::PrimitiveDateTime,
+) -> Option<time::Date> {
     if !window_contains(zeit_von, zeit_bis, at.time()) {
-        return false;
+        return None;
     }
     let after_midnight = zeit_von > zeit_bis && at.time() < zeit_bis;
-    let opened = if after_midnight {
+    Some(if after_midnight {
         at.date().previous_day().unwrap_or(at.date())
     } else {
         at.date()
-    };
-    wochentage.contains(&i16::from(opened.weekday().number_from_monday()))
+    })
+}
+
+fn weekday_listed(wochentage: &[i16], day: time::Date) -> bool {
+    wochentage.contains(&i16::from(day.weekday().number_from_monday()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{window_contains, window_holds};
-    use time::{Duration, OffsetDateTime, PrimitiveDateTime, macros::time};
+    use super::{Zaehlzeitfenster, classify, window_contains, window_holds};
+    use mako_markt::repository::MonatTag;
+    use time::{
+        Duration, OffsetDateTime, PrimitiveDateTime,
+        macros::{datetime, time},
+    };
+
+    /// A daily window of `saison`, which an operator's Preisblatt dates
+    /// 01.04.–30.09. (SOMMER) and 01.10.–31.03. (WINTER). These dates are the
+    /// fixture's: no published rule fixes a Zählzeit season.
+    fn fenster(zone: &str, saison: &str, von: time::Time, bis: time::Time) -> Zaehlzeitfenster {
+        let (apr, okt) = (MonatTag::new(4, 1).unwrap(), MonatTag::new(10, 1).unwrap());
+        let (saison_von, saison_bis) = match saison {
+            "SOMMER" => (Some(apr), Some(okt)),
+            "WINTER" => (Some(okt), Some(apr)),
+            _ => (None, None),
+        };
+        Zaehlzeitfenster {
+            zone: zone.to_owned(),
+            register: zone.to_owned(),
+            saison: saison.to_owned(),
+            saison_von,
+            saison_bis,
+            wochentage: vec![1, 2, 3, 4, 5, 6, 7],
+            zeit_von: von,
+            zeit_bis: bis,
+        }
+    }
+
+    /// SOMMER HT 08:00–20:00 / NT 20:00–08:00 over WINTER HT 06:00–22:00 /
+    /// NT 22:00–06:00: at 07:00 and 21:00 a SOMMER NT window and a WINTER HT
+    /// window overlap on the same weekday and hour.
+    fn sommer_over_winter() -> Vec<Zaehlzeitfenster> {
+        vec![
+            fenster("HT", "SOMMER", time!(08:00), time!(20:00)),
+            fenster("NT", "SOMMER", time!(20:00), time!(08:00)),
+            fenster("HT", "WINTER", time!(06:00), time!(22:00)),
+            fenster("NT", "WINTER", time!(22:00), time!(06:00)),
+        ]
+    }
+
+    fn zone_at(windows: &[Zaehlzeitfenster], at: PrimitiveDateTime) -> Option<String> {
+        classify(windows, at).expect("no contradiction")
+    }
+
+    #[test]
+    fn overlapping_seasons_answer_the_instants_own_season_in_any_order() {
+        let mut windows = sommer_over_winter();
+        for _ in 0..2 {
+            assert_eq!(
+                zone_at(&windows, datetime!(2026-01-15 07:00)).as_deref(),
+                Some("HT")
+            );
+            assert_eq!(
+                zone_at(&windows, datetime!(2026-07-15 07:00)).as_deref(),
+                Some("NT")
+            );
+            assert_eq!(
+                zone_at(&windows, datetime!(2026-01-15 21:00)).as_deref(),
+                Some("HT")
+            );
+            assert_eq!(
+                zone_at(&windows, datetime!(2026-07-15 21:00)).as_deref(),
+                Some("NT")
+            );
+            windows.reverse();
+        }
+    }
+
+    /// 30.03.–03.04.2026 and 29.09.–03.10.2026 cross the season boundaries:
+    /// every quarter hour is classified by the season of its own day, so no
+    /// quarter hour falls in no window and none in two.
+    #[test]
+    fn a_period_crossing_the_season_boundary_resolves_each_instant_to_its_own_season() {
+        let windows = sommer_over_winter();
+        let sommer = |day: time::Date| {
+            (time::macros::date!(2026 - 04 - 01)..time::macros::date!(2026 - 10 - 01))
+                .contains(&day)
+        };
+        for (from, to) in [
+            (datetime!(2026-03-30 00:00), datetime!(2026-04-03 00:00)),
+            (datetime!(2026-09-29 00:00), datetime!(2026-10-03 00:00)),
+        ] {
+            let mut at = from;
+            while at < to {
+                let t = at.time();
+                let ht = if sommer(at.date()) {
+                    (time!(08:00)..time!(20:00)).contains(&t)
+                } else {
+                    (time!(06:00)..time!(22:00)).contains(&t)
+                };
+                let expected = if ht { "HT" } else { "NT" };
+                assert_eq!(zone_at(&windows, at).as_deref(), Some(expected), "{at}");
+                at += Duration::minutes(15);
+            }
+        }
+        // 31 March 23:00 is WINTER's night; 1 April 03:00 and 07:00 are
+        // SOMMER's, whose night opened on 31 March.
+        assert_eq!(
+            zone_at(&windows, datetime!(2026-03-31 23:00)).as_deref(),
+            Some("NT")
+        );
+        assert_eq!(
+            zone_at(&windows, datetime!(2026-04-01 07:00)).as_deref(),
+            Some("NT")
+        );
+        assert_eq!(
+            zone_at(&windows, datetime!(2026-03-31 07:00)).as_deref(),
+            Some("HT")
+        );
+    }
+
+    #[test]
+    fn a_gesamt_window_holds_all_year() {
+        let windows = [fenster("EINZEL", "GESAMT", time!(00:00), time!(00:00:01))];
+        for at in [datetime!(2026-01-15 00:00), datetime!(2026-07-15 00:00)] {
+            assert_eq!(zone_at(&windows, at).as_deref(), Some("EINZEL"));
+        }
+    }
+
+    /// Two windows of different zones over the same instant are master data
+    /// with two answers; the row order Postgres happens to return must not
+    /// pick one.
+    #[test]
+    fn windows_of_different_zones_over_one_instant_are_refused() {
+        let windows = [
+            fenster("HT", "GESAMT", time!(06:00), time!(22:00)),
+            fenster("NT", "WINTER", time!(20:00), time!(06:00)),
+        ];
+        assert!(classify(&windows, datetime!(2026-01-15 21:00)).is_err());
+        assert_eq!(
+            zone_at(&windows, datetime!(2026-07-15 21:00)).as_deref(),
+            Some("HT")
+        );
+        // Windows agreeing on the zone are no contradiction.
+        let agreeing = [
+            fenster("NT", "GESAMT", time!(22:00), time!(06:00)),
+            fenster("NT", "WINTER", time!(20:00), time!(06:00)),
+        ];
+        assert_eq!(
+            zone_at(&agreeing, datetime!(2026-01-15 23:00)).as_deref(),
+            Some("NT")
+        );
+    }
 
     /// The German wall clock of a UTC instant.
     fn berlin_wall_clock(instant: OffsetDateTime) -> PrimitiveDateTime {
@@ -379,7 +643,6 @@ mod tests {
     /// Monday's early hours are Sunday's night, which the row does not name.
     #[test]
     fn a_wrapping_window_belongs_to_the_day_it_opens() {
-        use time::macros::datetime;
         let mo_fr = [1, 2, 3, 4, 5];
         let (von, bis) = (time!(22:00), time!(06:00));
         // Fri 09.01.2026 23:00 and Sat 10.01. 03:00: Friday's night.

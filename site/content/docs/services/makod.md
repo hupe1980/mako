@@ -1263,7 +1263,8 @@ and no `[[as4.partner]]` entry. Self-addressed by design:
 | 55001, 55004, 55077 | spawn by MaLo | `gpke-supplier-change` — `ReceiveUtilmd` |
 | 55016 | spawn by MaLo | `gpke-kuendigung` — `ReceiveKuendigung` |
 | 55003–55006, 55017, 55018 | resume by MaLo | `gpke-lf-anmeldung` — `ReceiveAntwort` |
-| 44001–44021 | spawn by MaLo | `geli-gas-supplier-change` — `ReceiveUtilmd` |
+| 44001–44021 except the six below | spawn by MaLo | `geli-gas-supplier-change` — `ReceiveUtilmd` |
+| 44008/44009, 44011/44012, 44014/44015 (NB role only) | resume by MaLo | `geli-gas-supplier-change` — `ReceiveGnbAntwort`, keeping the `STS+E01` code and its tree (`E_3002` / `E_3020` / `E_3008`) |
 | 55036–55038 · 44036–44038 | spawn per Meldung | `gpke-zuordnungsmeldung` / `geli-gas-zuordnungsmeldung` — `Empfangen` |
 
 Other combined-role pairs (`wim-rechnungsabwicklung` 17005/17006 ↔ 19009/19010,

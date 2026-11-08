@@ -145,11 +145,34 @@ fn unconditional_pids_always_registered() {
                 "PID {pid} (Lieferbeginn/-ende) must always be registered",
             );
         }
-        // GeLi Gas Abmeldung NN vom NB
-        for pid in [44007_u32, 44008, 44009] {
+        // The GNB's own Anfragen are received by the LF.
+        for pid in [44007_u32, 44010, 44013] {
             assert!(
                 router.route(pid).is_some(),
-                "PID {pid} (Abmeldung NN) must always be registered",
+                "PID {pid} (Anfrage des GNB) must always be registered",
+            );
+        }
+    }
+}
+
+/// The LF's answers to the GNB's Anfragen reach the GNB's process on an NB
+/// deployment, and are routed nowhere on one that holds no NB role: there they
+/// would resume a responder-side process on the same Marktlokation.
+#[test]
+fn gnb_answers_are_routed_only_with_the_nb_role() {
+    for (roles, routed) in [
+        (DeploymentRoles::all(), true),
+        (DeploymentRoles::nb(), true),
+        (DeploymentRoles::lf(), false),
+        (DeploymentRoles::msb(), false),
+    ] {
+        let mut router = PidRouter::new();
+        GeliGasModule.register_pids_with_roles(&mut router, &roles);
+        for &pid in mako_geli_gas::GNB_ANTWORT_PIDS {
+            assert_eq!(
+                router.route(pid),
+                routed.then_some(mako_geli_gas::WORKFLOW_NAME),
+                "PID {pid} with {roles:?}",
             );
         }
     }

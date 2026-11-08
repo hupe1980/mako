@@ -203,16 +203,56 @@ A 2027 Gas period with neither a 2027 series point nor a `behg_eur_per_t` row
 is **refused** under either regime. Under `korridor` an out-of-corridor point is
 refused, and an out-of-corridor row already at startup. The CO₂ line's legal
 basis names the regime. `behg_gas_ct_per_kwh_override` on a product applies only
-where the period has a lawful price.
+where the period has a lawful price. The same 70 EUR/t point that prices the
+CO₂ line under `rvo_bezugspreis` is refused under `korridor`, so no statement
+below is issued at a price the regime rejects. A 2027 invoice the regime does
+price is still refused until the year's § 4 CO2KostAufG price is recorded (the
+statement below).
 
-**The § 3 Abs. 1 CO2KostAufG statement.** Every Gas and Fernwärme invoice
-carries, beside the levy (Nr. 2), informational `co2kostaufg` positions: Nr. 1
-Brennstoffemissionen (kg CO₂, derived from Nr. 3 × Nr. 4), Nr. 3
-heizwertbezogener Emissionsfaktor (kg CO₂/kWh; a Wärmeprodukt's g/kWh is
-converted), Nr. 4 Energiegehalt (kWh), Nr. 5 Hinweis auf die
-Erstattungsansprüche nach § 6 Abs. 2 / § 8 Abs. 2.
+productd prices a Gas quotation for such a year under this setting as well: it
+reads it from `GET /api/v1/policy` (Cedar `read-policy`, a same-tenant service
+key) and carries no regime key of its own. A productd that cannot read it
+refuses the position `BEHG_PREIS_FEHLT`.
+
+**No ETS2 cut-over.** VO (EU) 2026/667 postpones Chapter IVa of 2003/87/EG
+until 2028, and billingd has no ETS2 price path. A 2028 Gas period is refused
+like a 2027 one until a price is supplied. `cargo xtask check-behg-prices` (in
+`just ci`) refuses a BEHG or nEHS price-table row for 2027 or later, so no
+year's figure can be guessed into a table.
+
+**The § 3 CO2KostAufG statement.** Every Gas and Fernwärme invoice carries,
+beside the levy, informational `co2kostaufg` positions: Nr. 1
+Brennstoffemissionen (kg CO₂, derived from Nr. 3 × Nr. 4), the § 4 Abs. 1
+price of the delivery year, Nr. 2 the Preisbestandteil, Nr. 3 heizwertbezogener
+Emissionsfaktor (kg CO₂/kWh; a Wärmeprodukt's g/kWh is converted), Nr. 4
+Energiegehalt (kWh), Nr. 5 Hinweis auf die Erstattungsansprüche nach § 6
+Abs. 2 / § 8 Abs. 2. The positions move no money.
 
 Nr. 6 concerns the Vermieter's building (§ 43 GEG) and is not emitted.
+
+**The CO2KostAufG price is not the auction price.** § 4 Abs. 1 CO2KostAufG
+fixes the maßgeblicher Preis per year: Nr. 1 the Festpreis to 2025, Nr. 2 the
+corridor midpoint of 60 EUR/t in 2026, Nr. 3 from 2027 the average of the § 10
+Abs. 1 BEHG auctions from 1 July to 30 November of the preceding year, which
+the Umweltbundesamt publishes no later than ten Werktage before the year
+(Abs. 2). `energy_billing::co2kostaufg_preis_eur_per_t` holds that figure by
+year and has none for 2027 until the UBA publication is recorded.
+
+The levy line prices the supplier's own CO₂ cost from its series point, and
+its legal basis names that point's source — in 2026 `nEHS-Zertifikatspreis vom
+{datum} (Versteigerung nach § 10 Abs. 1 BEHG)`, never § 4. § 3 Abs. 3 makes
+the Preisbestandteil the Nr. 1 emissions times the § 4 Abs. 1 price at the time
+of delivery, plus Umsatzsteuer, so the statement states that figure
+separately: a 2026 invoice whose CO₂ line is priced from a 63 EUR/t point
+discloses 60 EUR/t and, for 1000 kWh_Hs, `0.18139 t CO₂ × 60 EUR/t = 10.88 EUR
+netto, 12.95 EUR mit Umsatzsteuer (19 %)` — emissions to the cent kaufmännisch,
+the Umsatzsteuer at the rate the supply is charged. An invoice
+whose delivery year has no recorded § 4 price is refused **`RATE_REFUSED`**
+(`satz` `CO2KostAufG`), and so is a period running into a year with another
+§ 4 price: split at 31.12. Until the UBA's 2027 figure is recorded, a 2027
+Gas invoice and a 2027 Fernwärme invoice with an Emissionsfaktor are therefore
+refused. productd's quotation shows the § 4 figure too, and quotes a year
+without one with a `co2kostaufg_hinweis` instead of refusing.
 
 ### Statutory rates by year
 
@@ -256,10 +296,12 @@ A period straddling a statutory Stichtag has no correct single rate:
 
 `energy_billing::steuer_stichtage_im_zeitraum` computes the Stichtage: the USt
 windows (commodity-aware), the BEHG price step at every year boundary for gas,
-and the 1 January after which a rate series ends. An explicit `[rates]
-mwst_rate` suppresses the refusal at a **VAT** Stichtag only. The billing
-pipeline normally splits such periods itself — see
-[legs](#a-period-is-billed-in-legs).
+and the 1 January after which a rate series ends. A pinned `[rates]
+mwst_rate` waives none of them: it is the rate each leg is billed at.
+`energy-billing` refuses a straddling period itself
+(`MWST_STICHTAG_IM_ZEITRAUM`, `BEHG_JAHRESGRENZE_IM_ZEITRAUM`, both `Error`),
+whichever path hands it one. The billing pipeline normally splits such periods
+itself — see [legs](#a-period-is-billed-in-legs).
 
 ### SOLAR — Mieterstrom and GGV
 
@@ -506,7 +548,8 @@ overlap or gap to the previous invoice, rolling deviation. The score is 0–100.
 
 `MWST_STICHTAG_IM_ZEITRAUM` and `BEHG_JAHRESGRENZE_IM_ZEITRAUM` are **blocking**
 findings: they hold the invoice regardless of score, because no single rate is
-correct for such a period. Thresholds are validated at start (`sample_at <
+correct for such a period. The engine already refuses such a period, so the
+finding is the backstop for an invoice that reaches scoring carrying one. Thresholds are validated at start (`sample_at <
 review_at < hold_at ≤ 100`).
 
 `hold_dispatch = false` runs the gate in shadow mode. `GET
@@ -779,8 +822,7 @@ channel and is recorded, not paid.
        "aggregator_mp_id": "9910000000002",
        "capacity_price_eur_per_kwh": "0.12",
        "vertragsbeginn": "2026-01-01",
-       "vertragsende": null,
-       "mwst_rate_override": null
+       "vertragsende": null
      }'
    ```
 
@@ -807,7 +849,12 @@ The Gutschrift has `category = "VPP"`, `product_code = "VPP_{vpp_id}"`,
 `rechnungsart = GUTSCHRIFT`, one `vpp_dispatch` credit position (legal basis `§
 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag`), `zusatzAttribute` `vpp_id`,
 `tx_id`, `sr_id`, `flexibility_kwh`, and a `VG` number; VAT runs through
-`MwStProvider` with the contract's `mwst_rate_override`.
+`MwStProvider` at the period's statutory rate
+(`try_regulatory_rates_for_period`, category `VPP`) on both the webhook and the
+manual run. Neither the Aggregatorvertrag nor the request body carries a VAT
+rate — a body naming `mwst_rate_override` is refused — and a manual period
+straddling a USt Stichtag is refused `422` `ZEITRAUM_UEBERSCHREITET_SATZGRENZE`
+with its `stichtage`.
 
 `vpp_dispatch_ledger (tx_id, tenant, record_id)` records each `tx_id` once and
 is shared by the webhook and `POST /api/v1/billing/vpp/{vpp_id}`: a manual

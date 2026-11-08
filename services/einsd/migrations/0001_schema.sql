@@ -1207,3 +1207,38 @@ CREATE TABLE jahresabrechnungen (
 -- One statement per plant and year; re-running replaces it.
 CREATE UNIQUE INDEX ja_unique ON jahresabrechnungen (tr_id, tenant, billing_year);
 CREATE INDEX ja_year ON jahresabrechnungen (tenant, billing_year);
+
+-- ── EnFG ledger (§§ 13, 14, 50 Nr. 1 EnFG) ───────────────────────────────────
+-- What the Netzbetreiber paid, per ÜNB, billing month and head — built from
+-- accountingd's settled payouts and Aufrechnungen, never from
+-- settlement_receipts.settlement_eur: § 13 Abs. 1 Satz 1 EnFG reimburses „die …
+-- geleisteten Zahlungen" and § 50 Nr. 1 Buchst. a reports „die tatsächlich
+-- geleisteten Zahlungen". `receipt_id` is the receipt the paid amount reconciles
+-- to; `uenb_regelzone` is the plant's MeLo Regelzone (marktd) at build time, so
+-- a later master-data change does not move a booked row.
+--
+-- `posten` is `eeg_billing::enfg::EnfgPosten::token`:
+--   EEG_19_ABS1  § 13 Abs. 1 Satz 1 Nr. 1, 3 EnFG · § 50 Nr. 1 Buchst. a aa
+--   EEG_50       § 13 Abs. 1 Satz 1 Nr. 1 EnFG   · § 50 Nr. 1 Buchst. a bb
+--   KWKG_STROM   § 13 Abs. 1 Satz 1 Nr. 2, 3 EnFG · § 50 Nr. 1 Buchst. a cc
+--   SECT14_EEG52 § 14 Satz 1 Nr. 3 EnFG          · § 50 Nr. 1 Buchst. e
+CREATE TABLE enfg_ledger (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant          TEXT        NOT NULL,
+    uenb_regelzone  TEXT        NOT NULL,
+    billing_year    SMALLINT    NOT NULL,
+    billing_month   SMALLINT    NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
+    posten          TEXT        NOT NULL CHECK (posten IN (
+                        'EEG_19_ABS1', 'EEG_50', 'KWKG_STROM', 'SECT14_EEG52')),
+    tr_id           TEXT        NOT NULL,
+    quelle          TEXT        NOT NULL CHECK (quelle IN ('AUSZAHLUNG', 'AUFRECHNUNG')),
+    -- accountingd's payout_id or aufrechnung_id.
+    quelle_id       TEXT        NOT NULL,
+    receipt_id      UUID        NOT NULL REFERENCES settlement_receipts (id),
+    betrag_eur      NUMERIC(14, 5) NOT NULL,
+    gebucht_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- A payment is booked once per head: a rebuild adds, never moves.
+    UNIQUE (tenant, quelle, quelle_id, posten)
+);
+
+CREATE INDEX enfg_ledger_month ON enfg_ledger (tenant, billing_year, billing_month);

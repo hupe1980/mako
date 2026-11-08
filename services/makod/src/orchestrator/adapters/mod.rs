@@ -836,6 +836,7 @@ coverage_table! {
     gabi_gas_nomination_registry,
     geli_gas_datenabruf_ablehnung_registry,
     geli_gas_datenabruf_receive_registry,
+    geli_gas_gnb_antwort_registry,
     geli_gas_lf_anmeldung_registry,
     geli_gas_mscons_registry,
     geli_gas_partin_registry,

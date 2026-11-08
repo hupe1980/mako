@@ -209,6 +209,8 @@ fn saison(von: time::Time, bis: time::Time) -> ZaehlzeitSaisonUpsert {
         wochentage: vec![1, 2, 3, 4, 5],
         zeit_von: von,
         zeit_bis: bis,
+        saison_von: None,
+        saison_bis: None,
     }
 }
 

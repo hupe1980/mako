@@ -5,6 +5,7 @@
 mod angebot_conformance;
 mod angebot_pricing;
 mod authorization_guard;
+mod behg_regime_quelle;
 mod bo4e_angebot;
 mod bo4e_conformance;
 mod catalog_integration;

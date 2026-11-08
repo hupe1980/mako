@@ -256,6 +256,65 @@ pub fn geli_gas_registry(
     registry
 }
 
+/// Build an [`AdapterRegistry`] for the LF's answer to an Anfrage the GNB sent.
+///
+/// Adapts an inbound UTILMD G 44008/44009, 44011/44012 or 44014/44015 (LF → NB,
+/// answering the GNB's 44007, 44010 or 44013) to
+/// [`GasSupplierChangeCommand::ReceiveGnbAntwort`]. The Prüfidentifikator says
+/// Bestätigung or Ablehnung ([`mako_geli_gas::gnb_antwort_accepted`]); the
+/// `SG4 STS+E01` DE 9013 is kept raw, so a code its tree does not publish is
+/// still recorded — the workflow names the tree, `E_3002` / `E_3020` /
+/// `E_3008`, from the Anfrage it sent, because the Gas MIG carries no DE 1131.
+/// The `FTX+ACB` Bemerkung rides as the reason.
+///
+/// Built as an Anfrage instead (`ReceiveUtilmd`), the answer is refused inside
+/// the workflow and the GNB's process never records what the LF said.
+#[must_use]
+pub fn geli_gas_gnb_antwort_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas GNB-Antwort adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas GNB-Antwort adapter: expected UTILMD G message \
+                     (PIDs 44008/44009, 44011/44012, 44014/44015)"
+                        .into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas GNB-Antwort adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let accepted = mako_geli_gas::gnb_antwort_accepted(pid.as_u32()).ok_or_else(|| {
+                EngineError::Deserialization(format!(
+                    "GeLi Gas GNB-Antwort adapter: unexpected PID {pid} \
+                     (expected 44008/44009, 44011/44012, 44014/44015)"
+                ))
+            })?;
+            let first_tx = u.transactions().first();
+            Ok(GasSupplierChangeCommand::ReceiveGnbAntwort {
+                response_pid: pid,
+                accepted,
+                reason: first_tx
+                    .and_then(|tx| tx.ftx.first())
+                    .and_then(|f| f.text.clone()),
+                antwort_code: first_tx.and_then(|tx| tx.antwort()).map(|a| a.code.clone()),
+            })
+        },
+    ));
+    registry
+}
+
 // ── GeLi Gas Informationsmeldungen (PIDs 44036–44038) ────────────────────────
 
 /// Build an [`AdapterRegistry`] for

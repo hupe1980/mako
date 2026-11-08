@@ -13,6 +13,7 @@
 //! |---|---|
 //! | `daemon` | the [`Einsd`] daemon `mako_service::run` starts |
 //! | `config` | see module docs |
+//! | `enfg` | the EnFG ledger and the § 50 Nr. 1 EnFG Mitteilung |
 //! | `handlers` | see module docs |
 //! | `models` | the settlement-model vocabulary |
 //! | `sect52` | §52 Abs. 1 violation detection |
@@ -23,6 +24,7 @@
 
 pub mod config;
 pub mod daemon;
+pub mod enfg;
 pub mod handlers;
 pub mod mcp_server;
 pub mod models;

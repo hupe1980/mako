@@ -1450,11 +1450,25 @@ CREATE TABLE zaehler_saisons (
     -- values that compared and sorted differently, and nothing rejected '25:00'.
     zeit_von         TIME        NOT NULL,
     zeit_bis         TIME        NOT NULL,
+    -- The season's calendar days as 'MM-DD', half-open [saison_von,
+    -- saison_bis); a saison_von after saison_bis crosses the turn of the year
+    -- (WINTER 10-01 to 04-01). No published rule fixes when SOMMER or WINTER
+    -- begins — BO4E leaves it to a Saisonprofil the market partners agree on —
+    -- so the operator states its Preisblatt's dates. Zero-padded, so the text
+    -- order is the calendar order.
+    saison_von       TEXT        CHECK (saison_von ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'),
+    saison_bis       TEXT        CHECK (saison_bis ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     -- A zero-length window classifies no reading at all, which shows up as
     -- silently missing HT/NT energy rather than as an error.
     CONSTRAINT zaehler_saisons_window_nonempty CHECK (zeit_von <> zeit_bis),
+    -- SOMMER and WINTER are dated, GESAMT holds all year: an undated SOMMER
+    -- window would hold in January and overlap the WINTER one.
+    CONSTRAINT zaehler_saisons_season_dated CHECK (
+        (saison = 'GESAMT' AND saison_von IS NULL AND saison_bis IS NULL)
+        OR (saison <> 'GESAMT' AND saison_von IS NOT NULL AND saison_bis IS NOT NULL
+            AND saison_von <> saison_bis)),
     -- One definition per (register, season, window start).
     UNIQUE (register_id, saison, zeit_von)
 );

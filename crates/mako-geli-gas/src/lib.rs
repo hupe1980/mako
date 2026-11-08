@@ -192,11 +192,11 @@ pub use lf_stornierung::{
 };
 pub use lieferbeginn::{
     ANFRAGE_PIDS as LIEFERBEGINN_ANFRAGE_PIDS, ANTWORT_PIDS as LIEFERBEGINN_ANTWORT_PIDS,
-    GasProcessVariant, GasSupplierChangeCommand, GasSupplierChangeData, GasSupplierChangeEvent,
-    GasSupplierChangeProjection, GasSupplierChangeRecord, GasSupplierChangeRecordData,
-    GasSupplierChangeState, GeliGasSupplierChangeWorkflow,
+    GNB_ANTWORT_PIDS, GasProcessVariant, GasSupplierChangeCommand, GasSupplierChangeData,
+    GasSupplierChangeEvent, GasSupplierChangeProjection, GasSupplierChangeRecord,
+    GasSupplierChangeRecordData, GasSupplierChangeState, GeliGasSupplierChangeWorkflow,
     RESPONSE_WINDOW_LABEL as LIEFERBEGINN_RESPONSE_WINDOW_LABEL, UTILMD_PIDS, WORKFLOW_NAME,
-    response_pid_for,
+    gnb_antwort_accepted, response_pid_for,
 };
 pub use mscons::{
     GasMsconsDatenCommand, GasMsconsDatenEvent, GasMsconsDatenState, GeliGasMsconsWorkflow,
@@ -244,7 +244,9 @@ pub use zuordnungsmeldung::{
 /// Registers all GeLi Gas `Prüfidentifikator` values into the
 /// [`mako_engine::pid_router::PidRouter`] at engine startup:
 ///
-/// - PIDs 44001–44021 → `"geli-gas-supplier-change"` (`GeliGasSupplierChangeWorkflow`)
+/// - PIDs 44001–44021 → `"geli-gas-supplier-change"` (`GeliGasSupplierChangeWorkflow`);
+///   the six answers only a GNB receives — 44008/44009, 44011/44012,
+///   44014/44015 — only when the deployment holds the `Nb` role
 /// - PID 31011 → `"geli-gas-sperrprozesse-invoic"`
 ///   (`GeliGasSperrprozesseInvoicWorkflow`, Rechnung sonstige Leistung AWH, VNB → LFN/LFA)
 /// - PIDs 44022–44024 → `"geli-gas-stornierung"` when `Nb`-only deployment
@@ -315,9 +317,13 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
 
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
         // GeLi Gas Lieferantenwechsel Gas (BDEW GeLi Gas AHB — UTILMD G profiles)
-        // PIDs 44001–44021 → supplier-change workflow
+        // PIDs 44001–44021 → supplier-change workflow, but for the six answers
+        // only a GNB receives (`GNB_ANTWORT_PIDS`): those are registered by
+        // `register_pids_with_roles` when the deployment holds the NB role.
         for &pid in lieferbeginn::UTILMD_PIDS {
-            router.register(pid, "geli-gas-supplier-change");
+            if !lieferbeginn::GNB_ANTWORT_PIDS.contains(&pid) {
+                router.register(pid, lieferbeginn::WORKFLOW_NAME);
+            }
         }
         // PIDs 44022–44024: role-conditional — NOT registered here.
         // See register_pids_with_roles() for the Nb-role guard.
@@ -493,6 +499,14 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         let has_lf = roles.contains(Marktrolle::Lf);
 
         if has_nb {
+            // 44008/44009, 44011/44012, 44014/44015: the LF's answer to an
+            // Anfrage this GNB sent (44007, 44010, 44013). Only the GNB
+            // receives them; on an LF-only deployment they name no process
+            // here, so they stay unrouted rather than reach a responder-side
+            // process on the same Marktlokation.
+            for &pid in lieferbeginn::GNB_ANTWORT_PIDS {
+                router.register(pid, lieferbeginn::WORKFLOW_NAME);
+            }
             // Only 44022 is inbound on the GNB side — 44023/44024 are outbound responses
             // dispatched via the outbox and do not need PID-router registration.
             router.register_with_module(

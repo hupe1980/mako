@@ -16,8 +16,8 @@ just dev einsd         # dev/config/einsd.toml against the dev PostgreSQL
 
 | | |
 |---|---|
-| **Database** | PostgreSQL — `einspeiser`, `eeg_anlagen`, `settlement_receipts`, `eeg_pflichtverstoesse`, `marktwert_preise`, `eeg_verguetungssaetze` |
-| **Auth** | OIDC + Cedar [`policies/einsd.cedar`](policies/einsd.cedar): reads for the tenant, writes and settlement for `NB`/`LF`/`UENB`, corrections for `NB`/`UENB`. Refuses to start without `[oidc]` unless `allow_insecure_no_auth` |
+| **Database** | PostgreSQL — `einspeiser`, `eeg_anlagen`, `settlement_receipts`, `eeg_pflichtverstoesse`, `marktwert_preise`, `eeg_verguetungssaetze`, `enfg_ledger` |
+| **Auth** | OIDC + Cedar [`policies/einsd.cedar`](policies/einsd.cedar): reads for the tenant, writes and settlement for `NB`/`LF`/`UENB`, corrections for `NB`/`UENB`, the EnFG ledger and Mitteilung for `NB`. Refuses to start without `[oidc]` unless `allow_insecure_no_auth` |
 | **Settlement** | 12 models (VERGUETUNG … FLEXIBILITAET_ZUSCHLAG), 18 `erzeugungsart` values; REST, batch, MCP and the monthly worker all call `settle::settle_plant`. `Decimal` only |
 | **Inputs** | `arbeitsmenge_kwh` and the § 51 ¼h feed-in fetched from `edmd` when not supplied; Marktwert series per Anlage 1 Nr. 2 — a miss is `PriceMissing`, never a substitute |
 | **Events** | `de.eeg.*` through the transactional outbox to `erp_webhook_url`, HMAC-signed |
@@ -30,6 +30,7 @@ just dev einsd         # dev/config/einsd.toml against the dev PostgreSQL
 | Settlement | `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}`, `POST /api/v1/settle/{year}/{month}` (batch), `/settlements` (+ `/{year}/{month}/correction`), `POST /anlagen/{tr_id}/jahresabrechnung/{year}` |
 | Pflichten & AW cuts | `/anlagen/{tr_id}/pflichtverstoesse` (+ `/{typ}/behoben`), `/aw-reduktionen` (Regionalnachweis, Stromsteuerbefreiung, § 54 Defekt) |
 | Market data | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}`, `/marktwert/{year}/nachbewertung`, `/epex-monthly/{year}/{month}`, `PUT /epex-spot`, `POST /verguetungssatz-lookup` |
+| EnFG (§§ 13, 14, 50 Nr. 1) | `POST/GET /api/v1/enfg/ledger/{year}/{month}` — payments made per ÜNB and head, from accountingd; `GET /api/v1/enfg/mitteilung/{year}/{month}` — the § 50 Nr. 1 Mitteilung, naming every item mako does not hold |
 | For `processd` | `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` — the `CCI+Z22` code plus an `ausfallverguetung` flag |
 
 ## MCP server — `/mcp` (20 tools, 6 prompts)
@@ -39,7 +40,8 @@ Seventeen tools read; three write — `trigger_settle`, `import_marktwert` and
 
 ## Configuration
 
-Top-level: `tenant`, `edmd_url` / `edmd_api_key`,
+Top-level: `tenant`, `edmd_url` / `edmd_api_key`, `accountingd_url` /
+`accountingd_api_key` and `marktd_url` / `marktd_api_key` (EnFG ledger),
 `auto_settle_catchup_months`, `auto_settle_from_day`, `jahresmarktwert_url`,
 `erp_webhook_url` / `erp_hmac_secret`. Tables: `[http]` (`addr`), `[database]`, `[oidc]`,
 `[beihilfevorbehalt]` (recorded state-aid approvals), `[policy]`

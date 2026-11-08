@@ -308,8 +308,8 @@ pub fn assess(
     //
     // The two boundary warnings are **verdicts**, not evidence: the period has
     // no correct single rate, so part of what was billed is wrong. billingd
-    // refuses such a period upstream; one that reaches scoring anyway (an
-    // operator-pinned rate, a preview promoted to a bill) must not dispatch.
+    // refuses such a period upstream and `energy-billing` refuses it as an
+    // `Error`; an invoice carrying one anyway must not dispatch.
     // They carry `blocking` rather than a heavy weight, because a weight only
     // holds while it stays above `hold_at` — which is operator-configurable.
     for w in &invoice.warnings {
@@ -485,7 +485,7 @@ mod tests {
         let mut inv = invoice(dec!(300));
         inv.warnings.push(energy_billing::BillingWarning {
             code: "MWST_STICHTAG_IM_ZEITRAUM",
-            severity: energy_billing::WarningSeverity::Warning,
+            severity: energy_billing::WarningSeverity::Error,
             message: "Zeitraum überschreitet eine Satzgrenze".to_owned(),
         });
         // Every threshold above the finding's own weight.
@@ -566,16 +566,16 @@ mod tests {
     /// rate, so whatever was billed is wrong for part of it. Such an invoice
     /// must never dispatch automatically.
     ///
-    /// billingd refuses these periods upstream; this is the backstop for a path
-    /// that reaches scoring anyway — an operator-pinned rate, or a preview
-    /// promoted to a bill.
+    /// billingd refuses these periods upstream and `energy-billing` refuses
+    /// them as an `Error`; this is the backstop for an invoice that reaches
+    /// scoring carrying one anyway.
     #[test]
     fn a_period_crossing_a_rate_boundary_is_held() {
         for code in ["MWST_STICHTAG_IM_ZEITRAUM", "BEHG_JAHRESGRENZE_IM_ZEITRAUM"] {
             let mut inv = invoice(dec!(300));
             inv.warnings.push(energy_billing::BillingWarning {
                 code,
-                severity: energy_billing::WarningSeverity::Warning,
+                severity: energy_billing::WarningSeverity::Error,
                 message: "Zeitraum überschreitet eine Satzgrenze".to_owned(),
             });
             let cfg = RiskConfig::default();

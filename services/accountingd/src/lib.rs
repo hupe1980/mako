@@ -14,6 +14,7 @@
 //! | `clients` | `vertragd` (who the customer is) and `outputd` (the document) |
 //! | `daemon` | the [`Accountingd`] daemon `mako_service::run` starts |
 //! | `config` | TOML + env configuration |
+//! | `enfg` | the EEG/KWKG payments made, for the EnFG Belastungsausgleich |
 //! | `handlers` | the REST surface |
 //! | `ledger` | the `doubleentry`-backed Kontokorrent and its GL chart |
 //! | `mahnung` | a dunning case projected onto the page a customer receives |
@@ -25,6 +26,7 @@ pub mod booking;
 pub mod clients;
 pub mod config;
 pub mod daemon;
+pub mod enfg;
 pub mod handlers;
 pub mod ledger;
 pub mod mahnung;

@@ -92,6 +92,7 @@ pub mod biomasse;
 pub mod bridge;
 pub mod degression;
 pub mod direktverm;
+pub mod enfg;
 mod error;
 pub mod foerderdauer;
 pub mod foerderungsende;

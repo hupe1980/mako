@@ -893,6 +893,59 @@ without a document. Non-billable statuses issue none.
 
 ---
 
+## EnFG Belastungsausgleich
+
+The Netzbetreiber that pays a plant is reimbursed by its ÜNB: § 13 Abs. 1
+Satz 1 EnFG reimburses „die … geleisteten Zahlungen" under § 19 and § 50 EEG
+(Nr. 1), Abschnitt 2 KWKG (Nr. 2) and earlier Fassungen (Nr. 3), and § 13
+Abs. 1 Satz 2 counts a Forderung „die durch Aufrechnung erloschen" ist as
+paid. einsd keeps that figure in `enfg_ledger`, per tenant, ÜNB, billing month
+and head, and derives the § 50 Nr. 1 EnFG Mitteilung from it.
+
+**Paid, not computed.** `POST /api/v1/enfg/ledger/{year}/{month}` reads the
+month's payments from accountingd (`GET /api/v1/eeg/enfg-zahlungen`: payouts
+whose pain.002 status is `ACSC`, and recorded Aufrechnungen). A settled receipt
+with no such payment contributes nothing; the receipt only says which head a
+payment belongs to. The cents a plant was paid in the month must equal one of
+its `calculated` receipts rounded kaufmännisch to the cent; any other amount is
+refused with the plant, the cents and the receipts.
+
+| Head (`posten`) | Settlement models | Provision · Mitteilung item |
+|---|---|---|
+| `EEG_19_ABS1` | `VERGUETUNG`, `AUSFALLVERGUETUNG`, `DIREKTVERMARKTUNG`, `AUSSCHREIBUNG`, `MIETERSTROM`, the § 19 part of `FLEXIBILITAET` | § 13 Abs. 1 Satz 1 Nr. 1, 3 EnFG · § 50 Nr. 1 Buchst. a aa |
+| `EEG_50` | `FLEXIBILITAET_ZUSCHLAG`, the Flexibilitätsprämie position of `FLEXIBILITAET` | § 13 Abs. 1 Satz 1 Nr. 1 EnFG · § 50 Nr. 1 Buchst. a bb |
+| `KWKG_STROM` | `KWKG_ZUSCHLAG` | § 13 Abs. 1 Satz 1 Nr. 2, 3 EnFG · § 50 Nr. 1 Buchst. a cc |
+| `SECT14_EEG52` | a § 52 Pflichtzahlung set off against the Vergütung (§ 52 Abs. 6 Satz 2 EEG 2023) | § 14 Satz 1 Nr. 3 EnFG · § 50 Nr. 1 Buchst. e |
+
+`EIGENVERBRAUCH` and `SONSTIGE_DIREKTVERMARKTUNG` carry no Netzbetreiber
+payment, so a payment for one is refused. `POST_EEG_SPOT` and `GGV` refuse too:
+the first settles on the monthly EPEX average, which is not shown to be the
+§ 23b / § 53 Abs. 4 EEG 2023 Einspeisevergütung of an ausgeförderte Anlage, and
+the GGV (§ 42b EnWG) is no § 21b Abs. 1 Veräußerungsform. The mapping is
+`eeg_billing::enfg::zuordnung`, an exhaustive `match`.
+
+**The ÜNB.** § 50 EnFG addresses „ihrem vorgelagerten
+Übertragungsnetzbetreiber" without saying whether that is decided per plant or
+per Verteilernetzbetreiber. einsd attributes a month only where both readings
+agree: every paid plant's Messlokation carries one Regelzone in marktd. A plant
+without a MeLo or Regelzone refuses the month naming its `tr_id`, and plants in
+two Regelzonen refuse it naming both. The Regelzone is stored on each row; a
+rebuild adds payments made since and never moves a booked row.
+
+**The Mitteilung.** `GET /api/v1/enfg/mitteilung/{year}/{month}` lists every
+§ 50 Nr. 1 Buchst. a–g item with `bestand` `gehalten`, `teilweise` or
+`nicht_gehalten`; an item mako does not hold carries no figure and is named in
+`nicht_gehalten` — the KWKG-Boni, the vermiedene Netzentgelte (§ 13 Abs. 2),
+the KWK-Strom Verwertung, the umlagenpflichtige Netzentnahmen, the § 52
+payments not collected by set-off and § 55b, and Buchst. g. Within it, § 72
+Abs. 1, 2 EEG 2023: each plant's § 21b Abs. 1 Veräußerungsform, a switch in
+the month, the § 72 Abs. 1 Nr. 2 facts on a switch into the Ausfallvergütung,
+and the Spannungsebene (marktd's `netzebene_messung`); a plant without one is
+named. The ÜNB's Formularvorlage (§ 54 Satz 2 EnFG) is not yet read, so the
+Mitteilung is mako's JSON shape.
+
+---
+
 ## Endpoints
 
 | Method | Path | Description |
@@ -919,6 +972,8 @@ without a document. Non-billable statuses issue none.
 | `GET` | `/api/v1/anlagen/{tr_id}/settlements` | History (`?year=&month=&limit=`; unknown parameters are `400`) |
 | `POST` | `/api/v1/settle/{year}/{month}` | Batch settle |
 | `POST` | `/api/v1/anlagen/{tr_id}/jahresabrechnung/{year}` | Annual reconciliation |
+| `POST/GET` | `/api/v1/enfg/ledger/{year}/{month}` | Book / read the EnFG ledger from accountingd's payments |
+| `GET` | `/api/v1/enfg/mitteilung/{year}/{month}` | § 50 Nr. 1 EnFG Mitteilung with the § 72 EEG 2023 items |
 | `PUT/GET` | `/api/v1/epex-monthly/{year}/{month}` | EPEX monthly average (`DIREKTVERMARKTUNG`, `POST_EEG_SPOT` fallback) |
 | `PUT` | `/api/v1/epex-spot` | Day-ahead spot prices |
 | `PUT/GET` | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}` | Anlage 1 Marktwert, `art` = `monat` \| `jahr` |
@@ -933,7 +988,7 @@ without a document. Non-billable statuses issue none.
 ## Authentication and authorization
 
 einsd refuses to boot without `[oidc]` unless `allow_insecure_no_auth = true`.
-`policies/einsd.cedar` states **12 actions** in three grants; every handler checks
+`policies/einsd.cedar` states **14 actions** in four grants; every handler checks
 one before touching the database, and a refusal is `403` with the Cedar decision
 in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 `mako_roles`, `resource_tenant` from the row's owner.
@@ -943,6 +998,7 @@ in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 | Reads | `read-anlage`, `read-einspeiser`, `read-settlement`, `read-marktdaten`, `use-mcp`, `read-policy` | matching tenant |
 | Writes | `write-anlage`, `write-einspeiser`, `run-settlement`, `manage-lifecycle`, `write-marktdaten` | `NB`, `LF` or `UENB` |
 | Corrections | `correct-settlement` | `NB` or `UENB` |
+| EnFG | `read-enfg`, `build-enfg-ledger` | `NB` |
 
 | Action | Guards |
 |---|---|
@@ -957,6 +1013,8 @@ in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 | `write-marktdaten` | EPEX and Marktwert writes |
 | `use-mcp` | `/mcp` |
 | `read-policy` | `GET /api/v1/policy` |
+| `read-enfg` | `GET /api/v1/enfg/ledger/…`, `GET /api/v1/enfg/mitteilung/…` |
+| `build-enfg-ledger` | `POST /api/v1/enfg/ledger/…` |
 
 ---
 
@@ -969,6 +1027,8 @@ in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 | `tenant` | — (required) | Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid |
 | `erp_webhook_url` · `erp_hmac_secret` | — | ERP webhook and its signing secret |
 | `edmd_url` · `edmd_api_key` | — | Feed-in from edmd |
+| `accountingd_url` · `accountingd_api_key` | — | The payments made, for the EnFG ledger; without it the ledger is `503` |
+| `marktd_url` · `marktd_api_key` | — | MeLo Regelzone and Netzebene for the EnFG ledger and Mitteilung; without it both are `503` |
 | `alert_interval_secs` | `21600` | Förderende alert interval |
 | `jahresmarktwert_url` | — | ÜNB source for the **monthly** Marktwert import; the Jahresmarktwert is imported by hand |
 | `jahresmarktwert_import_interval_secs` | `86400` | Poll interval; also runs 60 s after start |
@@ -1028,6 +1088,7 @@ nothing sets it from capacity.
 | `epex_monthly_prices` · `epex_spot_prices` | EPEX monthly averages and day-ahead prices |
 | `settlement_period_accruals` | Each period's absolute contribution to the § 51a, § 44b and KWKG counters, so a re-settle applies only the difference |
 | `jahresabrechnungen` | Annual reconciliations |
+| `enfg_ledger` | Payments made per ÜNB (`uenb_regelzone`), month and head; unique per payment and head; `receipt_id` the receipt it reconciles to |
 
 ---
 

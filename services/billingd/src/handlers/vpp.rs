@@ -60,8 +60,24 @@ pub struct VppBillingRequest {
     /// next number of the tenant's `VG` (Gutschrift) series.
     #[serde(default)]
     pub rechnungsnummer: Option<String>,
-    /// MwSt rate override (default from billingd config, typically 0.19).
-    pub mwst_rate_override: Option<rust_decimal::Decimal>,
+}
+
+/// The `category` a § 41e settlement is recorded and taxed under.
+const VPP_CATEGORY: &str = "VPP";
+
+/// The Umsatzsteuer rate of a § 41e settlement period.
+///
+/// Resolved through [`BillingdConfig::try_regulatory_rates_for_period`], the
+/// one source every other billing path uses, so neither a request body nor a
+/// contract states the tax on the Gutschrift. A period straddling a USt
+/// Stichtag has no single correct rate and is refused with its Stichtage.
+pub(crate) fn vpp_mwst_rate(
+    cfg: &BillingdConfig,
+    period_from: time::Date,
+    period_to: time::Date,
+) -> Result<rust_decimal::Decimal, crate::config::StraddlesRateBoundary> {
+    cfg.try_regulatory_rates_for_period(VPP_CATEGORY, period_from, period_to, None)
+        .map(|r| r.mwst_rate)
 }
 
 /// `POST /api/v1/billing/vpp/{vpp_id}` — settle a period of VPP dispatches.
@@ -139,7 +155,8 @@ pub async fn post_vpp_billing(
 
     let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
 
-    let mwst_rate = req.mwst_rate_override.unwrap_or_else(|| cfg.mwst_rate());
+    // Before anything is read or priced: a straddling period has no rate.
+    let mwst_rate = vpp_mwst_rate(cfg, period_from, period_to)?;
 
     // Dispatches already settled — by an earlier run of this endpoint or by the
     // auto-settlement webhook — are excluded before anything is priced.
@@ -272,7 +289,7 @@ pub async fn post_vpp_billing(
             malo_id: &req.malo_id,
             lf_mp_id: &req.lf_mp_id,
             product_code: &format!("VPP_{vpp_id}"),
-            category: "VPP",
+            category: VPP_CATEGORY,
             rechnungsnummer: &rechnungsnummer,
             period_from,
             period_to,
@@ -651,9 +668,16 @@ pub async fn post_vpp_webhook(
     let period_from = dispatch_date;
     let period_to = period_from;
 
-    let mwst_rate = contract
-        .mwst_rate_override
-        .unwrap_or_else(|| cfg.mwst_rate());
+    // One Berlin day lies inside one USt regime, so the refusal cannot fire
+    // here; if it did, the dispatch stays unrecorded and is answered with the
+    // Stichtage rather than settled at a guessed rate.
+    let mwst_rate = match vpp_mwst_rate(cfg, period_from, period_to) {
+        Ok(rate) => rate,
+        Err(e) => {
+            tracing::error!(tx_id, error = %e, "billingd: vpp-dispatch — no single VAT rate");
+            return BillingError::from(e).into_response();
+        }
+    };
 
     // From the tenant's `VG` (Gutschrift) series, like the manual path. The old
     // `VPP-{vpp}-{date}-{tx-prefix}` string was einmalig only as long as no two
@@ -740,7 +764,7 @@ pub async fn post_vpp_webhook(
             malo_id: &contract.malo_id,
             lf_mp_id: &contract.aggregator_mp_id,
             product_code: &format!("VPP_{}", contract.vpp_id),
-            category: "VPP",
+            category: VPP_CATEGORY,
             rechnungsnummer: &rechnungsnummer,
             period_from,
             period_to,
@@ -924,5 +948,43 @@ mod disposition_tests {
         );
         // Not even when the contract itself names no aggregator.
         assert_eq!(disposition("", ""), Disposition::Sect14aGridIntervention);
+    }
+}
+
+#[cfg(test)]
+mod vat_tests {
+    use super::vpp_mwst_rate;
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    fn cfg() -> crate::config::BillingdConfig {
+        serde_json::from_value(serde_json::json!({
+            "database": { "url": "postgres://localhost/x" },
+            "tenant": "9900357000004",
+            "productd_url": "http://localhost:9080",
+            "edmd_url": "http://localhost:8380",
+            "marktd_url": "http://localhost:8080"
+        }))
+        .expect("config parses")
+    }
+
+    /// The webhook settles one Berlin day, at that day's statutory rate — a
+    /// dispatch in H2/2020 is taxed 16 % (§ 28 Abs. 1 UStG a. F.), not the
+    /// configured default.
+    #[test]
+    fn a_dispatch_day_is_taxed_at_its_own_rate() {
+        let c = cfg();
+        let day = date!(2020 - 08 - 03);
+        assert_eq!(vpp_mwst_rate(&c, day, day).unwrap(), dec!(0.16));
+        let day = date!(2026 - 06 - 01);
+        assert_eq!(vpp_mwst_rate(&c, day, day).unwrap(), dec!(0.19));
+    }
+
+    /// A period straddling a USt Stichtag has no single rate.
+    #[test]
+    fn a_straddling_settlement_period_is_refused() {
+        let err = vpp_mwst_rate(&cfg(), date!(2020 - 12 - 01), date!(2021 - 01 - 31))
+            .expect_err("no single rate");
+        assert_eq!(err.stichtage, vec![date!(2021 - 01 - 01)]);
     }
 }

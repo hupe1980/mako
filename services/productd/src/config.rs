@@ -57,13 +57,21 @@ pub struct ProductdConfig {
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
 
-    /// Which law prices nEHS certificates in a year § 10 BEHG fixes no price
-    /// for — `rvo_bezugspreis` (default, the law in force) or `korridor`
-    /// (55–65 EUR/t, BT-Drs. 21/7869). A Gas quotation for such a year takes a
-    /// series price only through this regime, the same one `billingd` bills
-    /// under.
+    /// `billingd` base URL. A Gas quotation for a year § 10 BEHG fixes no
+    /// price for is priced under billingd's `[policy] behg_regime`, read from
+    /// its `GET /api/v1/policy`; without one such a position is refused
+    /// `BEHG_PREIS_FEHLT`.
+    pub billingd_url: Option<String>,
+
+    /// `billingd` bearer token — register it there as an
+    /// `[[oidc.service_keys]]` entry of this tenant, which Cedar's
+    /// `read-policy` admits.
+    pub billingd_api_key: Option<String>,
+
+    /// Removed: the regime is billingd's `[policy] behg_regime`. Named so a
+    /// config still carrying it is refused at startup instead of ignored.
     #[serde(default)]
-    pub behg_regime: energy_billing::BehgRegime,
+    pub behg_regime: Option<String>,
 }
 
 impl ProductdConfig {
@@ -71,6 +79,22 @@ impl ProductdConfig {
     #[must_use]
     pub fn lf_mp_id(&self) -> &str {
         self.lf_mp_id_override.as_deref().unwrap_or(&self.tenant)
+    }
+
+    /// Refuse a config productd cannot run as documented — a removed key.
+    ///
+    /// # Errors
+    ///
+    /// Names the removed key and what replaced it.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(old) = &self.behg_regime {
+            anyhow::bail!(
+                "productd: `behg_regime = {old:?}` is not read; the regime is billingd's \
+                 `[policy] behg_regime`, which productd reads from billingd. Set it there and \
+                 configure `billingd_url` (and `billingd_api_key`) here."
+            );
+        }
+        Ok(())
     }
 
     /// Refuse to start in a posture that authenticates nothing.

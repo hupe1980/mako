@@ -2346,6 +2346,136 @@ pub async fn post_jahresabrechnung(
     }
 }
 
+// ── EnFG Belastungsausgleich (§§ 13, 14, 50 Nr. 1 EnFG) ───────────────────────
+
+/// The answer to an EnFG refusal: a `422` naming what is missing, a `500` for
+/// a failure underneath.
+fn enfg_error(e: crate::enfg::BuildFehler) -> Response {
+    match e {
+        crate::enfg::BuildFehler::Fachlich(f) => ApiError::unprocessable(f.to_string())
+            .with_code("enfg_refused")
+            .into_response(),
+        crate::enfg::BuildFehler::Technisch(e) => ApiError::internal(e).into_response(),
+    }
+}
+
+fn billing_month_valid(month: i16) -> Option<Response> {
+    (!(1..=12).contains(&month))
+        .then(|| ApiError::unprocessable("month must be 1–12").into_response())
+}
+
+/// The `503` for a missing `marktd`: the Regelzone and Netzebene of a plant's
+/// Messlokation come from it.
+fn marktd_unavailable() -> Response {
+    ApiError::unavailable(
+        "marktd_url is not configured — the Regelzone and Netzebene of a plant's \
+         Messlokation come from marktd",
+    )
+    .into_response()
+}
+
+/// `POST /api/v1/enfg/ledger/{year}/{month}` — book the month's EnFG ledger
+/// from the payments `accountingd` reports as made.
+pub async fn post_enfg_ledger(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Extension(http_client): Extension<Arc<reqwest::Client>>,
+    Path((year, month)): Path<(i16, i16)>,
+) -> Response {
+    if let Err(e) = enforcer.check(&claims.principal(), "build-enfg-ledger", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    if let Some(r) = billing_month_valid(month) {
+        return r;
+    }
+    let Some(accountingd) = cfg.accountingd((*http_client).clone()) else {
+        return ApiError::unavailable(
+            "accountingd_url is not configured — the ledger is built from the payments \
+             accountingd reports as made, never from the computed settlements",
+        )
+        .into_response();
+    };
+    let Some(marktd) = cfg.marktd((*http_client).clone()).map(crate::enfg::Marktd) else {
+        return marktd_unavailable();
+    };
+    let req = accountingd
+        .get("/api/v1/eeg/enfg-zahlungen")
+        .query(&[("year", year), ("month", month)]);
+    let zahlungen = match accountingd.json::<crate::enfg::Zahlungen>(req).await {
+        Ok(Some(z)) => z.zahlungen,
+        Ok(None) => {
+            return ApiError::upstream(
+                "accountingd",
+                anyhow::anyhow!("GET /api/v1/eeg/enfg-zahlungen answered 404"),
+            )
+            .into_response();
+        }
+        Err(e) => return ApiError::upstream("accountingd", e).into_response(),
+    };
+    match crate::enfg::build_month(&pool, &cfg.tenant, year, month, &zahlungen, &marktd).await {
+        Ok(rows) => Json(serde_json::json!({
+            "billing_year": year,
+            "billing_month": month,
+            "posten": rows,
+        }))
+        .into_response(),
+        Err(e) => enfg_error(e),
+    }
+}
+
+/// `GET /api/v1/enfg/ledger/{year}/{month}` — the booked EnFG ledger rows.
+pub async fn get_enfg_ledger(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path((year, month)): Path<(i16, i16)>,
+) -> Response {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-enfg", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    if let Some(r) = billing_month_valid(month) {
+        return r;
+    }
+    match crate::enfg::ledger_monat(&pool, &cfg.tenant, year, month).await {
+        Ok(rows) => Json(serde_json::json!({
+            "billing_year": year,
+            "billing_month": month,
+            "posten": rows,
+        }))
+        .into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
+    }
+}
+
+/// `GET /api/v1/enfg/mitteilung/{year}/{month}` — the § 50 Nr. 1 EnFG
+/// Mitteilung with the § 72 Abs. 1, 2 EEG 2023 items; every item mako does
+/// not hold is named in `nicht_gehalten` and carries no figure.
+pub async fn get_enfg_mitteilung(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Extension(http_client): Extension<Arc<reqwest::Client>>,
+    Path((year, month)): Path<(i16, i16)>,
+) -> Response {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-enfg", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    if let Some(r) = billing_month_valid(month) {
+        return r;
+    }
+    let Some(marktd) = cfg.marktd((*http_client).clone()).map(crate::enfg::Marktd) else {
+        return marktd_unavailable();
+    };
+    match crate::enfg::mitteilung_monat(&pool, &cfg.tenant, year, month, &marktd).await {
+        Ok(m) => Json(m).into_response(),
+        Err(e) => enfg_error(e),
+    }
+}
+
 #[cfg(test)]
 mod veraeusserungsform_tests {
     use super::{direktvermarktungspflicht_der_malo, veraeusserungsform_of, wechselziel};

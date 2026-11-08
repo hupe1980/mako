@@ -38,6 +38,8 @@
 //   "import-payments"    — POST camt.052/053/054 and the flat payment import
 //   "run-payout"         — POST an EEG payout run, PUT its pain.002 status
 //   "close-period"       — POST the Jahresabschluss and the Festschreibung seal
+//   "read-enfg"          — GET  the EEG/KWKG payments made per month (§ 13 Abs. 1 EnFG)
+//   "record-aufrechnung" — POST an Aufrechnung against an EEG claim (§ 13 Abs. 1 Satz 2 EnFG)
 //   "erase-pii"          — POST the GDPR Art. 17 anonymization
 //   "use-mcp"            — permission to speak MCP at all. The gate the shared
 //                          middleware applies to every frame; what a frame may
@@ -120,6 +122,20 @@ permit(
     context.principal_roles.containsAny(["LF", "MSB"])
 };
 
+// ── EnFG Belastungsausgleich ──────────────────────────────────────────────────
+// The EEG and KWKG payments are the Netzbetreiber's: § 19 Abs. 1 EEG 2023 gives
+// the plant operator its claim „gegen den Netzbetreiber", and § 13 Abs. 1 EnFG
+// has the ÜNB reimburse „ihren nachgelagerten Verteilernetzbetreibern". Reading
+// what was paid and recording an Aufrechnung that counts as paid are held to NB.
+permit(
+    principal,
+    action in [Action::"read-enfg", Action::"record-aufrechnung"],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("NB")
+};
+
 // ── Dunning and the §§41f/41g disconnection sequence ──────────────────────────
 // Every act here moves a household customer toward, or away from, having their
 // electricity cut off: a Mahnstufe escalation feeds the sequence, a Mahnsperre
@@ -191,7 +207,7 @@ permit(
 // keeps the reads its roles grant.
 //
 // The action list is every action of this file except the reads
-// (`read-account`, `read-banking`, `read-books`) and `use-mcp`;
+// (`read-account`, `read-banking`, `read-books`, `read-enfg`) and `use-mcp`;
 // `the_advisory_forbid_names_every_mutating_action` pins it to the actions the
 // handlers check.
 @id("advisory-is-read-only")
@@ -204,6 +220,7 @@ forbid(
         Action::"manage-sepa",
         Action::"import-payments",
         Action::"run-payout",
+        Action::"record-aufrechnung",
         Action::"close-period",
         Action::"erase-pii"
     ],

@@ -46,9 +46,11 @@ erp_webhook_url = "http://erp:8000/events"
 erp_hmac_secret = "env:PRODUCTD_ERP_HMAC_SECRET"
 
 # Which law prices nEHS certificates in a year § 10 BEHG fixes no price for
-# (2027): "rvo_bezugspreis" (default) or "korridor" (55–65 EUR/t) — the same
-# setting billingd bills under, so a Gas quotation and its invoice agree.
-behg_regime = "rvo_bezugspreis"
+# (2027) is billingd's [policy] behg_regime, read from its GET /api/v1/policy,
+# so a Gas quotation and its invoice agree. Without billingd such a position
+# is refused BEHG_PREIS_FEHLT. A behg_regime key here is refused at startup.
+billingd_url     = "http://billingd:9280"
+billingd_api_key = "env:PRODUCTD_BILLINGD_API_KEY"
 
 [http]
 addr = "0.0.0.0:9080"

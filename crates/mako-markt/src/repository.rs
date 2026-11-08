@@ -2446,9 +2446,104 @@ pub struct ZaehlzeitSaisonRecord {
     /// only worked while every writer happened to zero-pad.
     #[serde(with = "wall_clock")]
     pub zeit_bis: time::Time,
+    /// First calendar day of the season, inclusive — `None` for `GESAMT`.
+    pub saison_von: Option<MonatTag>,
+    /// First calendar day after the season, exclusive — `None` for `GESAMT`.
+    pub saison_bis: Option<MonatTag>,
     /// Time of the last write (UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
+}
+
+/// A recurring calendar day, `"MM-DD"` on the wire: a season boundary.
+///
+/// No regulatory document fixes when a Zählzeit `SOMMER` or `WINTER` begins.
+/// BO4E's `Zaehlzeitdefinition` leaves the dates to a `saisonprofil` the market
+/// partners agree on, so the boundary is the operator's, read off its own
+/// Preisblatt, and a season window carries it. 29 February is refused: a
+/// boundary that exists only in a leap year leaves three years in four
+/// without one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MonatTag {
+    monat: u8,
+    tag: u8,
+}
+
+impl MonatTag {
+    /// The day `tag` of month `monat`.
+    ///
+    /// # Errors
+    /// [`MdmError::Unprocessable`] when the day does not exist in every year.
+    pub fn new(monat: u8, tag: u8) -> Result<Self, MdmError> {
+        let refuse = || MdmError::Unprocessable {
+            reason: format!(
+                "{monat:02}-{tag:02} is not a calendar day of every year (MM-DD, 29 February excluded)"
+            ),
+        };
+        let month = time::Month::try_from(monat).map_err(|_| refuse())?;
+        // 2001 is no leap year, so 29 February does not construct.
+        time::Date::from_calendar_date(2001, month, tag).map_err(|_| refuse())?;
+        Ok(Self { monat, tag })
+    }
+
+    /// The recurring day `date` falls on.
+    #[must_use]
+    pub fn of(date: time::Date) -> Self {
+        Self {
+            monat: u8::from(date.month()),
+            tag: date.day(),
+        }
+    }
+
+    /// Whether `date` lies in the recurring range `[von, bis)`. A range whose
+    /// `von` is after its `bis` crosses the turn of the year: a WINTER from
+    /// `10-01` to `04-01` holds January.
+    #[must_use]
+    pub fn range_holds(von: Self, bis: Self, date: time::Date) -> bool {
+        let day = Self::of(date);
+        match von.cmp(&bis) {
+            std::cmp::Ordering::Less => von <= day && day < bis,
+            std::cmp::Ordering::Greater => day >= von || day < bis,
+            std::cmp::Ordering::Equal => false,
+        }
+    }
+}
+
+impl std::fmt::Display for MonatTag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02}-{:02}", self.monat, self.tag)
+    }
+}
+
+impl std::str::FromStr for MonatTag {
+    type Err = MdmError;
+
+    fn from_str(raw: &str) -> Result<Self, MdmError> {
+        let refuse = || MdmError::Unprocessable {
+            reason: format!("{raw:?} is not a calendar day as MM-DD"),
+        };
+        let (m, d) = raw.split_once('-').ok_or_else(refuse)?;
+        if m.len() != 2 || d.len() != 2 {
+            return Err(refuse());
+        }
+        Self::new(
+            m.parse().map_err(|_| refuse())?,
+            d.parse().map_err(|_| refuse())?,
+        )
+    }
+}
+
+impl serde::Serialize for MonatTag {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for MonatTag {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = <String as serde::Deserialize>::deserialize(d)?;
+        raw.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 /// The tariff zone a register counts: `HT`, `NT` or `EINZEL`.
@@ -2565,6 +2660,14 @@ pub struct ZaehlzeitSaisonUpsert {
     /// Window end in German local time, exclusive (`"22:00"`).
     #[serde(with = "wall_clock")]
     pub zeit_bis: time::Time,
+    /// First calendar day of a `SOMMER` or `WINTER` season, inclusive
+    /// (`"04-01"`); required for those two and absent for `GESAMT`.
+    #[serde(default)]
+    pub saison_von: Option<MonatTag>,
+    /// First calendar day after the season, exclusive (`"10-01"`). A
+    /// `saison_von` after it crosses the turn of the year.
+    #[serde(default)]
+    pub saison_bis: Option<MonatTag>,
 }
 
 impl ZaehlzeitSaisonUpsert {
@@ -2572,8 +2675,10 @@ impl ZaehlzeitSaisonUpsert {
     ///
     /// # Errors
     /// [`MdmError::Unprocessable`] for no weekday, a weekday outside 1–7 or
-    /// named twice, or a window that ends where it starts — which would
-    /// classify no reading and show up as missing HT/NT energy.
+    /// named twice, a window that ends where it starts — which would
+    /// classify no reading and show up as missing HT/NT energy — a `SOMMER`
+    /// or `WINTER` window without both season boundaries, a `GESAMT` window
+    /// with one, or a season that ends where it starts.
     pub fn validate(&self) -> Result<(), MdmError> {
         let refuse = |reason: &str| {
             Err(MdmError::Unprocessable {
@@ -2595,13 +2700,30 @@ impl ZaehlzeitSaisonUpsert {
         if self.zeit_von == self.zeit_bis {
             return refuse("zeit_bis must differ from zeit_von");
         }
+        match (self.saison, self.saison_von, self.saison_bis) {
+            (Saison::Gesamt, None, None) => {}
+            (Saison::Gesamt, _, _) => {
+                return refuse("a GESAMT window holds all year and takes no saison_von/saison_bis");
+            }
+            (Saison::Sommer | Saison::Winter, Some(von), Some(bis)) => {
+                if von == bis {
+                    return refuse("saison_bis must differ from saison_von");
+                }
+            }
+            (Saison::Sommer | Saison::Winter, _, _) => {
+                return refuse(
+                    "a SOMMER or WINTER window needs saison_von and saison_bis — \
+                     no published rule fixes the season, so the Preisblatt's dates are stated",
+                );
+            }
+        }
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod zaehlzeit_body_tests {
-    use super::{Saison, Tarifzone, ZaehlzeitRegisterUpsert, ZaehlzeitSaisonUpsert};
+    use super::{MonatTag, Saison, Tarifzone, ZaehlzeitRegisterUpsert, ZaehlzeitSaisonUpsert};
     use time::macros::{date, time};
 
     fn window(wochentage: Vec<i16>, von: time::Time, bis: time::Time) -> ZaehlzeitSaisonUpsert {
@@ -2610,7 +2732,69 @@ mod zaehlzeit_body_tests {
             wochentage,
             zeit_von: von,
             zeit_bis: bis,
+            saison_von: Some(MonatTag::new(10, 1).unwrap()),
+            saison_bis: Some(MonatTag::new(4, 1).unwrap()),
         }
+    }
+
+    #[test]
+    fn a_dated_season_needs_both_boundaries_and_gesamt_none() {
+        let base = window(vec![1], time!(07:00), time!(22:00));
+        assert!(base.validate().is_ok());
+        for bad in [
+            ZaehlzeitSaisonUpsert {
+                saison_von: None,
+                ..base.clone()
+            },
+            ZaehlzeitSaisonUpsert {
+                saison_bis: None,
+                ..base.clone()
+            },
+            ZaehlzeitSaisonUpsert {
+                saison_bis: base.saison_von,
+                ..base.clone()
+            },
+            ZaehlzeitSaisonUpsert {
+                saison: Saison::Gesamt,
+                ..base.clone()
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?} must be refused");
+        }
+        let gesamt = ZaehlzeitSaisonUpsert {
+            saison: Saison::Gesamt,
+            saison_von: None,
+            saison_bis: None,
+            ..base
+        };
+        assert!(gesamt.validate().is_ok());
+    }
+
+    #[test]
+    fn a_season_boundary_is_a_day_of_every_year() {
+        assert_eq!(
+            "04-01".parse::<MonatTag>().unwrap(),
+            MonatTag::new(4, 1).unwrap()
+        );
+        assert_eq!(MonatTag::new(12, 31).unwrap().to_string(), "12-31");
+        for bad in [
+            "02-29", "02-30", "13-01", "00-10", "4-01", "04-1", "0401", "04-01-01",
+        ] {
+            assert!(bad.parse::<MonatTag>().is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_season_crossing_the_turn_of_the_year_holds_january() {
+        let (okt, apr) = (MonatTag::new(10, 1).unwrap(), MonatTag::new(4, 1).unwrap());
+        assert!(MonatTag::range_holds(okt, apr, date!(2026 - 01 - 15)));
+        assert!(MonatTag::range_holds(okt, apr, date!(2026 - 03 - 31)));
+        assert!(!MonatTag::range_holds(okt, apr, date!(2026 - 04 - 01)));
+        assert!(MonatTag::range_holds(okt, apr, date!(2026 - 10 - 01)));
+        assert!(MonatTag::range_holds(apr, okt, date!(2026 - 07 - 15)));
+        assert!(!MonatTag::range_holds(apr, okt, date!(2026 - 10 - 01)));
+        // 29 February lies between 28 February and 1 March.
+        assert!(MonatTag::range_holds(okt, apr, date!(2028 - 02 - 29)));
     }
 
     #[test]

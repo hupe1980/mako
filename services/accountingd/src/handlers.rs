@@ -4853,6 +4853,72 @@ pub async fn get_eeg_payout(
     .into_response()
 }
 
+// ── EnFG Belastungsausgleich — the payments made (§ 13 Abs. 1 EnFG) ──────────
+
+/// Query for `GET /api/v1/eeg/enfg-zahlungen`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnfgZahlungenQuery {
+    pub year: i16,
+    pub month: i16,
+}
+
+/// `GET /api/v1/eeg/enfg-zahlungen?year=&month=` — the EEG/KWKG payments made
+/// for one billing month: payouts the bank settled (`ACSC`) and Aufrechnungen
+/// (§ 13 Abs. 1 Satz 2 EnFG), and nothing that is merely owed. `einsd` builds
+/// its EnFG ledger from this.
+pub async fn get_enfg_zahlungen(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Query(q): Query<EnfgZahlungenQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-enfg", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    if !(1..=12).contains(&q.month) {
+        return ApiError::unprocessable("month must be 1–12").into_response();
+    }
+    match crate::enfg::zahlungen_im_monat(&pool, &cfg.tenant, q.year, q.month).await {
+        Ok(zahlungen) => Json(serde_json::json!({
+            "billing_year": q.year,
+            "billing_month": q.month,
+            "zahlungen": zahlungen,
+        }))
+        .into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+/// `POST /api/v1/eeg/aufrechnungen` — record that a plant operator's EEG claim
+/// was extinguished by Aufrechnung against the named Gegenforderung.
+pub async fn post_eeg_aufrechnung(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Json(req): Json<crate::enfg::AufrechnungRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "record-aufrechnung", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    match crate::enfg::record_aufrechnung(&pool, &cfg.tenant, &req, Some(claims.sub())).await {
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "aufrechnung_id": id })),
+        )
+            .into_response(),
+        Err(crate::enfg::AufrechnungFehler::Ungueltig(m)) => {
+            ApiError::unprocessable(m).into_response()
+        }
+        Err(e @ crate::enfg::AufrechnungFehler::Doppelt) => {
+            ApiError::conflict(e.to_string()).into_response()
+        }
+        Err(crate::enfg::AufrechnungFehler::Db(e)) => internal(e.into()),
+    }
+}
+
 /// Request body for `POST /api/v1/eeg/payouts/run`.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

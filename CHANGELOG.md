@@ -13,6 +13,28 @@ History before this file is in `git log`.
 
 ### Added
 
+- **The EnFG Belastungsausgleich**: `eeg_billing::enfg` maps each settlement
+  model to its EnFG head (`POST_EEG_SPOT` and `GGV` refuse until their payment
+  basis is cited); accountingd serves the EEG/KWKG payments made
+  (`GET /api/v1/eeg/enfg-zahlungen` — only `ACSC`-settled payouts and every
+  Aufrechnung) and records an Aufrechnung (`POST /api/v1/eeg/aufrechnungen`);
+  einsd books them per ÜNB, month and head (`POST/GET
+  /api/v1/enfg/ledger/{year}/{month}`), reconciles the cents against the
+  receipts, refuses a plant without a Regelzone or a month across two, and
+  produces the § 50 Nr. 1 EnFG Mitteilung with the § 72 EEG 2023 items
+  (`GET /api/v1/enfg/mitteilung/{year}/{month}`), naming every item it does not
+  hold. New Cedar actions `read-enfg`, `record-aufrechnung`,
+  `build-enfg-ledger` (NB); einsd takes `accountingd_url` and `marktd_url`.
+- productd's quotation discloses the § 4 Abs. 1 CO2KostAufG price of each Gas
+  position (`co2kostaufg_preis_eur_per_t`, `co2kostaufg_rechtsgrundlage`) —
+  60 €/t in 2026 whatever the auctions cleared at; a year whose figure is not
+  published yet (2027, until the UBA's § 4 Abs. 2 publication is recorded) is
+  quoted without one and says so in `co2kostaufg_hinweis`.
+  `energy_billing::co2kostaufg_preis_eur_per_t(year)` holds the series.
+- A GNB records the LF's answer to its own GeLi Gas request: inbound
+  44008/44009, 44011/44012 and 44014/44015 resume the GNB's process through
+  `ReceiveGnbAntwort`, keeping the `STS+E01` code with its tree (`E_3002`,
+  `E_3020`, `E_3008`). They were read as requests and refused.
 - **A contract names its Bilanzkreis**: a vertragd Vertragskomponente carries
   `bilanzkreis` — an X-type EIC with its check character for Strom, the
   Marktgebietsverantwortlicher's code for Gas — and sends it with the
@@ -38,6 +60,38 @@ History before this file is in `git log`.
 
 ### Changed
 
+- **Breaking:** a Gas or Fernwärme invoice's CO2KostAufG statement states the
+  § 4 Abs. 1 price of the delivery year and the § 3 Abs. 3 Preisbestandteil
+  (emissions × that price, net and with Umsatzsteuer at the charged rate).
+  `energy_billing::position::co2kostaufg_disclosures` is fallible: a period
+  whose year has no recorded § 4 price, or that runs into a year with another
+  one, is `RATE_REFUSED` (satz `CO2KostAufG`) — 2027 Gas and Fernwärme invoices
+  refuse until the UBA's 2027 figure is recorded.
+- **Breaking:** productd reads the BEHG regime from billingd's `[policy]
+  behg_regime` (`GET /api/v1/policy`, new `billingd_url` / `billingd_api_key`)
+  for a year § 10 BEHG fixes no price for, and refuses its own `behg_regime`
+  key at startup; without an answer the Gas position is `BEHG_PREIS_FEHLT`.
+- **Breaking:** `energy-billing` refuses a billing period that straddles a USt
+  Stichtag (Strom, Gas, Fernwärme) or a BEHG year boundary:
+  `MWST_STICHTAG_IM_ZEITRAUM` and `BEHG_JAHRESGRENZE_IM_ZEITRAUM` are `Error`
+  and name the Stichtage, so a direct caller gets `ValidationBlocked`.
+  billingd's `[rates] mwst_rate` waives no Stichtag: a straddling period is
+  split and each leg billed at the pinned rate.
+- **Breaking:** VPP settlements (`POST /api/v1/billing/vpp/{vpp_id}` and the
+  `vpp-dispatch` webhook) take VAT at the period's statutory rate; a manual
+  period across a USt Stichtag is `422 ZEITRAUM_UEBERSCHREITET_SATZGRENZE`.
+- **Breaking:** a marktd `SOMMER`/`WINTER` Zählzeit window carries its
+  season's days as `saison_von` (inclusive) and `saison_bis` (exclusive),
+  `"MM-DD"`, from the operator's Preisblatt — no published rule fixes a Zählzeit
+  season; `zaehler_saisons_season_dated` refuses an undated SOMMER/WINTER window
+  and a dated GESAMT one. `mako-markt` gains `MonatTag`, and
+  `ZaehlzeitSaisonUpsert` / `ZaehlzeitSaisonRecord` the two fields.
+- `GET …/tariff-zone` resolves against the registers valid on the instant's day
+  and the windows of that day's season; windows of different zones over one
+  instant are a `422`, not whichever row came first.
+- **Breaking:** `GeliGasModule` routes 44008/44009, 44011/44012 and
+  44014/44015 only with the `Nb` role; `GNB_ANTWORT_PIDS` and
+  `gnb_antwort_accepted` are public.
 - **Breaking:** a marktd Zählzeit window may cross midnight. NT 22:00–06:00 is
   one row holding every time at or after `zeit_von` or before `zeit_bis` on the
   Europe/Berlin wall clock, across both DST nights, and it belongs to the day
@@ -65,6 +119,9 @@ History before this file is in `git log`.
 
 ### Removed
 
+- **Breaking:** `mwst_rate_override` is gone from the VPP request body and from
+  vertragd's Aggregatorvertrag (the `aggregatorvertraege` column is dropped);
+  both refuse the field.
 - **Breaking:** a vertragd portal identity has no `rolle`. The
   `kunden_identitaeten.rolle` column and its CHECK list are gone, an identity
   upsert carrying `rolle` is a `422`, and the `authenticate`, `by-sub` and
@@ -73,6 +130,9 @@ History before this file is in `git log`.
 
 ### Fixed
 
+- billingd credited the 2026 nEHS auction price to § 4 Abs. 1 Nr. 2
+  CO2KostAufG on the invoice's CO₂ line; its basis is the auction under § 10
+  Abs. 1 BEHG, and the § 4 price is stated on its own line.
 - No vertragd contract activation reached the NB: the Lieferbeginn body carried
   `endpoint`, `nb_mp_id` and `lf_mp_id`, which processd's request type does not
   declare, so every one was refused with a `422` and dead-lettered. The bodies

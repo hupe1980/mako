@@ -85,6 +85,10 @@ impl Daemon for Productd {
         Ok(())
     }
 
+    fn validate(cfg: &Self::Config) -> anyhow::Result<()> {
+        cfg.validate()
+    }
+
     async fn build(
         cfg: Arc<config::ProductdConfig>,
         ctx: ServiceContext,
@@ -130,6 +134,22 @@ impl Daemon for Productd {
                 &cfg.tenant,
             ),
         });
+
+        // ── The 2027 BEHG regime: billingd's `[policy] behg_regime` ──────────
+        let regime_quelle = match &cfg.billingd_url {
+            Some(url) => crate::billingd::BehgRegimeQuelle::billingd(
+                url,
+                cfg.billingd_api_key.clone(),
+                ctx.http.clone(),
+            ),
+            None => {
+                tracing::warn!(
+                    "productd: no billingd_url — a Gas quotation for a year § 10 BEHG fixes \
+                     no price for is refused BEHG_PREIS_FEHLT"
+                );
+                crate::billingd::BehgRegimeQuelle::keine()
+            }
+        };
 
         let app = Router::new()
             .merge(mcp_server::router(mcp_state, ctx.shutdown.clone()))
@@ -229,6 +249,7 @@ impl Daemon for Productd {
             )))
             .layer(Extension(oidc))
             .layer(Extension(cedar))
+            .layer(Extension(Arc::new(regime_quelle)))
             .layer(Extension(Arc::clone(&cfg)))
             .layer(Extension(pool.clone()));
 

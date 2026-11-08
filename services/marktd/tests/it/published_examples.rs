@@ -212,6 +212,15 @@ fn zaehler(body: &str) -> Result<(), String> {
         .map_err(|e| e.to_json().to_string())
 }
 
+/// `PUT …/saisons` — the typed body, then the `validate` the handler runs:
+/// a printed `SOMMER`/`WINTER` window without its season days is refused.
+fn saison(body: &str) -> Result<(), String> {
+    serde_json::from_str::<mako_markt::repository::ZaehlzeitSaisonUpsert>(body)
+        .map_err(|e| e.to_string())?
+        .validate()
+        .map_err(|e| e.to_string())
+}
+
 type Check = fn(&str) -> Result<(), String>;
 
 /// Route pattern (`{}` = one path segment) → the body type its handler takes.
@@ -248,11 +257,7 @@ const ROUTES: &[(&str, &str, Check)] = &[
         "/api/v1/zaehler/{}/register",
         parses::<mako_markt::repository::ZaehlzeitRegisterUpsert>,
     ),
-    (
-        "PUT",
-        "/api/v1/zaehler-register/{}/saisons",
-        parses::<mako_markt::repository::ZaehlzeitSaisonUpsert>,
-    ),
+    ("PUT", "/api/v1/zaehler-register/{}/saisons", saison),
     (
         "PUT",
         "/api/v1/steuerbare-ressourcen/{}/konfigurationsprodukte",

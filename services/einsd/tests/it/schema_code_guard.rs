@@ -731,6 +731,7 @@ fn the_sect44b_quota_uses_the_statutory_hours() {
 
 const ROUTES: &str = include_str!("../../src/routes.rs");
 const CONFIG: &str = include_str!("../../src/config.rs");
+const ENFG: &str = include_str!("../../src/enfg.rs");
 
 /// Paths that name a **different** service's API, with the service.
 ///
@@ -744,6 +745,14 @@ const FOREIGN_PATHS: &[(&str, &str)] = &[
         "edmd — deliberately not used; see EinsdConfig::edmd_url",
     ),
     ("/api/v1/billing/ggv/{}", "billingd — Mieterstrom/GGV split"),
+    (
+        "/api/v1/eeg/enfg-zahlungen",
+        "accountingd — the payments made, for the EnFG ledger",
+    ),
+    (
+        "/api/v1/melos/{}",
+        "marktd — the MeLo's Regelzone and Netzebene",
+    ),
 ];
 
 /// Every `/api/v1/...` path einsd prints or documents must be one it serves.
@@ -821,6 +830,7 @@ fn every_documented_api_path_is_a_route_einsd_serves() {
         ("pg.rs", PG),
         ("mcp_server.rs", MCP),
         ("config.rs", CONFIG),
+        ("enfg.rs", ENFG),
     ] {
         for raw in paths(src) {
             let path = normalise(&raw);
@@ -845,4 +855,51 @@ fn every_documented_api_path_is_a_route_einsd_serves() {
          registered in `routes.rs` nor declared in `FOREIGN_PATHS`, so a caller \
          following them gets a 404:\n  {dangling:#?}"
     );
+}
+
+/// Every `settlement_model` the schema accepts has an EnFG answer in
+/// `eeg_billing::enfg` — a head, „none", or a refusal naming the model — so a
+/// paid amount is never reported to the ÜNB under a default head.
+///
+/// The CHECK list, `einsd::models::ALL` and `eeg_billing::enfg::SettlementModel`
+/// are three spellings of one vocabulary; this pins all three equal.
+#[test]
+fn every_settlement_model_has_an_enfg_answer() {
+    use eeg_billing::enfg::{SettlementModel, zuordnung};
+    use std::collections::BTreeSet;
+
+    let schema = code_only(SCHEMA);
+    let check: BTreeSet<String> = check_in_values(&schema, "settlement_model")
+        .into_iter()
+        .collect();
+    let models: BTreeSet<String> = einsd::models::ALL.iter().map(|m| (*m).to_owned()).collect();
+    let enfg: BTreeSet<String> = SettlementModel::ALL
+        .iter()
+        .map(|m| m.token().to_owned())
+        .collect();
+    assert_eq!(check, models, "schema CHECK vs einsd::models::ALL");
+    assert_eq!(
+        check, enfg,
+        "schema CHECK vs eeg_billing::enfg::SettlementModel"
+    );
+    for token in &check {
+        let model = SettlementModel::from_token(token).expect("parsed above");
+        if let Err(e) = zuordnung(model) {
+            assert_eq!(e.model, token, "a refusal names its own model");
+        }
+    }
+}
+
+/// `enfg_ledger.posten` CHECK equals `EnfgPosten`'s tokens, both directions.
+#[test]
+fn enfg_ledger_posten_check_equals_the_enum() {
+    use eeg_billing::enfg::EnfgPosten;
+    use std::collections::BTreeSet;
+    let schema = code_only(SCHEMA);
+    let check: BTreeSet<String> = check_in_values(&schema, "posten").into_iter().collect();
+    let tokens: BTreeSet<String> = EnfgPosten::ALL
+        .iter()
+        .map(|p| p.token().to_owned())
+        .collect();
+    assert_eq!(check, tokens);
 }

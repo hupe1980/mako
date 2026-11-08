@@ -42,6 +42,7 @@ tokio-util   = { workspace = true }
 reqwest      = { workspace = true }
 tracing      = "0.1"
 anyhow       = "1"
+thiserror    = { workspace = true }
 secrecy      = { version = "0.10" }
 
 

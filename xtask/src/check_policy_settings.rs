@@ -47,12 +47,6 @@ pub const NOT_POLICY: &[(&str, &str)] = &[
         "the transport Summenzeitreihen are filed over; a target that is not implemented is \
          refused at startup",
     ),
-    (
-        "productd/behg_regime",
-        "an operator reading, the same one as billingd `[policy] behg_regime`; productd \
-         prices quotations with it and is not yet declared through policy_choice!, so this \
-         entry is the open item and is removed when productd declares it",
-    ),
 ];
 
 /// One finding: where, and what is wrong.

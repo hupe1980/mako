@@ -6339,6 +6339,175 @@ fn fernwaerme_passes_through_its_co2_cost_and_states_the_emissions() {
     }
 }
 
+/// The CO2KostAufG price an invoice discloses is the § 4 Abs. 1 figure of the
+/// delivery year, not the auction point that priced the supplier's own CO₂
+/// line, and § 3 Abs. 3 makes the Preisbestandteil the Nr. 1 emissions times
+/// that figure, plus Umsatzsteuer.
+///
+/// A 2026 Gas period whose levy is priced from a 63 EUR/t auction point
+/// discloses the Nr. 2 corridor midpoint of 60 EUR/t: 1000 kWh_Hs ×
+/// 0.18139464 kg/kWh = 181.39 kg = 0.18139 t; × 60 EUR/t = 10.88 EUR netto,
+/// 12.95 EUR at 19 %.
+#[test]
+fn a_gas_invoice_discloses_the_section_4_price_not_the_auction_point() {
+    let tariff = j(r#"{"category":"GAS","gas_grundpreis_ct_per_day":"0",
+             "gas_arbeitspreis_ct_per_kwh_hs":"7.5"}"#);
+    let rates = RegulatoryRates {
+        behg_gas_ct_per_kwh: Ok(dec!(63) * dec!(0.18139464) / dec!(10)),
+        behg_rechtsgrundlage: "nEHS-Zertifikatspreis vom 2026-07-08".to_owned(),
+        ..rates_2026()
+    };
+    let r = bill_rates(
+        &tariff,
+        Quantities {
+            gas: Some(GasMeterInput {
+                kwh_hs: Some(dec!(1000)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        &rates,
+    );
+    let statement: Vec<_> = r
+        .positions
+        .iter()
+        .filter(|p| p.has_tag("co2kostaufg"))
+        .collect();
+
+    let preis = statement
+        .iter()
+        .find(|p| {
+            p.legal_basis
+                .as_deref()
+                .is_some_and(|b| b.starts_with("§ 4 Abs. 1 Nr. 2 CO2KostAufG"))
+        })
+        .expect("the § 4 Abs. 1 Nr. 2 price is disclosed");
+    assert!(
+        preis.description.contains("60 EUR/t"),
+        "{}",
+        preis.description
+    );
+    for p in &statement {
+        assert!(!p.description.contains("63"), "{}", p.description);
+    }
+
+    let bestandteil = statement
+        .iter()
+        .find(|p| p.legal_basis.as_deref() == Some("CO2KostAufG § 3 Abs. 1 Nr. 2, Abs. 3"))
+        .expect("the § 3 Abs. 3 Preisbestandteil is disclosed");
+    assert!(
+        bestandteil
+            .description
+            .contains("0.18139 t CO₂ × 60 EUR/t = 10.88 EUR netto"),
+        "{}",
+        bestandteil.description
+    );
+    assert!(
+        bestandteil
+            .description
+            .contains("12.95 EUR mit Umsatzsteuer (19 %)"),
+        "{}",
+        bestandteil.description
+    );
+    // Disclosures move no money: the levy line still bills the auction point,
+    // under the basis the rates name for it.
+    let levy = r
+        .positions
+        .iter()
+        .find(|p| p.has_tag("behg"))
+        .expect("the CO₂ line");
+    assert_eq!(
+        levy.legal_basis.as_deref(),
+        Some("nEHS-Zertifikatspreis vom 2026-07-08")
+    );
+    for p in &statement {
+        assert_eq!(p.net_eur, Decimal::ZERO, "{}", p.description);
+    }
+}
+
+/// A Gas period whose year has no recorded § 4 Abs. 1 CO2KostAufG price is
+/// refused: from 2027 the figure is the UBA's publication (§ 4 Abs. 2), and an
+/// invoice that states its CO₂ cost without it cannot state the Preisbestandteil.
+#[test]
+fn a_2027_gas_period_without_a_recorded_section_4_price_is_refused() {
+    let tariff = j(r#"{"category":"GAS","gas_grundpreis_ct_per_day":"0",
+             "gas_arbeitspreis_ct_per_kwh_hs":"7.5"}"#);
+    let (from, to) = (date!(2027 - 01 - 01), date!(2027 - 01 - 31));
+    let rates = RegulatoryRates {
+        behg_gas_ct_per_kwh: Ok(dec!(60) * dec!(0.18139464) / dec!(10)),
+        ..rates_2026()
+    };
+    let ctx = BillingContext {
+        regulatory_rates: rates.clone(),
+        ..ctx_for(from, to)
+    };
+    let err = tariff
+        .build_engine(&no_grid(), &rates)
+        .bill(
+            ctx,
+            &Quantities {
+                gas: Some(GasMeterInput {
+                    kwh_hs: Some(dec!(1000)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .expect_err("no § 4 price for 2027 is recorded");
+    match err {
+        energy_billing::EngineError::RateRefused(r) => {
+            assert_eq!(r.satz, "CO2KostAufG");
+            assert_eq!(r.jahr, 2027);
+        }
+        other => panic!("expected a CO2KostAufG refusal, got {other}"),
+    }
+}
+
+/// The Wärme block states the same § 4 price and § 3 Abs. 3 Preisbestandteil
+/// from the heat product's own emissions: 1000 kWh_th × 0.18 kg/kWh = 180 kg =
+/// 0.18 t; × 60 EUR/t = 10.80 EUR netto, 12.85 EUR at 19 %. A period running
+/// into a year with another § 4 price has no single figure and is refused.
+#[test]
+fn fernwaerme_discloses_the_section_4_price_and_refuses_a_year_boundary() {
+    let tariff = j(
+        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":"9.0",
+             "waerme_co2_kosten_ct_per_kwh":"0.9","waerme_co2_emission_g_per_kwh":"180"}"#,
+    );
+    let heat = || Quantities {
+        heat: Some(WaermeMeterInput {
+            kwh_waerme: dec!(1000),
+            months: Some(dec!(1)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let r = bill(&tariff, heat());
+    let bestandteil = r
+        .positions
+        .iter()
+        .find(|p| p.legal_basis.as_deref() == Some("CO2KostAufG § 3 Abs. 1 Nr. 2, Abs. 3"))
+        .expect("the § 3 Abs. 3 Preisbestandteil is disclosed");
+    assert!(
+        bestandteil
+            .description
+            .contains("0.18 t CO₂ × 60 EUR/t = 10.80 EUR netto, 12.85 EUR mit Umsatzsteuer (19 %)"),
+        "{}",
+        bestandteil.description
+    );
+
+    let err = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(
+            ctx_for(date!(2025 - 12 - 01), date!(2026 - 01 - 31)),
+            &heat(),
+        )
+        .expect_err("55 EUR/t in 2025, 60 EUR/t in 2026");
+    assert!(
+        matches!(&err, energy_billing::EngineError::RateRefused(r) if r.satz == "CO2KostAufG"),
+        "{err}"
+    );
+}
+
 /// An indexed B2B tariff whose index value has not arrived cannot be priced.
 /// Adding no Arbeitspreis position and billing the Grundpreis alone is the exact
 /// silent-zero shape `KEIN_ARBEITSPREIS` exists to refuse — and the presence of

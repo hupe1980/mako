@@ -15,6 +15,10 @@ lf_mp_id = "9912345000005"
 
 erp_webhook_url = "http://webhook:8000/events"
 
+# A Gas quotation for a year § 10 BEHG fixes no price for is priced under
+# billingd's `[policy] behg_regime`, read from its GET /api/v1/policy.
+billingd_url = "http://billingd:9280"
+
 [http]
 addr = "0.0.0.0:9080"
 

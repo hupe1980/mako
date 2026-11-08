@@ -19,7 +19,7 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 | | |
 |---|---|
 | **Database** | PostgreSQL — satellites (accounts, mandates, dunning, SEPA runs, booking drafts) in `public`, the ledger in the `ledger` schema; `migration_url` migrates, `url`'s role cannot rewrite the journal |
-| **Auth** | OIDC + Cedar `policies/accountingd.cedar` on every route; reads split into `read-account`, `read-banking`, `read-books`. `/webhook` is HMAC-verified |
+| **Auth** | OIDC + Cedar `policies/accountingd.cedar` on every route; reads split into `read-account`, `read-banking`, `read-books`; the EnFG reads and Aufrechnungen are `NB`'s. `/webhook` is HMAC-verified |
 | **Ledger** | accountingd owns the chart of accounts (`ledger::Chart`) and the Buchungsart → postings map; every booking is a draft staged in its business transaction and booked after the commit (`booking`); a refused one parks for the Desk |
 | **SEPA** | pain.008 per collection date (CORE/B2B × sequence type), pain.001 payouts, pain.002 status (incl. Verification of Payee), pain.007 reversal, camt.055/029 recall; structured `PstlAdr` (or none) |
 | **Bank import** | camt.052/053/054 and a flat JSON import; only `BOOK` entries post, deduplicated on the bank reference |
@@ -39,7 +39,7 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 | Payments | `POST /api/v1/payments/import`, `/import/camt052`, `/camt053`, `/camt054` |
 | Periods & proofs | `POST /api/v1/periods/{id}/seal`, `GET /periods/seals`, `/periods/{id}/balance-proof`, `/entries/{id}/proof`, `/entries/consistency-proof` |
 | Parked bookings | `POST /api/v1/bookings/{key}/rebook`, `/discard` |
-| Jahresabschluss · EEG | `POST /api/v1/jahresabschluss/{malo_id}`; `/api/v1/eeg/payouts` |
+| Jahresabschluss · EEG | `POST /api/v1/jahresabschluss/{malo_id}`; `/api/v1/eeg/payouts`; `GET /api/v1/eeg/enfg-zahlungen` (settled payouts and Aufrechnungen per month, § 13 Abs. 1 EnFG); `POST /api/v1/eeg/aufrechnungen` |
 
 ## Configuration
 

@@ -272,12 +272,28 @@ period with:
    Festpreise for 2021–2025, the corridor midpoint for 2026 (§ 4 Abs. 1 Nr. 2
    CO2KostAufG);
 3. a year § 10 BEHG fixes no price for (2027) takes a series point only through
-   `behg_regime` (`rvo_bezugspreis`, the default, or `korridor`, 55–65 EUR/t),
-   which checks it.
+   billingd's [`[policy] behg_regime`](@/docs/services/billingd.md#policy-behg-regime)
+   (`rvo_bezugspreis` or `korridor`, 55–65 EUR/t), which checks it. productd
+   reads it from billingd's `GET /api/v1/policy` (`billingd_url`,
+   `billingd_api_key`) for each quotation whose Stichtag year needs it, and
+   holds no copy. A `behg_regime` key in productd's config is refused at startup.
 
 The price is converted at the year's EBeV emission factor for Erdgas. A
 position the steps leave without a price is refused with `BEHG_PREIS_FEHLT`,
-naming the year, unless it carries its own `behg_gas_ct_per_kwh`.
+naming the year, unless it carries its own `behg_gas_ct_per_kwh`. No
+`billingd_url`, or a billingd that does not answer, is no regime: such a
+position is refused the same way, never priced under a default.
+
+**The CO2KostAufG price beside it.** Each Gas position also discloses
+`co2kostaufg_preis_eur_per_t` and `co2kostaufg_rechtsgrundlage`: the
+maßgeblicher Preis of § 4 Abs. 1 CO2KostAufG for the Stichtag's year. That is
+the Festpreis to 2025 (Nr. 1) and the 60 EUR/t corridor midpoint in 2026
+(Nr. 2), whatever the auctions cleared at. From 2027 it is the
+Umweltbundesamt's published average of the prior July–November auctions
+(Nr. 3, Abs. 2). It never changes the CO₂ cost above. A year with no recorded
+figure — 2027 until the UBA publication is recorded — is quoted without one,
+and `co2kostaufg_hinweis` says why; no figure is taken from the auctions or a
+neighbouring year.
 
 The Strom- and Energiesteuer are read the same way: the position's own
 `stromsteuer_ct_per_kwh` / `energiesteuer_gas_ct_per_kwh` wins, otherwise the
@@ -595,7 +611,8 @@ The BO4E `Angebot` comes from `GET /angebote/{id}/comparison`, not from a tool.
 # productd.toml
 tenant   = "9910000000002"   # data-isolation key
 lf_mp_id = "9910000000002"   # market identity products are sold under; defaults to tenant
-# behg_regime = "rvo_bezugspreis"   # or "korridor" — nEHS price for a year § 10 BEHG fixes none
+billingd_url = "http://billingd:9280"   # its [policy] behg_regime prices a year § 10 BEHG fixes none
+# billingd_api_key = "env:PRODUCTD_BILLINGD_API_KEY"
 
 [http]
 addr = "0.0.0.0:9080"

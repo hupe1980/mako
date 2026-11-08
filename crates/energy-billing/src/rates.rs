@@ -205,6 +205,52 @@ pub fn behg_rechtsgrundlage_for_year(year: i32) -> Option<&'static str> {
     }
 }
 
+/// The Umweltbundesamt's published § 4 Abs. 1 Nr. 3 CO2KostAufG prices, one
+/// row per year: `(Jahr, EUR/t, Veröffentlichung)`.
+///
+/// From 2027 the maßgeblicher Preis is the average of the § 10 Abs. 1 BEHG
+/// auctions from 1 July to 30 November of the preceding year, which the UBA
+/// publishes at the latest ten Werktage before the year begins (§ 4 Abs. 2
+/// CO2KostAufG). It is a published figure, not a statute's: a row is added
+/// with the publication it was read from, and a year without one is refused.
+const CO2KOSTAUFG_UBA_EUR_PER_T: &[(i32, Decimal, &str)] = &[];
+
+/// The maßgeblicher Preis der Emissionszertifikate of § 4 Abs. 1 CO2KostAufG
+/// for `year`, in EUR/t CO₂, and the provision it comes from.
+///
+/// This is the figure a Rechnung or a quotation discloses as the CO2KostAufG
+/// price, and it is not the supplier's own CO₂ cost: § 4 Abs. 1 fixes it per
+/// year — Nr. 1 the § 10 Abs. 2 Satz 2 BEHG Festpreis up to 2025, Nr. 2 the
+/// midpoint of the § 10 Abs. 2 Satz 4 BEHG corridor in 2026, Nr. 3 from 2027
+/// the UBA's published auction average (`CO2KOSTAUFG_UBA_EUR_PER_T`) — while
+/// the supplier's cost follows its own auction purchases. The figure is the
+/// same under either [`BehgRegime`].
+///
+/// `None` for a year before 2021 and for a year from 2027 whose UBA figure is
+/// not recorded: the caller refuses, never substitutes a neighbouring year.
+#[must_use]
+pub fn co2kostaufg_preis_eur_per_t(year: i32) -> Option<(Decimal, &'static str)> {
+    match year {
+        BEHG_ERSTES_JAHR..=2025 => behg_eur_per_t_for_year(year).map(|p| {
+            (
+                p,
+                "§ 4 Abs. 1 Nr. 1 CO2KostAufG (Festpreis nach § 10 Abs. 2 Satz 2 BEHG)",
+            )
+        }),
+        2026 => behg_eur_per_t_for_year(year).map(|p| {
+            (
+                p,
+                "§ 4 Abs. 1 Nr. 2 CO2KostAufG (Mittelwert des Preiskorridors nach § 10 Abs. 2 Satz 4 BEHG)",
+            )
+        }),
+        2027.. => CO2KOSTAUFG_UBA_EUR_PER_T
+            .iter()
+            .find(|(y, _, _)| *y == year)
+            .map(|(_, p, quelle)| (*p, *quelle)),
+        _ => None,
+    }
+}
+
 /// Convert an nEHS certificate price (EUR/t CO₂) into the Gas CO₂ cost
 /// component in ct/kWh_Hs, at the year's EBeV emission factor.
 ///
@@ -743,6 +789,22 @@ mod tests {
                 .grund
                 .contains("vorletzten vorangegangenen Quartals")
         );
+    }
+
+    /// The § 4 Abs. 1 CO2KostAufG price is keyed by year: the Festpreis to
+    /// 2025, the corridor midpoint in 2026, and from 2027 only a recorded UBA
+    /// publication — never the 2026 figure carried forward.
+    #[test]
+    fn the_co2kostaufg_price_is_keyed_by_year_and_2027_is_not_recorded() {
+        assert_eq!(
+            co2kostaufg_preis_eur_per_t(2025).map(|p| p.0),
+            Some(dec!(55))
+        );
+        let (p, quelle) = co2kostaufg_preis_eur_per_t(2026).expect("2026 is Nr. 2");
+        assert_eq!(p, dec!(60));
+        assert!(quelle.contains("§ 4 Abs. 1 Nr. 2"), "{quelle}");
+        assert_eq!(co2kostaufg_preis_eur_per_t(2027), None);
+        assert_eq!(co2kostaufg_preis_eur_per_t(2020), None);
     }
 
     /// Before 2021 there was no Brennstoffemissionshandel: the CO₂ component

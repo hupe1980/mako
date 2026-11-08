@@ -1029,10 +1029,27 @@ row, holding every time at or after 22:00 or before 06:00, so 06:00 itself is
 outside it. A window belongs to the day it opens on: „Mo–Fr 22:00–06:00" holds
 Friday 22:00 to Saturday 06:00 and not Monday 00:00–06:00, which is the tail of
 Sunday's night.
-`GET …/tariff-zone?datetime=` classifies one Europe/Berlin wall-clock datetime;
+
+A `SOMMER` or `WINTER` window carries its season's calendar days,
+`saison_von` inclusive and `saison_bis` exclusive as `"MM-DD"`; a `saison_von`
+after `saison_bis` crosses the turn of the year (WINTER `"10-01"` to
+`"04-01"`). No published rule fixes when a Zählzeit season begins — BO4E's
+`Zaehlzeitdefinition` leaves the dates to a `saisonprofil` the market partners
+agree on — so the window states the Preisblatt's dates. A `GESAMT` window holds
+all year and carries neither; the schema refuses an undated `SOMMER`/`WINTER`
+window and a dated `GESAMT` one. The season is the instant's own calendar day,
+while the weekday stays the day the window opened on: on 1 April a SOMMER
+night that opened on 31 March takes over from WINTER's at midnight, so the
+seasons' windows meet without a gap or an overlap.
+
+`GET …/tariff-zone?datetime=` classifies one Europe/Berlin wall-clock datetime
+against the registers valid on its day — validity is half-open
+`[valid_from, valid_to)`, so a register replaced since still answers for the
+time before its replacement — and the windows of that day's season.
 `GET …/zaehlzeitdefinitionen` assembles them into a BO4E `Zaehlzeitdefinition`.
-A single-rate meter answers `EINZEL` from its own window; an instant no window
-covers is a `422`, never a defaulted `EINZEL`.
+A single-rate meter answers `EINZEL` from its own window. An instant no window
+covers is a `422`, never a defaulted `EINZEL`, and so is one that windows of
+different zones both hold: the row order does not choose between them.
 
 A register is identified by Zähler, `bezeichnung` and `valid_from`, a window by
 register, `saison` and `zeit_von`; a second `PUT` with the same identity updates
@@ -1040,7 +1057,8 @@ it. Each `PUT` answers `200` with the row as stored — the register's `id` is t
 path of its windows. The Zähler, the register and the tenant come from the path
 and the session, so a body naming `id`, `tenant` or `updated_at` is a `422`, as
 is a window with `zeit_von` equal to `zeit_bis`, a weekday outside 1–7 or named
-twice. A register
+twice, a `SOMMER`/`WINTER` window without both season days, a `GESAMT` window
+with one, or a season day not every year has (`"02-29"`). A register
 the caller's tenant does not hold takes no window: `404`.
 
 ```bash
@@ -1059,6 +1077,8 @@ curl -s -X PUT "http://marktd:8180/api/v1/zaehler-register/${REGISTER_ID}/saison
   -H "Content-Type: application/json" \
   -d '{
     "saison": "WINTER",
+    "saison_von": "10-01",
+    "saison_bis": "04-01",
     "wochentage": [1,2,3,4,5],
     "zeit_von": "07:00",
     "zeit_bis": "22:00"

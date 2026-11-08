@@ -43,6 +43,26 @@ pub struct EinsdConfig {
     /// API key used for authenticated requests to `edmd`.
     pub edmd_api_key: Option<String>,
 
+    /// `accountingd` base URL — the EEG/KWKG payments actually made, which the
+    /// EnFG ledger is built from (`GET /api/v1/eeg/enfg-zahlungen`). Without it
+    /// no ledger can be built, because a computed settlement is not a payment.
+    #[serde(default)]
+    pub accountingd_url: Option<String>,
+
+    /// Bearer credential for `accountingd`.
+    #[serde(default)]
+    pub accountingd_api_key: Option<String>,
+
+    /// `marktd` base URL — each plant's Messlokation (`GET /api/v1/melos/{id}`)
+    /// for the Regelzone that names its ÜNB and the Netzebene reported as its
+    /// Spannungsebene (§ 72 Abs. 2 Nr. 1 EEG 2023).
+    #[serde(default)]
+    pub marktd_url: Option<String>,
+
+    /// Bearer credential for `marktd`.
+    #[serde(default)]
+    pub marktd_api_key: Option<String>,
+
     /// How often (in seconds) the background alert worker checks for plants
     /// whose `foerderendedatum` is within 180 days.  Defaults to 21600 (6 h).
     pub alert_interval_secs: Option<u64>,
@@ -237,6 +257,36 @@ impl EinsdConfig {
                 "edmd",
                 url,
                 self.edmd_api_key.clone().map(secrecy::SecretString::from),
+                client,
+            )
+        })
+    }
+}
+
+impl EinsdConfig {
+    /// `accountingd`, addressed and credentialed, or `None` when not configured.
+    #[must_use]
+    pub fn accountingd(&self, client: reqwest::Client) -> Option<mako_service::http::Upstream> {
+        self.accountingd_url.as_deref().map(|url| {
+            mako_service::http::Upstream::new(
+                "accountingd",
+                url,
+                self.accountingd_api_key
+                    .clone()
+                    .map(secrecy::SecretString::from),
+                client,
+            )
+        })
+    }
+
+    /// `marktd`, addressed and credentialed, or `None` when not configured.
+    #[must_use]
+    pub fn marktd(&self, client: reqwest::Client) -> Option<mako_service::http::Upstream> {
+        self.marktd_url.as_deref().map(|url| {
+            mako_service::http::Upstream::new(
+                "marktd",
+                url,
+                self.marktd_api_key.clone().map(secrecy::SecretString::from),
                 client,
             )
         })
