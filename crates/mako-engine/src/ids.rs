@@ -161,7 +161,7 @@ impl TenantId {
     /// assert_ne!(id, TenantId::from_party_id("9900357000004"));
     ///
     /// // EIC code (ENTSO-E, agency 305) — e.g. for a TSO
-    /// let tso = TenantId::from_party_id("10XDE-EON-NETZ--I");
+    /// let tso = TenantId::from_party_id("10XDE-EON-NETZ-C");
     /// assert_ne!(id, tso);
     /// ```
     #[must_use]

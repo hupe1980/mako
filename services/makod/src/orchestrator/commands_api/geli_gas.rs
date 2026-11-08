@@ -641,6 +641,9 @@ pub(super) async fn dispatch_geli_gas_antwort(
         )));
     }
 
+    // The tree the code was resolved in rides the event, so the Verlauf
+    // reads its wording: a Lieferbeginn is answered from two.
+    let antwort_ebd = tree.to_owned();
     dispatch_to_process::<GeliGasSupplierChangeWorkflow, _>(
         state,
         malo_id.as_str(),
@@ -648,6 +651,7 @@ pub(super) async fn dispatch_geli_gas_antwort(
         move || GasSupplierChangeCommand::SendAntwort {
             accepted: positive,
             antwort_code: antwort_code.clone(),
+            antwort_ebd: Some(antwort_ebd.clone()),
             bemerkung: bemerkung.clone(),
             obligations: vec![],
         },
@@ -864,10 +868,7 @@ pub(super) async fn dispatch_geli_eog_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    // `E_3008` has no entry in the shared Codeliste catalogue yet, so the
-    // caller states the cluster alongside the code rather than having it
-    // derived. Passing an unbacked EBD id would look validated and not be.
-    dispatch_geli_lf_antwort_uncoded(state, payload).await
+    dispatch_geli_lf_antwort(state, payload, mako_pruefung::codes::EBD_ANMELDUNG_EOG_GAS).await
 }
 
 pub(super) fn cmd_geli_eog_bestaetigen<'a>(
@@ -915,44 +916,20 @@ async fn dispatch_geli_lf_antwort(
             entry.cluster.label(),
         ))
     })?;
-    answer_gas_supplier_change(state, payload, zustimmung, antwort_code).await
+    answer_gas_supplier_change(state, payload, zustimmung, antwort_code, Some(ebd)).await
 }
 
-/// Shared body for a process whose Codeliste this build does not carry.
-async fn dispatch_geli_lf_antwort_uncoded(
-    state: &CommandsApiState,
-    payload: &serde_json::Value,
-) -> Result<DispatchOutcome, DispatchError> {
-    let zustimmung = payload
-        .get("zustimmung")
-        .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must state \"zustimmung\" (true = Bestätigung, false = Ablehnung)".into(),
-            )
-        })?;
-    // No Codeliste for this process in this build, so the code cannot be
-    // resolved — but `SG4 STS+E01` is still Muss, so the caller must state one.
-    let antwort_code = payload
-        .get("antwort_code")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"antwort_code\" — the AHB marks SG4 STS+E01 Muss \
-                 on every Antwortnachricht"
-                    .into(),
-            )
-        })?;
-    answer_gas_supplier_change(state, payload, zustimmung, antwort_code).await
-}
-
+/// `ebd` is the tree the code was resolved in, which the event names so the
+/// Verlauf reads its wording; `None` leaves it to the process's only tree.
 async fn answer_gas_supplier_change(
     state: &CommandsApiState,
     payload: &serde_json::Value,
     accepted: bool,
     antwort_code: &str,
+    ebd: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
     let antwort_code = antwort_code.to_owned();
+    let antwort_ebd = ebd.map(str::to_owned);
     let malo_id = extract_malo_id(payload)?;
     let reason = payload
         .get("bemerkung")
@@ -967,6 +944,7 @@ async fn answer_gas_supplier_change(
         move || GasSupplierChangeCommand::SendAntwort {
             accepted,
             antwort_code: antwort_code.clone(),
+            antwort_ebd: antwort_ebd.clone(),
             bemerkung: reason.clone(),
             obligations: vec![],
         },

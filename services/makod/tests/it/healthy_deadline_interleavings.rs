@@ -228,6 +228,7 @@ fn geli_gas_lieferbeginn_survives_every_interleaving() {
             C::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -252,6 +253,7 @@ fn geli_gas_lieferbeginn_survives_every_interleaving() {
                 response_pid: pid(44_014),
                 accepted: true,
                 reason: None,
+                antwort_code: None,
             },
         ],
         external: &[(ANTWORT, 0)],

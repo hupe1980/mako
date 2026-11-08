@@ -124,7 +124,7 @@ fn render_utilmd(
         // `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 §5.3): without a
         // Bilanzkreis the NB cannot assign the Marktlokation to the LF.
         .produktpaket(edi_energy::utilmd_codes::Produktpaket::bilanzkreis(
-            "11XBK-EEG-----1",
+            "11XBK-EEG------Q",
         ))
         // The rest of the 55001 column: Stammdaten of the Marktlokation and
         // of the Kunde, and the Kunde with a Korrespondenzanschrift.

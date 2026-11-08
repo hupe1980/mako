@@ -93,14 +93,13 @@ pub struct UpdateKundeInput {
 }
 
 /// Add or update a portal user identity for a Kunde.
-/// Idempotent on `oidc_sub`: re-POST updates rolle / standort_filter.
+/// Idempotent on `oidc_sub`: re-POST updates standort_filter.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpsertIdentitaetInput {
     pub oidc_sub: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
-    pub rolle: Option<String>, // default: VOLLZUGRIFF
     pub standort_filter: Option<String>,
 }
 
@@ -202,7 +201,6 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
             oidc_sub: sub.clone(),
             email: input.email.clone(),
             display_name: None,
-            rolle: None,
             standort_filter: None,
         };
         upsert_identitaet_tx(&mut tx, actual_id, tenant, &identity).await?;
@@ -620,15 +618,13 @@ pub(crate) async fn upsert_identitaet_tx(
     input: &UpsertIdentitaetInput,
 ) -> Result<Uuid> {
     let id = Uuid::new_v4();
-    let rolle = input.rolle.as_deref().unwrap_or("VOLLZUGRIFF");
     let row = sqlx::query(
         "INSERT INTO kunden_identitaeten
-         (id, kunden_id, tenant, oidc_sub, email, display_name, rolle, standort_filter)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         (id, kunden_id, tenant, oidc_sub, email, display_name, standort_filter)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
          ON CONFLICT (tenant, oidc_sub) DO UPDATE
            SET email           = COALESCE(EXCLUDED.email, kunden_identitaeten.email),
                display_name    = COALESCE(EXCLUDED.display_name, kunden_identitaeten.display_name),
-               rolle           = EXCLUDED.rolle,
                standort_filter = EXCLUDED.standort_filter,
                aktiv           = true,
                updated_at      = now()
@@ -640,7 +636,6 @@ pub(crate) async fn upsert_identitaet_tx(
     .bind(&input.oidc_sub)
     .bind(&input.email)
     .bind(&input.display_name)
-    .bind(rolle)
     .bind(&input.standort_filter)
     .fetch_one(&mut *conn)
     .await?;
@@ -665,7 +660,7 @@ pub async fn list_identitaeten(
     .await?)
 }
 
-/// Resolve an OIDC sub to its identity row (rolle / standort scope).
+/// Resolve an OIDC sub to its identity row (standort scope).
 ///
 /// # Errors
 ///

@@ -87,7 +87,7 @@ pub use config::{
     load_config_file,
 };
 pub use error::{ApiError, ApiResult, UpstreamFailure};
-pub use json::{DETAIL_SENTINEL, Json, Lenient};
+pub use json::{DETAIL_SENTINEL, Json, Lenient, from_value as json_from_value};
 pub use service::{Daemon, Listener, ServiceConfig, ServiceContext, run, serve, validate_config};
 #[cfg(feature = "testing")]
 pub use service::{build_for_test, build_for_test_on};

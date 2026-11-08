@@ -1894,7 +1894,7 @@ fn a_strom_anmeldung_round_trips_its_bilanzkreis_produktpaket() {
         .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(
             transaktionsgrund::WECHSEL,
         ))
-        .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
+        .produktpaket(Produktpaket::bilanzkreis("11XBK-STD------Y"))
         .marktlokation("51238696781")
         // What the 55001 column demands beyond the Bilanzkreis: the
         // Marktlokation's Stammdaten (`SEQ+Z01`), the Kunde's (`SEQ+Z75`),
@@ -1923,7 +1923,7 @@ fn a_strom_anmeldung_round_trips_its_bilanzkreis_produktpaket() {
     let raw = String::from_utf8_lossy(&bytes).into_owned();
     assert!(raw.contains("SEQ+Z79+1"), "{raw}");
     assert!(raw.contains("PIA+5+9991000002082:Z11"), "{raw}");
-    assert!(raw.contains("CAV+ZV4:::11XBK-STD-----9"), "{raw}");
+    assert!(raw.contains("CAV+ZV4:::11XBK-STD------Y"), "{raw}");
     assert!(raw.contains("CCI+Z65+++Z01"), "{raw}");
 
     let msg = match Platform::with_all_profiles()
@@ -1946,7 +1946,7 @@ fn a_strom_anmeldung_round_trips_its_bilanzkreis_produktpaket() {
 
     // …and a receiver can read the Bilanzkreis back out of it.
     let tx = msg.transactions().first().expect("one Vorgang");
-    assert_eq!(tx.bilanzkreis(), Some("11XBK-STD-----9"));
+    assert_eq!(tx.bilanzkreis(), Some("11XBK-STD------Y"));
     let paket = tx.sequences.first().expect("one Produktpaket");
     assert_eq!(paket.seq.sequence_id.as_deref(), Some("1"));
     assert_eq!(paket.products[0].produkt_code(), Some("9991000002082"));
@@ -1974,7 +1974,7 @@ fn two_products_in_one_produktpaket_keep_their_own_values() {
                 eigenschaft: Some(produkt::TRANCHE_PROZENTUALE_AUFTEILUNG.to_owned()),
                 wert: Some("40".to_owned()),
             },
-            Produkt::bilanzkreis("11XBK-STD-----9"),
+            Produkt::bilanzkreis("11XBK-STD------Y"),
         ],
         umsetzung: edi_energy::utilmd_codes::Umsetzungsgrad::Vollumfaenglich,
     };
@@ -2007,7 +2007,7 @@ fn two_products_in_one_produktpaket_keep_their_own_values() {
 
     assert_eq!(
         tx.bilanzkreis(),
-        Some("11XBK-STD-----9"),
+        Some("11XBK-STD------Y"),
         "the Bilanzkreis is read from its own product, not the package's first value"
     );
     let groesse = tx.tranchengroesse().expect("the Tranchengröße product");

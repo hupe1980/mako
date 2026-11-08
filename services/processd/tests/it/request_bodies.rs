@@ -117,7 +117,7 @@ async fn start_supply_body_is_typed() {
     let valid = json!({
         "malo_id": "51238696012",
         "lieferbeginn_datum": "2099-01-01",
-        "bilanzkreis": "11XBK-STD-----9",
+        "bilanzkreis": "11XBK-STD------Y",
     });
     assert_refusals(
         reqwest::Method::POST,
@@ -137,7 +137,7 @@ async fn start_supply_body_is_typed() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["command"], "gpke.lieferbeginn.anmelden");
     assert_eq!(sent[0]["payload"]["malo_id"], "51238696012");
-    assert_eq!(sent[0]["payload"]["bilanzkreis"], "11XBK-STD-----9");
+    assert_eq!(sent[0]["payload"]["bilanzkreis"], "11XBK-STD------Y");
 }
 
 #[tokio::test]

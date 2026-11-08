@@ -75,6 +75,19 @@ Otherwise — or where a fact is missing — it answers
 **`422 PAPIER_UNZULAESSIG`**. A `POST` beside `PORTAL`, `EMAIL` or `ERP` is a
 copy of a document that also went out electronically and is queued.
 
+An `INVOICE` is issued only to a buyer in Germany. It is the operator's energy
+invoice — gas, electricity or heating/cooling, taxed as a domestic supply — so
+a model whose buyer country (BT-55) names another EU Member State is refused
+with **`422 CROSS_BORDER_SUPPLY_UNSUPPORTED`** (the OSS treatment under
+Art. 369aa MwStSystRL is not built), one outside the EU with
+**`422 EXPORT_SUPPLY_UNSUPPORTED`**, a model without BT-55 with
+**`422 RECIPIENT_COUNTRY_MISSING`** (EN 16931 BR-11 makes it mandatory, and
+outputd does not read it as `DE`), and a code that is not two letters with
+**`422 RECIPIENT_COUNTRY_INVALID`**. The postal `recipient.address` is where a
+letter goes, not who is invoiced, and does not decide. billingd asks the same
+rule before it stores an invoice; `POST /api/v1/render/{kind}` issues nothing
+and does not ask it.
+
 Admission is checked before rendering, each refusal a `422` naming the fix: a
 pinned hash must belong to **this kind**, the subject must match the kind, an
 `INVOICE` render **requires** the attachment, and a Textform render must not
@@ -180,6 +193,7 @@ operator's file:
 | `TEMPLATE_NOT_PUBLISHED` | 422 | the rollout names a hash never published as this kind |
 | `TEMPLATE_WRONG_KIND`, `SUBJECT_REQUIRED`, `SUBJECT_MUST_BE_A_MODEL`, `SUBJECT_MUST_BE_A_VIEW` | 422 | the render's parts do not agree |
 | `PAPIER_UNZULAESSIG` | 422 | a `POST`-only invoice the UStG does not admit on paper, or a missing fact |
+| `CROSS_BORDER_SUPPLY_UNSUPPORTED`, `EXPORT_SUPPLY_UNSUPPORTED`, `RECIPIENT_COUNTRY_MISSING`, `RECIPIENT_COUNTRY_INVALID` | 422 | an `INVOICE` whose buyer is not in Germany, or whose BT-55 is absent or malformed |
 | `ATTACHMENT_REQUIRED`, `ATTACHMENT_NOT_ALLOWED`, `ATTACHMENT_UNUSABLE`, `ATTACHMENT_NAME_INVALID` | 422 | the carrier contract |
 | `PDF_STANDARD_UNUSABLE` | 422 | a level that would silently drop the invoice |
 | `DATE_NOT_REPRESENTABLE` | 422 | a document date the PDF date format cannot carry |

@@ -295,7 +295,7 @@ pub const CCI: SegmentDefinition = SegmentDefinition::new("CCI", "Merkmal/Klasse
 
 /// C889 — Merkmalswert (`CAV`). `1131` and `3055` are *nicht benutzt* in the
 /// BDEW profile and keep their slots, so the value sits at component **4**:
-/// `CAV+ZV4:::11XBK-STD-----9`.
+/// `CAV+ZV4:::11XBK-STD------Y`.
 ///
 /// `7110` occurs **twice** — that is the UN/EDIFACT composite, and the MIG
 /// carries the five-component shape in seven places. Gas fixtures send

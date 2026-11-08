@@ -516,7 +516,7 @@ fn sg8_ranks(release: &Release) -> std::collections::HashMap<String, usize> {
 /// SEQ+Z79+1
 /// PIA+5+9991000002082:Z11
 /// CCI+Z66
-/// CAV+ZV4:::11XBK-EEG-----1
+/// CAV+ZV4:::11XBK-EEG------Q
 /// ```
 ///
 /// The Anmeldung einer Zuordnung des LFN is not complete without one: the AHB
@@ -1183,7 +1183,7 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     ///     .receiver("9900123456789")
     ///     .transaction("VORGANG-0001")
     ///     .date(dtm::BEGINN_ZUM, "20261101")
-    ///     .produktpaket(Produktpaket::bilanzkreis("11XBK-EEG-----1"))
+    ///     .produktpaket(Produktpaket::bilanzkreis("11XBK-EEG------Q"))
     ///     .marktlokation("51238696012")
     ///     .done()
     ///     .serialize()?;
@@ -1191,7 +1191,7 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     /// assert!(text.contains("SEQ+Z79+1"));
     /// assert!(text.contains("PIA+5+9991000002082:Z11"));
     /// assert!(text.contains("CCI+Z66"));
-    /// assert!(text.contains("CAV+ZV4:::11XBK-EEG-----1"));
+    /// assert!(text.contains("CAV+ZV4:::11XBK-EEG------Q"));
     /// # Ok::<(), edi_energy::Error>(())
     /// ```
     pub fn produktpaket(mut self, paket: Produktpaket) -> Self {

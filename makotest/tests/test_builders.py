@@ -188,12 +188,12 @@ class TestProduktpaket:
         CAV qualifier are all fixed by the AHB. A test supplying them by hand
         would be copying values it has no way to check.
         """
-        wire = utilmd_interchange_with_bilanzkreis("11XBK-EEG-----1")
+        wire = utilmd_interchange_with_bilanzkreis("11XBK-EEG------Q")
         text = wire.decode()
         assert "SEQ+Z79" in text
         assert "PIA+5+9991000002082:Z11" in text
         assert "CCI+Z66" in text
-        assert "CAV+ZV4:::11XBK-EEG-----1" in text
+        assert "CAV+ZV4:::11XBK-EEG------Q" in text
         assert_edifact_valid(wire, on=ON)
 
     def test_a_vorgang_without_one_carries_no_sg8_at_all(self):

@@ -1023,8 +1023,13 @@ own `SmgwSession`).
 
 `zaehler_register` (HT / NT / EINZEL, OBIS, validity) and `zaehler_saisons`
 (`SOMMER` / `WINTER` / `GESAMT`, `wochentage`, `zeit_von` inclusive and
-`zeit_bis` exclusive, German local time) describe iMSys TOU bands.
-`GET …/tariff-zone?datetime=` resolves one local datetime in a single JOIN;
+`zeit_bis` exclusive, German local time) describe iMSys TOU bands. A window
+whose `zeit_von` is after its `zeit_bis` crosses midnight: NT 22:00–06:00 is one
+row, holding every time at or after 22:00 or before 06:00, so 06:00 itself is
+outside it. A window belongs to the day it opens on: „Mo–Fr 22:00–06:00" holds
+Friday 22:00 to Saturday 06:00 and not Monday 00:00–06:00, which is the tail of
+Sunday's night.
+`GET …/tariff-zone?datetime=` classifies one Europe/Berlin wall-clock datetime;
 `GET …/zaehlzeitdefinitionen` assembles them into a BO4E `Zaehlzeitdefinition`.
 A single-rate meter answers `EINZEL` from its own window; an instant no window
 covers is a `422`, never a defaulted `EINZEL`.
@@ -1034,7 +1039,8 @@ register, `saison` and `zeit_von`; a second `PUT` with the same identity updates
 it. Each `PUT` answers `200` with the row as stored — the register's `id` is the
 path of its windows. The Zähler, the register and the tenant come from the path
 and the session, so a body naming `id`, `tenant` or `updated_at` is a `422`, as
-is an empty or inverted window, a weekday outside 1–7 or named twice. A register
+is a window with `zeit_von` equal to `zeit_bis`, a weekday outside 1–7 or named
+twice. A register
 the caller's tenant does not hold takes no window: `404`.
 
 ```bash

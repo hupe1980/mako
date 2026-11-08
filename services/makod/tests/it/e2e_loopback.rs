@@ -138,7 +138,7 @@ async fn loopback_round_trip_spawns_process() {
             // `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 §5.3): the NB
             // cannot assign the Marktlokation without a Bilanzkreis, so a command
             // that omits it renders a message the pre-send gate dead-letters.
-            "bilanzkreis": "11XBK-EEG-----1",
+            "bilanzkreis": "11XBK-EEG------Q",
             // The rest of the 55001 column: the Transaktionsgrund, the
             // Marktlokation's Gruppenzuordnung, the Kunde's EnFG-Grundlage,
             // and the Kunde with a Korrespondenzanschrift.

@@ -570,7 +570,7 @@ curl -X POST http://processd:8580/api/v1/start-supply \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01",
-       "bilanzkreis": "11XBK-STD-----9"}'
+       "bilanzkreis": "11XBK-STD------Y"}'
 ```
 
 | Field | Required | Notes |
@@ -990,10 +990,10 @@ eog_versorgungsart = "ZD0"
 # by Bilanzierungsgebiet and regime. Omit `bilanzierungsgebiet` for the
 # fallback row; no table → every 55607 escalates.
 [[lf.bilanzkreise]]
-bilanzierungsgebiet = "11YN-BG-EON---X"
-eeg      = ["11XBK-EEG-----1"]
-kwkg     = ["11XBK-KWKG----5"]
-standard = ["11XBK-STD-----9"]
+bilanzierungsgebiet = "11YN-BG-EON----A"
+eeg      = ["11XBK-EEG------Q"]
+kwkg     = ["11XBK-KWKG-----N"]
+standard = ["11XBK-STD------Y"]
 
 [msb]
 auto_accept       = false   # true → dispatch the MSB-Wechsel Bestätigung

@@ -41,6 +41,11 @@
 //! is a misfiling the BIKO cannot tell from a correct submission. So a literal
 //! on a line that *names* one identifier and carries the other is reported.
 //!
+//! An EIC-shaped token of another length — two digits, an object type, a
+//! hyphen among the rest — is reported too: it cannot be an EIC at all, and
+//! reading only sixteen-character tokens lets one a character short through
+//! unchecked.
+//!
 //! Validation uses `rubo4e` itself rather than a second implementation, so the
 //! guard can never disagree with the code that matters.
 //!
@@ -104,6 +109,21 @@ const DELIBERATE: &[(&str, &str)] = &[
          the arithmetic: eleven digits are refused whether or not the check \
          digit holds, because a Netzbetreiber issuing the valid neighbour of a \
          minted id collides just as hard. The test asserts both spellings",
+    ),
+    (
+        "11XRWENET----1E",
+        "`agentd` and `vertragd` assert that an EIC one character short is \
+         refused as a routing authority and as a Bilanzkreis",
+    ),
+    (
+        "11XRWENET-----1EX",
+        "`agentd` asserts that an EIC one character long is refused as a routing \
+         authority",
+    ),
+    (
+        "11XBK-STANDARD-5",
+        "`vertragd` asserts that a Bilanzkreis with the wrong check character is \
+         refused; the valid neighbour ends in `4`",
     ),
     (
         "10YDE-EON------2",
@@ -326,11 +346,16 @@ fn scan(path: &Path, scanned: &mut usize, findings: &mut Vec<Finding>) {
         });
     }
     for (code, line_no) in offending_eics(&src) {
-        let expected = rubo4e::identifiers::EicCode::compute_check_char(&code[..15]).unwrap_or('?');
-        let message = format!(
-            "{code} — EIC check character should be {expected} ({}{expected})",
-            &code[..15]
-        );
+        let message = if code.len() == 16 {
+            let expected =
+                rubo4e::identifiers::EicCode::compute_check_char(&code[..15]).unwrap_or('?');
+            format!(
+                "{code} — EIC check character should be {expected} ({}{expected})",
+                &code[..15]
+            )
+        } else {
+            format!("{code} — {} characters; an EIC has 16", code.len())
+        };
         findings.push(Finding {
             path: path.to_path_buf(),
             line: line_no,
@@ -386,7 +411,7 @@ fn mistyped_eics(src: &str) -> Vec<(String, usize, char, char)> {
         // A test that proves the mismatch is refused has to state the
         // mismatch. `is_err()`/`expect_err` on the line is that statement, and
         // is the only exemption — a mismatch nobody asserts against is a bug.
-        if line.contains("is_err()") || line.contains("expect_err") {
+        if line.contains("is_err()") || line.contains("expect_err") || line.contains("unwrap_err") {
             continue;
         }
         let l = line.to_ascii_lowercase();
@@ -429,7 +454,7 @@ fn offending_eics(src: &str) -> Vec<(String, usize)> {
             continue; // this guard's own prose
         }
         for tok in line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
-            if tok.len() != 16 {
+            if !(12..=20).contains(&tok.len()) {
                 continue;
             }
             if DELIBERATE.iter().any(|(d, _)| *d == tok) {
@@ -439,7 +464,22 @@ fn offending_eics(src: &str) -> Vec<(String, usize)> {
             let shaped = b[0].is_ascii_digit()
                 && b[1].is_ascii_digit()
                 && matches!(b[2], b'X' | b'Y' | b'Z' | b'W' | b'T' | b'V' | b'A');
-            if shaped && rubo4e::identifiers::EicCode::new(tok).is_err() {
+            // A prefix handed to `…from_prefix(` is fifteen characters on purpose:
+            // the call computes the check character.
+            if tok.len() == 15 && line.contains("from_prefix(") {
+                continue;
+            }
+            let wrong = if tok.len() == 16 {
+                rubo4e::identifiers::EicCode::new(tok).is_err()
+            } else {
+                // Another length is an EIC only by its shape: the hyphen
+                // padding keeps a number or a hash from reading as one.
+                tok[3..].contains('-')
+                    && tok
+                        .bytes()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'-')
+            };
+            if shaped && wrong {
                 out.push((tok.to_owned(), i + 1));
             }
         }
@@ -610,5 +650,21 @@ mod tests {
         assert!(super::offending_eics(r#""10YDE-EON------1""#).is_empty());
         // Sixteen characters that are not EIC-shaped are left alone.
         assert!(super::offending_eics("abcdefghijklmnop").is_empty());
+    }
+
+    /// An EIC one character short is no EIC; reading only sixteen-character
+    /// tokens let `11XBK-STD-----9` through as a Bilanzkreis fixture.
+    #[test]
+    fn an_eic_shaped_token_of_another_length_is_reported() {
+        // A prefix `from_prefix` completes is fifteen characters on purpose.
+        assert!(super::offending_eics(r#"bilanzkreis_from_prefix("11XSWKIEL------")"#).is_empty());
+        assert_eq!(
+            super::offending_eics(r#"bilanzkreis("11XBK-STD-----9")"#).len(),
+            1
+        );
+        assert_eq!(super::offending_eics(r#""10YDE-VE-TRANSMIX""#).len(), 1);
+        // A prefix test and a long number are not EIC-shaped tokens.
+        assert!(super::offending_eics(r#"starts_with("10YDE-")"#).is_empty());
+        assert!(super::offending_eics("12X3456789012345678").is_empty());
     }
 }

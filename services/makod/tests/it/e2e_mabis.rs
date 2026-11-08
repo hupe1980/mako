@@ -50,7 +50,7 @@ use time::{Date, Month};
 
 const BKV_ID: &str = "4033872000022";
 const UENB_ID: &str = "9900357000004";
-const BIKO_ID: &str = "10YDE-VE-TRANSMIX";
+const BIKO_ID: &str = "10YDE-VE-------2";
 const MABIS_ZP: &str = "DE0001111222233334444555566667777";
 const MONAT: &str = "2026-01";
 const FV: &str = "FV2025-10-01";

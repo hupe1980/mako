@@ -103,11 +103,6 @@ pub struct KundenIdentitaetRow {
     pub oidc_sub: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
-    /// The identity's recorded role.
-    ///
-    /// **Not an access control.** No read or write path compares it;
-    /// `standort_filter` is the field that narrows what an identity sees.
-    pub rolle: String,
     pub standort_filter: Option<String>,
     pub aktiv: bool,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -193,6 +188,9 @@ pub struct VertragskomponenteRow {
     pub melo_id: Option<String>,
     pub lf_mp_id: String,
     pub nb_mp_id: Option<String>,
+    /// The Bilanzkreis (X-type EIC) the contract names; `None` leaves it to
+    /// processd's single `standard` `[[lf.bilanzkreise]]` entry.
+    pub bilanzkreis: Option<String>,
     pub lieferbeginn: Date,
     pub lieferende: Option<Date>,
     pub status: String,

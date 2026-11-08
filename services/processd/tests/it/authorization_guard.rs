@@ -116,9 +116,11 @@ fn every_rest_handler_authenticates_and_authorizes() {
     // The handlers reachable from the router, excluding the webhook (which is
     // authenticated by the marktd HMAC, not by a bearer) and the MCP surface
     // (gated by the shared middleware).
+    // A route mounts its handler as a call argument — `post(rest::start_supply)`
+    // — which a `pub use rest::{…}` re-export of a request type is not.
     let routed: Vec<&str> = server
         .lines()
-        .filter_map(|l| l.split_once("rest::"))
+        .filter_map(|l| l.split_once("(rest::"))
         .map(|(_, rest)| rest.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_'))
         .collect();
     assert!(

@@ -212,6 +212,7 @@ impl MockGnb {
                 GasSupplierChangeCommand::SendAntwort {
                     accepted: positive,
                     antwort_code: if positive { "E15" } else { "E17" }.to_owned(),
+                    antwort_ebd: None,
                     bemerkung: reason.map(str::to_owned),
                     obligations: vec![],
                 },

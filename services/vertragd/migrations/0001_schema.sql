@@ -128,18 +128,8 @@ CREATE TABLE kunden_identitaeten (
     oidc_sub        TEXT        NOT NULL,
     email           TEXT,
     display_name    TEXT,
-    -- NOT AN ACCESS CONTROL. Nothing compares this column: it is written,
-    -- returned on the identity, and never consulted on any read or write path.
-    -- `standort_filter` below is the one that actually narrows what an identity
-    -- sees. Do not provision a restricted role expecting it to restrict.
-    rolle           TEXT        NOT NULL DEFAULT 'VOLLZUGRIFF' CHECK (rolle IN (
-                        'VOLLZUGRIFF',  -- B2C default
-                        'ADMIN',        -- B2B
-                        'FINANZEN',     -- B2B, intended: invoices + balance
-                        'TECHNIK',      -- B2B, intended: meter data + Lastgang
-                        'READONLY'      -- intended: no self-service
-                    )),
-    -- B2B site-scoped access: only sees MaLos matching this standort_bezeichnung
+    -- The identity's one restriction (B2B site scope): it sees only the MaLos
+    -- whose contract's standort_bezeichnung matches. NULL sees every MaLo of the Kunde.
     standort_filter TEXT,
     aktiv           BOOLEAN     NOT NULL DEFAULT true,
     eingeladen_am   TIMESTAMPTZ,
@@ -151,7 +141,7 @@ CREATE TABLE kunden_identitaeten (
 
 COMMENT ON TABLE kunden_identitaeten IS
     'OIDC portal user identities mapped to a Kunde. '
-    'B2C: 1:1. B2B: 1:N (different roles per employee). '
+    'B2C: 1:1. B2B: 1:N (one login per employee, optionally site-scoped). '
     'portald authorization: GET /kunden/authenticate?malo_id={malo_id}';
 
 CREATE INDEX identitaeten_kunde ON kunden_identitaeten (kunden_id, tenant) WHERE aktiv = true;
@@ -411,6 +401,15 @@ CREATE TABLE vertragskomponenten (
     melo_id                 TEXT,
     lf_mp_id                TEXT        NOT NULL,
     nb_mp_id                TEXT,
+    -- The Bilanzkreis this supply runs in, the Lieferant's choice per
+    -- contract: an X-type EIC for Strom, the Marktgebietsverantwortlicher's
+    -- code for Gas (`domain::pruefe_bilanzkreis` checks the EIC's check
+    -- character). NULL leaves it to processd's single `standard`
+    -- `[[lf.bilanzkreise]]` entry, which refuses the Anmeldung when there is
+    -- none (UTILMD AHB Strom 2.2 Kap. 5.3 makes it Muss on a 55001).
+    bilanzkreis             TEXT        CHECK (bilanzkreis IS NULL OR (
+                                sparte IN ('STROM','GAS') AND bilanzkreis <> ''
+                                AND (sparte <> 'STROM' OR bilanzkreis ~ '^[0-9]{2}X[0-9A-Z-]{13}$'))),
     lieferbeginn            DATE        NOT NULL,
     lieferende              DATE
                         CHECK (lieferende IS NULL OR lieferbeginn <= lieferende),

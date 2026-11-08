@@ -149,6 +149,7 @@ async fn cross_fv_antwort_accepted_on_fv_start_process() {
         GasSupplierChangeCommand::SendAntwort {
             accepted: true,
             antwort_code: "E15".to_owned(),
+            antwort_ebd: None,
             bemerkung: None,
             obligations: vec![],
         },

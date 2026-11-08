@@ -150,7 +150,7 @@ fn utilmd_anmeldung(
             transaktionsgrund::EIN_AUSZUG,
         ))
         .marktlokation("51238696012")
-        .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
+        .produktpaket(Produktpaket::bilanzkreis("11XBK-STD------Y"))
         .stammdaten(utilmd_codes::SEQ_DATEN_DER_MARKTLOKATION)
         .cci("", "Z15")
         .done()

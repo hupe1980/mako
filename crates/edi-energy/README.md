@@ -55,7 +55,7 @@ let bytes = UtilmdBuilder::new(Release::new("S2.2"))
     .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(transaktionsgrund::WECHSEL))
     // `SG8 SEQ+Z79` Produktpaket — Muss on an Anmeldung: without a Bilanzkreis
     // the NB cannot assign the Marktlokation (UTILMD AHB Strom 2.2 Kap. 5.3).
-    .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
+    .produktpaket(Produktpaket::bilanzkreis("11XBK-STD------Y"))
     // The Lokations-ID lives in `SG5 LOC+Z16`.
     .marktlokation("51238696799")
     // The rest of the 55001 column: the Marktlokation's and the Kunde's

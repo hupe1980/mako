@@ -2430,7 +2430,8 @@ pub struct ZaehlzeitSaisonRecord {
     /// constrained `SMALLINT[]`, so `["monday"]` and `[0]` are rejected at the
     /// boundary instead of being stored and silently matching nothing.
     pub wochentage: Vec<i16>,
-    /// Window start in German local time, inclusive. Example: `07:00`.
+    /// Window start in German local time, inclusive. Example: `07:00`. A
+    /// window whose start is after its end crosses midnight (`22:00`–`06:00`).
     ///
     /// Serialised as `"HH:MM:SS"`. Without the explicit format `time::Time`
     /// derives to a component array (`[7,0,0,0]`), which is neither what a
@@ -2557,7 +2558,8 @@ pub struct ZaehlzeitSaisonUpsert {
     pub saison: Saison,
     /// ISO weekdays, 1 (Mon) through 7 (Sun), each at most once.
     pub wochentage: Vec<i16>,
-    /// Window start in German local time, inclusive (`"07:00"`).
+    /// Window start in German local time, inclusive (`"07:00"`). A start
+    /// after the end crosses midnight: `"22:00"`–`"06:00"` is one window.
     #[serde(with = "wall_clock")]
     pub zeit_von: time::Time,
     /// Window end in German local time, exclusive (`"22:00"`).
@@ -2570,8 +2572,8 @@ impl ZaehlzeitSaisonUpsert {
     ///
     /// # Errors
     /// [`MdmError::Unprocessable`] for no weekday, a weekday outside 1–7 or
-    /// named twice, or a window that does not end after it starts — which
-    /// would classify no reading and show up as missing HT/NT energy.
+    /// named twice, or a window that ends where it starts — which would
+    /// classify no reading and show up as missing HT/NT energy.
     pub fn validate(&self) -> Result<(), MdmError> {
         let refuse = |reason: &str| {
             Err(MdmError::Unprocessable {
@@ -2590,8 +2592,8 @@ impl ZaehlzeitSaisonUpsert {
         if days.len() != self.wochentage.len() {
             return refuse("wochentage names a weekday twice");
         }
-        if self.zeit_von >= self.zeit_bis {
-            return refuse("zeit_bis must be after zeit_von");
+        if self.zeit_von == self.zeit_bis {
+            return refuse("zeit_bis must differ from zeit_von");
         }
         Ok(())
     }
@@ -2618,12 +2620,17 @@ mod zaehlzeit_body_tests {
                 .validate()
                 .is_ok()
         );
+        assert!(
+            window(vec![1, 2, 3, 4, 5], time!(22:00), time!(06:00))
+                .validate()
+                .is_ok(),
+            "a midnight-crossing NT window is one row"
+        );
         for bad in [
             window(vec![], time!(07:00), time!(22:00)),
             window(vec![0], time!(07:00), time!(22:00)),
             window(vec![8], time!(07:00), time!(22:00)),
             window(vec![1, 1], time!(07:00), time!(22:00)),
-            window(vec![1], time!(22:00), time!(07:00)),
             window(vec![1], time!(07:00), time!(07:00)),
         ] {
             assert!(bad.validate().is_err(), "{bad:?} must be refused");

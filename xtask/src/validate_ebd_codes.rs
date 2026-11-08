@@ -248,6 +248,20 @@ const KNOWN_UNCARRIED: &[(&str, &str, &str)] = &[
     ("E_0275", "Z15", "same table as E15"),
     ("E_0275", "Z21", "same table as E15"),
     (
+        "E_0443",
+        "E14",
+        "from the S_0087 „Ablehnung Anfrage Stornierung“ Codeliste that follows the tree \
+         (EBD 4.3 Kap. 6.27.2), not from this tree",
+    ),
+    (
+        "E_0443",
+        "E15",
+        "from the S_0086 „Bestätigung Anfrage Stornierung“ Codeliste that follows the tree \
+         (EBD 4.3 Kap. 6.27.1), not from this tree",
+    ),
+    ("E_0443", "Z14", "same S_0087 table as E14"),
+    ("E_0443", "ZE1", "same S_0087 table as E14"),
+    (
         "E_0406",
         "*",
         "the Netznutzungsabrechnung tree has 211 Prüfschritte (EBD 4.3 Kap. 6.10.1) and \

@@ -362,6 +362,40 @@ pub struct Laufzeitverstoss {
     pub detail: String,
 }
 
+/// Whether `bilanzkreis` can name the Bilanzkreis of a `sparte` component.
+///
+/// Only a supply runs in a Bilanzkreis, so only `STROM` and `GAS` carry one. A
+/// Strom Bilanzkreis is an EIC with a valid check character and object type `X`
+/// (Party) — a `Y` code is a Bilanzierungsgebiet, not a Bilanzkreis. A Gas
+/// Bilanzkreis is the code its Marktgebietsverantwortlicher issues and is not
+/// an EIC, so it is only required to be present.
+///
+/// # Errors
+///
+/// What is wrong with it, for the refusal.
+pub fn pruefe_bilanzkreis(sparte: &str, bilanzkreis: &str) -> Result<(), String> {
+    match sparte {
+        "STROM" => {}
+        "GAS" if !bilanzkreis.trim().is_empty() => return Ok(()),
+        "GAS" => return Err("bilanzkreis is empty".to_owned()),
+        other => {
+            return Err(format!(
+                "a {other} component runs in no Bilanzkreis; only STROM and GAS carry one"
+            ));
+        }
+    }
+    let eic = rubo4e::identifiers::EicCode::new(bilanzkreis)
+        .map_err(|e| format!("bilanzkreis `{bilanzkreis}` is not an EIC: {e}"))?;
+    if eic.eic_type() == rubo4e::identifiers::EicType::Party {
+        Ok(())
+    } else {
+        Err(format!(
+            "bilanzkreis `{bilanzkreis}` is an EIC of type `{}`; a Bilanzkreis is type `X`",
+            eic.type_char()
+        ))
+    }
+}
+
 /// Check a proposed contract term against the statutory caps.
 ///
 /// § 309 Nr. 9 BGB voids the clause, not the contract, so these are refused at
@@ -708,7 +742,28 @@ fn tage_im_monat(jahr: i32, monat: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kundenidentitaet, kundenidentitaet};
+    use super::{Kundenidentitaet, kundenidentitaet, pruefe_bilanzkreis};
+
+    /// A Bilanzkreis is an X-type EIC with its check character; a
+    /// Bilanzierungsgebiet (`Y`) or a code one character short is refused.
+    #[test]
+    fn a_bilanzkreis_is_an_x_type_eic() {
+        assert!(pruefe_bilanzkreis("STROM", "11XBK-STANDARD-4").is_ok());
+        let wrong_check = pruefe_bilanzkreis("STROM", "11XBK-STANDARD-5").unwrap_err();
+        assert!(wrong_check.contains("not an EIC"), "{wrong_check}");
+        let area = pruefe_bilanzkreis("STROM", "11YN-BG-EON----A").unwrap_err();
+        assert!(area.contains("type `Y`"), "{area}");
+        assert!(pruefe_bilanzkreis("STROM", "11XRWENET----1E").is_err());
+    }
+
+    /// A Gas Bilanzkreis is the Marktgebietsverantwortlicher's code, not an
+    /// EIC; a component that is no supply carries none.
+    #[test]
+    fn a_gas_bilanzkreis_is_not_held_to_the_eic_and_a_wallbox_has_none() {
+        assert!(pruefe_bilanzkreis("GAS", "9870000000006").is_ok());
+        assert!(pruefe_bilanzkreis("GAS", " ").is_err());
+        assert!(pruefe_bilanzkreis("WALLBOX", "11XBK-STANDARD-4").is_err());
+    }
 
     /// The wire and the contract database never agree on shape: `SG12 NAD+Z09`
     /// under Namensformat `Z01` splits a person across `C080`'s

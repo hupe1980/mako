@@ -148,7 +148,6 @@ pub async fn get_kunde_by_sub(
         "kunde": kunde,
         "active_malo_ids": malo_ids,
         "vertraege_count": vertraege.len(),
-        "rolle": identity.as_ref().map(|i| &i.rolle),
         "standort_filter": identity.as_ref().and_then(|i| i.standort_filter.as_deref()),
     }))
 }
@@ -241,7 +240,6 @@ pub async fn authenticate(
     ok(serde_json::json!({
         "kunden_id": kunde.id,
         "kundentyp": kunde.kundentyp,
-        "rolle": identity.as_ref().map(|i| &i.rolle),
         "malo_id": q.malo_id,
     }))
 }
@@ -288,7 +286,6 @@ pub async fn upsert_identitaet(
             "id": id,
             "kunden_id": kunden_id,
             "oidc_sub": input.oidc_sub,
-            "rolle": input.rolle.as_deref().unwrap_or("VOLLZUGRIFF"),
         })),
     ))
 }

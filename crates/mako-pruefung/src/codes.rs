@@ -1569,6 +1569,52 @@ pub const E_0595_CODES: &[AntwortCode] = &[
     ),
 ];
 
+// ── E_0441 / E_0443 — Geschäftsdatenanfrage zu Stammdaten (17132 → ORDRSP 19101) ─
+
+/// `E_0441` — „Geschäftsdatenanfrage zu Stammdaten prüfen", the NB's check of
+/// a Lieferant's Anfrage (EBD 4.3 Kap. 6.25.1, S. 312).
+pub const EBD_GDA_STAMMDATEN_LF: &str = "E_0441";
+const E_0441: Option<&'static str> = Some(EBD_GDA_STAMMDATEN_LF);
+
+/// `E_0441` — **Ablehnungscodes only**: the positive exit is „Stammdaten
+/// versenden", the UTILMD answer, which carries no code from this tree.
+pub const E_0441_CODES: &[AntwortCode] = &[code!(
+    "A01",
+    E_0441,
+    Ablehnung,
+    "Keine Berechtigung (Prüfschritt 2)"
+)];
+
+/// `E_0443` — „Geschäftsdatenanfrage zu Stammdaten prüfen", the NB's check of
+/// a Messstellenbetreiber's Anfrage (EBD 4.3 Kap. 6.26.1, S. 314, „AD:
+/// Geschäftsdatenanfrage von MSB an NB", „entspricht NB der Sparte Strom").
+pub const EBD_GDA_STAMMDATEN_MSB: &str = "E_0443";
+const E_0443: Option<&'static str> = Some(EBD_GDA_STAMMDATEN_MSB);
+
+/// `E_0443` — **Ablehnungscodes only**, for the same reason as
+/// [`E_0441_CODES`]. `A02` and `A03` answer a MSB of the Sparte Gas
+/// (Prüfschritt 10 → 40).
+pub const E_0443_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0443,
+        Ablehnung,
+        "Keine Berechtigung (Prüfschritt 30)"
+    ),
+    code!(
+        "A02",
+        E_0443,
+        Ablehnung,
+        "Kein iMS verbaut (Prüfschritt 50)"
+    ),
+    code!(
+        "A03",
+        E_0443,
+        Ablehnung,
+        "An der genannten Adresse betreibt der NB keinen Stromanschluss (Prüfschritt 40)"
+    ),
+];
+
 // ── Lookup ───────────────────────────────────────────────────────────────────
 
 // ── WiM Strom (Messstellenbetrieb) ────────────────────────────────────────────
@@ -5376,6 +5422,8 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     ("E_0605", E_0605_CODES),
     ("E_0606", E_0606_CODES),
     (EBD_BESTELLUNG, E_0595_CODES),
+    (EBD_GDA_STAMMDATEN_LF, E_0441_CODES),
+    (EBD_GDA_STAMMDATEN_MSB, E_0443_CODES),
     (EBD_NETZNUTZUNGSRECHNUNG, E_0406_CODES),
     // WiM Strom — Messstellenbetrieb.
     (EBD_KUENDIGUNG_MSB, E_0200_CODES),
@@ -5468,6 +5516,18 @@ pub const VORPRUEFUNG_TREES: &[(&str, &str)] = &[
 /// Adding a tree here is a claim about an AHB column. The test below holds it
 /// to the consequence: such a tree must publish no Zustimmungscode.
 pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
+    (
+        EBD_GDA_STAMMDATEN_LF,
+        "UTILMD: the Zustimmung is „Stammdaten versenden\u{201c} — the UTILMD \
+         55035/55095/55060, which carries no code from this tree; only the \
+         Ablehnung rides ORDRSP 19101 (EBD 4.3 Kap. 6.25.1)",
+    ),
+    (
+        EBD_GDA_STAMMDATEN_MSB,
+        "UTILMD: the Zustimmung is „Stammdaten versenden\u{201c} — the UTILMD \
+         55035/55095/55060, which carries no code from this tree; only the \
+         Ablehnung rides ORDRSP 19101 (EBD 4.3 Kap. 6.26.1)",
+    ),
     (
         EBD_ESA_ANFRAGE,
         "QUOTES: the 15003 Angebot carries no AJT at all — the priced offer is \

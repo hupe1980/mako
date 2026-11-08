@@ -615,10 +615,10 @@ pub struct LfConfig {
     ///
     /// ```toml
     /// [[lf.bilanzkreise]]
-    /// bilanzierungsgebiet = "11YN-BG-EON---X"
-    /// eeg      = ["11XBK-EEG-----1"]
-    /// kwkg     = ["11XBK-KWKG----5"]
-    /// standard = ["11XBK-STD-----9"]
+    /// bilanzierungsgebiet = "11YN-BG-EON----A"
+    /// eeg      = ["11XBK-EEG------Q"]
+    /// kwkg     = ["11XBK-KWKG-----N"]
+    /// standard = ["11XBK-STD------Y"]
     /// ```
     ///
     /// A row without a `bilanzierungsgebiet` is the fallback. Listing **one** BK

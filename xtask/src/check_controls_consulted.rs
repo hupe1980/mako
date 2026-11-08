@@ -148,17 +148,10 @@ const MELDUNG_UNREAD: &[Unread] = &[
 /// Credential fields nothing reads, as `service/field`. May only shrink.
 const CREDENTIAL_UNREAD: &[Unread] = &[];
 
-/// Where a declared control is consulted.
+/// Where a declared control is consulted: a file and the text in it that
+/// reads the control. A control nothing reads is removed, not declared.
 enum Site {
-    /// A file and the text in it that reads the control.
     At(&'static str, &'static str),
-    /// Nothing reads it.
-    Unread {
-        /// Why.
-        reason: &'static str,
-        /// The milestone that wires or removes it.
-        milestone: &'static str,
-    },
 }
 
 /// Role columns, as `(service, column, site)`.
@@ -201,15 +194,6 @@ const ROLE_COLUMNS: &[(&str, &str, Site)] = &[
             "services/processd/src/server.rs",
             "marktrolle: entry.marktrolle.clone()",
         ),
-    ),
-    (
-        "vertragd",
-        "rolle",
-        Site::Unread {
-            reason: "written and returned on the identity, compared nowhere; `standort_filter` \
-                     beside it is the column that narrows what an identity sees",
-            milestone: "M25",
-        },
     ),
 ];
 
@@ -546,10 +530,6 @@ fn check_site(root: &Path, what: &str, site: &Site) -> Vec<Finding> {
             )],
             Err(_) => vec![format!("{what}: consulting site `{path}` does not exist")],
         },
-        Site::Unread { reason, milestone } if reason.is_empty() || milestone.is_empty() => {
-            vec![format!("{what} is unread without a reason or milestone")]
-        }
-        Site::Unread { .. } => Vec::new(),
     }
 }
 

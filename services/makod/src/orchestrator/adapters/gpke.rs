@@ -1567,16 +1567,18 @@ pub fn gpke_geschaeftsdatenanfrage_registry() -> AdapterRegistry<GpkeGeschaeftsd
                     message_ref,
                 }),
                 AnyMessage::Ordrsp(o) => {
-                    let antwortcode = o
-                        .segments()
-                        .iter()
-                        .find(|s| s.tag == "AJT")
-                        .and_then(|s| s.component_str(0, 0))
-                        .filter(|c| !c.is_empty())
-                        .map(str::to_owned);
+                    let ajt = o.segments().iter().find(|s| s.tag == "AJT");
+                    let element = |e: usize| {
+                        ajt.and_then(|s| s.component_str(e, 0))
+                            .filter(|c| !c.is_empty())
+                            .map(str::to_owned)
+                    };
+                    // DE 4465 the code, DE 1082 the tree that defines it
+                    // (`E_0441` to a LF, `E_0443` to a MSB).
                     Ok(GdaCommand::ReceiveAblehnung {
                         pid,
-                        antwortcode,
+                        antwortcode: element(0),
+                        codeliste: element(1),
                         message_ref,
                     })
                 }

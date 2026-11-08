@@ -423,7 +423,7 @@ class TestBikoSim:
 
     def test_a_conformant_summenzeitreihe_is_accepted(self):
         biko = BikoSim(mp_id=BIKO_ID, reference_date=ON)
-        reply = biko.receive(mscons_interchange(), bilanzkreis="11XBK-------1")
+        reply = biko.receive(mscons_interchange(), bilanzkreis="11XBK----------3")
         assert_edifact_valid(reply.ack, on=ON)
         assert reply.ack_kind == "APERAK" and reply.ack_positive
         assert biko.accepted and not biko.klaerfaelle
@@ -439,7 +439,7 @@ class TestBikoSim:
     def test_a_klaerfall_comes_back_as_an_error_aperak(self):
         biko = BikoSim(mp_id=BIKO_ID, reference_date=ON)
         biko.reject_next(Klaerfall("summe_weicht_ab", detail="delta 12.4 kWh"))
-        first = biko.receive(mscons_interchange(), bilanzkreis="11XBK-------1")
+        first = biko.receive(mscons_interchange(), bilanzkreis="11XBK----------3")
         assert b"BGM+313" in first.ack
         assert not first.ack_positive and first.erc
         assert len(biko.klaerfaelle) == 1
@@ -454,10 +454,10 @@ class TestBikoSim:
 
     def test_reject_bilanzkreis_is_sticky_for_that_bilanzkreis_only(self):
         biko = BikoSim(mp_id=BIKO_ID, reference_date=ON)
-        biko.reject_bilanzkreis("11XBK-------1", Klaerfall("bilanzkreis_unbekannt"))
-        biko.receive(mscons_interchange(), bilanzkreis="11XBK-------1")
-        biko.receive(mscons_interchange(), bilanzkreis="11XBK-------1")
-        biko.receive(mscons_interchange(), bilanzkreis="11XBK-------2")
+        biko.reject_bilanzkreis("11XBK----------3", Klaerfall("bilanzkreis_unbekannt"))
+        biko.receive(mscons_interchange(), bilanzkreis="11XBK----------3")
+        biko.receive(mscons_interchange(), bilanzkreis="11XBK----------3")
+        biko.receive(mscons_interchange(), bilanzkreis="11XBK---------2Y")
         assert [s.accepted for s in biko.submissions] == [False, False, True]
 
     def test_a_utilmd_is_not_a_summenzeitreihe(self, anmeldung):

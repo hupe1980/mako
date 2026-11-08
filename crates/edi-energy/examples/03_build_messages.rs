@@ -111,7 +111,7 @@ fn build_utilmd() -> Result<(), Box<dyn std::error::Error>> {
         // SG8/SG12 — Produktpaket, Priorisierung and the Kunde des LF. All
         // Muss on 55001: without the Bilanzkreis the NB cannot assign the LF
         // to the Marktlokation, and the answer would be an Ablehnung.
-        .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
+        .produktpaket(Produktpaket::bilanzkreis("11XBK-STD------Y"))
         .stammdaten(utilmd_codes::SEQ_DATEN_DER_MARKTLOKATION)
         .cci("", "Z15")
         .done()

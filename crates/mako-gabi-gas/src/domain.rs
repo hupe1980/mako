@@ -1179,7 +1179,7 @@ mod tests {
     #[test]
     fn bilanzkreis_active_on_valid_date() {
         let bk = Bilanzkreis {
-            eic_code: "11YAKPG4CTRDNZ--A".to_owned(),
+            eic_code: "11YAKPG4CTRDNZ-3".to_owned(),
             bkv_eic: "EIC_BKV".to_owned(),
             marktgebiet_eic: "EIC_MGV".to_owned(),
             quality_class: GasQualityClass::HGas,
@@ -1192,7 +1192,7 @@ mod tests {
     #[test]
     fn bilanzkreis_inactive_before_valid_from() {
         let bk = Bilanzkreis {
-            eic_code: "11YAKPG4CTRDNZ--A".to_owned(),
+            eic_code: "11YAKPG4CTRDNZ-3".to_owned(),
             bkv_eic: "EIC_BKV".to_owned(),
             marktgebiet_eic: "EIC_MGV".to_owned(),
             quality_class: GasQualityClass::HGas,

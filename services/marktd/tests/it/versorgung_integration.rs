@@ -862,7 +862,7 @@ async fn bilanzierung_write_derives_the_malo_fallgruppe_column() {
         malo_id: malo.to_owned(),
         bilanzierungsbeginn: datetime!(2024-01-01 00:00 UTC),
         bilanzierungsende: None,
-        bilanzkreis: Some("11YWBK-------X".to_owned()),
+        bilanzkreis: Some("11XWBK---------E".to_owned()),
         aggregationsverantwortung: Some("VNB".to_owned()),
         abwicklungsmodell: Some("MODELL_1".to_owned()),
         aggregationszustaendigkeit: Some("VERTEILNETZBETREIBER".to_owned()),

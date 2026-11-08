@@ -308,6 +308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },

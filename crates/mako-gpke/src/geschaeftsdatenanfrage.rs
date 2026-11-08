@@ -176,13 +176,14 @@ impl Anfragender {
     }
 
     /// The Ablehnungscodes that EBD publishes: `E_0441` `A01` „Keine
-    /// Berechtigung"; `E_0443` `A01` „Keine Berechtigung" and `A02` „Kein iMS
-    /// verbaut" (EBD 4.2 S. 314 / S. 316).
+    /// Berechtigung"; `E_0443` `A01` „Keine Berechtigung", `A02` „Kein iMS
+    /// verbaut" and `A03` „An der genannten Adresse betreibt der NB keinen
+    /// Stromanschluss" (EBD 4.3 S. 312 / S. 314).
     #[must_use]
     pub fn ablehnungscodes(self) -> &'static [&'static str] {
         match self {
             Self::Lf => &["A01"],
-            Self::Msb => &["A01", "A02"],
+            Self::Msb => &["A01", "A02", "A03"],
         }
     }
 }
@@ -241,8 +242,11 @@ pub enum GdaEvent {
     AblehnungGesendet {
         /// ORDRSP PID — 19101.
         pid: Pruefidentifikator,
-        /// `SG2 AJT` code from `E_0441` (to a LF) or `E_0443` (to a MSB).
+        /// `SG2 AJT` DE 4465 — the code.
         antwortcode: String,
+        /// `SG2 AJT` DE 1082 — the tree it is drawn from: `E_0441` to a LF,
+        /// `E_0443` to a MSB.
+        codeliste: String,
         /// Reference of the outbound ORDRSP.
         message_ref: MessageRef,
     },
@@ -259,6 +263,8 @@ pub enum GdaEvent {
         pid: Pruefidentifikator,
         /// `SG2 AJT` code, when the message carried one.
         antwortcode: Option<String>,
+        /// `SG2 AJT` DE 1082 — the tree the NB named, as it arrived.
+        codeliste: Option<String>,
         /// Reference of the inbound ORDRSP.
         message_ref: MessageRef,
     },
@@ -317,17 +323,25 @@ impl EventPayload for GdaEvent {
             Self::AnfrageUngueltig { .. } | Self::DeadlineExpired { .. } => None,
         }
     }
-    /// The ORDRSP 19101's `SG2 AJT` code. Its tree is `E_0441` towards a LF and
-    /// `E_0443` towards a MSB, and the event does not say which party it went
-    /// to, so the Codeliste stays unnamed rather than guessed.
+    /// The ORDRSP 19101's `SG2 AJT` code and its DE 1082 tree — `E_0441`
+    /// towards a LF, `E_0443` towards a MSB, as the Anfragender decides.
     fn antwort(&self) -> Option<Antwortcode> {
         match self {
-            Self::AblehnungGesendet { antwortcode, .. } => {
-                Some(Antwortcode::new(antwortcode.clone(), None::<String>))
-            }
-            Self::AblehnungErhalten { antwortcode, .. } => antwortcode
+            Self::AblehnungGesendet {
+                antwortcode,
+                codeliste,
+                ..
+            } => Some(Antwortcode::new(
+                antwortcode.clone(),
+                Some(codeliste.clone()),
+            )),
+            Self::AblehnungErhalten {
+                antwortcode,
+                codeliste,
+                ..
+            } => antwortcode
                 .as_ref()
-                .map(|c| Antwortcode::new(c.clone(), None::<String>)),
+                .map(|c| Antwortcode::new(c.clone(), codeliste.clone())),
             _ => None,
         }
     }
@@ -476,6 +490,8 @@ pub enum GdaCommand {
         pid: Pruefidentifikator,
         /// `SG2 AJT` code, when present.
         antwortcode: Option<String>,
+        /// `SG2 AJT` DE 1082, when present.
+        codeliste: Option<String>,
         /// Reference of the inbound ORDRSP.
         message_ref: MessageRef,
     },
@@ -759,6 +775,7 @@ impl Workflow for GpkeGeschaeftsdatenanfrageWorkflow {
                     vec![GdaEvent::AblehnungGesendet {
                         pid: ABLEHNUNG_PID,
                         antwortcode,
+                        codeliste: anfragender.codeliste().to_owned(),
                         message_ref,
                     }],
                     outbox,
@@ -784,6 +801,7 @@ impl Workflow for GpkeGeschaeftsdatenanfrageWorkflow {
             GdaCommand::ReceiveAblehnung {
                 pid,
                 antwortcode,
+                codeliste,
                 message_ref,
             } => {
                 if !matches!(state, GdaState::Angefragt(_)) {
@@ -796,6 +814,7 @@ impl Workflow for GpkeGeschaeftsdatenanfrageWorkflow {
                 Ok(vec![GdaEvent::AblehnungErhalten {
                     pid,
                     antwortcode,
+                    codeliste,
                     message_ref,
                 }]
                 .into())
@@ -962,6 +981,56 @@ mod tests {
         );
     }
 
+    /// **The Ablehnung names the tree the recipient's role decides**, so the
+    /// Verlauf reads the wording: `A01` is „Keine Berechtigung" in both trees,
+    /// and the event of each Anfragender names its own.
+    #[test]
+    fn the_ablehnung_names_the_tree_of_its_recipient() {
+        let state = run(GdaState::New, eingegangen(true)).unwrap();
+        for (anfragender, code, tree) in [
+            (Anfragender::Lf, "A01", "E_0441"),
+            (Anfragender::Msb, "A01", "E_0443"),
+            (Anfragender::Msb, "A03", "E_0443"),
+        ] {
+            let out = GpkeGeschaeftsdatenanfrageWorkflow::handle(
+                &state,
+                GdaCommand::SendAblehnung {
+                    anfragender,
+                    antwortcode: code.into(),
+                    message_ref: MessageRef::new("ORDRSP-1"),
+                },
+            )
+            .unwrap();
+            let antwort = out.events[0]
+                .antwort()
+                .expect("the Ablehnung states its code");
+            assert_eq!(antwort.code, code, "{anfragender:?}");
+            assert_eq!(antwort.codeliste.as_deref(), Some(tree), "{anfragender:?}");
+            assert!(
+                mako_pruefung::codes::lies(tree, code).is_some(),
+                "{tree} {code} has its wording"
+            );
+        }
+    }
+
+    /// The codes a refusal is admitted with are exactly the ones its tree
+    /// publishes in the catalogue — the list here cannot drift from the EBD.
+    #[test]
+    fn the_admitted_codes_are_the_catalogue_of_each_tree() {
+        for anfragender in [Anfragender::Lf, Anfragender::Msb] {
+            let tree = anfragender.codeliste();
+            let katalog: Vec<&str> = mako_pruefung::codes::CODELISTEN
+                .iter()
+                .find(|(id, _)| *id == tree)
+                .unwrap_or_else(|| panic!("{tree} is catalogued"))
+                .1
+                .iter()
+                .map(|c| c.code)
+                .collect();
+            assert_eq!(anfragender.ablehnungscodes(), katalog.as_slice(), "{tree}");
+        }
+    }
+
     #[test]
     fn nb_refuses_with_19101() {
         let state = run(GdaState::New, eingegangen(true)).unwrap();
@@ -1063,6 +1132,7 @@ mod tests {
             GdaCommand::ReceiveAblehnung {
                 pid: ABLEHNUNG_PID,
                 antwortcode: Some("A02".into()),
+                codeliste: Some("E_0443".into()),
                 message_ref: MessageRef::new("ORDRSP-1"),
             },
         )
@@ -1150,6 +1220,7 @@ mod tests {
             GdaEvent::AblehnungGesendet {
                 pid: ABLEHNUNG_PID,
                 antwortcode: "A01".into(),
+                codeliste: "E_0441".into(),
                 message_ref: MessageRef::new("O-1"),
             }
             .verlauf(),
@@ -1167,6 +1238,7 @@ mod tests {
             GdaEvent::AblehnungErhalten {
                 pid: ABLEHNUNG_PID,
                 antwortcode: None,
+                codeliste: None,
                 message_ref: MessageRef::new("O-2"),
             }
             .verlauf(),
@@ -1183,16 +1255,17 @@ mod tests {
         let gesendet = GdaEvent::AblehnungGesendet {
             pid: pid(19101),
             antwortcode: "A02".into(),
+            codeliste: "E_0443".into(),
             message_ref: MessageRef::new("ORDRSP-1"),
         };
         assert_eq!(
             gesendet.antwort(),
-            Some(Antwortcode::new("A02", None::<String>)),
-            "the recipient decides between E_0441 and E_0443, and the event names neither"
+            Some(Antwortcode::new("A02", Some("E_0443")))
         );
         let ohne_code = GdaEvent::AblehnungErhalten {
             pid: pid(19101),
             antwortcode: None,
+            codeliste: Some("E_0441".into()),
             message_ref: MessageRef::new("ORDRSP-2"),
         };
         assert_eq!(ohne_code.antwort(), None);

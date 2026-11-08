@@ -784,7 +784,7 @@ mod tests {
                 "process_date": "20261101",
                 "antwort_code": "A01",
                 "antwort_codeliste": "E_0604",
-                "bilanzkreis": "11XBK-EEG-----1",
+                "bilanzkreis": "11XBK-EEG------Q",
             }),
         );
         let wire =
@@ -793,7 +793,7 @@ mod tests {
         assert!(text.contains("SEQ+Z79+1"), "{text}");
         assert!(text.contains("PIA+5+9991000002082:Z11"), "{text}");
         assert!(text.contains("CCI+Z66"), "{text}");
-        assert!(text.contains("CAV+ZV4:::11XBK-EEG-----1"), "{text}");
+        assert!(text.contains("CAV+ZV4:::11XBK-EEG------Q"), "{text}");
         // `SG8 SEQ+ZH0` is Muss wherever `SEQ+Z79` is.
         assert!(text.contains("SEQ+ZH0+1"), "{text}");
         assert!(text.contains("CCI+Z65+++Z01"), "{text}");
@@ -1423,13 +1423,13 @@ mod tests {
                 "malo": "51238696012",
                 "process_date": "20261101",
                 "transaktionsgrund": "E03",
-                "bilanzkreis": "11XBK-STD-----9",
+                "bilanzkreis": "11XBK-STD------Y",
             }),
         );
         let wire =
             render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("55001 renders");
         let text = String::from_utf8_lossy(&wire.bytes);
-        assert!(text.contains("CAV+ZV4:::11XBK-STD-----9"), "{text}");
+        assert!(text.contains("CAV+ZV4:::11XBK-STD------Y"), "{text}");
     }
 
     #[test]

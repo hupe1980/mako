@@ -142,6 +142,58 @@ impl GasProcessVariant {
         matches!(self, Self::Bestandsliste)
     }
 
+    /// The Entscheidungsbäume the answer to this Anfrage is drawn from.
+    ///
+    /// *Entscheidungsbaum-Diagramme und Codelisten* 4.3 Kap. 13: the
+    /// Lieferbeginn is answered out of `E_3005` „Prüfen, ob Anmeldung direkt
+    /// ablehnbar" (13.6.1) or `E_3007` „Lieferbeginn prüfen" (13.6.4); the
+    /// Lieferende von LF an NB out of `E_3019` (13.4.1); the Lieferende von NB
+    /// an LF out of `E_3002` (13.5.1); the Abmeldungsanfrage out of `E_3020`
+    /// (13.6.3); the Beginn der Ersatz-/Grundversorgung out of `E_3008`
+    /// (13.7.1); the Kündigung out of `E_3001` (13.3.1). The Bestandsliste and
+    /// its Änderungsmeldung have no Entscheidungsbaum there.
+    ///
+    /// Two trees answer a Lieferbeginn and share codes (`E13`, `E14`, `E17`,
+    /// `Z08`, `Z09`), so the code alone does not name the tree — the party that
+    /// walked one does.
+    #[must_use]
+    pub const fn antwort_trees(self) -> &'static [&'static str] {
+        match self {
+            Self::LieferbeginnGas => &["E_3005", "E_3007"],
+            Self::LieferendeGas => &["E_3019"],
+            Self::AbmeldungNn => &["E_3002"],
+            Self::Abmeldungsanfrage => &["E_3020"],
+            Self::EogAnmeldung => &["E_3008"],
+            Self::KuendigungLfa => &["E_3001"],
+            Self::Bestandsliste | Self::Aenderungsmeldung => &[],
+        }
+    }
+
+    /// The tree an answer to this Anfrage names: `stated` when it is one of
+    /// [`Self::antwort_trees`], else the variant's only tree, else none.
+    ///
+    /// # Errors
+    ///
+    /// A `stated` tree this Anfrage is not answered from — its codes mean
+    /// something else.
+    pub fn antwort_tree(self, stated: Option<&str>) -> Result<Option<&'static str>, String> {
+        let trees = self.antwort_trees();
+        match stated {
+            Some(t) => trees
+                .iter()
+                .find(|k| **k == t)
+                .copied()
+                .map(Some)
+                .ok_or_else(|| {
+                    format!("{t} answers no {self:?}; its answer is drawn from {trees:?}")
+                }),
+            None => Ok(match trees {
+                [only] => Some(*only),
+                _ => None,
+            }),
+        }
+    }
+
     /// `true` if the GNB is the initiator (sends the Anfrage via outbox).
     #[must_use]
     pub fn gnb_is_initiator(&self) -> bool {
@@ -285,9 +337,14 @@ pub enum GasSupplierChangeEvent {
         /// Rejection reason (only set when `accepted = false`).
         reason: Option<String>,
         /// `SG4 STS+E01` DE 9013 the answer carried. The Gas Codelisten name no
-        /// DE 1131, so no list rides with it.
+        /// DE 1131, so no list rides with it on the wire.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         antwort_code: Option<String>,
+        /// The Entscheidungsbaum that defines the code — see
+        /// [`GasProcessVariant::antwort_tree`]; `None` where the Anfrage has
+        /// two and the answering party named neither.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort_ebd: Option<String>,
     },
     /// GNB initiated a process by sending the Anfrage via outbox.
     GnbProcessInitiated {
@@ -317,6 +374,13 @@ pub enum GasSupplierChangeEvent {
         accepted: bool,
         /// Rejection reason (only when `accepted = false`).
         reason: Option<String>,
+        /// `SG4 STS+E01` DE 9013 the answer carried, as received.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort_code: Option<String>,
+        /// The Entscheidungsbaum the counterpart answered out of — the one tree
+        /// of the Anfrage this GNB sent (`E_3002`, `E_3020`, `E_3008`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort_ebd: Option<String>,
     },
     /// Gas supply became active (Lieferbeginn Gas 44001 only).
     Activated,
@@ -411,12 +475,21 @@ impl EventPayload for GasSupplierChangeEvent {
         }
     }
 
+    /// The answer's `STS+E01` code and the tree that defines it. The Gas MIG
+    /// names no DE 1131, so the tree is the one the process is answered out of
+    /// (see [`GasProcessVariant::antwort_trees`]).
     fn antwort(&self) -> Option<Antwortcode> {
         match self {
             Self::AntwortGesendet {
                 antwort_code: Some(code),
+                antwort_ebd,
                 ..
-            } => Some(Antwortcode::new(code.clone(), None::<String>)),
+            }
+            | Self::GnbAntwortErhalten {
+                antwort_code: Some(code),
+                antwort_ebd,
+                ..
+            } => Some(Antwortcode::new(code.clone(), antwort_ebd.clone())),
             _ => None,
         }
     }
@@ -653,6 +726,10 @@ pub enum GasSupplierChangeCommand {
         /// `E13` / `E14` / `E17` / `Z08` / `Z09` / `Z14` / `Z35` / `ZC5` / `A03` /
         /// `A04` / `A16` / `A17` / `ZE2` on an Ablehnung.
         antwort_code: String,
+        /// The Entscheidungsbaum the code was resolved in, which must be one
+        /// [`GasProcessVariant::antwort_trees`] names for this Anfrage. `None`
+        /// leaves it to the variant's only tree; a Lieferbeginn has two.
+        antwort_ebd: Option<String>,
         /// `FTX+ACB` Bemerkung — required alongside `E14` „Ablehnung Sonstiges",
         /// and useful on every other Ablehnung.
         bemerkung: Option<String>,
@@ -687,6 +764,9 @@ pub enum GasSupplierChangeCommand {
         accepted: bool,
         /// Rejection reason (only when `accepted = false`).
         reason: Option<String>,
+        /// `SG4 STS+E01` DE 9013, as the message carried it — kept raw, so an
+        /// answer with a code its tree does not publish is still recorded.
+        antwort_code: Option<String>,
     },
     /// Mark supply as active (Lieferbeginn Gas 44001 only).
     Activate,
@@ -1033,6 +1113,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
             GasSupplierChangeCommand::SendAntwort {
                 accepted,
                 antwort_code,
+                antwort_ebd,
                 bemerkung,
                 obligations,
             } => {
@@ -1045,6 +1126,10 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         ));
                     }
                 };
+                let antwort_ebd = data
+                    .variant
+                    .antwort_tree(antwort_ebd.as_deref())
+                    .map_err(WorkflowError::rejected)?;
                 let anfrage_pid = data.pruefidentifikator.as_u32();
                 let response_pid = response_pid_for(anfrage_pid, accepted);
                 // The answer PID is what goes on the wire; `anfrage_pid` is
@@ -1097,6 +1182,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     accepted,
                     reason: bemerkung,
                     antwort_code: Some(antwort_code),
+                    antwort_ebd: antwort_ebd.map(str::to_owned),
                 };
                 Ok(WorkflowOutput::with_outbox(vec![event], all_outbox))
             }
@@ -1157,6 +1243,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 response_pid,
                 accepted,
                 reason,
+                antwort_code,
             } => {
                 let data = match state {
                     GasSupplierChangeState::GnbPending(d) => d,
@@ -1182,6 +1269,11 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         response_pid,
                         accepted,
                         reason,
+                        antwort_ebd: antwort_code
+                            .as_ref()
+                            .and_then(|_| data.variant.antwort_tree(None).ok().flatten())
+                            .map(str::to_owned),
+                        antwort_code,
                     },
                 ]))
             }
@@ -1476,6 +1568,7 @@ mod tests {
             accepted: true,
             reason: None,
             antwort_code: None,
+            antwort_ebd: None,
         };
         assert_eq!(
             antwort.verlauf(),
@@ -1493,6 +1586,7 @@ mod tests {
             accepted: true,
             reason: None,
             antwort_code: None,
+            antwort_ebd: None,
         };
         assert_eq!(einweg.verlauf().and_then(|v| v.pid), Some(44019));
         // The APERAK 313 queued beside a validation failure.
@@ -1511,6 +1605,8 @@ mod tests {
             response_pid: pid(44015),
             accepted: false,
             reason: None,
+            antwort_code: None,
+            antwort_ebd: None,
         };
         assert_eq!(
             gnb_antwort.verlauf(),
@@ -1629,6 +1725,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -1665,6 +1762,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: false,
                 antwort_code: "E17".to_owned(),
+                antwort_ebd: None,
                 bemerkung: Some("MaLo nicht bekannt".to_owned()),
                 obligations: vec![],
             },
@@ -1691,6 +1789,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -1720,6 +1819,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -1748,6 +1848,7 @@ mod tests {
                 response_pid: pid(44008),
                 accepted: true,
                 reason: None,
+                antwort_code: None,
             },
         )
         .unwrap();
@@ -1766,6 +1867,7 @@ mod tests {
                 response_pid: pid(44009),
                 accepted: false,
                 reason: Some("abgelehnt".to_owned()),
+                antwort_code: None,
             },
         )
         .unwrap();
@@ -1784,6 +1886,7 @@ mod tests {
                 response_pid: pid(44011),
                 accepted: true,
                 reason: None,
+                antwort_code: None,
             },
         )
         .expect_err("PID mismatch must be rejected");
@@ -1806,6 +1909,7 @@ mod tests {
                 response_pid: pid(44011),
                 accepted: true,
                 reason: None,
+                antwort_code: None,
             },
         )
         .unwrap();
@@ -1824,6 +1928,7 @@ mod tests {
                 response_pid: pid(44014),
                 accepted: true,
                 reason: None,
+                antwort_code: None,
             },
         )
         .unwrap();
@@ -1843,6 +1948,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -1893,6 +1999,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -1953,6 +2060,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -2061,6 +2169,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -2086,6 +2195,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -2176,6 +2286,7 @@ mod tests {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -2223,6 +2334,134 @@ mod tests {
     fn utilmd_pids_covers_44001_to_44021() {
         for p in 44001..=44021u32 {
             assert!(UTILMD_PIDS.contains(&p), "PID {p} missing from UTILMD_PIDS");
+        }
+    }
+
+    // ── The answer names its tree ─────────────────────────────────────────────
+
+    /// The answer a party sends out of `anfrage`, with the code and the tree
+    /// it says it walked.
+    fn gesendet(
+        anfrage: u32,
+        accepted: bool,
+        code: &str,
+        tree: Option<&str>,
+    ) -> GasSupplierChangeEvent {
+        let state = apply_all(
+            GasSupplierChangeState::default(),
+            &GeliGasSupplierChangeWorkflow::handle(
+                &GasSupplierChangeState::default(),
+                receive_cmd(anfrage, true),
+            )
+            .unwrap()
+            .events,
+        );
+        GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted,
+                antwort_code: code.to_owned(),
+                antwort_ebd: tree.map(str::to_owned),
+                bemerkung: Some("Erläuterung".to_owned()),
+                obligations: vec![],
+            },
+        )
+        .unwrap()
+        .events
+        .remove(0)
+    }
+
+    /// **An answer names the tree its code is defined in**, so the Verlauf can
+    /// read the wording. The Gas MIG carries no DE 1131, so the tree is the
+    /// process's: `E_3005` or `E_3007` for a Lieferbeginn — as the answering
+    /// party walked it — and `E_3019` for a Lieferende, the only one.
+    #[test]
+    fn an_answer_names_the_tree_of_its_process() {
+        for (anfrage, accepted, code, stated, tree) in [
+            (44001, false, "A16", Some("E_3005"), "E_3005"),
+            (44001, true, "E15", Some("E_3007"), "E_3007"),
+            (44004, false, "E17", None, "E_3019"),
+        ] {
+            let antwort = gesendet(anfrage, accepted, code, stated)
+                .antwort()
+                .expect("the answer states its code");
+            assert_eq!(antwort.code, code, "{anfrage}");
+            assert_eq!(antwort.codeliste.as_deref(), Some(tree), "{anfrage}");
+            assert!(
+                mako_pruefung::codes::lies(tree, code).is_some(),
+                "{tree} {code} has its wording"
+            );
+        }
+    }
+
+    /// Two trees answer a Lieferbeginn and share `E14`, so an answer that
+    /// names neither names none rather than one picked for it — and a tree
+    /// another process is answered from is refused.
+    #[test]
+    fn a_lieferbeginn_answer_names_no_tree_it_was_not_given() {
+        let antwort = gesendet(44001, false, "E14", None).antwort().expect("code");
+        assert_eq!(antwort.codeliste, None);
+
+        let state = apply_all(
+            GasSupplierChangeState::default(),
+            &GeliGasSupplierChangeWorkflow::handle(
+                &GasSupplierChangeState::default(),
+                receive_cmd(44001, true),
+            )
+            .unwrap()
+            .events,
+        );
+        let err = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: false,
+                antwort_code: "E17".to_owned(),
+                antwort_ebd: Some("E_3019".to_owned()),
+                bemerkung: None,
+                obligations: vec![],
+            },
+        )
+        .expect_err("E_3019 answers a Lieferende, not a Lieferbeginn");
+        assert!(format!("{err}").contains("E_3019"), "{err}");
+    }
+
+    /// **The GNB keeps the code its counterpart answered with**, and names the
+    /// one tree the Anfrage it sent is answered from: `E_3002` for the
+    /// Abmeldung NN, `E_3020` for the Abmeldungsanfrage, `E_3008` for the
+    /// Ersatz-/Grundversorgung.
+    #[test]
+    fn the_gnb_keeps_the_code_it_receives_and_names_its_tree() {
+        for (anfrage, response, accepted, code, tree) in [
+            (44007, 44008, true, "E15", "E_3002"),
+            (44010, 44012, false, "Z12", "E_3020"),
+            (44013, 44015, false, "E14", "E_3008"),
+        ] {
+            let state = apply_all(
+                GasSupplierChangeState::default(),
+                &GeliGasSupplierChangeWorkflow::handle(
+                    &GasSupplierChangeState::default(),
+                    gnb_cmd(anfrage),
+                )
+                .unwrap()
+                .events,
+            );
+            let out = GeliGasSupplierChangeWorkflow::handle(
+                &state,
+                GasSupplierChangeCommand::ReceiveGnbAntwort {
+                    response_pid: pid(response),
+                    accepted,
+                    reason: None,
+                    antwort_code: Some(code.to_owned()),
+                },
+            )
+            .unwrap();
+            let antwort = out.events[0].antwort().expect("the answer kept its code");
+            assert_eq!(antwort.code, code, "{anfrage}");
+            assert_eq!(antwort.codeliste.as_deref(), Some(tree), "{anfrage}");
+            assert!(
+                mako_pruefung::codes::lies(tree, code).is_some(),
+                "{tree} {code} has its wording"
+            );
         }
     }
 }

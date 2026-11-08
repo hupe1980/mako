@@ -286,6 +286,9 @@ pub enum ListenabgleichEvent {
         antwort_pid: Pruefidentifikator,
         /// The whole-list Antwortcode out of the tree the sender's role names.
         antwortcode: String,
+        /// That tree — `E_0047` or `E_0004` for a Lieferantenclearingliste,
+        /// by who distributed it; the family's one tree otherwise.
+        codeliste: String,
         /// The Prüfschritt that refused it, for the audit trail.
         pruefschritt: u16,
     },
@@ -327,15 +330,20 @@ impl EventPayload for ListenabgleichEvent {
         }
     }
 
-    /// The whole-list refusal states its code. The event does not name the
-    /// tree: one answer PID is drawn from a different tree per sender role, so
-    /// the list stays `None` rather than a guess. A Korrekturliste carries its
-    /// codes per position, not as one answer.
+    /// The whole-list refusal states its code and the tree it was drawn from.
+    /// One answer PID is drawn from a different tree per sender role, so the
+    /// tree is the one the walk ran, not one derived from the PID. A
+    /// Korrekturliste carries its codes per position, not as one answer.
     fn antwort(&self) -> Option<Antwortcode> {
         match self {
-            Self::GesamtAblehnungGesendet { antwortcode, .. } => {
-                Some(Antwortcode::new(antwortcode.clone(), None::<String>))
-            }
+            Self::GesamtAblehnungGesendet {
+                antwortcode,
+                codeliste,
+                ..
+            } => Some(Antwortcode::new(
+                antwortcode.clone(),
+                Some(codeliste.clone()),
+            )),
             _ => None,
         }
     }
@@ -758,6 +766,7 @@ impl Workflow for MabisListenabgleichWorkflow {
                     events: vec![ListenabgleichEvent::GesamtAblehnungGesendet {
                         antwort_pid,
                         antwortcode: antwort.code.clone(),
+                        codeliste: ebd.to_owned(),
                         pruefschritt: antwort.pruefschritt,
                     }],
                     outbox: vec![outbox],
@@ -852,10 +861,11 @@ mod tests {
             ListenabgleichEvent::GesamtAblehnungGesendet {
                 antwort_pid: Pruefidentifikator::const_new(55066),
                 antwortcode: "A01".to_owned(),
+                codeliste: "E_0047".to_owned(),
                 pruefschritt: 1,
             }
             .antwort(),
-            Some(Antwortcode::new("A01", None::<String>))
+            Some(Antwortcode::new("A01", Some("E_0047")))
         );
         assert_eq!(
             ListenabgleichEvent::KorrekturGesendet {
@@ -1209,6 +1219,39 @@ mod tests {
         .expect("an inadmissible version refuses the list");
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0047");
         assert_eq!(out.outbox[0].payload["korrekturen"], 0);
+    }
+
+    /// **The refusal names the tree its code is defined in**, so the Verlauf
+    /// can read the wording: one Prüfidentifikator, and the tree follows the
+    /// sender — `E_0047` for the NB's list, `E_0004` for the ÜNB's.
+    #[test]
+    fn a_whole_list_refusal_names_the_tree_the_sender_decides() {
+        let refuse = |rolle: &str, abonnement, version| {
+            let out = MabisListenabgleichWorkflow::handle(
+                &after(&[receive(55_065)]),
+                ListenabgleichCommand::SendGesamtAblehnung {
+                    sender_rolle: rolle.to_owned(),
+                    abonnement_bestellt: abonnement,
+                    zeitraum_plausibel: Some(true),
+                    mabis_zp_passt: Some(true),
+                    version_zugelassen: version,
+                    innerhalb_clearingphase: Some(true),
+                },
+            )
+            .expect("the walk refuses the list");
+            out.events[0].antwort().expect("a refusal states its code")
+        };
+        for (rolle, antwort, tree) in [
+            ("NB", refuse("NB", None, Some(false)), "E_0047"),
+            ("ÜNB", refuse("ÜNB", Some(false), Some(true)), "E_0004"),
+        ] {
+            assert_eq!(antwort.codeliste.as_deref(), Some(tree), "{rolle}");
+            assert!(
+                mako_pruefung::codes::lies(tree, &antwort.code).is_some(),
+                "{tree} {} has its wording in the catalogue",
+                antwort.code
+            );
+        }
     }
 
     /// The whole-list refusal resolves its tree from the **sender's role**, the

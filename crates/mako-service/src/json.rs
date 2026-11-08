@@ -225,6 +225,20 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Strict<T> {
     }
 }
 
+/// Reads `value` as [`Json`] reads a request body: a key `T` does not declare,
+/// at any depth, is an error naming its path.
+///
+/// For a caller that holds a body without a request around it — the contract
+/// test pinning one service's outbound body against the request type of the
+/// service it calls.
+///
+/// # Errors
+///
+/// `value` is not a `T`, or carries a key `T` does not declare.
+pub fn from_value<T: DeserializeOwned>(value: serde_json::Value) -> Result<T, serde_json::Error> {
+    serde_json::from_value::<Strict<T>>(value).map(|Strict(v)| v)
+}
+
 /// `axum`'s rejection as an [`ApiError`], keeping the status it chose.
 ///
 /// The status comes from the rejection rather than a match arm of our own:
@@ -323,6 +337,21 @@ mod tests {
             status,
             serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
         )
+    }
+
+    /// [`super::from_value`] refuses what the extractor refuses, so a body
+    /// pinned through it is a body the handler accepts.
+    #[test]
+    fn from_value_refuses_an_unknown_key_as_the_extractor_does() {
+        #[derive(Deserialize, Debug)]
+        struct Wanted {
+            n: u8,
+        }
+        let ok: Wanted = super::from_value(serde_json::json!({ "n": 1 })).expect("declared keys");
+        assert_eq!(ok.n, 1);
+        let err = super::from_value::<Wanted>(serde_json::json!({ "n": 1, "extra": true }))
+            .expect_err("an undeclared key is refused");
+        assert!(err.to_string().contains("`extra`"), "{err}");
     }
 
     /// Every failure answers in the problem shape — that is the whole point.

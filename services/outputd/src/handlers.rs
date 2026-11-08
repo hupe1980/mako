@@ -970,6 +970,42 @@ pub fn pruefe_papierweg(
     .map_err(|e| refuse(e.to_string()))
 }
 
+/// Refuse an `INVOICE` whose Rechnungsempfänger is not in Germany.
+///
+/// An `INVOICE` here is the operator's energy invoice — a supply of gas,
+/// electricity or heating/cooling, taxed as a domestic supply. A buyer (BG-7)
+/// whose BT-55 names another Member State or a country outside the EU is
+/// refused by [`mako_fristen::empfaengerland::pruefe_empfaengerland`], the rule
+/// billingd asks before it stores the invoice, rather than issued taxed as
+/// domestic. BT-55 is read off the model and nothing is assumed for it: the
+/// model is the issuer's document, EN 16931 makes the buyer's country code
+/// mandatory (BR-11), and an absent one is refused rather than read as `DE`.
+/// The postal [`crate::delivery::store::PostalAddress`] is where a letter
+/// goes, not who is invoiced, and is not consulted.
+///
+/// A request without a model is left to the render, which refuses it.
+///
+/// # Errors
+///
+/// `422` with the rule's code — `CROSS_BORDER_SUPPLY_UNSUPPORTED`,
+/// `EXPORT_SUPPLY_UNSUPPORTED`, `RECIPIENT_COUNTRY_MISSING` or
+/// `RECIPIENT_COUNTRY_INVALID`.
+pub fn pruefe_empfaengerland(kind: TemplateKind, req: &IssueDocumentRequest) -> OutputResult<()> {
+    if kind != TemplateKind::Invoice {
+        return Ok(());
+    }
+    let Some(model) = req.model.as_deref() else {
+        return Ok(());
+    };
+    let land = model.buyer.address.country.as_ref().map(|c| c.as_str());
+    mako_fristen::empfaengerland::pruefe_empfaengerland(land).map_err(|e| {
+        OutputError::unprocessable(
+            e.code(),
+            format!("INVOICE {} is not issued: {e}", req.subject_ref),
+        )
+    })
+}
+
 /// `POST /api/v1/documents/issue/{kind}` — render, record, and queue for delivery.
 ///
 /// `201` for a document that was issued now, `200` for one this
@@ -1005,6 +1041,7 @@ pub async fn post_document(
     }
     // The paper is übermittelt now, so the grace is tested on today's Berlin date.
     pruefe_papierweg(kind, &channels, &req, mako_fristen::heute())?;
+    pruefe_empfaengerland(kind, &req)?;
 
     // Before the render: discovering a retry afterwards costs twenty seconds of
     // Typst and, if the template has moved since, produces bytes that differ
@@ -1357,6 +1394,81 @@ mod papierweg_tests {
             date!(2026 - 10 - 15),
         )
         .expect("§ 27 Abs. 38 Nr. 1");
+    }
+
+    /// The request above, carrying an INVOICE model whose buyer (BG-7) is
+    /// addressed in `country`.
+    fn invoice_to(country: Option<&str>) -> IssueDocumentRequest {
+        let mut req = request(Some(true), Some("2026-09-30"));
+        req.view = None;
+        let mut model = en16931::Invoice::default();
+        model.buyer.address.country = country.map(en16931::invoice::Code::from);
+        req.model = Some(Box::new(model));
+        req
+    }
+
+    fn code(r: OutputResult<()>) -> Option<&'static str> {
+        match r {
+            Ok(()) => None,
+            Err(OutputError::Unprocessable { code, .. }) => Some(code),
+            Err(other) => panic!("not a 422: {other:?}"),
+        }
+    }
+
+    /// A Rechnungsempfänger in Austria: the INVOICE is not issued, and the
+    /// refusal names the OSS treatment that is not built.
+    #[test]
+    fn an_invoice_to_austria_is_refused() {
+        let err = pruefe_empfaengerland(TemplateKind::Invoice, &invoice_to(Some("AT")))
+            .expect_err("a cross-border supply is not taxed as domestic");
+        assert!(err.to_string().contains("Art. 369aa MwStSystRL"), "{err}");
+        assert_eq!(code(Err(err)), Some("CROSS_BORDER_SUPPLY_UNSUPPORTED"),);
+        assert_eq!(
+            code(pruefe_empfaengerland(
+                TemplateKind::Invoice,
+                &invoice_to(Some("US"))
+            )),
+            Some("EXPORT_SUPPLY_UNSUPPORTED"),
+        );
+    }
+
+    /// A German buyer is issued; a model without BT-55 is refused, not read
+    /// as `DE`; a kind that is no invoice is not asked.
+    #[test]
+    fn a_german_buyer_is_issued_and_an_absent_country_refused() {
+        assert_eq!(
+            code(pruefe_empfaengerland(
+                TemplateKind::Invoice,
+                &invoice_to(Some("DE"))
+            )),
+            None
+        );
+        assert_eq!(
+            code(pruefe_empfaengerland(
+                TemplateKind::Invoice,
+                &invoice_to(None)
+            )),
+            Some("RECIPIENT_COUNTRY_MISSING"),
+        );
+        assert_eq!(
+            code(pruefe_empfaengerland(
+                TemplateKind::Mahnung,
+                &invoice_to(Some("AT"))
+            )),
+            None
+        );
+    }
+
+    /// `post_document` asks the rule before it renders or records anything.
+    #[test]
+    fn the_issue_path_asks_the_rule_before_it_records() {
+        let src = include_str!("handlers.rs");
+        let body = &src[src.find("pub async fn post_document(").expect("handler")..];
+        let check = body
+            .find("pruefe_empfaengerland(kind, &req)?")
+            .expect("post_document asks the rule");
+        let record = body.find("store::issue(").expect("post_document records");
+        assert!(check < record);
     }
 
     /// Only an INVOICE is an invoice: a Mahnung by POST is not tested.

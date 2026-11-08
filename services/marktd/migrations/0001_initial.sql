@@ -1443,16 +1443,18 @@ CREATE TABLE zaehler_saisons (
     wochentage       SMALLINT[]  NOT NULL
                      CHECK (array_length(wochentage, 1) BETWEEN 1 AND 7
                             AND wochentage <@ ARRAY[1,2,3,4,5,6,7]::SMALLINT[]),
-    -- Window in German local time, half-open [zeit_von, zeit_bis).
+    -- Window in German local time, half-open [zeit_von, zeit_bis). A window
+    -- with zeit_von > zeit_bis crosses midnight (NT 22:00–06:00 is one row) and
+    -- holds a time at or after zeit_von or before zeit_bis.
     -- `TIME` rather than `TEXT`: as text, '7:00' and '07:00' were different
     -- values that compared and sorted differently, and nothing rejected '25:00'.
     zeit_von         TIME        NOT NULL,
     zeit_bis         TIME        NOT NULL,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    -- A zero-length or inverted window classifies no reading at all, which
-    -- shows up as silently missing HT/NT energy rather than as an error.
-    CONSTRAINT zaehler_saisons_window_ordered CHECK (zeit_von < zeit_bis),
+    -- A zero-length window classifies no reading at all, which shows up as
+    -- silently missing HT/NT energy rather than as an error.
+    CONSTRAINT zaehler_saisons_window_nonempty CHECK (zeit_von <> zeit_bis),
     -- One definition per (register, season, window start).
     UNIQUE (register_id, saison, zeit_von)
 );

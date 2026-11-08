@@ -218,7 +218,7 @@ pub async fn kuendigen(
         }
 
         let mut tx = ctx.pool.begin().await.map_err(sqlx_err)?;
-        let result = pg::kuendige_vertrag(&mut tx, v, &input, eingang, &ctx.cfg.lf_mp_id)
+        let result = pg::kuendige_vertrag(&mut tx, v, &input, eingang)
             .await
             .map_err(ApiError::Internal)?;
         dispatched += result.dispatched.len();

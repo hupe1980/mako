@@ -98,8 +98,11 @@ pub enum WeiterverpflichtungEvent {
     AntwortGesendet {
         /// 19003 (Bestätigung) or 19004 (Ablehnung).
         pruefidentifikator: Pruefidentifikator,
-        /// `AJT` DE 4465 — `Z13`, `Z14` or `Z22` from `E_0203`.
+        /// `AJT` DE 4465 — `Z13`, `Z14` or `Z22`.
         antwort_code: String,
+        /// The tree the code was resolved against — `E_0203` in Strom,
+        /// `E_2004` in Gas, by the Sparte of the order.
+        antwort_ebd: String,
         /// The corrected Abmeldetermin (`DTM` DE 2380), where the code names one.
         abweichender_termin: Option<String>,
     },
@@ -145,14 +148,18 @@ impl EventPayload for WeiterverpflichtungEvent {
         }
     }
 
-    /// The ORDRSP states its `AJT` code. The tree follows the Sparte of the
-    /// order (`E_0203` Strom, `E_2004` Gas), which this event does not carry,
-    /// so the list stays `None` rather than a guess.
+    /// The ORDRSP states its `AJT` code and the tree it was resolved against;
+    /// the wire Codeliste (`S_`/`G_`) is resolved from it on read.
     fn antwort(&self) -> Option<Antwortcode> {
         match self {
-            Self::AntwortGesendet { antwort_code, .. } => {
-                Some(Antwortcode::new(antwort_code.clone(), None::<String>))
-            }
+            Self::AntwortGesendet {
+                antwort_code,
+                antwort_ebd,
+                ..
+            } => Some(Antwortcode::new(
+                antwort_code.clone(),
+                Some(antwort_ebd.clone()),
+            )),
             _ => None,
         }
     }
@@ -484,6 +491,7 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                         pruefidentifikator: Pruefidentifikator::new(antwort_pid)
                             .map_err(WorkflowError::rejected)?,
                         antwort_code: code.code.to_owned(),
+                        antwort_ebd: tree.to_owned(),
                         abweichender_termin,
                     }],
                     vec![PendingOutbox::new("ORDRSP", data.nb.as_str(), payload).caused_by(0)],
@@ -604,6 +612,29 @@ mod tests {
         }
     }
 
+    /// The answer event names the Sparte's tree, so the Verlauf reads the
+    /// code's wording: `Z22` is defined in `E_0203` for Strom and in `E_2004`
+    /// for Gas, and the event of each Sparte resolves to its own.
+    #[test]
+    fn the_answer_event_names_the_tree_of_its_sparte() {
+        for (sparte, ebd) in [(Sparte::Strom, "E_0203"), (Sparte::Gas, "E_2004")] {
+            let out = WimWeiterverpflichtungWorkflow::handle(
+                &empfangen_in(sparte),
+                WeiterverpflichtungCommand::DispatchAntwort {
+                    antwort_code: "Z22".to_owned(),
+                    abweichender_termin: Some("20260601".to_owned()),
+                },
+            )
+            .expect("Z22");
+            let antwort = out.events[0].antwort().expect("the ORDRSP states its code");
+            assert_eq!(antwort.code, "Z22", "{sparte}");
+            assert_eq!(antwort.codeliste.as_deref(), Some(ebd), "{sparte}");
+            let wording = mako_pruefung::codes::lies(ebd, &antwort.code)
+                .unwrap_or_else(|| panic!("{ebd} Z22 has its wording"));
+            assert_eq!(wording.ebd, Some(ebd), "{sparte}");
+        }
+    }
+
     #[test]
     fn a_plain_agreement_answers_on_19003() {
         let out = WimWeiterverpflichtungWorkflow::handle(
@@ -716,10 +747,11 @@ mod verlauf_tests {
             WeiterverpflichtungEvent::AntwortGesendet {
                 pruefidentifikator: pid(19_003),
                 antwort_code: "Z13".into(),
+                antwort_ebd: "E_0203".into(),
                 abweichender_termin: None,
             }
             .antwort(),
-            Some(Antwortcode::new("Z13", None::<String>))
+            Some(Antwortcode::new("Z13", Some("E_0203")))
         );
         assert_eq!(
             WeiterverpflichtungEvent::Rejected { reason: "x".into() }.antwort(),
@@ -732,6 +764,7 @@ mod verlauf_tests {
         let antwort = WeiterverpflichtungEvent::AntwortGesendet {
             pruefidentifikator: pid(19_003),
             antwort_code: "Z13".into(),
+            antwort_ebd: "E_0203".into(),
             abweichender_termin: None,
         };
         assert_eq!(

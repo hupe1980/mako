@@ -52,7 +52,7 @@ enum Shape {
     ///
     /// Its own shape rather than [`Self::AlphaNum`], because **an EIC may
     /// contain `-`**: positions 4–15 are alphanumeric *or* the filler `-`, so a
-    /// real Bilanzkreis like `11XRWENET----1X` is 16 characters of which four
+    /// real Bilanzkreis like `11XRWENET-----1E` is 16 characters of which four
     /// are hyphens. Treating it as alphanumeric refused every padded code, and
     /// the refusal is silent — the value simply stayed untrusted, so a `planned`
     /// specialist reading a Bilanzkreis found nothing to plan from.

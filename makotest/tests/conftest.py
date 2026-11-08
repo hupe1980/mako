@@ -23,7 +23,7 @@ MALO = "51238696012"
 #: `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 §5.3) — without a
 #: Bilanzkreis the NB cannot assign the Marktlokation to the LF — so a fixture
 #: that omitted it would build a message a conformant counterparty refuses.
-BILANZKREIS = "11XBK-EEG-----1"
+BILANZKREIS = "11XBK-EEG------Q"
 
 
 def utilmd_interchange(

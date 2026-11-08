@@ -91,6 +91,7 @@ async fn happy_path_full_lifecycle() {
         GasSupplierChangeCommand::SendAntwort {
             accepted: true,
             antwort_code: "E15".to_owned(),
+            antwort_ebd: None,
             bemerkung: None,
             obligations: vec![],
         },
@@ -150,6 +151,7 @@ async fn negative_antwort_rejects_process() {
         GasSupplierChangeCommand::SendAntwort {
             accepted: false,
             antwort_code: "E17".to_owned(),
+            antwort_ebd: None,
             bemerkung: Some("Marktlokation nicht im Versorgungsgebiet".to_owned()),
             obligations: vec![],
         },
@@ -284,6 +286,7 @@ async fn deadline_on_active_is_absorbed() {
         GasSupplierChangeCommand::SendAntwort {
             accepted: true,
             antwort_code: "E15".to_owned(),
+            antwort_ebd: None,
             bemerkung: None,
             obligations: vec![],
         },
@@ -328,6 +331,7 @@ async fn send_antwort_from_new_is_rejected() {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -357,6 +361,7 @@ async fn projection_tracks_full_lifecycle() {
         GasSupplierChangeCommand::SendAntwort {
             accepted: true,
             antwort_code: "E15".to_owned(),
+            antwort_ebd: None,
             bemerkung: None,
             obligations: vec![],
         },

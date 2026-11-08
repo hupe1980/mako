@@ -96,7 +96,7 @@ let bytes = UtilmdBuilder::new(Release::new("S2.2"))
     .date(dtm::BEGINN_ZUM, "20261101")
     .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(transaktionsgrund::WECHSEL))
     // `SG8 SEQ+Z79` Produktpaket with the Bilanzkreis, and its `SEQ+ZH0`.
-    .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
+    .produktpaket(Produktpaket::bilanzkreis("11XBK-STD------Y"))
     // `SG5 LOC+Z16`.
     .marktlokation("51238696012")
     // Stammdaten blocks the column demands: `SEQ+Z01` Daten der

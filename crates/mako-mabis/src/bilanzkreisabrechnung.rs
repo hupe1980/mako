@@ -1366,7 +1366,7 @@ mod tests {
             im_erstaufschlag,
             clearing_ende: Some(time::OffsetDateTime::UNIX_EPOCH),
             absender: MarktpartnerCode::new("9900357000004"),
-            biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
+            biko_id: BikoId::new("10YDE-VE-------2"),
             message_ref: MessageRef::new(format!("MSCONS-{version}")),
         }
     }

@@ -981,7 +981,7 @@ mod tests {
             malo_id: "51238696012".to_owned(),
             new_supplier_gln: "9900357000004".to_owned(),
             grid_operator_gln: "9900000000002".to_owned(),
-            bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
+            bilanzierungsgebiet: Some("11YB-TENNET----U".to_owned()),
             process_date,
             sparte: Sparte::Strom,
             messtyp: Messtyp::Slp,
@@ -1026,7 +1026,7 @@ mod tests {
         MaloGridRecord {
             malo_id: "51238696012".to_owned(),
             nb_mp_id: "9900000000002".to_owned(),
-            bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
+            bilanzierungsgebiet: Some("11YB-TENNET----U".to_owned()),
             netzgebiet: None,
         }
     }
@@ -1488,7 +1488,7 @@ mod tests {
         assert_eq!(result.antwortcode(), Some("ZC5"), "not A06");
 
         let mut grid = make_grid();
-        grid.bilanzierungsgebiet = Some("11YB-OTHER------W".to_owned());
+        grid.bilanzierungsgebiet = Some("11YB-OTHER-----2".to_owned());
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&grid), true, NOW, &cfg());
         assert_eq!(result.antwortcode(), Some("E13"), "not A05");

@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let zeitreihe = Zeitreihe::new(Familie::BgSzr, Some(Kategorie::B))?;
     let mabis_zp = MabisZaehlpunktId::new("DE0001111222233334444555566667777")?;
-    let biko = BikoId::new("10YDE-VE-TRANSMIX");
+    let biko = BikoId::new("10YDE-VE-------2");
     let absender = MarktpartnerCode::new("9900357000004");
 
     // ── The Fristenkalender for this month ───────────────────────────────────
@@ -344,7 +344,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 im_erstaufschlag: false,
                 clearing_ende: None,
                 absender: MarktpartnerCode::new("9900357000004"),
-                biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
+                biko_id: BikoId::new("10YDE-VE-------2"),
                 message_ref: MessageRef::new("MSCONS-BG-2026-01-V3"),
             },
             RunOptions::new(),

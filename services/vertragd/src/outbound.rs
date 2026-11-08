@@ -115,11 +115,10 @@ pub fn lieferbeginn(
     sparte: &str,
     malo_id: &str,
     melo_id: Option<&str>,
-    nb_mp_id: &str,
-    lf_mp_id: &str,
+    bilanzkreis: Option<&str>,
     lieferbeginn: Date,
 ) -> Result<Task> {
-    let payload = lieferbeginn_body(sparte, malo_id, melo_id, nb_mp_id, lf_mp_id, lieferbeginn)?;
+    let payload = lieferbeginn_body(sparte, malo_id, melo_id, bilanzkreis, lieferbeginn)?;
     Ok(Task {
         kind: TaskKind::Lieferbeginn,
         komp_id: Some(komp_id),
@@ -128,15 +127,41 @@ pub fn lieferbeginn(
     })
 }
 
-/// Build the `processd` Lieferbeginn request body for the commodity.
+/// A `processd` call as a task stores it: the endpoint, and the `body` the
+/// worker posts — exactly the fields that endpoint's request type declares,
+/// because processd reads it with [`mako_service::Json`] and refuses any other.
+fn processd_call(endpoint: &str, body: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "endpoint": endpoint, "body": body })
+}
+
+/// `YYYYMMDD`, the date `start-supply-gas` and `end-supply-gas` read
+/// (gesetzliche deutsche Zeit).
+fn compact_date(d: Date) -> String {
+    format!("{:04}{:02}{:02}", d.year(), u8::from(d.month()), d.day())
+}
+
+/// The Zählpunktbezeichnung of a gas component: its Messlokation.
+fn gas_zaehlpunkt<'a>(malo_id: &str, melo_id: Option<&'a str>, call: &str) -> Result<&'a str> {
+    melo_id.filter(|m| !m.is_empty()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "gas supply point {malo_id} has no melo_id; \
+             {call} requires the Zählpunktbezeichnung (RFF+Z13)"
+        )
+    })
+}
+
+/// Build the `processd` Lieferbeginn call for the commodity.
 ///
-/// The contract differs by commodity (verified against
-/// `services/processd/src/server.rs`):
+/// The body is `processd`'s request type, field for field — the contract test
+/// reads it through `processd::server::StartSupplyRequest` and
+/// `processd::server::StartSupplyGasRequest` as the handler does:
 /// - `start-supply` (Strom et al.) takes `lieferbeginn_datum` (ISO-8601);
 /// - `start-supply-gas` takes `zaehlpunkt` (the Messlokation) and
 ///   `process_date` (YYYYMMDD).
 ///
-/// Pure, so the field-name contract is unit-tested without a live `processd`.
+/// `bilanzkreis` is the contract's own; without one processd uses the single
+/// `standard` entry of its `[[lf.bilanzkreise]]` and refuses the Anmeldung
+/// (`MISSING_BILANZKREIS`) when there is none.
 ///
 /// # Errors
 ///
@@ -145,35 +170,31 @@ pub fn lieferbeginn_body(
     sparte: &str,
     malo_id: &str,
     melo_id: Option<&str>,
-    nb_mp_id: &str,
-    lf_mp_id: &str,
+    bilanzkreis: Option<&str>,
     lieferbeginn: Date,
 ) -> Result<serde_json::Value> {
-    if sparte == "GAS" {
-        let zaehlpunkt = melo_id.filter(|m| !m.is_empty()).ok_or_else(|| {
-            anyhow::anyhow!(
-                "gas supply point {malo_id} has no melo_id; \
-                 start-supply-gas requires the Zählpunktbezeichnung (RFF+Z13)"
-            )
-        })?;
-        return Ok(serde_json::json!({
-            "endpoint": "start-supply-gas",
+    let mut body = if sparte == "GAS" {
+        let zaehlpunkt = gas_zaehlpunkt(malo_id, melo_id, "start-supply-gas")?;
+        serde_json::json!({
             "malo_id": malo_id,
             "zaehlpunkt": zaehlpunkt,
-            "nb_mp_id": nb_mp_id,
-            "lf_mp_id": lf_mp_id,
-            "process_date": lieferbeginn
-                .format(time::macros::format_description!("[year][month][day]"))
-                .unwrap_or_else(|_| lieferbeginn.to_string()),
-        }));
+            "process_date": compact_date(lieferbeginn),
+        })
+    } else {
+        serde_json::json!({
+            "malo_id": malo_id,
+            "lieferbeginn_datum": lieferbeginn.to_string(),
+        })
+    };
+    if let Some(bk) = bilanzkreis.filter(|b| !b.is_empty()) {
+        body["bilanzkreis"] = bk.into();
     }
-    Ok(serde_json::json!({
-        "endpoint": "start-supply",
-        "malo_id": malo_id,
-        "nb_mp_id": nb_mp_id,
-        "lf_mp_id": lf_mp_id,
-        "lieferbeginn_datum": lieferbeginn.to_string(),
-    }))
+    let endpoint = if sparte == "GAS" {
+        "start-supply-gas"
+    } else {
+        "start-supply"
+    };
+    Ok(processd_call(endpoint, body))
 }
 
 /// The `processd` Lieferende task for one component.
@@ -183,32 +204,46 @@ pub fn lieferbeginn_body(
 /// obligation, and a key without the date makes `ON CONFLICT DO NOTHING` drop
 /// it while the NB hears the withdrawn date. A replay of the same date still
 /// collapses into one task. Enqueue it with [`enqueue_superseding`].
-#[must_use]
+///
+/// The body is `processd`'s request type, as for [`lieferbeginn_body`]:
+/// `end-supply` takes `lieferende_datum` (ISO-8601), `end-supply-gas` the
+/// `zaehlpunkt` and a `YYYYMMDD` `process_date`.
+///
+/// # Errors
+///
+/// A gas supply point with no Messlokation.
 pub fn lieferende(
     komp_id: Uuid,
     sparte: &str,
     malo_id: &str,
-    nb_mp_id: &str,
-    lf_mp_id: &str,
+    melo_id: Option<&str>,
     lieferende: Date,
-) -> Task {
-    let endpoint = if sparte == "GAS" {
-        "end-supply-gas"
+) -> Result<Task> {
+    let payload = if sparte == "GAS" {
+        let zaehlpunkt = gas_zaehlpunkt(malo_id, melo_id, "end-supply-gas")?;
+        processd_call(
+            "end-supply-gas",
+            serde_json::json!({
+                "malo_id": malo_id,
+                "zaehlpunkt": zaehlpunkt,
+                "process_date": compact_date(lieferende),
+            }),
+        )
     } else {
-        "end-supply"
+        processd_call(
+            "end-supply",
+            serde_json::json!({
+                "malo_id": malo_id,
+                "lieferende_datum": lieferende.to_string(),
+            }),
+        )
     };
-    Task {
+    Ok(Task {
         kind: TaskKind::Lieferende,
         komp_id: Some(komp_id),
-        payload: serde_json::json!({
-            "endpoint": endpoint,
-            "malo_id": malo_id,
-            "nb_mp_id": nb_mp_id,
-            "lf_mp_id": lf_mp_id,
-            "lieferende_datum": lieferende.to_string(),
-        }),
+        payload,
         dedupe_key: format!("LIEFERENDE:{komp_id}:{lieferende}"),
-    }
+    })
 }
 
 /// An `edmd` reading order (GPKE Beginn-/Schlussablesung).
@@ -513,7 +548,13 @@ impl OutboundWorker {
                 }
             }
             Err(e) => {
-                let attempts = attempts + 1;
+                // A refusal is the same refusal on every retry, so it stops the
+                // task now and leaves the callee's answer on it for the operator.
+                let attempts = if is_refusal(&e) {
+                    MAX_ATTEMPTS
+                } else {
+                    attempts + 1
+                };
                 let detail = format!("{e:#}");
                 if attempts >= MAX_ATTEMPTS {
                     tracing::error!(
@@ -632,6 +673,16 @@ impl FollowUp {
     }
 }
 
+/// The body a stored `processd` call posts; see [`processd_call`].
+///
+/// A payload without one is refused rather than posted whole: processd refuses
+/// every key its request type does not declare, `endpoint` among them.
+fn call_body(payload: &serde_json::Value) -> Result<&serde_json::Value> {
+    payload
+        .get("body")
+        .ok_or_else(|| anyhow::anyhow!("processd task payload has no `body`"))
+}
+
 impl OutboundWorker {
     /// Perform one task's call, returning the follow-up write that records it.
     async fn perform(
@@ -651,7 +702,9 @@ impl OutboundWorker {
                     &self.cfg.processd_url,
                     self.cfg.processd_api_key.as_deref(),
                 );
-                let body = self.post_json(&processd, endpoint, payload).await?;
+                let body = self
+                    .post_json(&processd, endpoint, call_body(payload)?)
+                    .await?;
                 let process_id = body
                     .get("process_id")
                     .and_then(serde_json::Value::as_str)
@@ -673,7 +726,8 @@ impl OutboundWorker {
                     &self.cfg.processd_url,
                     self.cfg.processd_api_key.as_deref(),
                 );
-                self.post_json(&processd, endpoint, payload).await?;
+                self.post_json(&processd, endpoint, call_body(payload)?)
+                    .await?;
                 Ok(FollowUp::Nothing)
             }
             TaskKind::AblesungBeginn | TaskKind::AblesungEnde => {
@@ -789,6 +843,19 @@ impl OutboundWorker {
     }
 }
 
+/// Whether the callee refused the request itself: a 4xx other than 408 and
+/// 429, which a retry with the same body cannot change.
+fn is_refusal(e: &anyhow::Error) -> bool {
+    e.chain()
+        .filter_map(|c| c.downcast_ref::<mako_service::http::UpstreamError>())
+        .filter_map(mako_service::http::UpstreamError::status)
+        .any(|s| {
+            s.is_client_error()
+                && s != reqwest::StatusCode::REQUEST_TIMEOUT
+                && s != reqwest::StatusCode::TOO_MANY_REQUESTS
+        })
+}
+
 /// Exponential backoff, capped so a long outage does not push the next attempt
 /// past the point where the obligation still matters.
 fn backoff_secs(attempts: i32) -> u64 {
@@ -803,20 +870,15 @@ mod tests {
     use super::*;
     use time::macros::date;
 
+    const MELO: &str = "DE0001112223334445556667778889";
+
     #[test]
     fn strom_carries_lieferbeginn_datum() {
-        let b = lieferbeginn_body(
-            "STROM",
-            "51238696012",
-            None,
-            "9900000000001",
-            "9900357000004",
-            date!(2026 - 04 - 01),
-        )
-        .unwrap();
+        let b =
+            lieferbeginn_body("STROM", "51238696012", None, None, date!(2026 - 04 - 01)).unwrap();
         assert_eq!(b["endpoint"], "start-supply");
-        assert_eq!(b["lieferbeginn_datum"], "2026-04-01");
-        assert!(b.get("zaehlpunkt").is_none());
+        assert_eq!(b["body"]["lieferbeginn_datum"], "2026-04-01");
+        assert!(b["body"].get("zaehlpunkt").is_none());
     }
 
     #[test]
@@ -824,46 +886,97 @@ mod tests {
         let b = lieferbeginn_body(
             "GAS",
             "51238696012",
-            Some("DE0001112223334445556667778889"),
-            "9900000000001",
-            "9900357000004",
+            Some(MELO),
+            None,
             date!(2026 - 04 - 01),
         )
         .unwrap();
         assert_eq!(b["endpoint"], "start-supply-gas");
-        assert_eq!(b["zaehlpunkt"], "DE0001112223334445556667778889");
-        assert_eq!(b["process_date"], "20260401");
+        assert_eq!(b["body"]["zaehlpunkt"], MELO);
+        assert_eq!(b["body"]["process_date"], "20260401");
+    }
+
+    /// The posted body is processd's request type and nothing else: the
+    /// routing key and the MP-IDs processd derives itself stay out of it.
+    #[test]
+    fn the_body_carries_no_key_beside_the_request_fields() {
+        for b in [
+            lieferbeginn_body("STROM", "51238696012", None, None, date!(2026 - 04 - 01)).unwrap(),
+            lieferbeginn_body(
+                "GAS",
+                "51238696012",
+                Some(MELO),
+                None,
+                date!(2026 - 04 - 01),
+            )
+            .unwrap(),
+        ] {
+            let body = b["body"].as_object().unwrap();
+            for key in ["endpoint", "nb_mp_id", "lf_mp_id"] {
+                assert!(!body.contains_key(key), "{key} in {body:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_contract_bilanzkreis_is_sent_and_an_absent_one_is_left_out() {
+        let with = lieferbeginn_body(
+            "STROM",
+            "51238696012",
+            None,
+            Some("11XBK-STANDARD-4"),
+            date!(2026 - 04 - 01),
+        )
+        .unwrap();
+        assert_eq!(with["body"]["bilanzkreis"], "11XBK-STANDARD-4");
+        let without =
+            lieferbeginn_body("STROM", "51238696012", None, None, date!(2026 - 04 - 01)).unwrap();
+        assert!(without["body"].get("bilanzkreis").is_none());
     }
 
     #[test]
     fn gas_without_a_messlokation_is_refused_rather_than_sent_with_the_malo() {
-        // An 11-digit MaLo is not a 33-character Zählpunktbezeichnung; sending
-        // it produced a malformed UTILMD the NB rejected days later.
-        let err = lieferbeginn_body(
+        // An 11-digit MaLo is not a 33-character Zählpunktbezeichnung.
+        let err =
+            lieferbeginn_body("GAS", "51238696012", None, None, date!(2026 - 04 - 01)).unwrap_err();
+        assert!(err.to_string().contains("Zählpunktbezeichnung"));
+        let err = lieferende(
+            Uuid::nil(),
             "GAS",
             "51238696012",
             None,
-            "9900000000001",
-            "9900357000004",
-            date!(2026 - 04 - 01),
+            date!(2026 - 12 - 31),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("Zählpunktbezeichnung"));
+        assert!(err.to_string().contains("end-supply-gas"), "{err}");
     }
 
     #[test]
     fn an_empty_melo_counts_as_absent() {
         assert!(
-            lieferbeginn_body(
-                "GAS",
-                "51238696012",
-                Some(""),
-                "9900000000001",
-                "9900357000004",
-                date!(2026 - 04 - 01)
-            )
-            .is_err()
+            lieferbeginn_body("GAS", "51238696012", Some(""), None, date!(2026 - 04 - 01)).is_err()
         );
+    }
+
+    #[test]
+    fn a_gas_lieferende_carries_the_zaehlpunkt_and_a_compact_date() {
+        let t = lieferende(
+            Uuid::nil(),
+            "GAS",
+            "51238696012",
+            Some(MELO),
+            date!(2026 - 12 - 31),
+        )
+        .unwrap();
+        assert_eq!(t.payload["endpoint"], "end-supply-gas");
+        assert_eq!(t.payload["body"]["zaehlpunkt"], MELO);
+        assert_eq!(t.payload["body"]["process_date"], "20261231");
+        assert!(t.payload["body"].get("lieferende_datum").is_none());
+    }
+
+    #[test]
+    fn a_task_without_a_body_is_refused_rather_than_posted_whole() {
+        assert!(call_body(&serde_json::json!({ "endpoint": "start-supply" })).is_err());
     }
 
     /// A replay of one Lieferende collapses into one task; a re-issue to a new
@@ -871,7 +984,7 @@ mod tests {
     #[test]
     fn the_lieferende_key_is_the_component_and_its_date() {
         let komp = Uuid::nil();
-        let at = |d| lieferende(komp, "STROM", "51238696012", "NB", "LF", d);
+        let at = |d| lieferende(komp, "STROM", "51238696012", None, d).unwrap();
         assert_eq!(
             at(date!(2026 - 12 - 31)).dedupe_key,
             at(date!(2026 - 12 - 31)).dedupe_key,

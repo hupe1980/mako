@@ -117,7 +117,7 @@ fn a_seed_is_completed_to_its_column_and_keeps_its_values() {
     let seed = b"UNH+MSG-7+UTILMD:D:11A:UN:S2.1'BGM+E01+DOC-7'DTM+137:202601150800?+00:303'\
 NAD+MS+4012345000023::9'NAD+MR+9900357000004::293'IDE+24+VG-ABC'\
 DTM+92:202601312300?+00:303'LOC+Z16+51238696781'LOC+Z17+DE00056266802AO6G56M11SN51G21M24S'\
-RFF+Z13:55001'SEQ+Z79+1'PIA+5+9991000002082:Z11'CCI+Z66'CAV+ZV4:::11XBK-STD-----9'UNT+15+MSG-7'";
+RFF+Z13:55001'SEQ+Z79+1'PIA+5+9991000002082:Z11'CCI+Z66'CAV+ZV4:::11XBK-STD------Y'UNT+15+MSG-7'";
     let seed: Vec<edifact_rs::OwnedSegment> = edifact_rs::from_bytes(seed)
         .map(|s| s.map(edifact_rs::Segment::into_owned))
         .collect::<Result<_, _>>()
@@ -138,7 +138,7 @@ RFF+Z13:55001'SEQ+Z79+1'PIA+5+9991000002082:Z11'CCI+Z66'CAV+ZV4:::11XBK-STD-----
     for kept in [
         "IDE+24+VG-ABC'",
         "LOC+Z16+51238696781'",
-        "CAV+ZV4:::11XBK-STD-----9'",
+        "CAV+ZV4:::11XBK-STD------Y'",
         "BGM+E01+DOC-7'",
         "UNH+MSG-7+",
     ] {

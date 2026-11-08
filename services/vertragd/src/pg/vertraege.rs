@@ -72,6 +72,11 @@ pub struct CreateKomponenteInput {
     /// Zählpunktbezeichnung (RFF+Z13).
     pub melo_id: Option<String>,
     pub nb_mp_id: Option<String>,
+    /// The Bilanzkreis (an X-type EIC) this supply runs in. Absent, processd
+    /// uses its single `standard` `[[lf.bilanzkreise]]` entry and refuses the
+    /// Anmeldung when there is none.
+    #[serde(default)]
+    pub bilanzkreis: Option<String>,
     pub product_code: String,
     pub lieferbeginn: Date,
     pub lieferende: Option<Date>,
@@ -452,15 +457,14 @@ pub async fn insert_versorgungsvertrag(
             // Persist-before-dispatch: the registration intent commits with the
             // contract, so it survives a restart and can be retried.
             if VertragskomponenteRow::requires_mako_workflow(&komp.sparte)
-                && let (Some(malo_id), Some(nb_mp_id)) = (&komp.malo_id, &komp.nb_mp_id)
+                && let (Some(malo_id), Some(_)) = (&komp.malo_id, &komp.nb_mp_id)
             {
                 let task = outbound::lieferbeginn(
                     komp_id,
                     &komp.sparte,
                     malo_id,
                     komp.melo_id.as_deref(),
-                    nb_mp_id,
-                    lf_mp_id,
+                    komp.bilanzkreis.as_deref(),
                     komp.lieferbeginn,
                 )?;
                 if outbound::enqueue(&mut *tx, tenant, &task).await? {
@@ -504,12 +508,15 @@ async fn insert_komponente(
     lf_mp_id: &str,
     k: &CreateKomponenteInput,
 ) -> Result<Uuid> {
+    if let Some(bk) = k.bilanzkreis.as_deref() {
+        crate::domain::pruefe_bilanzkreis(&k.sparte, bk).map_err(anyhow::Error::msg)?;
+    }
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO vertragskomponenten
-         (id,vertrag_id,tenant,sparte,malo_id,melo_id,lf_mp_id,nb_mp_id,
+         (id,vertrag_id,tenant,sparte,malo_id,melo_id,lf_mp_id,nb_mp_id,bilanzkreis,
           lieferbeginn,lieferende,jahresverbrauch_kwh,fulfillment_data)
-         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10,$11
+         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
          FROM versorgungsvertraege v WHERE v.id=$2",
     )
     .bind(id)
@@ -519,6 +526,7 @@ async fn insert_komponente(
     .bind(&k.melo_id)
     .bind(lf_mp_id)
     .bind(&k.nb_mp_id)
+    .bind(&k.bilanzkreis)
     .bind(k.lieferbeginn)
     .bind(k.lieferende)
     .bind(k.jahresverbrauch_kwh)
@@ -1112,7 +1120,6 @@ pub async fn kuendige_vertrag(
     vertrag: &VersorgungsvertragRow,
     input: &KuendigungInput,
     eingang: Date,
-    lf_mp_id: &str,
 ) -> Result<KuendigungResult> {
     let komponenten: Vec<VertragskomponenteRow> =
         sqlx::query_as("SELECT * FROM vertragskomponenten WHERE vertrag_id=$1")
@@ -1127,7 +1134,7 @@ pub async fn kuendige_vertrag(
         .filter(|k| matches!(k.status.as_str(), "AKTIV" | "BESTAETIGT"))
     {
         match (k.is_mako(), k.malo_id.as_deref(), k.nb_mp_id.as_deref()) {
-            (true, Some(malo_id), Some(nb_mp_id)) => {
+            (true, Some(malo_id), Some(_)) => {
                 // The Schlussablesung is the LF's own obligation and does not
                 // depend on the Lieferende reaching the NB, so it is its own
                 // task — a processd outage must not cost the customer the
@@ -1141,10 +1148,9 @@ pub async fn kuendige_vertrag(
                     k.id,
                     &k.sparte,
                     malo_id,
-                    nb_mp_id,
-                    lf_mp_id,
+                    k.melo_id.as_deref(),
                     input.lieferende,
-                );
+                )?;
                 // Superseding for the same reason: the key carries the date,
                 // and a task for another date that is still queued is obsolete.
                 outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &task).await?;
@@ -1464,6 +1470,7 @@ mod tests {
             melo_id: None,
             lf_mp_id: "LF".into(),
             nb_mp_id: None,
+            bilanzkreis: None,
             lieferbeginn: date!(2026 - 01 - 01),
             lieferende: None,
             status: status.into(),

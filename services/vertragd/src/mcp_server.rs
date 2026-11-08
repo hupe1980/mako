@@ -921,9 +921,8 @@ impl VertragdMcpHandler {
                  → Automatically dispatches GPKE Lieferbeginn (Strom) or GeLi Gas (Gas) to processd.\n\n\
                  **Step 4** — Add portal users:\n\
                  `POST /api/v1/kunden/{id}/identitaeten` for each OIDC user.\n\
-                 `standort_filter=Werk Nord` scopes a site manager to matching MaLos.\n\
-                 `rolle` is recorded but **not enforced** — it narrows nothing today, so do \
-                 not rely on it to restrict an identity.\n\n\
+                 `standort_filter=Werk Nord` scopes a site manager to matching MaLos — \
+                 the one restriction an identity carries.\n\n\
                  **Step 5** — Set Preisgarantie if applicable:\n\
                  `PUT /api/v1/vertraege/{id}/preisgarantie` with BO4E Preisgarantie COM.\n\n\
                  **Monitoring:** `list_anmeldungen` lists what is not confirmed yet; makod `get_process` says whether its deadline has passed.",

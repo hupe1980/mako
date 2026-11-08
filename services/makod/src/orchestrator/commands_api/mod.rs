@@ -1131,7 +1131,7 @@ mod tests {
             "mabis_zp_id":        "DE0001111222233334444555566667777",
             "bilanzierungsmonat": offener_bilanzierungsmonat(),
             "version":            version,
-            "biko_id":            "10YDE-VE-TRANSMIX",
+            "biko_id":            "10YDE-VE-------2",
             "absender_mp_id":     "9900357000004",
         })
     }
@@ -1417,7 +1417,7 @@ mod tests {
         let payload = serde_json::json!({
             // "billing_period" intentionally omitted
             "bkv_id":  "4033872000022",
-            "biko_id": "10YDE-VE-TRANSMIX",
+            "biko_id": "10YDE-VE-------2",
             "version": "vorlaeufig",
         });
         let err = dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)

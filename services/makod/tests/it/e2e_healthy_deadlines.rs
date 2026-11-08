@@ -156,6 +156,7 @@ async fn a_healthy_gas_anmeldung_survives_every_deadline() {
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
+                antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
             },
@@ -369,7 +370,7 @@ async fn an_unowned_label_closes_no_clearing_window() {
                 im_erstaufschlag: true,
                 clearing_ende: None,
                 absender: MarktpartnerCode::new(NB_ID),
-                biko_id: mako_engine::types::BikoId::new("10YDE-VE-TRANSMIX"),
+                biko_id: mako_engine::types::BikoId::new("10YDE-VE-------2"),
                 message_ref: MessageRef::new("MSCONS-1"),
             },
             RunOptions::new().attempts(3),

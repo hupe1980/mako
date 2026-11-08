@@ -305,8 +305,8 @@ than assembled:
 
 ```python
 UtilmdTransaction("VORGANG-1", locations=[("malo", malo)],
-                  bilanzkreis="11XBK-EEG-----1")
-# → SEQ+Z79+1 · PIA+5+9991000002082:Z11 · CCI+Z66 · CAV+ZV4:::11XBK-EEG-----1
+                  bilanzkreis="11XBK-EEG------Q")
+# → SEQ+Z79+1 · PIA+5+9991000002082:Z11 · CCI+Z66 · CAV+ZV4:::11XBK-EEG------Q
 ```
 
 The Produkt-Code and the `ZV4` qualifier are fixed by the AHB, so a test writing

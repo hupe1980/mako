@@ -82,7 +82,7 @@ pub const STEUERUNGSAUFTRAG_DEADLINE_LABEL: &str = "wim-steuerungsauftrag-deadli
 ///
 /// | Prefix | Type | Example |
 /// |--------|------|---------|
-/// | `E…` / `10Y…` | [`NeloId`] — EIC or BDEW Codenummer | `10XDE-EON-NETZ--G` |
+/// | `E…` / `10Y…` | [`NeloId`] — EIC or BDEW Codenummer | `10XDE-EON-NETZ-C` |
 /// | `C…` | [`SrId`] — Steuerbare-Ressource-ID | `C0001234567890` |
 ///
 /// [`NeloId`]: rubo4e::identifiers::NeloId

@@ -538,7 +538,7 @@ async fn nelo_patch_stammdaten_updates_netzebene() {
         return;
     };
     let repo = PgNeLoRepository::new(pool.clone());
-    const NELO: &str = "11XNELO-EXAMPL1";
+    const NELO: &str = "E0000000019";
 
     // No row yet → no-op.
     let applied = repo

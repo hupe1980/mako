@@ -781,7 +781,7 @@ pub struct Cci {
 ///
 /// Both middle components are unused in the BDEW profile and still occupy their
 /// slots, which is why the value sits at component 4:
-/// `CAV+ZV4:::11XBK-STD-----9`.
+/// `CAV+ZV4:::11XBK-STD------Y`.
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
 #[edifact(segment = "CAV", layout = crate::messages::layouts::CAV)]
 pub struct Cav {

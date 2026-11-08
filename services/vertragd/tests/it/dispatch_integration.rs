@@ -66,6 +66,7 @@ pub(crate) fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
             malo_id: Some(MALO.to_owned()),
             melo_id: None,
             nb_mp_id: Some("9900000000001".to_owned()),
+            bilanzkreis: None,
             product_code: "STROM-BASIS-2026".to_owned(),
             lieferbeginn: d,
             lieferende: None,
@@ -753,7 +754,6 @@ async fn a_kuendigung_ends_the_term_and_enqueues_both_obligations() {
         &vertrag,
         &input,
         time::macros::date!(2026 - 10 - 01),
-        tenant,
     )
     .await
     .expect("kuendigen");
@@ -844,7 +844,6 @@ async fn kuendige(pool: &PgPool, vertrag_id: Uuid, tenant: &str, lieferende: tim
         &vertrag,
         &input,
         time::macros::date!(2026 - 10 - 01),
-        tenant,
     )
     .await
     .expect("kuendigen");
@@ -855,7 +854,7 @@ async fn kuendige(pool: &PgPool, vertrag_id: Uuid, tenant: &str, lieferende: tim
 /// each carries.
 async fn armed(pool: &PgPool, tenant: &str, kind: &str) -> Vec<String> {
     sqlx::query_scalar(
-        "SELECT COALESCE(payload->>'lieferende_datum', payload->>'geplant_am')
+        "SELECT COALESCE(payload->'body'->>'lieferende_datum', payload->>'geplant_am')
            FROM outbound_tasks
           WHERE tenant = $1 AND kind = $2
             AND completed_at IS NULL AND dead_lettered_at IS NULL
@@ -1914,7 +1913,6 @@ async fn erasure_waits_for_the_contract_to_end_and_survives_several_logins() {
                 oidc_sub: sub.to_owned(),
                 email: Some(format!("{sub}@example.test")),
                 display_name: None,
-                rolle: None,
                 standort_filter: None,
             },
         )

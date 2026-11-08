@@ -69,7 +69,7 @@ fn receive(version: u32, im_erstaufschlag: bool) -> BillingCommand {
         im_erstaufschlag,
         clearing_ende: None,
         absender: MarktpartnerCode::new("9900357000004"),
-        biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
+        biko_id: BikoId::new("10YDE-VE-------2"),
         message_ref: MessageRef::new(format!("MSCONS-BG-2026-01-V{version}")),
     }
 }
@@ -394,7 +394,7 @@ async fn a_kategorie_c_series_is_refused() {
         im_erstaufschlag: true,
         clearing_ende: None,
         absender: MarktpartnerCode::new("9900357000004"),
-        biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
+        biko_id: BikoId::new("10YDE-VE-------2"),
         message_ref: MessageRef::new("MSCONS-C"),
     };
     assert!(process.run(cmd, RunOptions::new()).await.is_err());
@@ -419,7 +419,7 @@ async fn a_second_zeitreihe_is_refused_in_the_same_stream() {
         im_erstaufschlag: false,
         clearing_ende: None,
         absender: MarktpartnerCode::new("9900357000004"),
-        biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
+        biko_id: BikoId::new("10YDE-VE-------2"),
         message_ref: MessageRef::new("MSCONS-BK"),
     };
     assert!(process.run(cmd, RunOptions::new()).await.is_err());

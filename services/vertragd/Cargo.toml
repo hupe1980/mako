@@ -43,6 +43,9 @@ schemars      = { workspace = true }
 tokio-util    = { workspace = true }
 
 [dev-dependencies]
+# The contract test reads every body vertragd sends processd through
+# processd's own request types and Bilanzkreis rule.
+processd = { path = "../processd" }
 mako-service = { path = "../../crates/mako-service", features = ["testing"] }
 toml       = "0.8"
 testcontainers = { workspace = true }

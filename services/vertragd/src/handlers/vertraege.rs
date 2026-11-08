@@ -86,6 +86,9 @@ pub async fn create(
         })));
     }
     for k in &input.komponenten {
+        if let Some(bk) = k.bilanzkreis.as_deref() {
+            domain::pruefe_bilanzkreis(&k.sparte, bk).map_err(ApiError::unprocessable)?;
+        }
         if k.sparte == "GAS" && k.melo_id.as_deref().unwrap_or("").is_empty() {
             return Err(ApiError::unprocessable(
                 "eine GAS-Komponente braucht eine melo_id — start-supply-gas trägt sie als \
@@ -522,7 +525,7 @@ pub async fn kuendigen(
     }
 
     let mut tx = ctx.pool.begin().await.map_err(anyhow_from)?;
-    let result = pg::kuendige_vertrag(&mut tx, &vertrag, &input, eingang, &ctx.cfg.lf_mp_id)
+    let result = pg::kuendige_vertrag(&mut tx, &vertrag, &input, eingang)
         .await
         .map_err(ApiError::Internal)?;
 

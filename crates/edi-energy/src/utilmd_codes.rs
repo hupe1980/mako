@@ -553,7 +553,7 @@ pub mod produkt {
 /// SEQ+Z79+1
 /// PIA+5+9991000002082:Z11
 /// CCI+Z66
-/// CAV+ZV4:::11XBK-EEG-----1
+/// CAV+ZV4:::11XBK-EEG------Q
 /// ```
 ///
 /// `CAV+ZH9` is emitted only where the Codeliste gives the product a Code der

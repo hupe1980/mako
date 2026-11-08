@@ -123,6 +123,7 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
 /// priced invoice would reach this map only.
 fn buyer_party(invoice: &Invoice) -> Party {
     let malo_id = invoice.context.malo_id.as_str();
+    let country = Some(Code::from(empfaengerland(invoice)));
     let Some(b) = invoice
         .context
         .rechnungsempfaenger
@@ -132,7 +133,7 @@ fn buyer_party(invoice: &Invoice) -> Party {
         return Party {
             name: Some(format!("Marktlokation {malo_id}")),
             address: PostalAddress {
-                country: Some(Code::from("DE")),
+                country,
                 ..Default::default()
             },
             ..Default::default()
@@ -150,11 +151,59 @@ fn buyer_party(invoice: &Invoice) -> Party {
             line1: b.line1.clone(),
             city: b.city.clone(),
             post_code: b.post_code.clone(),
-            country: Some(Code::from(b.country.as_deref().unwrap_or("DE"))),
+            country,
             ..Default::default()
         },
         ..Default::default()
     }
+}
+
+/// BT-55, the country the Rechnungsempfänger is addressed in — the one value
+/// both the document and [`pruefe_empfaengerland`] read, so the country the
+/// refusal decides on is the country the invoice states.
+///
+/// An absent country is `DE`: `energy_billing::Rechnungsempfaenger::country`
+/// documents that default, and `vertragd` sends the BO4E `landescode`
+/// unchanged, absent included. No recipient at all — `vertragd` unreachable, or
+/// the MaLo uncontracted — leaves the document addressed to the German
+/// Marktlokation it settles, also `DE`.
+#[must_use]
+pub fn empfaengerland(invoice: &Invoice) -> &str {
+    invoice
+        .context
+        .rechnungsempfaenger
+        .as_ref()
+        .and_then(|r| r.country.as_deref())
+        .unwrap_or("DE")
+}
+
+/// Refuse an invoice whose Rechnungsempfänger is not in Germany.
+///
+/// Everything billingd settles is a supply of gas, electricity or
+/// heating/cooling taxed as a domestic supply; a recipient in another Member
+/// State or outside the EU is refused by
+/// [`mako_fristen::empfaengerland::pruefe_empfaengerland`], the rule outputd's
+/// issue path asks too, rather than taxed as domestic. [`store`] asks it
+/// before anything is attached, so the record and its receivable event roll
+/// back with the caller's transaction; the preview asks it so a dry
+/// run answers what the calculation would.
+///
+/// # Errors
+///
+/// `422` with the rule's code — `CROSS_BORDER_SUPPLY_UNSUPPORTED`,
+/// `EXPORT_SUPPLY_UNSUPPORTED` or `RECIPIENT_COUNTRY_INVALID`.
+pub fn pruefe_empfaengerland(invoice: &Invoice) -> crate::error::BillingResult<()> {
+    mako_fristen::empfaengerland::pruefe_empfaengerland(Some(empfaengerland(invoice))).map_err(
+        |e| {
+            crate::error::BillingError::unprocessable(
+                e.code(),
+                format!(
+                    "invoice {} is refused: {e}",
+                    invoice.context.rechnungsnummer
+                ),
+            )
+        },
+    )
 }
 
 /// Findings against the profile the document actually declares in BT-24.
@@ -260,6 +309,9 @@ pub async fn store(
     cfg: &BillingdConfig,
     malo_id: &str,
 ) -> crate::error::BillingResult<()> {
+    // First, before anything is attached: a foreign recipient's invoice is not
+    // written at all, and the caller's transaction rolls back with it.
+    pruefe_empfaengerland(invoice)?;
     // `to_en16931` refuses an invoice the standard cannot represent — today,
     // one mixing a not-subject-to-VAT line with any other category
     // (BR-O-11 ff.: a hoheitliche Abwassergebühr beside taxable Trinkwasser,

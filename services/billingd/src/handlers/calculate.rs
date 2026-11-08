@@ -502,6 +502,8 @@ pub async fn compute_preview(
         .unwrap_or_else(|| format!("PREVIEW-{malo_id}-{period_from}"));
     let billed =
         dispatch_invoice_multi(deps, &legs, req, malo_id, &rechnungsnummer, RunId::NONE).await?;
+    // The refusal `/calculate` answers for a foreign Rechnungsempfänger.
+    crate::einvoice::pruefe_empfaengerland(&billed.invoice)?;
     Ok(Preview {
         invoice: billed.invoice,
         period_from,

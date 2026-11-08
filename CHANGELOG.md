@@ -9,6 +9,79 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.29.0] — unreleased
+
+### Added
+
+- **A contract names its Bilanzkreis**: a vertragd Vertragskomponente carries
+  `bilanzkreis` — an X-type EIC with its check character for Strom, the
+  Marktgebietsverantwortlicher's code for Gas — and sends it with the
+  Lieferbeginn; without one, processd fills in its single `standard`
+  `[[lf.bilanzkreise]]` entry and refuses the Anmeldung otherwise
+  (`MISSING_BILANZKREIS`, `processd::lf_module::anmeldung_bilanzkreis`).
+- billingd and outputd refuse an invoice whose Rechnungsempfänger is not in
+  Germany instead of taxing it as a domestic supply: another EU Member State
+  answers `422 CROSS_BORDER_SUPPLY_UNSUPPORTED` (the Art. 369aa MwStSystRL OSS
+  treatment is not built), a third country `EXPORT_SUPPLY_UNSUPPORTED`, a
+  malformed code `RECIPIENT_COUNTRY_INVALID`; outputd also refuses an INVOICE
+  model without BT-55 (`RECIPIENT_COUNTRY_MISSING`). One rule,
+  `mako_fristen::empfaengerland`, serves both.
+- The Verlauf shows the BDEW wording for every remaining answer: the
+  Geschäftsdatenanfrage refusals (`E_0441` / `E_0443`, now in the
+  `mako-pruefung` catalogue — `E_0443` with its `A03`), the Listenabgleich
+  Gesamtablehnung (`E_0047` / `E_0004` by sender), the Weiterverpflichtung
+  answer (`E_0203` / `E_2004` by Sparte) and the GeLi Gas answers a GNB sends
+  and receives.
+- `mako_service::json_from_value` reads a value as `Json` reads a request body,
+  refusing an undeclared key; processd re-exports its supply request types
+  (`processd::server::StartSupplyRequest` and the other three).
+
+### Changed
+
+- **Breaking:** a marktd Zählzeit window may cross midnight. NT 22:00–06:00 is
+  one row holding every time at or after `zeit_von` or before `zeit_bis` on the
+  Europe/Berlin wall clock, across both DST nights, and it belongs to the day
+  it opens on („Mo–Fr 22:00–06:00" holds Friday night into Saturday, not
+  Monday 00:00–06:00). `zaehler_saisons_window_ordered` is replaced by
+  `zaehler_saisons_window_nonempty` (`zeit_von <> zeit_bis`).
+- **Breaking:** a vertragd `outbound_tasks` payload to processd is
+  `{endpoint, body}`, and the worker posts `body` alone; a task without one is
+  refused rather than posted whole.
+- **Breaking:** the answer events name their tree:
+  `GasSupplierChangeCommand::SendAntwort` takes `antwort_ebd`,
+  `ReceiveGnbAntwort` takes `antwort_code`, `GdaCommand::ReceiveAblehnung`
+  takes `codeliste`, and `GesamtAblehnungGesendet` /
+  Weiterverpflichtung `AntwortGesendet` carry theirs.
+- **Breaking:** makod's `geli.eog.bestaetigen` / `geli.eog.ablehnen` validate
+  the code against `E_3008` like every other Gas answer and take the Zustimmung
+  from its Cluster; the `zustimmung` flag no longer decides.
+- vertragd dead-letters a task at once when the peer refuses it (a 4xx other
+  than 408 or 429), with the answer in `last_error`, instead of retrying the
+  same body eight times.
+- `check-malo-ids` also reports an EIC-shaped token of any other length than
+  16, which no EIC can be; the 34 fixture codes that were one character short
+  or long — `11XBK-STD-----9` among them, in the edi-energy README and examples
+  — are valid EICs, and a Bilanzkreis fixture carrying a `Y` code is an `X`.
+
+### Removed
+
+- **Breaking:** a vertragd portal identity has no `rolle`. The
+  `kunden_identitaeten.rolle` column and its CHECK list are gone, an identity
+  upsert carrying `rolle` is a `422`, and the `authenticate`, `by-sub` and
+  upsert responses no longer return it. `standort_filter` is the one
+  restriction on a portal identity.
+
+### Fixed
+
+- No vertragd contract activation reached the NB: the Lieferbeginn body carried
+  `endpoint`, `nb_mp_id` and `lf_mp_id`, which processd's request type does not
+  declare, so every one was refused with a `422` and dead-lettered. The bodies
+  are processd's request types field for field, pinned by
+  `tests/it/processd_supply_contract.rs`.
+- A Gas Lieferende from vertragd sent `lieferende_datum`, where processd's
+  `end-supply-gas` requires the `zaehlpunkt` and a `YYYYMMDD` `process_date`;
+  it carries both, and a gas component without a Messlokation is refused.
+
 ## [0.28.0] — 2026-11-07
 
 ### Added

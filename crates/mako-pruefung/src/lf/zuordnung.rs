@@ -296,7 +296,7 @@ mod tests {
                 &anfrage(),
                 Some(fall),
                 &ZuordnungsLage {
-                    bilanzkreis: Some("11XBK-EEG-----1".to_owned()),
+                    bilanzkreis: Some("11XBK-EEG------Q".to_owned()),
                     fehler: None,
                 },
             );
@@ -322,12 +322,12 @@ mod tests {
             &anfrage(),
             Some(ZuordnungsFall::EegMitDvPflicht),
             &ZuordnungsLage {
-                bilanzkreis: Some("11XBK-EEG-----1".to_owned()),
+                bilanzkreis: Some("11XBK-EEG------Q".to_owned()),
                 fehler: None,
             },
         );
         let a = d.as_antwort().expect("answer");
-        assert_eq!(a.bilanzkreis.as_deref(), Some("11XBK-EEG-----1"));
+        assert_eq!(a.bilanzkreis.as_deref(), Some("11XBK-EEG------Q"));
         assert!(
             a.bemerkung.is_none(),
             "a 55608 Bestätigung carries no FTX+ACB — the AHB allows it on the 55609 only"
@@ -342,7 +342,7 @@ mod tests {
             &anfrage(),
             Some(ZuordnungsFall::KwkgTranchiert),
             &ZuordnungsLage {
-                bilanzkreis: Some("11XBK-EEG-----1".to_owned()),
+                bilanzkreis: Some("11XBK-EEG------Q".to_owned()),
                 fehler: Some("Zuordnungsermächtigung liegt nicht vor".to_owned()),
             },
         );
@@ -363,7 +363,7 @@ mod tests {
             &anfrage(),
             None,
             &ZuordnungsLage {
-                bilanzkreis: Some("11XBK-EEG-----1".to_owned()),
+                bilanzkreis: Some("11XBK-EEG------Q".to_owned()),
                 fehler: None,
             },
         );

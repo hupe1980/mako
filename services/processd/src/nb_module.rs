@@ -2403,7 +2403,7 @@ mod tests {
         let grid = mako_pruefung::MaloGridRecord {
             malo_id: a.malo_id.clone(),
             nb_mp_id: a.grid_operator_gln.clone(),
-            bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
+            bilanzierungsgebiet: Some("11YB-TENNET----U".to_owned()),
             netzgebiet: None,
         };
         let vs = unbeliefert();
@@ -2742,7 +2742,7 @@ mod tests {
                 "malo_id": "51238696012",
                 "new_supplier": "9900357000004",
                 "grid_operator": "9900000000001",
-                "bilanzierungsgebiet": "11YF-VATTENFALL-2",
+                "bilanzierungsgebiet": "11YF-VATTENFALLT",
                 "process_date": "20261001",
                 "transaktionsgrund": "E01",
                 "bilanzierungsmethode": "RLM"
@@ -2755,7 +2755,7 @@ mod tests {
         assert_eq!(payload.grid_operator_gln, "9900000000001");
         assert_eq!(
             payload.bilanzierungsgebiet.as_deref(),
-            Some("11YF-VATTENFALL-2")
+            Some("11YF-VATTENFALLT")
         );
         assert_eq!(payload.transaktionsgrund.as_deref(), Some("E01"));
         // No Transaktionsgrundergänzung → the default verbrauchende branch.
@@ -3299,7 +3299,7 @@ mod tests {
         let grid = mako_pruefung::MaloGridRecord {
             malo_id: a.malo_id.clone(),
             nb_mp_id: a.grid_operator_gln.clone(),
-            bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
+            bilanzierungsgebiet: Some("11YB-TENNET----U".to_owned()),
             netzgebiet: None,
         };
         let (accepted, baum) = decide_anmeldung_im_baum(

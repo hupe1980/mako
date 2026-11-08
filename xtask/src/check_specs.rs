@@ -20,7 +20,9 @@
 //!   that names no spec;
 //! - a milestone row whose **State** cell (the cell after the spec link) is
 //!   not the word the spec's `**Status**:` starts with — the roadmap is read
-//!   for its states, so a stale cell misreports what is open.
+//!   for its states, so a stale cell misreports what is open;
+//! - a `Built` spec outside `specs/archive/`, and an archived spec that is not
+//!   `Built` — `specs/` lists the open work, the archive what is finished.
 //!
 //! `concepts/` and `specs/` are local and untracked, so on a checkout without
 //! them the check reports itself skipped rather than passing in silence. It is
@@ -32,6 +34,8 @@ use std::path::Path;
 
 const ROADMAP: &str = "concepts/ROADMAP.md";
 const SPECS: &str = "specs";
+/// Where a `Built` spec lives, under [`SPECS`].
+const ARCHIVE: &str = "archive";
 
 /// Runs the check over `root`; `false` when it found a problem.
 pub fn run(root: &Path) -> bool {
@@ -75,20 +79,28 @@ fn problems(root: &Path) -> std::io::Result<Vec<String>> {
     let defined = milestones_defined(&roadmap);
     let parked = parked_list(&roadmap);
 
-    let mut dirs: Vec<_> = fs::read_dir(root.join(SPECS))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_dir() && p.join("spec.md").is_file())
-        .collect();
+    let mut dirs = spec_dirs(&root.join(SPECS))?;
+    let archive = root.join(SPECS).join(ARCHIVE);
+    if archive.is_dir() {
+        dirs.extend(spec_dirs(&archive)?);
+    }
     dirs.sort();
 
     let mut problems = Vec::new();
     let mut names = BTreeSet::new();
     for dir in dirs {
-        let name = dir
+        let dir_name = dir
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
+        let archived = dir.parent() == Some(archive.as_path());
+        // The path under `specs/` — what the roadmap links and every message names.
+        let name = if archived {
+            format!("{ARCHIVE}/{dir_name}")
+        } else {
+            dir_name.clone()
+        };
         let body = fs::read_to_string(dir.join("spec.md"))?;
         let tasks = fs::read_to_string(dir.join("tasks.md")).unwrap_or_default();
         let stated = body
@@ -123,8 +135,19 @@ fn problems(root: &Path) -> std::io::Result<Vec<String>> {
             }
         }
 
+        let built = stated.starts_with("Built");
+        if built && !archived {
+            problems.push(format!(
+                "specs/{name} is Built and belongs under specs/{ARCHIVE}/"
+            ));
+        } else if archived && !built {
+            problems.push(format!(
+                "specs/{name} is archived and states Status `{stated}`, not `Built`"
+            ));
+        }
+
         let cited = milestones_cited(&body);
-        match own_milestone(&name) {
+        match own_milestone(&dir_name) {
             Some(own) if !cited.contains(&own) => problems.push(format!(
                 "specs/{name}/spec.md does not cite its own milestone M{own}"
             )),
@@ -163,6 +186,14 @@ fn problems(root: &Path) -> std::io::Result<Vec<String>> {
         }
     }
     Ok(problems)
+}
+
+/// The spec directories directly under `dir`: those holding a `spec.md`.
+fn spec_dirs(dir: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+    Ok(fs::read_dir(dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir() && p.join("spec.md").is_file())
+        .collect())
 }
 
 /// The words a milestone's state can be, as a spec's `**Status**:` starts.
@@ -273,18 +304,25 @@ fn own_milestone(name: &str) -> Option<String> {
     digits.parse::<u32>().ok().map(|n| n.to_string())
 }
 
-/// The spec directories the roadmap links: `specs/<name>/`.
+/// The spec directories the roadmap links: `specs/<name>/` or
+/// `specs/archive/<name>/`, named by their path under `specs/`.
 fn specs_linked(roadmap: &str) -> BTreeSet<String> {
+    let archived = format!("{ARCHIVE}/");
     roadmap
         .split("specs/")
         .skip(1)
-        .filter_map(|rest| rest.split_once('/').map(|(name, _)| name))
-        .filter(|name| own_milestone(name).is_some())
-        .filter(|name| {
-            name.chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        .filter_map(|rest| {
+            let (prefix, rest) = match rest.strip_prefix(&archived) {
+                Some(rest) => (archived.as_str(), rest),
+                None => ("", rest),
+            };
+            let (name, _) = rest.split_once('/')?;
+            let well_formed = own_milestone(name).is_some()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+            well_formed.then(|| format!("{prefix}{name}"))
         })
-        .map(str::to_owned)
         .collect()
 }
 
@@ -585,6 +623,57 @@ mod tests {
         let found = problems(&root).unwrap();
         assert!(
             found.iter().any(|p| p.contains("state `open work`")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_built_spec_lives_in_the_archive() {
+        let built = (
+            "003-done",
+            "**Status**: Built — done\n\n**Input**: M3\n",
+            "- [x] **T001** did it\n",
+        );
+        let roadmap = format!(
+            "{ROADMAP_OK}| **M3** | [`003-done`](../specs/003-done/spec.md) | Built | done |\n"
+        );
+        let root = tree(
+            "built-outside",
+            &roadmap,
+            &[open_spec(), parked_spec("- [~] **T001** w\n"), built],
+        );
+        let found = problems(&root).unwrap();
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains("belongs under specs/archive/")),
+            "{found:?}"
+        );
+
+        let roadmap = roadmap.replace("specs/003-done/", "specs/archive/003-done/");
+        let archived = ("archive/003-done", built.1, built.2);
+        let root = tree(
+            "built-archived",
+            &roadmap,
+            &[open_spec(), parked_spec("- [~] **T001** w\n"), archived],
+        );
+        assert_eq!(problems(&root).unwrap(), Vec::<String>::new());
+
+        let (_, spec, tasks) = open_spec();
+        let roadmap = ROADMAP_OK.replace("specs/001-open/", "specs/archive/001-open/");
+        let root = tree(
+            "open-archived",
+            &roadmap,
+            &[
+                ("archive/001-open", spec, tasks),
+                parked_spec("- [~] **T001** w\n"),
+            ],
+        );
+        let found = problems(&root).unwrap();
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains("is archived and states Status `Not started")),
             "{found:?}"
         );
     }

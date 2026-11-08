@@ -720,7 +720,7 @@ the action its REST twin enforces:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `command` | string | ✓ | `<domain>.<prozess>.<aktion>`, e.g. `gpke.lieferbeginn.anmelden` |
-| `payload` | object | ✓ | Command payload, e.g. `{"malo_id": "51238696012", "lieferbeginn_datum": "2026-10-01", "bilanzkreis": "11XBK-STD-----9"}` |
+| `payload` | object | ✓ | Command payload, e.g. `{"malo_id": "51238696012", "lieferbeginn_datum": "2026-10-01", "bilanzkreis": "11XBK-STD------Y"}` |
 | `marktrolle` | string | – | Required for multi-role commands |
 | `idempotency_key` | string | – | Supplied: a repeat replays the recorded response (24 h), reuse for another request is refused. Omitted: a random UUID, no replay record |
 
@@ -884,7 +884,7 @@ for the full contract.
   "payload": {
     "malo_id":            "51238696012",
     "lieferbeginn_datum": "2026-10-01",
-    "bilanzkreis":        "11XBK-STD-----9"
+    "bilanzkreis":        "11XBK-STD------Y"
   }
 }
 ```

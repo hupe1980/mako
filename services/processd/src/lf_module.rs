@@ -218,6 +218,23 @@ pub fn bilanzkreis_fuer(
     }
 }
 
+/// The Bilanzkreis an Anmeldung (55001 / 44001) carries: the one the caller
+/// names, else the single `standard` entry this deployment declared, else
+/// `None` — which the handler refuses as `MISSING_BILANZKREIS`.
+///
+/// `vertragd` sends the contract's own Bilanzkreis when it has one, and its
+/// contract test runs its bodies through this rule.
+#[must_use]
+pub fn anmeldung_bilanzkreis(
+    requested: Option<&str>,
+    eintraege: &[BilanzkreisEintrag],
+) -> Option<String> {
+    requested
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or_else(|| bilanzkreis_fuer(eintraege, mako_pruefung::Bilanzkreisart::Standard, None))
+}
+
 // ── Process descriptors ───────────────────────────────────────────────────────
 
 /// One inbound process this module answers on the supplier's behalf.
@@ -1258,6 +1275,11 @@ mod tests {
     use mako_markt::domain::MaloId;
     use time::macros::{date, datetime};
 
+    /// Two Bilanzierungsgebiete (`Y`-type EICs): the one a table row names,
+    /// and one it does not.
+    const BG_EON: &str = "11YN-BG-EON----A";
+    const BG_OTHER: &str = "11YN-BG-OTHER--3";
+
     const OWN: &str = "9900357000004";
 
     fn make_vs(status: LieferStatus, lf_mp_id: Option<&str>) -> VersorgungsStatusRecord {
@@ -1378,7 +1400,7 @@ mod tests {
                 standard: vec!["BK-FALLBACK-STD".into()],
             },
             BilanzkreisEintrag {
-                bilanzierungsgebiet: Some("11YN-BG-EON---X".into()),
+                bilanzierungsgebiet: Some(BG_EON.into()),
                 eeg: vec!["BK-EON-EEG".into()],
                 kwkg: vec![],
                 standard: vec!["BK-EON-STD".into()],
@@ -1388,17 +1410,17 @@ mod tests {
         let ordinary = Some(mako_pruefung::ZuordnungsFall::KwkgNichtTranchiert);
 
         assert_eq!(
-            resolve_bilanzkreis(&table, eeg, Some("11YN-BG-EON---X")).as_deref(),
+            resolve_bilanzkreis(&table, eeg, Some(BG_EON)).as_deref(),
             Some("BK-EON-EEG")
         );
         assert_eq!(
-            resolve_bilanzkreis(&table, ordinary, Some("11YN-BG-EON---X")).as_deref(),
+            resolve_bilanzkreis(&table, ordinary, Some(BG_EON)).as_deref(),
             Some("BK-EON-STD")
         );
         // A Bilanzierungsgebiet with no row of its own falls back, as does an
         // unknown one.
         assert_eq!(
-            resolve_bilanzkreis(&table, eeg, Some("11YN-BG-OTHER-Y")).as_deref(),
+            resolve_bilanzkreis(&table, eeg, Some(BG_OTHER)).as_deref(),
             Some("BK-FALLBACK-EEG")
         );
         assert_eq!(
@@ -1489,7 +1511,7 @@ mod tests {
     #[test]
     fn an_unresolvable_bilanzkreis_is_none_rather_than_a_neighbour() {
         let table = vec![BilanzkreisEintrag {
-            bilanzierungsgebiet: Some("11YN-BG-EON---X".into()),
+            bilanzierungsgebiet: Some(BG_EON.into()),
             eeg: vec!["BK-EON-EEG".into()],
             ..BilanzkreisEintrag::default()
         }];
@@ -1499,15 +1521,12 @@ mod tests {
             resolve_bilanzkreis(
                 &table,
                 Some(mako_pruefung::ZuordnungsFall::KwkgNichtTranchiert),
-                Some("11YN-BG-EON---X")
+                Some(BG_EON)
             ),
             None
         );
         // No Anwendungsfall at all.
-        assert_eq!(
-            resolve_bilanzkreis(&table, None, Some("11YN-BG-EON---X")),
-            None
-        );
+        assert_eq!(resolve_bilanzkreis(&table, None, Some(BG_EON)), None);
     }
 
     /// 55607 is answered by the LFN, and it is the one process where missing
@@ -1529,7 +1548,7 @@ mod tests {
             &p,
             &LfVertragslage::default(),
             &mako_pruefung::ZuordnungsLage {
-                bilanzkreis: Some("11XBK-EEG-----1".to_owned()),
+                bilanzkreis: Some("11XBK-EEG------Q".to_owned()),
                 fehler: None,
             },
         );
@@ -1552,7 +1571,7 @@ mod tests {
             &p,
             &LfVertragslage::default(),
             &mako_pruefung::ZuordnungsLage {
-                bilanzkreis: Some("11XBK-EEG-----1".to_owned()),
+                bilanzkreis: Some("11XBK-EEG------Q".to_owned()),
                 fehler: None,
             },
         );
@@ -1562,7 +1581,7 @@ mod tests {
         assert_eq!(a.ebd.as_deref(), Some("E_0604"));
         assert_eq!(
             a.bilanzkreis.as_deref(),
-            Some("11XBK-EEG-----1"),
+            Some("11XBK-EEG------Q"),
             "the Bilanzkreis has its own slot; FTX+ACB is 55609-only"
         );
         assert!(a.bemerkung.is_none());
@@ -1991,13 +2010,13 @@ mod tests {
                 &p,
                 &LfVertragslage::default(),
                 &mako_pruefung::ZuordnungsLage {
-                    bilanzkreis: Some("11XBK-EEG-----1".to_owned()),
+                    bilanzkreis: Some("11XBK-EEG------Q".to_owned()),
                     fehler: None,
                 },
             );
             let a = d.as_antwort().unwrap_or_else(|| panic!("{code}: {d:?}"));
             assert_eq!(a.ebd.as_deref(), Some(ebd));
-            assert_eq!(a.bilanzkreis.as_deref(), Some("11XBK-EEG-----1"));
+            assert_eq!(a.bilanzkreis.as_deref(), Some("11XBK-EEG------Q"));
         }
     }
 

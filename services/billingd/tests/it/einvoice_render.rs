@@ -523,3 +523,74 @@ fn the_seller_steuernummer_reaches_the_model_and_the_wire() {
         );
     }
 }
+
+/// The invoice above, addressed to a Rechnungsempfänger in `country`.
+fn invoice_to(country: Option<&str>) -> energy_billing::Invoice {
+    let mut invoice = restrechnung_invoice();
+    invoice.context.rechnungsempfaenger = Some(energy_billing::Rechnungsempfaenger {
+        name: Some("Muster GmbH".to_owned()),
+        line1: Some("Musterstraße 1".to_owned()),
+        post_code: Some("6020".to_owned()),
+        city: Some("Innsbruck".to_owned()),
+        country: country.map(ToOwned::to_owned),
+        unternehmer: Some(true),
+        ..Default::default()
+    });
+    invoice
+}
+
+/// A Rechnungsempfänger in Austria: the supply is cross-border, and billingd
+/// refuses the invoice — naming the OSS treatment it has not built — instead of
+/// storing it taxed as a domestic supply. `einvoice::store` asks this first,
+/// before it attaches anything.
+#[test]
+fn a_rechnungsempfaenger_in_austria_is_refused() {
+    let err = einvoice::pruefe_empfaengerland(&invoice_to(Some("AT")))
+        .expect_err("a cross-border supply is not taxed as domestic");
+    assert_eq!(err.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    let body = err.body();
+    assert_eq!(body["error"]["code"], "CROSS_BORDER_SUPPLY_UNSUPPORTED");
+    let message = body["error"]["message"].as_str().expect("message");
+    assert!(
+        message.contains("R-XR-9002") && message.contains("Art. 369aa MwStSystRL"),
+        "{message}"
+    );
+
+    let err = einvoice::pruefe_empfaengerland(&invoice_to(Some("CH")))
+        .expect_err("an export is not taxed as domestic either");
+    assert_eq!(err.body()["error"]["code"], "EXPORT_SUPPLY_UNSUPPORTED");
+}
+
+/// A German recipient is unaffected — and so is one whose address states no
+/// country, or no recipient at all: both are addressed in `DE`, the default
+/// `energy_billing::Rechnungsempfaenger::country` documents, and the rule
+/// decides on the same BT-55 the document states.
+#[test]
+fn a_german_or_unstated_recipient_is_issued() {
+    for invoice in [
+        invoice_to(Some("DE")),
+        invoice_to(None),
+        restrechnung_invoice(),
+    ] {
+        einvoice::pruefe_empfaengerland(&invoice).expect("domestic");
+        let model = einvoice::build(&invoice, &cfg()).expect("model builds");
+        assert_eq!(
+            model.buyer.address.country.as_ref().map(|c| c.as_str()),
+            Some(einvoice::empfaengerland(&invoice)),
+            "BT-55 is the country the rule decided on"
+        );
+    }
+}
+
+/// `store` refuses before it writes: the check is its first statement, so a
+/// refused invoice attaches no Unternehmer status, no issuer and no model.
+#[test]
+fn store_asks_the_rule_before_it_writes() {
+    let src = include_str!("../../src/einvoice.rs");
+    let body = &src[src.find("pub async fn store(").expect("store")..];
+    let check = body
+        .find("pruefe_empfaengerland(invoice)?")
+        .expect("store asks the rule");
+    let first_write = body.find("attach_").expect("store writes");
+    assert!(check < first_write, "the refusal must precede every write");
+}

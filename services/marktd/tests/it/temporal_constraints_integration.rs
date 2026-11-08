@@ -228,19 +228,29 @@ async fn a_tariff_window_must_be_a_real_interval() {
     .await
     .expect("seed register");
 
-    // An inverted window classifies no reading at all, so HT energy would go
-    // missing rather than be mis-priced — a silent shortfall on the invoice.
-    let err = sqlx::query(
+    // A start after the end crosses midnight: NT 22:00–06:00 is one row.
+    sqlx::query(
         "INSERT INTO zaehler_saisons (register_id, saison, wochentage, zeit_von, zeit_bis)
          VALUES ('00000000-0000-0000-0000-000000000001', 'WINTER',
-                 ARRAY[1,2,3,4,5]::smallint[], '22:00', '07:00')",
+                 ARRAY[1,2,3,4,5]::smallint[], '22:00', '06:00')",
     )
     .execute(&pool)
     .await
-    .expect_err("an inverted window must be refused");
+    .expect("a midnight-crossing window is accepted");
+
+    // A zero-length window classifies no reading at all, so the energy would
+    // go missing rather than be mis-priced — a silent shortfall on the invoice.
+    let err = sqlx::query(
+        "INSERT INTO zaehler_saisons (register_id, saison, wochentage, zeit_von, zeit_bis)
+         VALUES ('00000000-0000-0000-0000-000000000001', 'SOMMER',
+                 ARRAY[1,2,3,4,5]::smallint[], '07:00', '07:00')",
+    )
+    .execute(&pool)
+    .await
+    .expect_err("a zero-length window must be refused");
     assert!(
-        err.to_string().contains("zaehler_saisons_window_ordered"),
-        "expected the ordering CHECK to reject it, got: {err}"
+        err.to_string().contains("zaehler_saisons_window_nonempty"),
+        "expected the non-empty CHECK to reject it, got: {err}"
     );
 
     // And a weekday outside ISO 1..=7 is not a weekday.
@@ -325,13 +335,13 @@ async fn the_tariff_zone_resolves_from_typed_weekday_and_wall_clock_columns() {
     };
     let tenant = "9900357000004";
 
-    // HT Mon–Fri 07:00–22:00, NT Mon–Fri 22:00–24:00.
+    // HT Mon–Fri 06:00–22:00, NT Mon–Fri 22:00–06:00 — one row that wraps.
     for (id, name, auspraegung, von, bis) in [
         (
             "00000000-0000-0000-0000-0000000000a1",
             "HT",
             "HT",
-            "07:00",
+            "06:00",
             "22:00",
         ),
         (
@@ -339,7 +349,7 @@ async fn the_tariff_zone_resolves_from_typed_weekday_and_wall_clock_columns() {
             "NT",
             "NT",
             "22:00",
-            "23:59",
+            "06:00",
         ),
     ] {
         sqlx::query(
@@ -388,9 +398,18 @@ async fn the_tariff_zone_resolves_from_typed_weekday_and_wall_clock_columns() {
         Some("NT"),
     );
 
-    // The boundary is half-open: 07:00 is HT, and 22:00 has already left it.
+    // After midnight the wrapping NT window still holds (Friday is listed).
     assert_eq!(
-        repo.resolve_tariff_zone("Z1", tenant, datetime!(2026-01-08 07:00))
+        repo.resolve_tariff_zone("Z1", tenant, datetime!(2026-01-09 03:00))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("NT"),
+    );
+
+    // The boundary is half-open: 06:00 has left NT and is HT.
+    assert_eq!(
+        repo.resolve_tariff_zone("Z1", tenant, datetime!(2026-01-08 06:00))
             .await
             .unwrap()
             .as_deref(),

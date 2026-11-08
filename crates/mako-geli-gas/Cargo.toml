@@ -26,6 +26,9 @@ anyhow      = { workspace = true }
 edi-energy  = { workspace = true, features = ["utilmd", "aperak"] }
 # testing feature enables InMemoryXxx stores and EngineBuilder::new().
 mako-engine = { workspace = true, features = ["testing"] }
+# The Antwortcode catalogue — the tests assert that every tree an answer names
+# publishes the code it carries.
+mako-pruefung = { workspace = true }
 serde_json  = { workspace = true }
 time        = { workspace = true }
 tokio       = { version = "1", features = ["full"] }

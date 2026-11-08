@@ -729,6 +729,11 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
 
 // ── REST handlers ──────────────────────────────────────────────────────────────
 
+/// The supply request bodies another service sends: `vertragd` builds its
+/// Lieferbeginn and Lieferende tasks to these, and its contract test reads each
+/// body through them as the handler's [`mako_service::Json`] does.
+pub use rest::{EndSupplyGasRequest, EndSupplyRequest, StartSupplyGasRequest, StartSupplyRequest};
+
 mod rest {
     use std::sync::Arc;
 
@@ -1312,28 +1317,31 @@ mod rest {
         .await
     }
 
-    /// The one `standard` Bilanzkreis this deployment declared, if any.
+    /// The Bilanzkreis an Anmeldung carries — see
+    /// [`crate::lf_module::anmeldung_bilanzkreis`].
     ///
     /// Both Anmeldungen need one — UTILMD AHB Strom 2.2 Kap. 5.3 makes the
     /// `SG8 SEQ+Z79` Produktpaket Muss on a 55001, AHB Gas 1.2 makes
     /// `SG10 CCI+Z19` Muss on a 44001 — and a deployment that lists exactly one
     /// has already made the choice MaBiS § 10.2.1 leaves to the supplier.
     ///
-    /// `None` in a build without the LF module compiled in: the endpoints stay
-    /// reachable so the Cedar `initiate-supply` denial is the answer a caller
-    /// gets, not a 404, and there is no `[[lf.bilanzkreise]]` to consult.
+    /// Without the LF module compiled in only the caller's counts: the
+    /// endpoints stay reachable so the Cedar `initiate-supply` denial is the
+    /// answer a caller gets, not a 404, and there is no `[[lf.bilanzkreise]]`.
     #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
-    fn configured_standard_bilanzkreis(state: &ProcessdState) -> Option<String> {
-        crate::lf_module::bilanzkreis_fuer(
-            &state.lf.as_ref()?.config.bilanzkreise,
-            mako_pruefung::Bilanzkreisart::Standard,
-            None,
+    fn anmeldung_bilanzkreis(state: &ProcessdState, requested: Option<String>) -> Option<String> {
+        crate::lf_module::anmeldung_bilanzkreis(
+            requested.as_deref(),
+            state
+                .lf
+                .as_ref()
+                .map_or(&[][..], |lf| &lf.config.bilanzkreise),
         )
     }
 
     #[cfg(not(any(feature = "role-lf-strom", feature = "role-lf-gas")))]
-    fn configured_standard_bilanzkreis(_state: &ProcessdState) -> Option<String> {
-        None
+    fn anmeldung_bilanzkreis(_state: &ProcessdState, requested: Option<String>) -> Option<String> {
+        requested.filter(|s| !s.is_empty())
     }
 
     /// `POST /api/v1/start-supply` — ERP initiates a GPKE Lieferbeginn (Strom SLP).
@@ -1403,9 +1411,7 @@ mod rest {
         // otherwise it is the caller's to name, because MaBiS § 10.2.1 grants the
         // Zuordnungsermächtigung per (ZRT, BG, BK, LF) and the supplier picks
         // among those.
-        let bilanzkreis = bilanzkreis
-            .filter(|s| !s.is_empty())
-            .or_else(|| configured_standard_bilanzkreis(&state));
+        let bilanzkreis = anmeldung_bilanzkreis(&state, bilanzkreis);
         if bilanzkreis.is_none() {
             return Err(refuse(
                 "MISSING_BILANZKREIS",
@@ -1585,9 +1591,7 @@ mod rest {
         // GeLi Gas states the Bilanzkreis in one segment; the Strom `SG8
         // SEQ+Z79` Produktpaket does not exist here. `makod` refuses an
         // Anmeldung without one, so the caller learns at the edge.
-        let bilanzkreis = bilanzkreis
-            .filter(|s| !s.is_empty())
-            .or_else(|| configured_standard_bilanzkreis(&state));
+        let bilanzkreis = anmeldung_bilanzkreis(&state, bilanzkreis);
         let Some(bilanzkreis) = bilanzkreis else {
             return Err(refuse(
                 "MISSING_BILANZKREIS",

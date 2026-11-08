@@ -81,7 +81,10 @@ flowchart LR
 **`outbound_tasks`** carries every service-to-service call — `LIEFERBEGINN`,
 `LIEFERENDE`, `ABLESUNG_BEGINN`, `ABLESUNG_ENDE`, `ABRECHNUNGSKONTO` — with
 backoff from 30 s to an hour, dead-lettered after eight attempts, claimed with
-`FOR UPDATE SKIP LOCKED`. **A delivered call is never repeated**: once the peer
+`FOR UPDATE SKIP LOCKED`. **A refusal is dead-lettered at once**: a 4xx other
+than 408 or 429 is the peer's answer to that body, and a retry would send the
+same body, so the task stops with the answer in `last_error`. **A delivered call
+is never repeated**: once the peer
 answers, a failing local follow-up is recorded in `last_error`, not retried as a
 second UTILMD 55001. A unique `dedupe_key` makes the enqueue exactly-once: a
 repeatable action keys on what makes it distinct
@@ -176,7 +179,20 @@ Kunde (B2C: Haushalt/SLP, B2B: Unternehmen/RLM/HV)
 ```
 
 `vertrags_nr` and `rahmenvertrag_nr` come from a sequence (§ 41 Abs. 1 Nr. 1
-EnWG). `vertragsart`, `kuendigung_grund` and the outbound task `kind` are
+EnWG).
+
+**A component names its Bilanzkreis** (`bilanzkreis`): which Bilanzkreis a
+supply runs in is the Lieferant's choice per contract. A Strom Bilanzkreis is an
+X-type EIC with its check character; a Gas one is the code its
+Marktgebietsverantwortlicher issues; a component that is no supply carries
+none. Without one, processd fills in the single `standard` entry of its
+`[[lf.bilanzkreise]]` and refuses the Anmeldung (`MISSING_BILANZKREIS`) when it
+lists none or several — the UTILMD AHB Strom 2.2 Kap. 5.3 makes the Bilanzkreis
+Muss on a 55001, so the refusal is dead-lettered for the operator rather than
+sent. The Lieferbeginn and Lieferende bodies are processd's request types field
+for field, pinned by `tests/it/processd_supply_contract.rs`; a gas component's
+Lieferende carries its Messlokation as the Zählpunktbezeichnung, as its
+Lieferbeginn does. `vertragsart`, `kuendigung_grund` and the outbound task `kind` are
 `CHECK`-constrained and held to their Rust enums in both directions by
 `tests/it/schema_enum_guard.rs`.
 
@@ -218,23 +234,15 @@ facts and the BG-7 recipient lookup; a source-scanning test pins them to it.
 Customer calls portald /api/v1/portal/{malo_id}/…
   → portald forwards the customer's Bearer token to
     GET vertragd /api/v1/kunden/authenticate?malo_id={malo_id}
-     → 200 { kunden_id, kundentyp, rolle, malo_id }  or  403
+     → 200 { kunden_id, kundentyp, malo_id }  or  403
 ```
 
-**`standort_filter` is the scope that is enforced.** It narrows an identity to
-the MaLos whose `standort_bezeichnung` matches, on every read that returns
-customer data, the per-request check included.
-
-**`rolle` is recorded, not enforced**: all five values grant the same access.
-Scope with `standort_filter`, or gate in the portal.
-
-| rolle | Intended access (not enforced) |
-|---|---|
-| `VOLLZUGRIFF` | Full read/write |
-| `ADMIN` | All data + identity management |
-| `FINANZEN` | Invoices, balance, SEPA mandates |
-| `TECHNIK` | Lastgang, readings, device status — no billing |
-| `READONLY` | Read-only within the site scope |
+**`standort_filter` is the one restriction an identity carries.** It narrows
+an identity to the MaLos whose `standort_bezeichnung` matches, on every read
+that returns customer data, the per-request check included. An identity has no
+role: every identity of a Kunde sees the same data within its site scope, and an
+upsert body carrying a `rolle` key is refused as an unknown field. Finer gating
+by function belongs in the portal.
 
 Every "not authorized" outcome of `GET /api/v1/kunden/authenticate` — unknown
 subject, no customer, a MaLo not owned or outside the `standort_filter` — is the

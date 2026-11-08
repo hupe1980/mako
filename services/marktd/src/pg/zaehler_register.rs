@@ -156,47 +156,50 @@ impl PgZaehlzeitRepository {
     }
 
     /// Resolve the applicable tariff zone (`HT`|`NT`|`EINZEL`) for a Zähler at
-    /// a given local datetime.  Returns `None` if no matching window is found
-    /// (treat as `EINZEL` in that case).
+    /// `local_datetime`, a German (Europe/Berlin) wall-clock time. A window
+    /// applies on the weekdays it lists, dated by the day it opens on — see
+    /// [`window_holds`]. `None` when no window covers the instant; the endpoint
+    /// refuses that rather than answering `EINZEL`.
     pub async fn resolve_tariff_zone(
         &self,
         zaehler_id: &str,
         tenant: &str,
         local_datetime: time::PrimitiveDateTime,
     ) -> Result<Option<String>, MdmError> {
-        use time::Weekday;
-        let at = local_datetime.time();
-        let weekday_iso: i16 = match local_datetime.weekday() {
-            Weekday::Monday => 1,
-            Weekday::Tuesday => 2,
-            Weekday::Wednesday => 3,
-            Weekday::Thursday => 4,
-            Weekday::Friday => 5,
-            Weekday::Saturday => 6,
-            Weekday::Sunday => 7,
-        };
-        // Single query: JOIN registers + saisons, filter by time + weekday.
-        // Returns the zaehlerauspraegung (HT/NT/EINZEL) of the first matching window.
-        let row = sqlx::query(
-            r"SELECT r.zaehlerauspraegung
+        // Every window of the register; which one holds the instant is decided
+        // by [`window_holds`], the one place a midnight-crossing window wraps
+        // and is dated to the day it opened.
+        let rows = sqlx::query(
+            r"SELECT r.zaehlerauspraegung, s.zeit_von, s.zeit_bis, s.wochentage
               FROM zaehler_register r
               JOIN zaehler_saisons  s ON s.register_id = r.id
               WHERE r.zaehler_id = $1 AND r.tenant = $2
-                AND r.valid_to IS NULL
-                AND $3 = ANY(s.wochentage)
-                AND s.zeit_von <= $4
-                AND s.zeit_bis  > $4
-              LIMIT 1",
+                AND r.valid_to IS NULL",
         )
         .bind(zaehler_id)
         .bind(tenant)
-        .bind(weekday_iso)
-        .bind(at)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
-        Ok(row.and_then(|r| r.try_get::<String, _>("zaehlerauspraegung").ok()))
+        for row in rows {
+            let von: time::Time = row
+                .try_get("zeit_von")
+                .map_err(|e| MdmError::Internal(e.to_string()))?;
+            let bis: time::Time = row
+                .try_get("zeit_bis")
+                .map_err(|e| MdmError::Internal(e.to_string()))?;
+            let wochentage: Vec<i16> = row
+                .try_get("wochentage")
+                .map_err(|e| MdmError::Internal(e.to_string()))?;
+            if window_holds(von, bis, &wochentage, local_datetime) {
+                return row
+                    .try_get::<String, _>("zaehlerauspraegung")
+                    .map(Some)
+                    .map_err(|e| MdmError::Internal(e.to_string()));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -257,4 +260,161 @@ fn row_to_saison(row: &sqlx::postgres::PgRow) -> Result<ZaehlzeitSaisonRecord, M
             .try_get("updated_at")
             .map_err(|e| MdmError::Internal(e.to_string()))?,
     })
+}
+
+/// Whether the German wall-clock time `at` lies inside the Zählzeit window
+/// `[zeit_von, zeit_bis)`.
+///
+/// A window with `zeit_von > zeit_bis` crosses midnight — one row, as the
+/// Preisblatt prints „NT 22:00–06:00" — and holds `at` when it is at or after
+/// `zeit_von` or before `zeit_bis`. Reading it as an ordinary range holds no
+/// minute at all, so the night's NT energy would go missing from the invoice.
+/// `zeit_von == zeit_bis` is no window; the schema refuses it.
+pub fn window_contains(zeit_von: time::Time, zeit_bis: time::Time, at: time::Time) -> bool {
+    match zeit_von.cmp(&zeit_bis) {
+        std::cmp::Ordering::Less => zeit_von <= at && at < zeit_bis,
+        std::cmp::Ordering::Greater => at >= zeit_von || at < zeit_bis,
+        std::cmp::Ordering::Equal => false,
+    }
+}
+
+/// Whether a window applying on `wochentage` (ISO, Monday = 1) holds the
+/// German wall-clock instant `at`.
+///
+/// A window belongs to the day it **opens** on: „Mo–Fr 22:00–06:00" holds
+/// Friday 22:00 to Saturday 06:00 and not Monday 00:00–06:00, which is the
+/// tail of Sunday's night. Dating the minutes after midnight by their own
+/// weekday would bill Saturday's early hours at the day rate and Monday's at
+/// the night rate — each against the window as printed.
+pub fn window_holds(
+    zeit_von: time::Time,
+    zeit_bis: time::Time,
+    wochentage: &[i16],
+    at: time::PrimitiveDateTime,
+) -> bool {
+    if !window_contains(zeit_von, zeit_bis, at.time()) {
+        return false;
+    }
+    let after_midnight = zeit_von > zeit_bis && at.time() < zeit_bis;
+    let opened = if after_midnight {
+        at.date().previous_day().unwrap_or(at.date())
+    } else {
+        at.date()
+    };
+    wochentage.contains(&i16::from(opened.weekday().number_from_monday()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{window_contains, window_holds};
+    use time::{Duration, OffsetDateTime, PrimitiveDateTime, macros::time};
+
+    /// The German wall clock of a UTC instant.
+    fn berlin_wall_clock(instant: OffsetDateTime) -> PrimitiveDateTime {
+        let local = mako_fristen::in_berlin(instant);
+        PrimitiveDateTime::new(local.date(), local.time())
+    }
+
+    /// HT 06:00–22:00 and NT 22:00–06:00, as the Preisblatt prints them.
+    fn zone(at: time::Time) -> Option<&'static str> {
+        [
+            ("HT", time!(06:00), time!(22:00)),
+            ("NT", time!(22:00), time!(06:00)),
+        ]
+        .into_iter()
+        .find(|(_, von, bis)| window_contains(*von, *bis, at))
+        .map(|(z, _, _)| z)
+    }
+
+    /// Every UTC minute from 22:00 Berlin on `evening` to 06:00 Berlin on the
+    /// next day, classified on its German wall clock.
+    fn assert_night_is_nt(evening: time::Date) {
+        let start = mako_fristen::berlin_at(evening, time!(22:00));
+        let end = mako_fristen::berlin_at(evening.next_day().unwrap(), time!(06:00));
+        let mut t = start;
+        let mut minutes = 0;
+        while t < end {
+            let local = berlin_wall_clock(t);
+            assert_eq!(zone(local.time()), Some("NT"), "{t} = {local} Berlin");
+            t += Duration::MINUTE;
+            minutes += 1;
+        }
+        let night = (end - start).whole_minutes();
+        assert_eq!(minutes, night);
+        assert_eq!(
+            zone(berlin_wall_clock(end).time()),
+            Some("HT"),
+            "06:00 Berlin has left the NT window"
+        );
+    }
+
+    #[test]
+    fn every_minute_of_an_ordinary_night_is_nt() {
+        assert_night_is_nt(time::macros::date!(2026 - 01 - 07));
+    }
+
+    /// 29.03.2026, the last Sunday of March: 02:00 jumps to 03:00, so the night
+    /// is seven hours long and no minute of it is unclassified.
+    #[test]
+    fn every_minute_of_the_spring_forward_night_is_nt() {
+        let evening = time::macros::date!(2026 - 03 - 28);
+        assert_night_is_nt(evening);
+        let night = mako_fristen::berlin_at(evening.next_day().unwrap(), time!(06:00))
+            - mako_fristen::berlin_at(evening, time!(22:00));
+        assert_eq!(night, Duration::hours(7));
+    }
+
+    /// 25.10.2026, the last Sunday of October: 02:00–03:00 runs twice, so the
+    /// night is nine hours long and both passes through 02:xx are NT.
+    #[test]
+    fn every_minute_of_the_fall_back_night_is_nt() {
+        let evening = time::macros::date!(2026 - 10 - 24);
+        assert_night_is_nt(evening);
+        let night = mako_fristen::berlin_at(evening.next_day().unwrap(), time!(06:00))
+            - mako_fristen::berlin_at(evening, time!(22:00));
+        assert_eq!(night, Duration::hours(9));
+    }
+
+    /// „Mo–Fr 22:00–06:00": Friday's night runs into Saturday morning, and
+    /// Monday's early hours are Sunday's night, which the row does not name.
+    #[test]
+    fn a_wrapping_window_belongs_to_the_day_it_opens() {
+        use time::macros::datetime;
+        let mo_fr = [1, 2, 3, 4, 5];
+        let (von, bis) = (time!(22:00), time!(06:00));
+        // Fri 09.01.2026 23:00 and Sat 10.01. 03:00: Friday's night.
+        assert!(window_holds(von, bis, &mo_fr, datetime!(2026-01-09 23:00)));
+        assert!(window_holds(von, bis, &mo_fr, datetime!(2026-01-10 03:00)));
+        // Sat 22:00 and Mon 12.01. 03:00: Saturday's and Sunday's nights.
+        assert!(!window_holds(von, bis, &mo_fr, datetime!(2026-01-10 22:00)));
+        assert!(!window_holds(von, bis, &mo_fr, datetime!(2026-01-12 03:00)));
+        // Tue 03:00 is Monday's night.
+        assert!(window_holds(von, bis, &mo_fr, datetime!(2026-01-13 03:00)));
+        // An ordinary window is dated by its own day.
+        assert!(window_holds(
+            time!(06:00),
+            time!(22:00),
+            &mo_fr,
+            datetime!(2026-01-09 12:00)
+        ));
+        assert!(!window_holds(
+            time!(06:00),
+            time!(22:00),
+            &mo_fr,
+            datetime!(2026-01-10 12:00)
+        ));
+    }
+
+    #[test]
+    fn a_wrapping_window_is_half_open_at_both_ends() {
+        let (von, bis) = (time!(22:00), time!(06:00));
+        assert!(window_contains(von, bis, time!(22:00)));
+        assert!(window_contains(von, bis, time!(00:00)));
+        assert!(window_contains(von, bis, time!(05:59:59)));
+        assert!(!window_contains(von, bis, time!(06:00)));
+        assert!(!window_contains(von, bis, time!(21:59:59)));
+        // An ordinary window still does not wrap.
+        assert!(!window_contains(time!(06:00), time!(22:00), time!(23:00)));
+        assert!(window_contains(time!(06:00), time!(22:00), time!(06:00)));
+    }
 }

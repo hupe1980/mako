@@ -71,7 +71,7 @@ pub enum AgencyCode {
     /// # NAD wire form
     ///
     /// ```text
-    /// NAD+MS+10XDE-EON-NETZ--I::305'
+    /// NAD+MS+10XDE-EON-NETZ-C::305'
     /// ```
     Etso,
 

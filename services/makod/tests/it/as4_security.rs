@@ -298,7 +298,7 @@ fn utilmd_55001(from: &str, to: &str) -> Vec<u8> {
             "receiver": to,
             "malo": "51238696781",
             "process_date": "2026-03-01",
-            "bilanzkreis": "11XBK-EEG-----1",
+            "bilanzkreis": "11XBK-EEG------Q",
             "transaktionsgrund": "E03",
             "kundengruppe": "Z15",
             "enfg_grundlage": "ZG0",

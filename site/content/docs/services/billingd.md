@@ -636,6 +636,33 @@ path.
 
 The EDI grace of Nr. 3 belongs to the INVOIC issuers, not this path.
 
+### Only a Rechnungsempfänger in Germany is invoiced
+
+Everything billingd settles is a supply of gas, electricity or heating/cooling,
+taxed as a domestic supply. Whether a supply crosses a border is read from the
+Rechnungsempfänger's country code (BT-55, vertragd's `country` in the
+`rechnungsempfaenger` block), and billingd refuses the invoice rather than tax
+it as domestic where that code is not `DE`:
+
+| Recipient's country | Answer |
+|---|---|
+| `DE` | invoiced |
+| another EU Member State (`AT`, `FR`, …) | **`422 CROSS_BORDER_SUPPLY_UNSUPPORTED`** — the OSS treatment under Art. 369aa MwStSystRL is not built |
+| outside the EU (`CH`, `US`, …) | **`422 EXPORT_SUPPLY_UNSUPPORTED`** — an export's treatment is not built |
+| not two letters | **`422 RECIPIENT_COUNTRY_INVALID`** |
+
+A recipient whose address carries no country is `DE`, the default the BT-55 of
+the document states too; so is an invoice with no recipient on file, which is
+addressed to the Marktlokation it settles. Set the `landescode` on a foreign
+Kunde's address in vertragd: without it the invoice goes out as domestic.
+
+Every invoice-producing path (`/calculate`, the billing runs, Sammelrechnung,
+GGV and the § 41e VPP settlement) asks the rule before the record is written,
+so a refused invoice leaves no record and no `de.billing.rechnung.erstellt`;
+`/preview` answers the same refusal. The rule is
+`mako_fristen::empfaengerland::pruefe_empfaengerland`, the one outputd's issue
+path asks.
+
 ### The PDF and sending it
 
 `GET …/pdf` sends the stored model, the CII XML and BT-24 to
@@ -838,6 +865,7 @@ One envelope, `{ "error": { "code", "message", … } }`:
 | `TARIFSTAFFEL_OHNE_MENGE` | 422 | No Preisstaffel tier selectable (no or too low `jahresverbrauch_kwh`, or kW tiers) |
 | `MODEL_MISSING`, `XRECHNUNG_NOT_CONFORMANT`, `BT24_NOT_AN_INVOICE` | 422 | Stored EN 16931 model absent or inconsistent |
 | `MODEL_NOT_REPRESENTABLE` · `PAPIER_UNZULAESSIG` | 422 | No EN 16931 form; paper admissible · not admissible |
+| `CROSS_BORDER_SUPPLY_UNSUPPORTED` · `EXPORT_SUPPLY_UNSUPPORTED` · `RECIPIENT_COUNTRY_INVALID` | 422 | Rechnungsempfänger in another EU Member State · outside the EU · country code not two letters |
 | `NUTZUNGSPLAN_INVALID`, `NUTZUNGSPLAN_INCOMPLETE`, `RABATT_EXCEEDS_ARBEITSPREIS` | 422 | GGV input that would mis-bill |
 | `UPSTREAM_UNAVAILABLE` | 502 | An upstream did not answer; the body names it |
 | `NO_ERP_WEBHOOK` | 503 | B2G submission with nothing to transmit it |

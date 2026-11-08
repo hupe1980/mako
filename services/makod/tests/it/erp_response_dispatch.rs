@@ -703,3 +703,35 @@ async fn a_gas_answer_is_validated_against_its_tree_without_a_de1131() {
     .await
     .expect("E17 is published by E_3019");
 }
+
+/// The Gas EoG answer (44014 / 44015) is validated against `E_3008` like every
+/// other Gas answer: a code that tree does not publish is refused, and the
+/// Zustimmung is the code's own Cluster rather than a flag the caller sets.
+#[tokio::test]
+async fn a_gas_eog_answer_is_validated_against_e_3008() {
+    let state = make_state(&["LF"]).await;
+    for code in ["A07", "ZZ9"] {
+        let err = makod::commands_api::dispatch_command(
+            &state,
+            "geli.eog.bestaetigen",
+            &serde_json::json!({
+                "malo_id": "51238696012",
+                "antwort_code": code,
+                "zustimmung": true,
+            }),
+        )
+        .await
+        .expect_err("a code E_3008 does not publish is refused");
+        assert!(
+            matches!(&err, makod::commands_api::DispatchError::InvalidPayload(m) if m.contains("E_3008")),
+            "{code}: {err:?}"
+        );
+    }
+    for code in mako_pruefung::codes::E_3008_CODES {
+        assert!(
+            code.ist_zustimmung().is_some(),
+            "{} has no Zustimmung/Ablehnung Cluster, so it could not pick 44014 or 44015",
+            code.code
+        );
+    }
+}

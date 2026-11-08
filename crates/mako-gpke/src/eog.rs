@@ -1240,7 +1240,7 @@ mod tests {
                 response_pid: pid(55014),
                 accepted: true,
                 versorgungsart: Some(Versorgungsart::Ersatzversorgung),
-                bilanzkreis: Some("11XGRUNDV-BK--I".to_owned()),
+                bilanzkreis: Some("11XGRUNDV-BK---9".to_owned()),
                 reason: None,
             },
         )
@@ -1274,7 +1274,7 @@ mod tests {
                 response_pid: pid(55014),
                 accepted: true,
                 versorgungsart: Some(Versorgungsart::Grundversorgung),
-                bilanzkreis: Some("11XGRUNDV-BK--I".to_owned()),
+                bilanzkreis: Some("11XGRUNDV-BK---9".to_owned()),
                 reason: None,
             },
         )
@@ -1382,7 +1382,7 @@ mod tests {
             EogCommand::SendAntwort {
                 accepted: true,
                 versorgungsart: Some(Versorgungsart::Grundversorgung),
-                bilanzkreis: Some("11XGRUNDV-BK--I".to_owned()),
+                bilanzkreis: Some("11XGRUNDV-BK---9".to_owned()),
                 reason: None,
             },
         )
