@@ -94,6 +94,7 @@ async fn happy_path_full_lifecycle() {
             antwort_ebd: None,
             bemerkung: None,
             obligations: vec![],
+            stammdaten: mako_engine::payload::Stammdaten::default(),
         },
         RunOptions::new(),
     )
@@ -154,6 +155,7 @@ async fn negative_antwort_rejects_process() {
             antwort_ebd: None,
             bemerkung: Some("Marktlokation nicht im Versorgungsgebiet".to_owned()),
             obligations: vec![],
+            stammdaten: mako_engine::payload::Stammdaten::default(),
         },
         RunOptions::new(),
     )
@@ -289,6 +291,7 @@ async fn deadline_on_active_is_absorbed() {
             antwort_ebd: None,
             bemerkung: None,
             obligations: vec![],
+            stammdaten: mako_engine::payload::Stammdaten::default(),
         },
         RunOptions::new(),
     )
@@ -334,6 +337,7 @@ async fn send_antwort_from_new_is_rejected() {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: mako_engine::payload::Stammdaten::default(),
             },
             RunOptions::new(),
         )
@@ -364,6 +368,7 @@ async fn projection_tracks_full_lifecycle() {
             antwort_ebd: None,
             bemerkung: None,
             obligations: vec![],
+            stammdaten: mako_engine::payload::Stammdaten::default(),
         },
         RunOptions::new(),
     )

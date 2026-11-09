@@ -185,8 +185,8 @@ EnWG).
 supply runs in is the Lieferant's choice per contract. A Strom Bilanzkreis is an
 X-type EIC with its check character; a Gas one is the code its
 Marktgebietsverantwortlicher issues; a component that is no supply carries
-none. Without one, processd fills in the single `standard` entry of its
-`[[lf.bilanzkreise]]` and refuses the Anmeldung (`MISSING_BILANZKREIS`) when it
+none. Without one, processd fills in the single `standard` entry of the
+contract's Sparte in its `[[lf.bilanzkreise]]` and refuses the Anmeldung (`MISSING_BILANZKREIS`) when it
 lists none or several — the UTILMD AHB Strom 2.2 Kap. 5.3 makes the Bilanzkreis
 Muss on a 55001, so the refusal is dead-lettered for the operator rather than
 sent.

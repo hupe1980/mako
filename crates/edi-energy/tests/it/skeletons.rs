@@ -160,3 +160,67 @@ RFF+Z13:55001'SEQ+Z79+1'PIA+5+9991000002082:Z11'CCI+Z66'CAV+ZV4:::11XBK-STD-----
         "the Transaktionsgrund is filled in: {wire}"
     );
 }
+
+/// Every `303` value a skeleton samples is the UTC instant a German day
+/// begins — 00:00 Europe/Berlin in Strom, the Gastag's 06:00 in Gas
+/// (Allgemeine Festlegungen V6.1d Kap. 3.1) — so a skeleton used as a fixture
+/// or completed into a message never carries an instant that names no day.
+///
+/// A UTILMD release says its Sparte (`S…` Strom, `G…` Gas); the other AHBs are
+/// Sparte-neutral, and there a day start of either Sparte is a day start.
+#[test]
+fn every_303_sample_begins_a_german_day() {
+    use mako_fristen::{Sparte, tag_des_beginns};
+
+    let platform = Platform::with_all_profiles();
+    let mut failures: Vec<String> = Vec::new();
+    for profile in platform.registry().all_profiles() {
+        let release = profile.release().to_string();
+        let sparten: &[Sparte] = match release.chars().next() {
+            Some('S') => &[Sparte::Strom],
+            Some('G') => &[Sparte::Gas],
+            _ => &[Sparte::Strom, Sparte::Gas],
+        };
+        for af in profile.anwendungsfaelle() {
+            let segs = profile.skeleton(af, &SkeletonParties::default());
+            let wire = String::from_utf8(edifact_rs::segments_to_bytes(&segs).unwrap_or_default())
+                .unwrap_or_default();
+            for seg in wire.split('\'') {
+                let Some(body) = seg.trim().strip_prefix("DTM+") else {
+                    continue;
+                };
+                let parts: Vec<String> = body
+                    .replace("?+", "+")
+                    .split(':')
+                    .map(str::to_owned)
+                    .collect();
+                if parts.get(2).map(String::as_str) != Some("303") {
+                    continue;
+                }
+                let value = &parts[1];
+                let instant = time::PrimitiveDateTime::parse(
+                    &value[..12],
+                    time::macros::format_description!("[year][month][day][hour][minute]"),
+                )
+                .map(|t| t.assume_utc());
+                let begins_a_day = instant.is_ok_and(|i| {
+                    value[12..] == *"+00" && sparten.iter().any(|&s| tag_des_beginns(i, s).is_ok())
+                });
+                if !begins_a_day {
+                    failures.push(format!(
+                        "{} {release} {}: DTM+{} {value}",
+                        profile.message_type(),
+                        af.pid.map_or_else(|| af.name.clone(), |p| p.to_string()),
+                        parts[0],
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} skeleton 303 values begin no German day:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}

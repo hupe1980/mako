@@ -215,6 +215,7 @@ impl MockGnb {
                     antwort_ebd: None,
                     bemerkung: reason.map(str::to_owned),
                     obligations: vec![],
+                    stammdaten: mako_engine::payload::Stammdaten::default(),
                 },
                 RunOptions::new(),
             )

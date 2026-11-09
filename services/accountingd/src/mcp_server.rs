@@ -154,8 +154,8 @@ pub struct SepaCollectionParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OverdueParams {
-    /// Minimum days overdue (default 1).
-    pub days_overdue: Option<i64>,
+    /// Maximum rows (default 100, capped at 1000), largest balance first.
+    pub limit: Option<i64>,
 }
 
 /// Parameters for payment reconciliation.
@@ -182,7 +182,8 @@ pub struct SuggestPaymentMatchParams {
 pub struct ManualBuchungParams {
     pub malo_id: String,
     /// Buchungsart. One of: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE,
-    /// BANKRUECKLAST, MAHNGEBUEHR, VERZUGSZINSEN, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.
+    /// EEG_AUSZAHLUNG, EEG_RUECKZAHLUNG, BANKRUECKLAST, SEPA_STORNO, MAHNGEBUEHR, VERZUGSZINSEN,
+    /// ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.
     pub entry_type: String,
     /// Amount in ct (× 10⁻² EUR). Positive = debit; negative = credit.
     pub amount_ct: i64,
@@ -379,7 +380,7 @@ issuing the reversal itself is an operator decision and is not exposed as a tool
     }
 
     #[tool(
-        description = "List all accounts with overdue invoices. Returns accounts with balance_ct > 0 and the oldest unpaid entry date.",
+        description = "List all accounts with overdue invoices. Returns accounts with balance_ct > 0 and the oldest unpaid entry date. An EEG plant account is never listed: what a plant operator owes back is an EEG Rückforderung (GET /api/v1/eeg/rueckforderungen), not dunned.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_overdue(
@@ -391,7 +392,7 @@ issuing the reversal itself is an operator decision and is not exposed as a tool
             &self.state.pool,
             &self.state.tenant,
             1_i64,
-            p.days_overdue.unwrap_or(100),
+            p.limit.unwrap_or(100).clamp(1, 1000),
         )
         .await
         {
@@ -1013,7 +1014,8 @@ Use for: ZAHLUNG (incoming bank transfer), BANKRUECKLAST (returned SEPA direct d
 KORREKTUR (operator adjustment), GUTSCHRIFT (one-off credit). \
 The entry immediately updates the account balance. \
 Allowed entry_type: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE, \
-BANKRUECKLAST, MAHNGEBUEHR, VERZUGSZINSEN, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO. \
+EEG_AUSZAHLUNG (a settled EEG payout), EEG_RUECKZAHLUNG (a plant operator's repayment of an EEG overpayment), \
+BANKRUECKLAST, SEPA_STORNO, MAHNGEBUEHR, VERZUGSZINSEN, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO. \
 amount_ct: positive = debit (increases balance); negative = credit (reduces balance). \
 ⚠ This is an authorised operator action — always document via reference_id and description.",
         annotations(read_only_hint = false, open_world_hint = false)

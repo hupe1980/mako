@@ -52,6 +52,7 @@ import {
   wartendAuf,
 } from "./aktionen";
 import { DIENST } from "./dienste";
+import { FaktFelder } from "./FaktFelder";
 import { frageMoeglich, frageStellen } from "./frage";
 import { PALETTE } from "./keys";
 import { ROLLEN, type Rolle, useRolle } from "./rollen";
@@ -588,7 +589,7 @@ export function AktionForm({
     const v = wartend?.vorschlag;
     if (herkunft || !vor || !v || !wartend || beruehrt.code || beruehrt.text) return;
     setHerkunft({ run: wartend.run, v });
-    setWerte({ code: vor.code, text: vor.text || leer.text });
+    setWerte({ ...werte, code: vor.code, text: vor.text || leer.text });
   });
 
   // Focus the first parameter, or the send where there is none — again once
@@ -681,6 +682,16 @@ export function AktionForm({
               </Radio>
             ))}
           </RadioGroup>
+        )}
+        {a.fakten && a.fakten.length > 0 && (
+          <FaktFelder
+            fakten={a.fakten}
+            werte={werte.fakten ?? {}}
+            onChange={(feld, wert) =>
+              setWerte({ ...werte, fakten: { ...werte.fakten, [feld]: wert } })
+            }
+            isDisabled={Boolean(verweigert)}
+          />
         )}
         {a.feld && (
           <TextField

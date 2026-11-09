@@ -372,6 +372,13 @@ pub enum Pflichtfeld {
     /// `reason` — the Begründung of an answer that carries no code (the
     /// QUOTES refusal of an ESA Werteanfrage rides `FTX+ACB`).
     Begruendung,
+    /// `bilanzkreis` — the LF's Bilanzkreis on an E/G Zustimmung (Strom
+    /// `SG8 SEQ+Z79`, Gas `SG10 CCI+Z19`).
+    Bilanzkreis,
+    /// `versorgungsart` — `SG10 CCI+Z36` on a Strom 55014.
+    Versorgungsart,
+    /// `abrechnungsintervall_monate` — `SG6 DTM+Z20` on a Gas 44014, a number.
+    Abrechnungsintervall,
 }
 
 impl Pflichtfeld {
@@ -388,6 +395,11 @@ impl Pflichtfeld {
             Self::TxId => has("tx_id"),
             Self::Antwortcode => has("antwort_code"),
             Self::Begruendung => has("reason"),
+            Self::Bilanzkreis => has("bilanzkreis"),
+            Self::Versorgungsart => has("versorgungsart"),
+            Self::Abrechnungsintervall => body
+                .get("abrechnungsintervall_monate")
+                .is_some_and(serde_json::Value::is_u64),
         }
     }
 
@@ -401,6 +413,9 @@ impl Pflichtfeld {
             Self::TxId => "tx_id",
             Self::Antwortcode => "antwort_code",
             Self::Begruendung => "reason (stated as bemerkung)",
+            Self::Bilanzkreis => "bilanzkreis",
+            Self::Versorgungsart => "versorgungsart",
+            Self::Abrechnungsintervall => "abrechnungsintervall_monate",
         }
     }
 }
@@ -414,7 +429,10 @@ impl Pflichtfeld {
 /// `cargo xtask check-approval-commands` refuses an enqueue site naming a
 /// command this table does not hold.
 pub const ANSWER_CONTRACTS: &[(&str, &[Pflichtfeld])] = {
-    use Pflichtfeld::{Antwortcode, Begruendung, Lokation, MaloId, MeloId, TxId};
+    use Pflichtfeld::{
+        Abrechnungsintervall, Antwortcode, Begruendung, Bilanzkreis, Lokation, MaloId, MeloId,
+        TxId, Versorgungsart,
+    };
     use mako_markt::commands as c;
     const MALO_CODE: &[Pflichtfeld] = &[MaloId, Antwortcode];
     &[
@@ -443,10 +461,20 @@ pub const ANSWER_CONTRACTS: &[(&str, &[Pflichtfeld])] = {
         (c::GELI_BEENDIGUNG_ZUORDNUNG_ABLEHNEN, MALO_CODE),
         (c::GELI_KUENDIGUNG_BESTAETIGEN, MALO_CODE),
         (c::GELI_KUENDIGUNG_ABLEHNEN, MALO_CODE),
-        (c::GELI_EOG_BESTAETIGEN, MALO_CODE),
+        // A 44014 states the LF's Bilanzkreis and Abrechnungsintervall (UTILMD
+        // AHB Gas 1.2 Kap. 5.9, Muss), and `geli.eog.bestaetigen` refuses it
+        // without either.
+        (
+            c::GELI_EOG_BESTAETIGEN,
+            &[MaloId, Antwortcode, Bilanzkreis, Abrechnungsintervall],
+        ),
         (c::GELI_EOG_ABLEHNEN, MALO_CODE),
-        // `dispatch_gpke_eog_antwort` reads the cluster from the command.
-        (c::GPKE_EOG_BESTAETIGEN, &[MaloId]),
+        // `dispatch_gpke_eog_antwort` reads the cluster from the command; a
+        // 55014 states the Versorgungsart and the Bilanzkreis.
+        (
+            c::GPKE_EOG_BESTAETIGEN,
+            &[MaloId, Versorgungsart, Bilanzkreis],
+        ),
         (c::GPKE_EOG_ABLEHNEN, &[MaloId]),
         // WiM MSB-Wechsel (`dispatch_wim_antwort`): the code defaults from the
         // process's own Entscheidungsbaum.
@@ -478,6 +506,30 @@ pub const ANSWER_CONTRACTS: &[(&str, &[Pflichtfeld])] = {
     ]
 };
 
+/// The facts — [`Pflichtfeld::Bilanzkreis`], [`Pflichtfeld::Versorgungsart`],
+/// [`Pflichtfeld::Abrechnungsintervall`] — `command` needs that `frozen` does
+/// not hold: what the operator states on the decision, beside the code.
+#[must_use]
+pub fn fehlende_fakten(command: &str, frozen: Option<&serde_json::Value>) -> Vec<&'static str> {
+    let empty = serde_json::Map::new();
+    let body = frozen
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(&empty);
+    answer_contract(command)
+        .unwrap_or_default()
+        .iter()
+        .filter(|f| {
+            matches!(
+                f,
+                Pflichtfeld::Bilanzkreis
+                    | Pflichtfeld::Versorgungsart
+                    | Pflichtfeld::Abrechnungsintervall
+            ) && !f.satisfied_by(body)
+        })
+        .map(|f| f.key())
+        .collect()
+}
+
 /// The fields `command` needs, or `None` when the queue holds no contract for it.
 #[must_use]
 pub fn answer_contract(command: &str) -> Option<&'static [Pflichtfeld]> {
@@ -507,6 +559,16 @@ pub struct OperatorAnswer {
     /// `FTX+ACB` Erläuterung.
     #[serde(default)]
     pub bemerkung: Option<String>,
+    /// The Bilanzkreis an E/G Zustimmung names, where the entry's own facts
+    /// did not resolve one.
+    #[serde(default)]
+    pub bilanzkreis: Option<String>,
+    /// `SG10 CCI+Z36` on a Strom 55014 — `ZC9`, `ZD0` or `ZE3`.
+    #[serde(default)]
+    pub versorgungsart: Option<String>,
+    /// `SG6 DTM+Z20` on a Gas 44014 — 1, 3, 6 or 12.
+    #[serde(default)]
+    pub abrechnungsintervall_monate: Option<u8>,
 }
 
 /// Why a decision cannot be dispatched.
@@ -540,6 +602,22 @@ pub enum DecisionRefusal {
         /// The cluster the decision requires.
         cluster: &'static str,
     },
+    /// A fact stated for a command that does not carry it.
+    FactNotTaken {
+        /// The command.
+        command: String,
+        /// The fact.
+        field: &'static str,
+    },
+    /// A stated fact outside the values its segment admits.
+    InvalidFact {
+        /// The fact.
+        field: &'static str,
+        /// What was stated.
+        value: String,
+        /// What the segment admits, and where that is published.
+        admitted: &'static str,
+    },
 }
 
 impl std::fmt::Display for DecisionRefusal {
@@ -567,6 +645,17 @@ impl std::fmt::Display for DecisionRefusal {
                 "Antwortcode {code:?} is not in the {cluster}-Cluster of {ebd} — a code means \
                  something only inside its tree"
             ),
+            Self::FactNotTaken { command, field } => {
+                write!(
+                    f,
+                    "{command} carries no {field}; leave it off this decision"
+                )
+            }
+            Self::InvalidFact {
+                field,
+                value,
+                admitted,
+            } => write!(f, "{field} {value:?} is not admitted: {admitted}"),
         }
     }
 }
@@ -609,6 +698,58 @@ pub fn decision_body(
             return Err(DecisionRefusal::AnswerFrozen);
         }
         body.insert(key.to_owned(), serde_json::Value::String(value.clone()));
+    }
+    // The facts an E/G Zustimmung states beside its code, where the entry's
+    // own did not resolve: each only on a command that carries it, never over
+    // a frozen one, and only a value its segment admits.
+    let fakten: [(Pflichtfeld, Option<serde_json::Value>); 3] = [
+        (
+            Pflichtfeld::Bilanzkreis,
+            operator
+                .bilanzkreis
+                .clone()
+                .filter(|v| !v.is_empty())
+                .map(serde_json::Value::String),
+        ),
+        (
+            Pflichtfeld::Versorgungsart,
+            match operator.versorgungsart.as_deref().filter(|v| !v.is_empty()) {
+                Some(code) if mako_gpke::Versorgungsart::from_code(code).is_none() => {
+                    return Err(DecisionRefusal::InvalidFact {
+                        field: "versorgungsart",
+                        value: code.to_owned(),
+                        admitted: "ZC9, ZD0 or ZE3 (SG10 CCI+Z36, DE 7037)",
+                    });
+                }
+                other => other.map(|c| serde_json::Value::String(c.to_owned())),
+            },
+        ),
+        (
+            Pflichtfeld::Abrechnungsintervall,
+            match operator.abrechnungsintervall_monate {
+                Some(n) if !mako_markt::commands::ABRECHNUNGSINTERVALLE_MONATE.contains(&n) => {
+                    return Err(DecisionRefusal::InvalidFact {
+                        field: "abrechnungsintervall_monate",
+                        value: n.to_string(),
+                        admitted: "1, 3, 6 or 12 (SG6 DTM+Z20, UTILMD MIG Gas G1.2 S. 55)",
+                    });
+                }
+                other => other.map(|n| serde_json::json!(n)),
+            },
+        ),
+    ];
+    for (feld, value) in fakten {
+        let Some(value) = value else { continue };
+        if !contract.contains(&feld) {
+            return Err(DecisionRefusal::FactNotTaken {
+                command: command.to_owned(),
+                field: feld.key(),
+            });
+        }
+        if body.contains_key(feld.key()) {
+            return Err(DecisionRefusal::AnswerFrozen);
+        }
+        body.insert(feld.key().to_owned(), value);
     }
     // The operator's Erläuterung is the Begründung of a refusal that carries
     // no Antwortcode.
@@ -923,5 +1064,125 @@ mod decision_tests {
             Ok(())
         );
         assert!(check_operator_code(&held_refusal, false, &said(ablehnung.code)).is_err());
+    }
+
+    /// A queued 44014 whose Bilanzkreis did not resolve is released with the
+    /// operator's: the resolved Abrechnungsintervall stays frozen, the missing
+    /// Bilanzkreis is stated, and a value the segment does not admit, a fact
+    /// the command does not carry and an overwrite of a frozen one are refused.
+    #[test]
+    fn a_queued_eog_answer_is_released_with_the_operators_bilanzkreis() {
+        use mako_markt::commands::{GELI_EOG_ABLEHNEN, GELI_EOG_BESTAETIGEN};
+        let frozen = serde_json::json!({ "abrechnungsintervall_monate": 12 });
+        let e = entry(GELI_EOG_BESTAETIGEN, GELI_EOG_ABLEHNEN).with_answer_payload(frozen.clone());
+        let code = || OperatorAnswer {
+            antwort_code: Some("E15".into()),
+            ..OperatorAnswer::default()
+        };
+
+        let refused = decision_body(&e, GELI_EOG_BESTAETIGEN, Some(&frozen), &code());
+        assert!(
+            matches!(&refused, Err(DecisionRefusal::Missing { fields, .. }) if fields == &["bilanzkreis"]),
+            "{refused:?}"
+        );
+
+        let body = decision_body(
+            &e,
+            GELI_EOG_BESTAETIGEN,
+            Some(&frozen),
+            &OperatorAnswer {
+                bilanzkreis: Some("BKGAS0001".into()),
+                ..code()
+            },
+        )
+        .expect("the stated Bilanzkreis fills the gap");
+        assert_eq!(body["bilanzkreis"], "BKGAS0001");
+        assert_eq!(body["abrechnungsintervall_monate"], 12);
+
+        let overwrite = decision_body(
+            &e,
+            GELI_EOG_BESTAETIGEN,
+            Some(&frozen),
+            &OperatorAnswer {
+                bilanzkreis: Some("BKGAS0001".into()),
+                abrechnungsintervall_monate: Some(3),
+                ..code()
+            },
+        );
+        assert_eq!(overwrite, Err(DecisionRefusal::AnswerFrozen));
+
+        let invalid = decision_body(
+            &e,
+            GELI_EOG_BESTAETIGEN,
+            None,
+            &OperatorAnswer {
+                abrechnungsintervall_monate: Some(2),
+                ..code()
+            },
+        );
+        assert!(
+            matches!(
+                invalid,
+                Err(DecisionRefusal::InvalidFact {
+                    field: "abrechnungsintervall_monate",
+                    ..
+                })
+            ),
+            "{invalid:?}"
+        );
+
+        let not_taken = decision_body(
+            &e,
+            GELI_EOG_ABLEHNEN,
+            None,
+            &OperatorAnswer {
+                antwort_code: Some("A02".into()),
+                bilanzkreis: Some("BKGAS0001".into()),
+                ..OperatorAnswer::default()
+            },
+        );
+        assert!(
+            matches!(
+                not_taken,
+                Err(DecisionRefusal::FactNotTaken {
+                    field: "bilanzkreis",
+                    ..
+                })
+            ),
+            "{not_taken:?}"
+        );
+    }
+
+    /// A Strom 55014 from the queue states its Versorgungsart and Bilanzkreis;
+    /// a code `CCI+Z36` does not publish is refused.
+    #[test]
+    fn a_queued_55014_needs_versorgungsart_and_bilanzkreis() {
+        use mako_markt::commands::{GPKE_EOG_ABLEHNEN, GPKE_EOG_BESTAETIGEN};
+        let e = entry(GPKE_EOG_BESTAETIGEN, GPKE_EOG_ABLEHNEN);
+        let refused = decision_body(&e, GPKE_EOG_BESTAETIGEN, None, &OperatorAnswer::default());
+        assert!(
+            matches!(&refused, Err(DecisionRefusal::Missing { fields, .. })
+                if fields == &["versorgungsart", "bilanzkreis"]),
+            "{refused:?}"
+        );
+        let wrong = decision_body(
+            &e,
+            GPKE_EOG_BESTAETIGEN,
+            None,
+            &OperatorAnswer {
+                versorgungsart: Some("ZZD".into()),
+                ..OperatorAnswer::default()
+            },
+        );
+        assert!(
+            matches!(
+                wrong,
+                Err(DecisionRefusal::InvalidFact {
+                    field: "versorgungsart",
+                    ..
+                })
+            ),
+            "{wrong:?}"
+        );
     }
 }

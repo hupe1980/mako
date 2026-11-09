@@ -448,9 +448,13 @@ substance of the answer is that Bilanzkreis (`A01` / `A99` are the only codes).
 UTILMD AHB Strom 2.2 Bedingungen [161]–[164] map `ZW8`–`ZX1` onto
 `E_0603`–`E_0606`. The BK rides `SG8 SEQ+Z79`, Produkt-Code `9991000002082`,
 Merkmalswert in `SG10 CAV+ZV4` (the AHB admits `SG4 FTX+ACB` on the 55609
-only, Bedingung [48]). `[[lf.bilanzkreise]]` is keyed on the
+only, Bedingung [48]). `[[lf.bilanzkreise]]` is keyed on the Sparte and the
 Bilanzierungsgebiet because MaBiS § 10.2.1 grants the Zuordnungsermächtigung
-„je ZRT, BG, BK und LF"; several BKs for one regime are an operator choice.
+„je ZRT, BG, BK und LF"; several BKs for one regime are an operator choice. A
+lookup reads only the rows of the answer's Sparte, the fallback row included,
+so a supplier of Strom and Gas never names one Sparte's Bilanzkreis on the
+other's message. Startup refuses two rows for one Sparte and
+Bilanzierungsgebiet, and an `eeg` or `kwkg` list on a Gas row.
 
 ### Contract facts
 
@@ -479,10 +483,24 @@ walk still runs and its outcome is queued with the Antwortfrist.
 `E_0615` / `E_3008` is the only Anmeldung whose Zustimmung accepts a statutory
 duty (§ 36 / § 38 EnWG), so dispatch needs `[lf] eog_auto_respond = true` on
 top of `auto_respond`. An empty `grundversorgungs_netzgebiete` escalates every
-55013 / 44013. A Zustimmung also needs the Versorgungsart (`SG10 CCI+Z36`:
-`ZC9`, `ZD0`, `ZE3`) from `[lf] eog_versorgungsart` and the Bilanzkreis from
-`[[lf.bilanzkreise]]`; missing either, the answer is queued with the field
-named.
+55013 / 44013. A Zustimmung also carries facts of the supplier's own:
+
+| Answer | Fact | Source |
+|---|---|---|
+| 55014 | Versorgungsart `SG10 CCI+Z36` (`ZC9`, `ZD0`, `ZE3`) | `[lf] eog_versorgungsart` |
+| 55014 / 44014 | Bilanzkreis (`SG8 SEQ+Z79` / `SG10 CCI+Z19`) | the one `standard` entry of the answer's Sparte in `[[lf.bilanzkreise]]` for the Marktlokation's Bilanzierungsgebiet, else that Sparte's fallback row's |
+| 44014 | Abrechnungsintervall des LF `SG6 DTM+Z20` | `[lf] eog_abrechnungsintervall_monate` |
+
+The 44014 carries no `CCI+Z36` and both of its facts are Muss (UTILMD AHB Gas
+1.2 Kap. 5.9). A fact that does not resolve queues the answer with its Frist and
+the fact named. `eog_auto_respond = true` in a Gas build without
+`eog_abrechnungsintervall_monate` is refused at startup. A queue entry for an
+E/G Anmeldung starts its Bestätigung from the facts that resolved, frozen; the
+view lists the rest in `fakten_freigeben` / `fakten_ablehnen`, and the operator
+states them on the decision as `bilanzkreis`, `versorgungsart` (`ZC9`, `ZD0`,
+`ZE3`) or `abrechnungsintervall_monate` (1, 3, 6, 12). A value the segment does
+not admit, a fact the command does not carry, and a fact replacing a frozen one
+are `422`.
 
 ### Approval queue
 
@@ -501,6 +519,9 @@ both (`answer_payload`, `reject_payload`). The operator states the rest:
 ```json
 { "antwort_code": "A01", "antwort_tree": "E_0622", "antwort_codeliste": "E_0622", "bemerkung": "…" }
 ```
+
+An E/G Bestätigung adds the facts its entry lists as missing (`bilanzkreis`,
+`versorgungsart`, `abrechnungsintervall_monate`).
 
 The body is optional and refuses unknown keys. A field the frozen answer
 already holds cannot be replaced (`422`): an approval sends the answer that was
@@ -583,8 +604,8 @@ curl -X POST http://processd:8580/api/v1/start-supply \
 | `lieferbeginn_datum` | ✓ | ISO-8601 date (YYYY-MM-DD) |
 | `bilanzkreis` | ✓* | `SG8 SEQ+Z79` Produktpaket, Produkt-Code `9991000002082` |
 
-\* Optional only where `[[lf.bilanzkreise]]` declares exactly one `standard`
-entry. UTILMD AHB Strom 2.2 Kap. 5.3 makes the Produktpaket Muss on a 55001, so
+\* Optional only where the Strom fallback row of `[[lf.bilanzkreise]]` declares
+exactly one `standard` entry (the Gas Anmeldung reads the Gas row). UTILMD AHB Strom 2.2 Kap. 5.3 makes the Produktpaket Muss on a 55001, so
 a request resolving to none is a `422` with `code` `MISSING_BILANZKREIS`.
 
 Every refusal is the shared problem body — `error`, `detail` (the sentence) and
@@ -989,11 +1010,16 @@ eog_auto_respond = false          # E_0615 / E_3008 dispatch, on top of auto_res
 # SG10 CCI+Z36 on a 55014: ZC9 §38 Ersatzversorgung, ZD0 §36 Grundversorgung,
 # ZE3 vertragliche Ersatzbelieferung. Unset → an automatic Zustimmung is queued.
 eog_versorgungsart = "ZD0"
+# SG6 DTM+Z20 on a 44014 — this supplier's E/G billing interval in months:
+# 1, 3, 6 or 12 (UTILMD MIG Gas G1.2). Required with eog_auto_respond in a Gas
+# build; unset → an automatic Gas Zustimmung is queued.
+eog_abrechnungsintervall_monate = 12
 
-# The Bilanzkreise a 55607 Zustimmung (and a start-supply default) may name,
-# by Bilanzierungsgebiet and regime. Omit `bilanzierungsgebiet` for the
-# fallback row; no table → every 55607 escalates.
+# The Bilanzkreise an answer (and a start-supply default) may name, by Sparte,
+# Bilanzierungsgebiet and regime. Omit `bilanzierungsgebiet` for the Sparte's
+# fallback row; eeg/kwkg are Strom only; no table → every 55607 escalates.
 [[lf.bilanzkreise]]
+sparte = "strom"
 bilanzierungsgebiet = "11YN-BG-EON----A"
 eeg      = ["11XBK-EEG------Q"]
 kwkg     = ["11XBK-KWKG-----N"]
@@ -1071,7 +1097,7 @@ handler's `decide-queue` check runs as well.
 | `list_affiliate_decisions` | `read-decisions` | Decisions involving affiliated suppliers (Gleichbehandlung evidence) |
 | `list_pending_approvals` | `read-queue` | Typed `{ freigaben, count, saturated }`, earliest `expires_at` first; filters `status`, `limit` (≤ 200), `marktrolle`. Each `Freigabe`: `art` (`gehalten` with its frozen `antwort`, or `eskaliert`) and per action the codes its tree allows (`codes_freigeben`, `codes_ablehnen`) |
 | `get_queue_entry` | `read-queue` | One `Freigabe` by UUID |
-| `approve_queue_entry` | `decide-queue` | Dispatch the entry's answer; takes `antwort_code` / `antwort_tree` / `antwort_codeliste` / `bemerkung` for an escalation |
+| `approve_queue_entry` | `decide-queue` | Dispatch the entry's answer; takes `antwort_code` / `antwort_tree` / `antwort_codeliste` / `bemerkung` for an escalation, and the E/G facts the entry lists as missing |
 | `reject_queue_entry` | `decide-queue` | Dispatch the refusal with the operator's `antwort_code`, or `bemerkung` as the Begründung |
 | `get_process` | `read-process` | Full process projection — state, deadline, `deadline_source`, ERC code |
 | `list_processes_by_family` | `read-process` | One family, optionally one state; both are enumerated in the schema and an unknown value is refused |

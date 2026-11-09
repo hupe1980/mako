@@ -1400,6 +1400,41 @@ pub async fn log_account_audit(
     Ok(())
 }
 
+/// Whether `account_id` is an **EEG plant account**: one an EEG settlement
+/// receipt (`eeg_belege`) was booked to.
+///
+/// Read off the receipt chain rather than stored beside the account, so no
+/// flag can disagree with the receipts. Such an account is the plant
+/// operator's, credited for its feed-in; what the operator owes back of an
+/// overpayment is a claim in the EEG chain (`GET /api/v1/eeg/rueckforderungen`),
+/// never supply debt — no dunning case is opened on it, and with none the
+/// §§ 41f/41g sequence never reaches it.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn is_eeg_anlagenkonto(
+    exec: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    account_id: Uuid,
+) -> anyhow::Result<bool> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM eeg_belege WHERE tenant = $1 AND account_id = $2)",
+    )
+    .bind(tenant)
+    .bind(account_id)
+    .fetch_one(exec)
+    .await
+    .context("is_eeg_anlagenkonto")
+}
+
+/// The accounts owing at least `min_balance_ct` — the Offene Posten.
+///
+/// An **EEG plant account** — one an EEG settlement receipt was booked to
+/// ([`is_eeg_anlagenkonto`]) — is never listed: what a plant operator owes back
+/// of an overpaid Vergütung or Marktprämie is no payment obligation from a
+/// supply contract, and this list is what dunning works from. Such a claim is
+/// served by `GET /api/v1/eeg/rueckforderungen`.
 pub async fn list_overdue_accounts(
     pool: &PgPool,
     tenant: &str,
@@ -1407,9 +1442,11 @@ pub async fn list_overdue_accounts(
     limit: i64,
 ) -> anyhow::Result<Vec<AccountRow>> {
     sqlx::query_as::<_, AccountRow>(
-        r"SELECT * FROM accounts
-          WHERE tenant = $1 AND balance_ct >= $2
-          ORDER BY balance_ct DESC
+        r"SELECT a.* FROM accounts a
+          WHERE a.tenant = $1 AND a.balance_ct >= $2
+            AND NOT EXISTS (SELECT 1 FROM eeg_belege b
+                            WHERE b.tenant = a.tenant AND b.account_id = a.account_id)
+          ORDER BY a.balance_ct DESC
           LIMIT $3",
     )
     .bind(tenant)
@@ -1922,6 +1959,15 @@ pub struct DunningCaseRow {
     pub sperrauftrag_ce_id: Option<String>,
 }
 
+/// Open a dunning case at `stufe` on `account_id`.
+///
+/// Refuses an EEG plant account ([`is_eeg_anlagenkonto`]) in the same
+/// statement that writes the case, so no caller can open one there: every
+/// Mahnstufe 3 case feeds the §§ 41f/41g interruption of supply.
+///
+/// # Errors
+///
+/// An EEG plant account, or a database error.
 pub async fn create_dunning_case(
     exec: impl sqlx::PgExecutor<'_>,
     account_id: Uuid,
@@ -1932,7 +1978,9 @@ pub async fn create_dunning_case(
 ) -> anyhow::Result<Uuid> {
     let row = sqlx::query(
         r"INSERT INTO dunning_cases (account_id, tenant, stufe, amount_due_ct, due_date)
-          VALUES ($1, $2, $3, $4, $5)
+          SELECT $1, $2, $3, $4, $5
+           WHERE NOT EXISTS (SELECT 1 FROM eeg_belege b
+                              WHERE b.tenant = $2 AND b.account_id = $1)
           RETURNING id",
     )
     .bind(account_id)
@@ -1940,9 +1988,14 @@ pub async fn create_dunning_case(
     .bind(stufe)
     .bind(amount_due_ct)
     .bind(due_date)
-    .fetch_one(exec)
+    .fetch_optional(exec)
     .await
     .context("create_dunning_case")?;
+    let Some(row) = row else {
+        anyhow::bail!(
+            "account {account_id} is an EEG plant account; what its operator owes back is not dunned"
+        );
+    };
     Ok(row.try_get("id")?)
 }
 
@@ -2780,6 +2833,9 @@ async fn phase_candidates(
           WHERE dc.tenant = $1
             AND dc.stufe = 3
             AND dc.resolved_at IS NULL
+            -- An EEG plant account owes no supply debt to interrupt supply over.
+            AND NOT EXISTS (SELECT 1 FROM eeg_belege b
+                            WHERE b.tenant = a.tenant AND b.account_id = a.account_id)
             {phase}
             {ABS3_GATES}
           ORDER BY dc.issued_at"
@@ -3828,6 +3884,8 @@ pub async fn run_auto_dunning(
     //
     // Qualifying accounts:
     //   - verzug_ct > 0 — open supply debt, the same figure step 0b closes on
+    //   - Not an EEG plant account (`is_eeg_anlagenkonto`) — a Rückforderung is
+    //     no supply debt; every step below and every §§ 41f/41g phase skips it
     //   - No active (unresolved) Mahnstufe 1 dunning case
     //   - Oldest RECHNUNG debit is older than grace_days (billing date ≤ cutoff)
     //   - Not anonymized
@@ -3842,6 +3900,8 @@ pub async fn run_auto_dunning(
           WHERE a.tenant = $1
             AND a.verzug_ct > 0
             AND a.anonymized_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM eeg_belege b
+                            WHERE b.tenant = a.tenant AND b.account_id = a.account_id)
             AND NOT EXISTS (
                 SELECT 1 FROM dunning_cases dc
                 WHERE dc.account_id = a.account_id
@@ -3918,7 +3978,9 @@ pub async fn run_auto_dunning(
             -- figure step 0b closes a case on. `due_date` alone would walk a
             -- paid-up customer to Mahnstufe 3, and `balance_ct` would keep the
             -- chain alive on the Mahngebühr the previous Stufe just charged.
-            AND a.verzug_ct > 0",
+            AND a.verzug_ct > 0
+            AND NOT EXISTS (SELECT 1 FROM eeg_belege b
+                            WHERE b.tenant = a.tenant AND b.account_id = a.account_id)",
     )
     .bind(tenant)
     .bind(today)
@@ -3982,7 +4044,9 @@ pub async fn run_auto_dunning(
             -- figure step 0b closes a case on. `due_date` alone would walk a
             -- paid-up customer to Mahnstufe 3, and `balance_ct` would keep the
             -- chain alive on the Mahngebühr the previous Stufe just charged.
-            AND a.verzug_ct > 0",
+            AND a.verzug_ct > 0
+            AND NOT EXISTS (SELECT 1 FROM eeg_belege b
+                            WHERE b.tenant = a.tenant AND b.account_id = a.account_id)",
     )
     .bind(tenant)
     .bind(today)

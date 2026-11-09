@@ -116,6 +116,80 @@ pub enum IngestOutcome {
     },
 }
 
+/// `Skipped { reason }` value of a message the door answered with its
+/// Verarbeitbarkeitsfehlermeldung instead of handing it to its workflow — an
+/// AHB-Fehler of a class in [`ABGEWIESENE_KLASSEN`].
+pub const SKIP_REFUSED_AT_DOOR: &str = "refused_at_door";
+
+/// The rule-id family of an AHB-Prüfung finding — the unit the door's
+/// refusal is switched on in.
+///
+/// A class is counted first (`makod_inbound_findings_total{class}`) and
+/// refused only once its inbound count is explained: no real counterparty
+/// message has been through these checks, and a check that misreads a valid
+/// message refuses a counterparty falsely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Fehlerklasse {
+    /// `MIG-…` — the Nachrichtenstruktur and Segmentlayout.
+    Mig,
+    /// `AHB-…` — the Anwendungsfall's Prüfschablone.
+    Ahb,
+    /// `FMT-…` — a Formatbedingung `[901]`–`[999]` on a value.
+    Fmt,
+}
+
+impl Fehlerklasse {
+    /// The class of a rule id, `None` for one outside the three families.
+    #[must_use]
+    pub fn of(rule_id: &str) -> Option<Self> {
+        if rule_id.starts_with(edi_energy::profile::validate::FMT_PREFIX) {
+            Some(Self::Fmt)
+        } else if rule_id.starts_with("AHB-") {
+            Some(Self::Ahb)
+        } else if rule_id.starts_with("MIG-") {
+            Some(Self::Mig)
+        } else {
+            None
+        }
+    }
+
+    /// The metric label: `MIG`, `AHB`, `FMT`.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Mig => "MIG",
+            Self::Ahb => "AHB",
+            Self::Fmt => "FMT",
+        }
+    }
+
+    /// The Formatbedingung number of a `FMT-<pid>-<nr>-<tag>-<de>-<n>` rule
+    /// id — its last field.
+    #[must_use]
+    pub fn formatbedingung(rule_id: &str) -> Option<&str> {
+        rule_id
+            .strip_prefix(edi_energy::profile::validate::FMT_PREFIX)?
+            .rsplit('-')
+            .next()
+            .filter(|n| !n.is_empty())
+    }
+}
+
+/// The classes the door refuses: none.
+///
+/// Every class stays counted, not refused, until a release has counted real
+/// counterparty traffic and every non-zero count is explained — `FMT` with
+/// the severity change of its findings, `MIG` and `AHB` by the same rule.
+/// Thirty of the 66 adapter registries never validate, so switching a class
+/// on switches their messages to refusals at once. It is a constant rather
+/// than an operator setting: APERAK AHB 1.1 settles that an AHB-Fehler is
+/// refused — a Geschäftsvorfall short of its Prüfschablone „so ist er
+/// abzulehnen" (Kap. 2.1.2, S. 11), and Kap. 2.1.2.1 (S. 12) counts `Z35`
+/// „Format nicht eingehalten" among the AHB-Fehler — so the only open question
+/// is whether mako's own checks are right, and that is answered once for every
+/// deployment.
+pub const ABGEWIESENE_KLASSEN: &[Fehlerklasse] = &[];
+
 /// `Skipped { reason }` value used when a workflow name reaches the family
 /// router with no arm in its family module.
 pub const SKIP_WORKFLOW_NOT_DISPATCHED: &str = "workflow_not_in_dispatch_table";
@@ -237,34 +311,71 @@ impl<'a> Inbound<'a> {
 /// meldung in both Sparten — in Gas it is the one result reported (§ 2.3,
 /// S. 21); a processable Strom message gets its Anerkennungsmeldung; a
 /// processable Gas message and a finding the APERAK has no code for get none.
-fn door_aperak(msg: &AnyMessage, gas: bool) -> Option<mako_engine::outbox::PendingOutbox> {
+/// Formatbedingung findings count only where `formatbedingungen` says their
+/// class is refused.
+fn door_aperak(
+    msg: &AnyMessage,
+    gas: bool,
+    formatbedingungen: bool,
+) -> Option<mako_engine::outbox::PendingOutbox> {
     use crate::adapters::AhbBefund;
-    match crate::adapters::ahb_befund(msg) {
+    match crate::adapters::ahb_befund(msg, formatbedingungen) {
         AhbBefund::Fehler(fehler) => {
-            let (own, sender) = (msg.nad_receiver()?, msg.nad_sender()?);
-            let mut fehler = fehler.into_iter();
-            let first = fehler.next()?;
-            let mut payload = mako_engine::payload::AperakPayload::fehler(
-                own,
-                sender,
-                msg.message_ref(),
-                first.code,
-                first.reason,
-            );
-            payload.ortsangabe = first.ortsangabe;
-            // Every further AHB-Fehler its own `SG4 ERC` group (§ 2.1.1).
-            payload.weitere_fehler = fehler
-                .map(|f| mako_engine::payload::AperakFehler {
-                    error_code: f.code.to_owned(),
-                    reason: Some(f.reason),
-                    ortsangabe: f.ortsangabe,
-                })
-                .collect();
+            let (payload, sender) = fehlermeldung_of(msg, fehler)?;
             Some(mako_engine::outbox::PendingOutbox::typed(sender, &payload))
         }
         AhbBefund::Verarbeitbar if !gas => anerkennung_of(msg),
         AhbBefund::Verarbeitbar | AhbBefund::Ungeklaert => None,
     }
+}
+
+/// The Verarbeitbarkeitsfehlermeldung naming `fehler`, and who it goes to:
+/// one `SG4 ERC` group per AHB-Fehler, each with its Ortsangabe
+/// (APERAK AHB 1.1 § 2.1.1, S. 10: „Es sind alle AHB-Fehler anzugeben";
+/// § 2.1.2.2, S. 12). `None` when `fehler` is empty or `msg` names no
+/// `NAD+MS` / `NAD+MR` to answer.
+fn fehlermeldung_of(
+    msg: &AnyMessage,
+    fehler: Vec<crate::adapters::AhbFehler>,
+) -> Option<(mako_engine::payload::AperakPayload, &str)> {
+    let (own, sender) = (msg.nad_receiver()?, msg.nad_sender()?);
+    let mut fehler = fehler.into_iter();
+    let first = fehler.next()?;
+    let mut payload = mako_engine::payload::AperakPayload::fehler(
+        own,
+        sender,
+        msg.message_ref(),
+        first.code,
+        ftx_text(&first.reason),
+    );
+    payload.ortsangabe = first.ortsangabe.as_deref().map(ftx_text);
+    payload.weitere_fehler = fehler
+        .map(|f| mako_engine::payload::AperakFehler {
+            error_code: f.code.to_owned(),
+            reason: Some(ftx_text(&f.reason)),
+            ortsangabe: f.ortsangabe.as_deref().map(ftx_text),
+        })
+        .collect();
+    Some((payload, sender))
+}
+
+/// A finding's text as an APERAK `FTX` DE 4440 carries it: `an..512` (APERAK
+/// MIG), in the UNOC repertoire the interchange declares — ISO 8859-1, which
+/// holds the umlauts but not the typographic quotes and dashes the
+/// validator's messages use. Those become their ASCII forms and anything else
+/// outside the repertoire `?`, so the Fehlermeldung renders instead of being
+/// refused by the writer.
+fn ftx_text(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '„' | '“' | '”' | '‚' | '‘' | '’' | '«' | '»' => '"',
+            '—' | '–' | '−' => '-',
+            '…' => '.',
+            c if u32::from(c) < 0x100 && !c.is_control() => c,
+            _ => '?',
+        })
+        .take(512)
+        .collect()
 }
 
 /// The Anerkennungsmeldung (`BGM+312`, APERAK 29002) a processable Strom
@@ -465,6 +576,9 @@ pub struct EdifactIngestDispatcher {
     /// `[policy.ingest] unbekannter_vorgang` — what an orphan follow-up is
     /// answered with ([`Self::answer_orphan`]).
     unbekannter_vorgang: crate::core::config::UnbekannterVorgang,
+    /// The AHB-Fehler classes answered at the door instead of reaching their
+    /// workflow — [`ABGEWIESENE_KLASSEN`] unless a test says otherwise.
+    abgewiesene_klassen: Vec<Fehlerklasse>,
 }
 
 /// Per-business-key mutexes guarding the lookup→spawn critical section.
@@ -608,6 +722,51 @@ impl EdifactIngestDispatcher {
     ) -> Self {
         self.marktd_client = client;
         self
+    }
+
+    /// Refuse AHB-Fehler of `klassen` at the door, in place of
+    /// [`ABGEWIESENE_KLASSEN`] — how a class's refusal is exercised before
+    /// its inbound count lets it into the constant.
+    #[must_use]
+    pub fn with_abgewiesene_klassen(mut self, klassen: &[Fehlerklasse]) -> Self {
+        self.abgewiesene_klassen = klassen.to_vec();
+        self
+    }
+
+    fn weist_ab(&self, klasse: Fehlerklasse) -> bool {
+        self.abgewiesene_klassen.contains(&klasse)
+    }
+
+    /// The Verarbeitbarkeitsfehlermeldung for `msg` when it carries an
+    /// AHB-Fehler of a refused class — the message is then answered at the
+    /// door and handed to no workflow, whether or not its adapter would have
+    /// validated it. Every AHB-Fehler of the message is named, refused class
+    /// or not (§ 2.1.1, S. 10). `None` for an APERAK or a CONTRL, which no
+    /// APERAK answers (§ 2, S. 9), and for a message with nothing refused.
+    fn door_refusal(&self, msg: &AnyMessage) -> Option<mako_engine::outbox::OutboxMessage> {
+        use crate::adapters::AhbBefund;
+        if self.abgewiesene_klassen.is_empty()
+            || matches!(
+                msg.try_message_type(),
+                Some(edi_energy::MessageType::Aperak | edi_energy::MessageType::Contrl) | None
+            )
+        {
+            return None;
+        }
+        let AhbBefund::Fehler(fehler) =
+            crate::adapters::ahb_befund(msg, self.weist_ab(Fehlerklasse::Fmt))
+        else {
+            return None;
+        };
+        if !fehler.iter().any(|f| self.weist_ab(f.klasse)) {
+            return None;
+        }
+        let (payload, sender) = fehlermeldung_of(msg, fehler)?;
+        Some(crate::edifact_api::aperak_ohne_prozess(
+            &payload,
+            sender,
+            self.tenant_id,
+        ))
     }
 
     /// Answer an orphan follow-up as `[policy.ingest] unbekannter_vorgang`
@@ -886,6 +1045,7 @@ impl EdifactIngestDispatcher {
             key_locks: business_key_locks(),
             mp_id_registry: None,
             unbekannter_vorgang: crate::core::config::UnbekannterVorgang::Z33,
+            abgewiesene_klassen: ABGEWIESENE_KLASSEN.to_vec(),
         }
     }
 
@@ -924,19 +1084,25 @@ impl EdifactIngestDispatcher {
         // stands — behaviour is unchanged for correctly-routed and orphan messages.
         let corrected = self.correlation_route(msg, workflow_name).await;
         let effective_name = corrected.as_deref().unwrap_or(workflow_name);
-        let aperak = aperak_window(
-            msg.try_message_type(),
-            self.aperak_sparte(msg, effective_name),
-            pid,
-            received_at,
-        );
-        let anerkennung = aperak.and_then(|w| door_aperak(msg, w.only_with_aperak));
-        let inbound = Inbound {
-            received_at,
-            aperak,
-            anerkennung: anerkennung.as_ref(),
+        let outcome = if let Some(answer) = self.door_refusal(msg) {
+            self.refuse_at_door(msg, effective_name, &answer).await
+        } else {
+            let aperak = aperak_window(
+                msg.try_message_type(),
+                self.aperak_sparte(msg, effective_name),
+                pid,
+                received_at,
+            );
+            let anerkennung = aperak.and_then(|w| {
+                door_aperak(msg, w.only_with_aperak, self.weist_ab(Fehlerklasse::Fmt))
+            });
+            let inbound = Inbound {
+                received_at,
+                aperak,
+                anerkennung: anerkennung.as_ref(),
+            };
+            self.dispatch_inner(msg, effective_name, pid, inbound).await
         };
-        let outcome = self.dispatch_inner(msg, effective_name, pid, inbound).await;
         let outcome = match outcome {
             Ok(
                 skipped @ IngestOutcome::Skipped {
@@ -973,6 +1139,33 @@ impl EdifactIngestDispatcher {
             );
         }
         outcome
+    }
+
+    /// Answer `msg` with its Verarbeitbarkeitsfehlermeldung and nothing else:
+    /// the one write the door makes for a message it refuses, as for an
+    /// orphan's `Z33`.
+    async fn refuse_at_door(
+        &self,
+        msg: &AnyMessage,
+        workflow_name: &str,
+        answer: &mako_engine::outbox::OutboxMessage,
+    ) -> Result<IngestOutcome, EngineError> {
+        use mako_engine::outbox::OutboxStore as _;
+        self.store.enqueue(std::slice::from_ref(answer)).await?;
+        tracing::warn!(
+            workflow = %workflow_name,
+            message_ref = %msg.message_ref(),
+            error_code = answer.payload["error_code"].as_str().unwrap_or("-"),
+            "ingest: AHB-Fehler of a refused class — answered at the door, not dispatched",
+        );
+        Ok(IngestOutcome::Skipped {
+            workflow_name: Self::KNOWN_WORKFLOW_NAMES
+                .iter()
+                .copied()
+                .find(|n| *n == workflow_name)
+                .unwrap_or("unregistered"),
+            reason: SKIP_REFUSED_AT_DOOR,
+        })
     }
 
     /// Answer a follow-up no process takes with `Z33` „Referenziertes
@@ -2513,5 +2706,65 @@ mod aperak_window_tests {
             assert_eq!(aperak_window(Some(mt), Sparte::Strom, 0, AT), None);
         }
         assert_eq!(aperak_window(None, Sparte::Strom, 0, AT), None);
+    }
+}
+
+#[cfg(test)]
+mod fehlerklasse_tests {
+    use super::{Fehlerklasse, ftx_text};
+    use crate::adapters::erc_of;
+
+    #[test]
+    fn a_rule_id_names_its_class() {
+        assert_eq!(
+            Fehlerklasse::of("FMT-55001-00047-LOC-3225-950"),
+            Some(Fehlerklasse::Fmt)
+        );
+        assert_eq!(
+            Fehlerklasse::of("AHB-13018-00004-DTM-MISSING"),
+            Some(Fehlerklasse::Ahb)
+        );
+        assert_eq!(
+            Fehlerklasse::of("MIG-00004-DTM-REQUIRED"),
+            Some(Fehlerklasse::Mig)
+        );
+        assert_eq!(Fehlerklasse::of("SEM-DTM-VALUE"), None);
+    }
+
+    /// The counter is keyed by the number, never by the unbounded rule id.
+    #[test]
+    fn a_format_rule_id_names_its_formatbedingung() {
+        assert_eq!(
+            Fehlerklasse::formatbedingung("FMT-55001-00020-DTM-2380-932"),
+            Some("932")
+        );
+        assert_eq!(
+            Fehlerklasse::formatbedingung("AHB-55001-00020-DTM-MISSING"),
+            None
+        );
+    }
+
+    /// APERAK AHB 1.1 Kap. 4.3: `Z35` for a Formatbedingung (S. 45), `Z29` for
+    /// a missing Angabe, `Z39` for a code outside the Wertebereich; a MIG
+    /// finding has no code here.
+    #[test]
+    fn each_coded_finding_has_its_erc() {
+        assert_eq!(erc_of("FMT-55001-00047-LOC-3225-950"), Some("Z35"));
+        assert_eq!(erc_of("AHB-13018-00004-DTM-MISSING"), Some("Z29"));
+        assert_eq!(erc_of("AHB-55001-00020-DTM-2005-CODE"), Some("Z39"));
+        assert_eq!(erc_of("AHB-55001-00020-DTM-NOT-PERMITTED"), None);
+        assert_eq!(erc_of("MIG-00004-DTM-REQUIRED"), None);
+    }
+
+    /// A validator message is not UNOC: its quotes and dashes are mapped, the
+    /// umlauts kept, and the text bounded by DE 4440 `an..512`.
+    #[test]
+    fn a_finding_text_fits_ftx() {
+        assert_eq!(
+            ftx_text("DE 2380 „Datum“ — Prüfschablone"),
+            "DE 2380 \"Datum\" - Prüfschablone"
+        );
+        assert_eq!(ftx_text("⊻"), "?");
+        assert_eq!(ftx_text(&"x".repeat(600)).chars().count(), 512);
     }
 }

@@ -19,11 +19,11 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 | | |
 |---|---|
 | **Database** | PostgreSQL — satellites (accounts, mandates, dunning, SEPA runs, booking drafts) in `public`, the ledger in the `ledger` schema; `migration_url` migrates, `url`'s role cannot rewrite the journal |
-| **Auth** | OIDC + Cedar `policies/accountingd.cedar` on every route; reads split into `read-account`, `read-banking`, `read-books`; the EnFG reads and Aufrechnungen are `NB`'s. `/webhook` is HMAC-verified |
+| **Auth** | OIDC + Cedar `policies/accountingd.cedar` on every route; reads split into `read-account`, `read-banking`, `read-books`; the EEG payout run and its pain.002 status, the EnFG reads, the Rückforderungen, Aufrechnungen and Rückzahlungen are `NB`'s. `/webhook` is HMAC-verified |
 | **Ledger** | accountingd owns the chart of accounts (`ledger::Chart`) and the Buchungsart → postings map; every booking is a draft staged in its business transaction and booked after the commit (`booking`); a refused one parks for the Desk |
 | **SEPA** | pain.008 per collection date (CORE/B2B × sequence type), pain.001 payouts, pain.002 status (incl. Verification of Payee), pain.007 reversal, camt.055/029 recall; structured `PstlAdr` (or none) |
 | **Bank import** | camt.052/053/054 and a flat JSON import; only `BOOK` entries post, deduplicated on the bank reference |
-| **Dunning** | Mahnstufe 1→3, then Sperrandrohung → Sperrankündigung → Sperrauftrag (ORDERS 17115 via `makod`) → Entsperrauftrag (17117); Mahnsperren and Forderungseinwände are recorded acts |
+| **Dunning** | Mahnstufe 1→3, then Sperrandrohung → Sperrankündigung → Sperrauftrag (ORDERS 17115 via `makod`) → Entsperrauftrag (17117); Mahnsperren and Forderungseinwände are recorded acts; an EEG plant account is never dunned — its Rückforderung is served by `GET /api/v1/eeg/rueckforderungen` |
 | **Events** | `de.accounting.*` through the transactional outbox to `erp_webhook_url` |
 | **MCP** | 16 tools at `/mcp`, each authorized as its REST twin; the contract is pinned by `mcp.snapshot.json` |
 | **Metrics** | `GET /accountingd/metrics` (the runner owns `/metrics`) |
@@ -39,7 +39,7 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 | Payments | `POST /api/v1/payments/import`, `/import/camt052`, `/camt053`, `/camt054` |
 | Periods & proofs | `POST /api/v1/periods/{id}/seal`, `GET /periods/seals`, `/periods/{id}/balance-proof`, `/entries/{id}/proof`, `/entries/consistency-proof` |
 | Parked bookings | `POST /api/v1/bookings/{key}/rebook`, `/discard` |
-| Jahresabschluss · EEG | `POST /api/v1/jahresabschluss/{malo_id}`; `/api/v1/eeg/payouts` (each order pays a receipt chain's outstanding difference — a correction is never paid in full twice); `GET /api/v1/eeg/rueckforderungen`; `GET /api/v1/eeg/enfg-zahlungen` (settled payouts and Aufrechnungen per month, § 13 Abs. 1 EnFG); `POST /api/v1/eeg/aufrechnungen` |
+| Jahresabschluss · EEG | `POST /api/v1/jahresabschluss/{malo_id}`; `/api/v1/eeg/payouts` (each order pays a receipt chain's outstanding difference, Vergütung and Marktprämie — a correction is never paid in full twice; an `ACSC` books the payment); `GET /api/v1/eeg/rueckforderungen`; `POST /api/v1/eeg/rueckzahlungen`; `GET /api/v1/eeg/enfg-zahlungen` (settled payouts and Aufrechnungen per month, § 13 Abs. 1 EnFG); `POST /api/v1/eeg/aufrechnungen` |
 
 ## Configuration
 

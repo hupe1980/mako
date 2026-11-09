@@ -4514,4 +4514,60 @@ async fn a_correction_event_names_its_receipt_and_the_one_it_corrects() {
     assert_eq!(daten[1]["receipt_id"], korrektur["id"], "{daten:?}");
     assert_eq!(daten[1]["korrektur_von"], original["id"], "{daten:?}");
     assert_eq!(daten[1]["billing_month"], 3, "{daten:?}");
+    // The chain's order is the order einsd wrote the receipts in.
+    assert_eq!(daten[0]["ketten_folge"], 1, "{daten:?}");
+    assert_eq!(daten[1]["ketten_folge"], 2, "{daten:?}");
+}
+
+/// A period paid at its calculated amount and re-settled to `kein_anspruch`
+/// announces the zero, so accountingd can claim back what it paid: a run that
+/// decides the period owes nothing changes the chain's amount as much as one
+/// that decides it owes more. The re-settle keeps the receipt's id and takes
+/// the chain's next position.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_resettle_to_kein_anspruch_announces_the_zero() {
+    let Some((pool, _pg)) = test_pool("resettle_zero").await else {
+        return;
+    };
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
+    seed_plant(&pool, "TR-NULL", TENANT, "", "").await;
+    let mut cfg = test_config();
+    cfg.erp_webhook_url = Some("http://127.0.0.1:9/erp".to_owned());
+    let app = test_router_with(pool.clone(), cfg);
+    let settle = async || {
+        let (status, body) = post_json(
+            &app,
+            "/api/v1/anlagen/TR-NULL/settle/2026/3",
+            serde_json::json!({ "einspeisemenge_kwh": "500" }),
+        )
+        .await;
+        assert!(status.is_success(), "{status} {body}");
+        serde_json::from_str::<serde_json::Value>(&body).expect("json")
+    };
+
+    let paid = settle().await;
+    assert_eq!(paid["status"], "calculated", "{paid}");
+    // § 21 Abs. 1 Satz 1 Nr. 1 EEG 2023: above 100 kW the plant has no claim
+    // to the Einspeisevergütung.
+    sqlx::query("UPDATE eeg_anlagen SET leistung_kwp = 150 WHERE tr_id = 'TR-NULL'")
+        .execute(&pool)
+        .await
+        .expect("raise the plant above 100 kW");
+    let zero = settle().await;
+    assert_eq!(zero["status"], "kein_anspruch", "{zero}");
+
+    let daten: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT envelope->'data' FROM event_outbox ORDER BY created_at, id")
+            .fetch_all(&pool)
+            .await
+            .expect("outbox");
+    assert_eq!(daten.len(), 2, "the zero is announced too: {daten:?}");
+    assert_eq!(daten[1]["status"], "kein_anspruch", "{daten:?}");
+    assert_eq!(daten[1]["settlement_eur"], "0", "{daten:?}");
+    assert_eq!(daten[1]["receipt_id"], daten[0]["receipt_id"], "{daten:?}");
+    assert_eq!(daten[0]["ketten_folge"], 1, "{daten:?}");
+    assert_eq!(daten[1]["ketten_folge"], 2, "{daten:?}");
 }

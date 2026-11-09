@@ -138,7 +138,7 @@ async fn an_unrouted_aperak_gets_no_aperak() {
 #[tokio::test]
 async fn an_ahb_fehler_is_answered_z29() {
     let wire = skeleton(edi_energy::MessageType::Mscons, 13018)
-        .replace("DTM+137:202610010000?+00:303'", "")
+        .replace("DTM+137:202609302200?+00:303'", "")
         .replace("LOC+172'", "LOC+172+51238696781'")
         .replace("UNT+17+1'", "UNT+16+1'");
     let msg = edi_energy::parse(wire.as_bytes()).expect("still parses");
@@ -183,7 +183,7 @@ async fn a_gas_ahb_fehler_is_answered_and_watched() {
         .find(|s| s.starts_with("UNT"))
         .expect("UNT")
         .to_owned();
-    let without = wire.replacen("DTM+137:202610010000?+00:303'", "", 1);
+    let without = wire.replacen("DTM+137:202609302200?+00:303'", "", 1);
     // `UNT` counts `UNH` through `UNT`.
     let count = without
         .split('\'')
@@ -235,7 +235,7 @@ async fn every_ahb_fehler_gets_its_own_erc_group() {
         .expect("UNT")
         .to_owned();
     let without = wire
-        .replacen("DTM+137:202610010000?+00:303'", "", 1)
+        .replacen("DTM+137:202609302200?+00:303'", "", 1)
         .replacen("QTY+220:100'", "", 1);
     let count = without
         .split('\'')

@@ -132,6 +132,13 @@ pub enum NeuanlageEvent {
         message_ref: MessageRef,
         /// BDEW Prüfidentifikator (55600 or 55601).
         pruefidentifikator: Pruefidentifikator,
+        /// `SG4 IDE+24` DE 7402 of the Anmeldung — the answer's `SG6 RFF+TN`.
+        #[serde(default)]
+        vorgangsnummer: Option<String>,
+        /// `SG4 STS+7` Transaktionsgrund of the Anmeldung, which the answer
+        /// restates.
+        #[serde(default)]
+        transaktionsgrund: Option<String>,
     },
     /// EDIFACT message passed profile validation (no rule violations).
     ValidationPassed {
@@ -224,6 +231,15 @@ pub struct NeuanlageData {
     pub process_date: String,
     /// BDEW Prüfidentifikator (55600 or 55601).
     pub pruefidentifikator: Pruefidentifikator,
+    /// `SG4 IDE+24` DE 7402 of the Anmeldung. Every answer references it in
+    /// `SG6 RFF+TN` (UTILMD AHB Strom 2.2, Muss on 55602–55605).
+    #[serde(default)]
+    pub vorgangsnummer: Option<String>,
+    /// `SG4 STS+7` Transaktionsgrund of the Anmeldung (`E02`), which every
+    /// answer restates; the Ergänzung is the answer's own (`ZW3`/`ZW4` on an
+    /// Ablehnung, the column fixes it).
+    #[serde(default)]
+    pub transaktionsgrund: Option<String>,
 }
 
 /// State of a GPKE Neuanlage process.
@@ -353,6 +369,8 @@ pub enum NeuanlageCommand {
         validation_passed: bool,
         /// Validation error strings (for the `Rejected` event).
         validation_errors: Vec<String>,
+        /// The Anmeldung's `SG4` facts — its Vorgangsnummer and Transaktionsgrund.
+        vorgang: Box<crate::LfVorgangsdaten>,
     },
     /// Send the outbound UTILMD response to the Lieferant.
     ///
@@ -441,6 +459,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 document_date,
                 process_date,
                 pruefidentifikator,
+                vorgangsnummer,
+                transaktionsgrund,
                 ..
             } => NeuanlageState::Eingegangen(NeuanlageData {
                 location_id: location_id.clone(),
@@ -449,6 +469,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 document_date: document_date.clone(),
                 process_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
+                vorgangsnummer: vorgangsnummer.clone(),
+                transaktionsgrund: transaktionsgrund.clone(),
             }),
             NeuanlageEvent::ValidationPassed { .. } => match state {
                 NeuanlageState::Eingegangen(data) => NeuanlageState::ValidationPassed(data),
@@ -511,6 +533,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 message_ref,
                 validation_passed,
                 validation_errors,
+                vorgang,
             } => {
                 if !matches!(state, NeuanlageState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -532,6 +555,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     process_date,
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
+                    vorgangsnummer: vorgang.vorgangsnummer.clone(),
+                    transaktionsgrund: vorgang.transaktionsgrund.clone(),
                 }];
                 if validation_passed {
                     events.push(NeuanlageEvent::ValidationPassed {
@@ -593,6 +618,13 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 // answered while the Lieferant watches its 61-Werktage window
                 // expire.
                 let mut outbox = Vec::new();
+                // `SG5 LOC+Z16` names a Marktlokation the NB has. On the
+                // Ablehnung of a neue erzeugende Marktlokation 55605 it is Muss
+                // only beside `A12`/`A13` and admitted nowhere else (Bedingung
+                // `[43]`, UTILMD AHB Strom 2.2) — any other refusal names none.
+                let nennt_marktlokation = !data.location_id.as_str().is_empty()
+                    && (response_pid.map(Pruefidentifikator::as_u32) != Some(55_605)
+                        || matches!(antwort.antwort_code.as_str(), "A12" | "A13"));
                 if let Some(rpid) = response_pid {
                     outbox.push(PendingOutbox::new(
                         "UTILMD",
@@ -602,13 +634,17 @@ impl Workflow for GpkeNeuanlageWorkflow {
                             "anfrage_pid":  data.pruefidentifikator.as_u32(),
                             "sender":       data.receiver.as_str(),
                             "receiver":     data.sender.as_str(),
-                            "malo":         data.location_id.as_str(),
+                            "malo":         nennt_marktlokation.then(|| data.location_id.as_str()),
                             "process_date": data.process_date,
                             // `SG4 STS+E01++<code>:E_0608` — Muss on every
                             // Antwortnachricht.
                             "antwort_code": antwort.antwort_code,
                             "antwort_codeliste":  antwort.ebd,
                             "bemerkung":    antwort.bemerkung,
+                            // `SG4 STS+7` and `SG6 RFF+TN` — the Anmeldung's
+                            // Grund and Vorgangsnummer, Muss on every answer.
+                            "transaktionsgrund":       data.transaktionsgrund,
+                            "referenz_vorgangsnummer": data.vorgangsnummer,
                         }),
                     ));
                 }
@@ -671,6 +707,7 @@ mod tests {
             } else {
                 vec!["missing mandatory segment".to_owned()]
             },
+            vorgang: Box::default(),
         }
     }
 
@@ -833,6 +870,7 @@ mod tests {
                 message_ref: mref("NEUA-X"),
                 validation_passed: true,
                 validation_errors: vec![],
+                vorgang: Box::default(),
             },
         );
         assert!(result.is_err());
@@ -847,6 +885,8 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             pruefidentifikator: pid(55600),
+            vorgangsnummer: None,
+            transaktionsgrund: None,
         });
         let dl_id = DeadlineId::new();
         let out = GpkeNeuanlageWorkflow::handle(

@@ -3,10 +3,12 @@
 // evidence, GoBD) and dispatches the answer the entry holds. The Desk sends
 // exactly the request its form shows — a proposal only ever fills the form.
 
+import type { FaktKoerper } from "../format/fakt";
 import { problem, sentence } from "./problem";
 import { verweigern } from "./verweigert";
 
-export interface Entscheidung {
+/** The decision body: the code, the Bemerkung, and the E/G facts the entry lists as still needed. */
+export interface Entscheidung extends FaktKoerper {
   aktion: "freigeben" | "ablehnen";
   /** For a refusal, and for approving an escalation: the code of the entry's tree. */
   antwort_code?: string;

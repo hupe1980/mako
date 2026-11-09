@@ -178,6 +178,7 @@ impl MockNb {
                     message_ref,
                     validation_passed: true,
                     validation_errors: vec![],
+                    vorgang: Box::default(),
                 }
             }
             _ => panic!("expected NeuanlageCommand::ReceiveAnmeldung"),
@@ -335,6 +336,7 @@ async fn e2e_neuanlage_validation_failure_rejects() {
         message_ref: MessageRef::new("MSG-BAD-001"),
         validation_passed: false,
         validation_errors: vec!["BGM qualifier missing".to_owned()],
+        vorgang: Box::default(),
     };
 
     nb.process

@@ -66,6 +66,7 @@
 
 use crate::config::BilanzkreisEintrag;
 use mako_gpke::LfVorgangsdaten;
+use mako_markt::domain::Sparte;
 use mako_markt::makod_client::{ForwardCommand, MakodClient};
 use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
 use mako_pruefung::{
@@ -131,7 +132,96 @@ pub struct LfModuleConfig {
     /// Versorgungsart.) The AHB marks the element Muss on a 55014 and it is a
     /// legal classification, not a tree outcome — `E_0615` never produces one.
     /// Without it an automatic Zustimmung is queued instead of dispatched.
+    /// Strom only: the Gas 44014 carries no `CCI+Z36`.
     pub eog_versorgungsart: Option<String>,
+    /// `SG6 DTM+Z20` „Abrechnungsintervall des LF" on a Gas 44014, in Monaten
+    /// — see [`crate::config::LfConfig::eog_abrechnungsintervall_monate`].
+    /// `None` queues every Gas Zustimmung instead of dispatching it.
+    pub eog_abrechnungsintervall_monate: Option<u8>,
+}
+
+/// What an `E_0615` / `E_3008` Zustimmung states beside its Antwortcode: facts
+/// of the supplier's own that no Entscheidungsbaum produces and no Marktlokation
+/// record holds.
+///
+/// | Sparte | Fact | Segment | Source |
+/// |---|---|---|---|
+/// | Strom 55014 | Versorgungsart | `SG10 CCI+Z36` | `[lf] eog_versorgungsart` |
+/// | Strom 55014 | Bilanzkreis | `SG8 SEQ+Z79` | `[[lf.bilanzkreise]]` `standard` |
+/// | Gas 44014 | Bilanzkreis | `SG10 CCI+Z19` | `[[lf.bilanzkreise]]` `standard` |
+/// | Gas 44014 | Abrechnungsintervall des LF | `SG6 DTM+Z20` | `[lf] eog_abrechnungsintervall_monate` |
+///
+/// The Gas rows are Muss on a 44014 (UTILMD AHB Gas 1.2 Kap. 5.9, S. 78 and
+/// S. 80), whose column lists no `CCI+Z36`. The Bilanzkreis is the one
+/// `standard` entry for the Marktlokation's Bilanzierungsgebiet, else the
+/// fallback row's ([`bilanzkreis_fuer`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EogFakten {
+    /// The Gas 44014 rather than the Strom 55014.
+    pub gas: bool,
+    /// `SG10 CCI+Z36` (Strom).
+    pub versorgungsart: Option<String>,
+    /// The Bilanzkreis.
+    pub bilanzkreis: Option<String>,
+    /// `SG6 DTM+Z20` in Monaten (Gas).
+    pub abrechnungsintervall_monate: Option<u8>,
+}
+
+impl EogFakten {
+    /// The facts `config` states for an answer to `process`, on a Marktlokation
+    /// in `bilanzierungsgebiet`.
+    #[must_use]
+    pub fn fuer(
+        config: &LfModuleConfig,
+        process: &LfAntwortProcess,
+        bilanzierungsgebiet: Option<&str>,
+    ) -> Self {
+        let gas = ist_gas(process.trigger_pid);
+        Self {
+            gas,
+            versorgungsart: config.eog_versorgungsart.clone().filter(|_| !gas),
+            bilanzkreis: bilanzkreis_fuer(
+                &config.bilanzkreise,
+                if gas { Sparte::Gas } else { Sparte::Strom },
+                mako_pruefung::Bilanzkreisart::Standard,
+                bilanzierungsgebiet,
+            ),
+            abrechnungsintervall_monate: config.eog_abrechnungsintervall_monate.filter(|_| gas),
+        }
+    }
+
+    /// The first fact a Zustimmung cannot go out without, named for the
+    /// operator, or `None` when all are present.
+    #[must_use]
+    pub fn fehlt(&self) -> Option<&'static str> {
+        match (self.gas, &self.versorgungsart, &self.bilanzkreis) {
+            (false, None, _) => Some("[lf] eog_versorgungsart (SG10 CCI+Z36: ZC9/ZD0/ZE3)"),
+            (false, _, None) => {
+                Some("ein eindeutiger Bilanzkreis aus [[lf.bilanzkreise]] (SG8 SEQ+Z79)")
+            }
+            (true, _, None) => Some(
+                "ein eindeutiger standard-Bilanzkreis aus [[lf.bilanzkreise]] für das \
+                 Bilanzierungsgebiet der Marktlokation (SG10 CCI+Z19)",
+            ),
+            (true, _, Some(_)) if self.abrechnungsintervall_monate.is_none() => {
+                Some("[lf] eog_abrechnungsintervall_monate (SG6 DTM+Z20)")
+            }
+            _ => None,
+        }
+    }
+
+    /// Write the facts into a command body.
+    fn schreibe(&self, payload: &mut serde_json::Value) {
+        if let Some(art) = &self.versorgungsart {
+            payload["versorgungsart"] = serde_json::Value::String(art.clone());
+        }
+        if let Some(bk) = &self.bilanzkreis {
+            payload["bilanzkreis"] = serde_json::Value::String(bk.clone());
+        }
+        if let Some(monate) = self.abrechnungsintervall_monate {
+            payload["abrechnungsintervall_monate"] = serde_json::json!(monate);
+        }
+    }
 }
 
 /// Pick the Bilanzkreis a 55607 Zustimmung names, or `None` to let an operator
@@ -164,9 +254,11 @@ pub fn resolve_bilanzkreis(
 ) -> Option<String> {
     use mako_pruefung::{Bilanzkreisart, ZuordnungsFall};
 
+    // The 55607 is a Strom process (GPKE Teil 2): it reads the Strom rows.
+    const STROM: Sparte = Sparte::Strom;
     let fall = fall?;
     if let Some(art) = fall.bilanzkreisart() {
-        return bilanzkreis_fuer(eintraege, art, bilanzierungsgebiet);
+        return bilanzkreis_fuer(eintraege, STROM, art, bilanzierungsgebiet);
     }
     // Fall 1 (`E_0603`) is the one the Anwendungsfall does not decide: its
     // Sequenzdiagramm covers „EEG-Marktlokation ohne DV-Pflicht **bzw.**
@@ -181,8 +273,8 @@ pub fn resolve_bilanzkreis(
     // `Z94` KWKG-Vergütung) lives in the EEG-/KWKG-Register, not in `marktd`.
     debug_assert_eq!(fall, ZuordnungsFall::EegOhneDvPflicht);
     match (
-        bilanzkreis_fuer(eintraege, Bilanzkreisart::Eeg, bilanzierungsgebiet),
-        bilanzkreis_fuer(eintraege, Bilanzkreisart::Kwkg, bilanzierungsgebiet),
+        bilanzkreis_fuer(eintraege, STROM, Bilanzkreisart::Eeg, bilanzierungsgebiet),
+        bilanzkreis_fuer(eintraege, STROM, Bilanzkreisart::Kwkg, bilanzierungsgebiet),
     ) {
         (Some(eeg), None) => Some(eeg),
         (None, Some(kwkg)) => Some(kwkg),
@@ -191,7 +283,11 @@ pub fn resolve_bilanzkreis(
 }
 
 /// The one Bilanzkreis of a given [`Bilanzkreisart`] this deployment has
-/// declared for a Bilanzierungsgebiet, or `None`.
+/// declared for a Bilanzierungsgebiet of `sparte`, or `None`.
+///
+/// Only the rows of `sparte` are read — the fallback row included — so a
+/// deployment supplying Strom and Gas never answers one Sparte with the
+/// other's Bilanzkreis.
 ///
 /// [`Bilanzkreisart`]: mako_pruefung::Bilanzkreisart
 ///
@@ -202,16 +298,17 @@ pub fn resolve_bilanzkreis(
 #[must_use]
 pub fn bilanzkreis_fuer(
     eintraege: &[BilanzkreisEintrag],
+    sparte: Sparte,
     art: mako_pruefung::Bilanzkreisart,
     bilanzierungsgebiet: Option<&str>,
 ) -> Option<String> {
+    let mut rows = eintraege.iter().filter(|e| e.sparte == sparte);
     let row = bilanzierungsgebiet
         .and_then(|bg| {
-            eintraege
-                .iter()
+            rows.clone()
                 .find(|e| e.bilanzierungsgebiet.as_deref() == Some(bg))
         })
-        .or_else(|| eintraege.iter().find(|e| e.bilanzierungsgebiet.is_none()))?;
+        .or_else(|| rows.find(|e| e.bilanzierungsgebiet.is_none()))?;
     match row.candidates(art) {
         [only] => Some(only.clone()),
         _ => None,
@@ -219,8 +316,9 @@ pub fn bilanzkreis_fuer(
 }
 
 /// The Bilanzkreis an Anmeldung (55001 / 44001) carries: the one the caller
-/// names, else the single `standard` entry this deployment declared, else
-/// `None` — which the handler refuses as `MISSING_BILANZKREIS`.
+/// names, else the single `standard` entry this deployment declared for
+/// `sparte`'s fallback row, else `None` — which the handler refuses as
+/// `MISSING_BILANZKREIS`.
 ///
 /// `vertragd` sends the contract's own Bilanzkreis when it has one, and its
 /// contract test runs its bodies through this rule.
@@ -228,11 +326,19 @@ pub fn bilanzkreis_fuer(
 pub fn anmeldung_bilanzkreis(
     requested: Option<&str>,
     eintraege: &[BilanzkreisEintrag],
+    sparte: Sparte,
 ) -> Option<String> {
     requested
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
-        .or_else(|| bilanzkreis_fuer(eintraege, mako_pruefung::Bilanzkreisart::Standard, None))
+        .or_else(|| {
+            bilanzkreis_fuer(
+                eintraege,
+                sparte,
+                mako_pruefung::Bilanzkreisart::Standard,
+                None,
+            )
+        })
 }
 
 // ── Process descriptors ───────────────────────────────────────────────────────
@@ -492,6 +598,7 @@ impl LfAnfragePayload {
             vorgangsnummer: str_field("vorgangsnummer"),
             uet_lieferanmeldung: str_field("uet_lieferanmeldung"),
             naechstmoeglicher_termin: str_field("naechstmoeglicher_termin"),
+            bilanzierungsbeginn: str_field("bilanzierungsbeginn"),
             // `SG12 NAD+Z09` / `NAD+VY` — the customer the request names and
             // the Neulieferant behind it. `E_0624` Prüfschritt 50 compares the
             // first against the contract holder.
@@ -551,9 +658,13 @@ impl LfAnfragePayload {
                 .or(vorgang.naechstmoeglicher_termin.clone())
                 .or_else(|| str_field("process_date"))
                 .as_deref()
-                .and_then(parse_date),
+                .and_then(|d| parse_date(d, process.trigger_pid)),
             terminart,
-            uet_lieferanmeldung: vorgang.uet_lieferanmeldung.as_deref().and_then(parse_date),
+            // `DTM+154` is format `102`, a bare `CCYYMMDD`.
+            uet_lieferanmeldung: vorgang
+                .uet_lieferanmeldung
+                .as_deref()
+                .and_then(crate::wire_date::kalendertag),
             eingang: event_time,
         };
 
@@ -582,9 +693,15 @@ impl LfAnfragePayload {
     }
 }
 
-/// Every date shape a process payload carries — see [`crate::wire_date`].
-fn parse_date(s: &str) -> Option<Date> {
-    crate::wire_date::parse(s)
+/// Every date shape a process payload carries, a `303` stamp read as the
+/// German day it begins in the trigger PID's Sparte — see [`crate::wire_date`].
+fn parse_date(s: &str, pid: u32) -> Option<Date> {
+    let sparte = if ist_gas(pid) {
+        mako_fristen::Sparte::Gas
+    } else {
+        mako_fristen::Sparte::Strom
+    };
+    crate::wire_date::parse(s, sparte)
 }
 
 // ── Fact gathering ────────────────────────────────────────────────────────────
@@ -727,7 +844,12 @@ pub fn apply_vertrag(
     termin: Option<Date>,
 ) -> LfVertragslage {
     let v = &vertrag["vertrag"];
-    let date_of = |key: &str| v.get(key).and_then(|x| x.as_str()).and_then(parse_date);
+    // `vertragd` writes calendar dates, never a wire stamp.
+    let date_of = |key: &str| {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .and_then(crate::wire_date::kalendertag)
+    };
 
     // A contract row came back at all — `E_0614` Prüfschritt 500. `None` from
     // the caller leaves this `Unbekannt`, which is what a deployment without
@@ -768,7 +890,7 @@ pub fn apply_vertrag(
     lage.naechstmoeglicher_kuendigungstermin = vertrag
         .get("naechstmoeglicher_kuendigungstermin")
         .and_then(|x| x.as_str())
-        .and_then(parse_date);
+        .and_then(crate::wire_date::kalendertag);
 
     lage.kunde_identisch = Bekannt::from_option(
         vertrag
@@ -894,16 +1016,18 @@ pub async fn process_lf_antwort(
     // state — so it is fetched only for the one process that needs it. A lookup
     // failure leaves it unknown, and the decision escalates rather than naming a
     // BK authorised for a different Bilanzierungsgebiet.
-    let bilanzierungsgebiet = if payload.process.walk == Walk::ZuordnungLf {
-        reader
-            .get_malo(&anfrage.malo_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|m| m.bilanzierungsgebiet)
-    } else {
-        None
-    };
+    // The E/G Zustimmung names a Bilanzkreis by the same key.
+    let bilanzierungsgebiet =
+        if matches!(payload.process.walk, Walk::ZuordnungLf | Walk::AnmeldungEog) {
+            reader
+                .get_malo(&anfrage.malo_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|m| m.bilanzierungsgebiet)
+        } else {
+            None
+        };
 
     let entscheidung = entscheide(
         &payload,
@@ -925,6 +1049,40 @@ pub async fn process_lf_antwort(
         outcome = ?entscheidung,
         "processd LF: decision"
     );
+
+    // A resolved `E_0615` / `E_3008` answer needs its own opt-in: it accepts or
+    // declines a § 36 / § 38 EnWG supply duty for a customer this supplier has
+    // no contract with.
+    //
+    // A **Zustimmung** additionally needs the facts [`EogFakten`] names, which
+    // the walk does not produce. Dispatching without them produces an
+    // AHB-invalid 55014 / 44014, so the answer is queued instead, with the
+    // missing fact named.
+    let eog_fakten = (payload.process.walk == Walk::AnmeldungEog)
+        .then(|| EogFakten::fuer(config, &payload.process, bilanzierungsgebiet.as_deref()));
+    let eog_missing: Option<&str> = eog_fakten
+        .as_ref()
+        .filter(|_| entscheidung.ist_zustimmung())
+        .and_then(EogFakten::fehlt);
+
+    // The Zustimmung's facts, for an operator's decision to send: an escalated
+    // E/G Anmeldung is approved with the operator's code alone, and a held
+    // Ablehnung is overridden by the Bestätigung, so whichever slot of the
+    // entry sends the Bestätigung starts from them. The facts that resolved
+    // are frozen even when one did not — the operator states only the missing
+    // one on the decision, and cannot replace one that resolved.
+    let eog_vorbelegt = eog_fakten
+        .as_ref()
+        .map(|f| {
+            let mut body = serde_json::json!({});
+            f.schreibe(&mut body);
+            body
+        })
+        .filter(|body| body.as_object().is_some_and(|m| !m.is_empty()));
+
+    let may_dispatch = config.auto_respond
+        && (payload.process.walk != Walk::AnmeldungEog
+            || (config.eog_auto_respond && eog_missing.is_none()));
 
     // `held` is a decided answer an operator has to release: approving sends
     // it as decided, rejecting sends the other cluster's command with the
@@ -954,15 +1112,27 @@ pub async fn process_lf_antwort(
                 } else {
                     payload.process.bestaetigen
                 };
-                entry
+                let entry = entry
                     .with_commands(command, other, Some("LF"))
-                    .with_answer_payload(body)
+                    .with_answer_payload(body);
+                match eog_vorbelegt.clone() {
+                    Some(fakten) if other == payload.process.bestaetigen => {
+                        entry.with_reject_payload(fakten)
+                    }
+                    _ => entry,
+                }
             }
-            None => entry.with_commands(
-                payload.process.bestaetigen,
-                payload.process.ablehnen,
-                Some("LF"),
-            ),
+            None => {
+                let entry = entry.with_commands(
+                    payload.process.bestaetigen,
+                    payload.process.ablehnen,
+                    Some("LF"),
+                );
+                match eog_vorbelegt.clone() {
+                    Some(fakten) => entry.with_answer_payload(fakten),
+                    None => entry,
+                }
+            }
         };
         queue
             .enqueue(&entry)
@@ -970,70 +1140,23 @@ pub async fn process_lf_antwort(
             .inspect_err(|e| warn!(%e, "processd LF: failed to enqueue approval entry"))
     };
 
-    // A resolved `E_0615` / `E_3008` answer needs its own opt-in: it accepts or
-    // declines a § 36 / § 38 EnWG supply duty for a customer this supplier has
-    // no contract with.
-    //
-    // A **Zustimmung** additionally needs two facts the walk does not produce.
-    // UTILMD AHB Strom 2.2 Kap. 5.3 makes `SG8 SEQ+Z79` Muss on a 55014, and
-    // the AHB marks `SG10 CCI+Z36` (Versorgungsart, `ZC9`/`ZD0`/`ZE3`)
-    // Muss there too — which of the two statutes applies is a legal
-    // classification, not a tree outcome. Dispatching without them produces an
-    // AHB-invalid 55014, so the answer is queued instead, with the missing
-    // fact named.
-    let eog_missing: Option<&str> = if payload.process.walk == Walk::AnmeldungEog
-        && entscheidung.ist_zustimmung()
-    {
-        match (
-            config.eog_versorgungsart.as_deref(),
-            bilanzkreis_fuer(
-                &config.bilanzkreise,
-                mako_pruefung::Bilanzkreisart::Standard,
-                None,
-            ),
-        ) {
-            (None, _) => Some("[lf] eog_versorgungsart (SG10 CCI+Z36: ZC9/ZD0/ZE3)"),
-            (_, None) => Some("ein eindeutiger Bilanzkreis aus [[lf.bilanzkreise]] (SG8 SEQ+Z79)"),
-            _ => None,
-        }
-    } else {
-        None
-    };
-
-    let may_dispatch = config.auto_respond
-        && (payload.process.walk != Walk::AnmeldungEog
-            || (config.eog_auto_respond && eog_missing.is_none()));
-
     match &entscheidung {
         LfEntscheidung::Antwort(antwort) => {
             if may_dispatch {
-                let eog_extras = (payload.process.walk == Walk::AnmeldungEog).then(|| {
-                    (
-                        config.eog_versorgungsart.clone(),
-                        bilanzkreis_fuer(
-                            &config.bilanzkreise,
-                            mako_pruefung::Bilanzkreisart::Standard,
-                            None,
-                        ),
-                    )
-                });
-                dispatch_antwort(makod, payload.process, anfrage, antwort, eog_extras).await?;
+                dispatch_antwort(
+                    makod,
+                    payload.process,
+                    anfrage,
+                    antwort,
+                    eog_fakten.as_ref(),
+                )
+                .await?;
             } else {
                 // A Zustimmung that is not dispatchable for want of the EoG
                 // facts is not frozen: what it lacks is what the operator
                 // has to supply.
                 let held = eog_missing.is_none().then(|| {
-                    let eog_extras = (payload.process.walk == Walk::AnmeldungEog).then(|| {
-                        (
-                            config.eog_versorgungsart.clone(),
-                            bilanzkreis_fuer(
-                                &config.bilanzkreise,
-                                mako_pruefung::Bilanzkreisart::Standard,
-                                None,
-                            ),
-                        )
-                    });
-                    answer_payload(payload.process, anfrage, antwort, eog_extras)
+                    answer_payload(payload.process, anfrage, antwort, eog_fakten.as_ref())
                 });
                 // auto_respond off means "an operator decides", not "nobody
                 // answers": without a queue row the process goes unanswered and
@@ -1042,8 +1165,10 @@ pub async fn process_lf_antwort(
                     format!(
                         "{} — {} für MaLo {} ist entschieden: {} {} ({})",
                         match (config.auto_respond, eog_missing) {
-                            (_, Some(fehlt)) =>
-                                format!("Zustimmung nicht versandfähig, es fehlt {fehlt}"),
+                            (_, Some(fehlt)) => format!(
+                                "Zustimmung nicht versandfähig, es fehlt {fehlt} — \
+                                     bei der Freigabe angeben"
+                            ),
                             (true, None) => "eog_auto_respond disabled".to_owned(),
                             (false, None) => "auto_respond disabled".to_owned(),
                         },
@@ -1133,9 +1258,9 @@ async fn dispatch_antwort(
     process: LfAntwortProcess,
     anfrage: &LfAnfrage,
     antwort: &LfAntwort,
-    eog_extras: Option<(Option<String>, Option<String>)>,
+    eog_fakten: Option<&EogFakten>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (command, payload) = answer_payload(process, anfrage, antwort, eog_extras);
+    let (command, payload) = answer_payload(process, anfrage, antwort, eog_fakten);
     let cmd = ForwardCommand {
         marktrolle: None,
         command: command.to_owned(),
@@ -1161,11 +1286,15 @@ async fn dispatch_antwort(
 
 /// The command and body a resolved answer is sent as — by the automatic path,
 /// and frozen on the approval queue when an operator has to release it.
-fn answer_payload(
+///
+/// `eog_fakten` are written on a Zustimmung only: the 55015 / 44015 Ablehnung
+/// carries none of them.
+#[must_use]
+pub fn answer_payload(
     process: LfAntwortProcess,
     anfrage: &LfAnfrage,
     antwort: &LfAntwort,
-    eog_extras: Option<(Option<String>, Option<String>)>,
+    eog_fakten: Option<&EogFakten>,
 ) -> (&'static str, serde_json::Value) {
     let command = if antwort.zustimmung {
         process.bestaetigen
@@ -1197,15 +1326,8 @@ fn answer_payload(
                 .unwrap_or_default(),
         );
     }
-    // The two facts a 55014 / 44014 Bestätigung must state beside its code:
-    // `SG10 CCI+Z36` Versorgungsart and the `SG8 SEQ+Z79` Bilanzkreis.
-    if let Some((versorgungsart, bilanzkreis)) = eog_extras {
-        if let Some(art) = versorgungsart {
-            payload["versorgungsart"] = serde_json::Value::String(art);
-        }
-        if let Some(bk) = bilanzkreis {
-            payload["bilanzkreis"] = serde_json::Value::String(bk);
-        }
+    if let Some(fakten) = eog_fakten.filter(|_| antwort.zustimmung) {
+        fakten.schreibe(&mut payload);
     }
     (command, payload)
 }
@@ -1394,12 +1516,14 @@ mod tests {
     fn the_bilanzkreis_is_picked_per_bilanzierungsgebiet_and_regime() {
         let table = vec![
             BilanzkreisEintrag {
+                sparte: Sparte::Strom,
                 bilanzierungsgebiet: None,
                 eeg: vec!["BK-FALLBACK-EEG".into()],
                 kwkg: vec!["BK-FALLBACK-KWKG".into()],
                 standard: vec!["BK-FALLBACK-STD".into()],
             },
             BilanzkreisEintrag {
+                sparte: Sparte::Strom,
                 bilanzierungsgebiet: Some(BG_EON.into()),
                 eeg: vec!["BK-EON-EEG".into()],
                 kwkg: vec![],
@@ -1440,7 +1564,7 @@ mod tests {
         let eeg_only = vec![BilanzkreisEintrag {
             bilanzierungsgebiet: None,
             eeg: vec!["BK-EEG".into()],
-            ..BilanzkreisEintrag::default()
+            ..BilanzkreisEintrag::leer(Sparte::Strom)
         }];
         assert_eq!(
             resolve_bilanzkreis(
@@ -1455,7 +1579,7 @@ mod tests {
         let kwkg_only = vec![BilanzkreisEintrag {
             bilanzierungsgebiet: None,
             kwkg: vec!["BK-KWKG".into()],
-            ..BilanzkreisEintrag::default()
+            ..BilanzkreisEintrag::leer(Sparte::Strom)
         }];
         assert_eq!(
             resolve_bilanzkreis(
@@ -1472,7 +1596,7 @@ mod tests {
             bilanzierungsgebiet: None,
             eeg: vec!["BK-EEG".into()],
             kwkg: vec!["BK-KWKG".into()],
-            ..BilanzkreisEintrag::default()
+            ..BilanzkreisEintrag::leer(Sparte::Strom)
         }];
         assert_eq!(
             resolve_bilanzkreis(
@@ -1493,7 +1617,7 @@ mod tests {
         let table = vec![BilanzkreisEintrag {
             bilanzierungsgebiet: None,
             eeg: vec!["BK-EEG-A".into(), "BK-EEG-B".into()],
-            ..BilanzkreisEintrag::default()
+            ..BilanzkreisEintrag::leer(Sparte::Strom)
         }];
         assert_eq!(
             resolve_bilanzkreis(
@@ -1513,7 +1637,7 @@ mod tests {
         let table = vec![BilanzkreisEintrag {
             bilanzierungsgebiet: Some(BG_EON.into()),
             eeg: vec!["BK-EON-EEG".into()],
-            ..BilanzkreisEintrag::default()
+            ..BilanzkreisEintrag::leer(Sparte::Strom)
         }];
 
         // The matching row lists no BK for this regime, and there is no fallback.
@@ -2059,6 +2183,7 @@ mod tests {
             grundversorgungs_netzgebiete: vec!["9900000000001".to_owned()],
             eog_auto_respond: false,
             eog_versorgungsart: None,
+            eog_abrechnungsintervall_monate: None,
         };
         let vs = make_vs(LieferStatus::Unbeliefert, None);
         let z = eog_zustaendigkeit(&cfg, Some(&vs));

@@ -122,12 +122,9 @@ impl Combined {
     /// Deliver every pending UTILMD to this deployment's own ingest, as the AS4
     /// loopback does for a message addressed to one of its own MP-IDs, and
     /// acknowledge everything else the outbox holds — ERP notifications are not
-    /// market messages. The GNB's 44013 must pass its AHB profile first, as
-    /// the pre-send gate (`transport::as4_sender`) requires on the loopback.
-    /// The LF's 44014 goes as rendered: what `geli.eog.bestaetigen` writes
-    /// carries the Antwort's head without the Marktlokation's Stammdaten the
-    /// profile makes Muss on it, and the subject of that leg is which process
-    /// it reaches.
+    /// market messages. Every UTILMD — the GNB's 44013 and the LF's 44014 —
+    /// must pass its AHB profile first, as the pre-send gate
+    /// (`transport::as4_sender`) requires on the loopback.
     async fn loopback(&self) -> Vec<(u32, IngestOutcome)> {
         use edi_energy::EdiEnergyMessage as _;
         let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
@@ -137,13 +134,7 @@ impl Combined {
         let mut outcomes = Vec::new();
         for om in &pending {
             if &*om.message_type == "UTILMD" {
-                let msg = if om.payload["pid"] == 44013 {
-                    gated(om, &self.registry)
-                } else {
-                    let wire = makod::edifact_renderer::render_to_wire_bytes(om, &self.registry)
-                        .unwrap_or_else(|e| panic!("render UTILMD: {e:?}"));
-                    edi_energy::parse(&wire.bytes).unwrap_or_else(|e| panic!("parse: {e:?}"))
-                };
+                let msg = gated(om, &self.registry);
                 let pid = msg
                     .detect_pruefidentifikator()
                     .expect("a Prüfidentifikator")
@@ -379,6 +370,81 @@ async fn assert_nothing_written(c: &Combined) {
     );
 }
 
+/// The LF's 44014 as `geli.eog.bestaetigen` writes it on a combined
+/// deployment — the GNB's 44013 delivered to the LF side, then answered.
+pub(crate) async fn rendered_44014() -> mako_engine::outbox::OutboxMessage {
+    let c = combined().await;
+    dispatch_command(
+        &c.state,
+        "geli.eog.anmelden",
+        &support::geli_eog_anmeldung(MALO, LF_MP),
+    )
+    .await
+    .expect("geli.eog.anmelden spawns");
+    c.loopback().await;
+    dispatch_command(&c.state, "geli.eog.bestaetigen", &bestaetigung())
+        .await
+        .expect("the LF answers");
+    let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+    OutboxStore::pending(&*c.store, 100, now)
+        .await
+        .expect("pending outbox")
+        .into_iter()
+        .find(|om| &*om.message_type == "UTILMD" && om.payload["pid"] == 44014)
+        .expect("the 44014 is written")
+}
+
+/// The LF's Bestätigung EoG: the Antwortcode, its Bilanzkreis and its
+/// Abrechnungsintervall.
+fn bestaetigung() -> serde_json::Value {
+    serde_json::json!({
+        "malo_id": MALO,
+        "antwort_code": "E15",
+        "bilanzkreis": BILANZKREIS,
+        "abrechnungsintervall_monate": 12,
+    })
+}
+
+/// A Gas Bilanzkreis code as the LF's own fact — synthetic, no assignment.
+const BILANZKREIS: &str = "BKGAS0001";
+
+/// **A 44014 without the LF's own Muss facts is refused**, naming each — never
+/// written as a message the pre-send gate dead-letters. The process still owes
+/// its answer afterwards.
+#[tokio::test]
+async fn geli_eog_bestaetigen_without_an_lf_fact_is_refused() {
+    let c = combined().await;
+    dispatch_command(
+        &c.state,
+        "geli.eog.anmelden",
+        &support::geli_eog_anmeldung(MALO, LF_MP),
+    )
+    .await
+    .expect("geli.eog.anmelden spawns");
+    let lf = match c.loopback().await.as_slice() {
+        [(44013, IngestOutcome::Spawned { process_id, .. })] => *process_id,
+        other => panic!("the LF's copy of the 44013 opens its process, got {other:?}"),
+    };
+    for missing in ["bilanzkreis", "abrechnungsintervall_monate"] {
+        let mut body = bestaetigung();
+        body.as_object_mut().expect("an object").remove(missing);
+        let err = dispatch_command(&c.state, "geli.eog.bestaetigen", &body)
+            .await
+            .expect_err("a 44014 without it is refused");
+        assert!(
+            format!("{err:?}").contains(missing),
+            "the refusal names {missing:?}: {err:?}"
+        );
+    }
+    assert!(
+        matches!(
+            c.state_of(lf).await,
+            GasSupplierChangeState::ValidationPassed(_)
+        ),
+        "a refused answer leaves the LF's process owing it"
+    );
+}
+
 /// **A 44013 runs to its 44014 on one combined deployment**: the LF's copy
 /// opens the LF's own process, the LF answers it, and the answer reaches the
 /// GNB's process, so both sides end where their half of the Vorgang ends.
@@ -411,14 +477,12 @@ async fn a_combined_deployment_runs_the_gas_eog_to_its_answer() {
         "the GNB still waits for the answer"
     );
 
-    // 3. The LF confirms the Ersatz-/Grundversorgung out of `E_3008`.
-    let answered = dispatch_command(
-        &c.state,
-        "geli.eog.bestaetigen",
-        &serde_json::json!({ "malo_id": MALO, "antwort_code": "E15" }),
-    )
-    .await
-    .expect("the LF answers its own process");
+    // 3. The LF confirms the Ersatz-/Grundversorgung out of `E_3008`, stating
+    //    the two facts of its own a 44014 carries beside the Marktlokation's
+    //    record; the loopback below holds the rendering to its profile.
+    let answered = dispatch_command(&c.state, "geli.eog.bestaetigen", &bestaetigung())
+        .await
+        .expect("the LF answers its own process");
     assert!(
         matches!(answered, DispatchOutcome::Dispatched { process_id } if process_id == lf),
         "geli.eog.bestaetigen answers the LF's process, got {answered:?}"

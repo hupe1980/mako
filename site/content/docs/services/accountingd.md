@@ -36,7 +36,7 @@ graph TB
 
     billingd -->|"de.billing.rechnung.erstellt → RECHNUNG / STORNO"| accountingd
     einsd -->|"de.eeg.verguetung.berechnet → EEG_GUTSCHRIFT + pain.001"| accountingd
-    einsd -->|"de.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE"| accountingd
+    einsd -->|"de.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE + pain.001"| accountingd
     invoicd -->|"de.invoic.receipt.settled → ZAHLUNG"| accountingd
     vertragd -->|"recipient of a Mahnung"| accountingd
     accountingd -->|"MAHNUNG document"| outputd
@@ -108,6 +108,8 @@ contra account. Money is `i64` cents throughout; no `f64` touches it.
 | `VERZUGSZINSEN` | Debit | Zinserträge (SKR 2650) | § 288 BGB interest |
 | `EEG_GUTSCHRIFT` | by sign | EEG-Aufwand | `de.eeg.verguetung.berechnet` — what the receipt changes its chain by |
 | `EEG_MARKTPRAEMIE` | by sign | EEG-Aufwand | `de.eeg.marktpraemie.berechnet` — the same |
+| `EEG_AUSZAHLUNG` | Debit | Bank | an EEG payout the bank settled (pain.002 `ACSC`) |
+| `EEG_RUECKZAHLUNG` | Credit | Bank | a plant operator's repayment of an overpayment |
 | `JAHRESABSCHLUSS` | Debit (Erstattung) | Erstattungen | the annual settlement |
 
 `ledger::ENTRY_TYPES` is the single list: `Chart::contra` maps it and
@@ -187,7 +189,7 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `PUT` | `/api/v1/accounts/{malo_id}/business-partner` | Link to a `kunden_nr`; body `{ "kunden_nr" }` |
 | `GET` | `/api/v1/business-partners/{kunden_nr}/accounts` · `/balance` | A partner's accounts; consolidated balance |
 | `GET` | `/api/v1/aging` | Receivables in 0–30 / 31–60 / 61–90 / >90 day buckets |
-| `GET` | `/api/v1/offene-posten` | Overdue accounts |
+| `GET` | `/api/v1/offene-posten` | Overdue accounts; never an EEG plant account |
 | `POST` | `/api/v1/periods/{period_id}/seal` | Festschreibung of every open month through `YYYY-MM`; no body |
 | `GET` | `/api/v1/periods/seals` | Sealed months, `sealed_through`, `verified` (a full `audit`) |
 | `POST` | `/api/v1/bookings/{key}/rebook` · `/discard` | Resolve a parked booking |
@@ -215,9 +217,10 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `POST` | `/api/v1/payments/import/camt053` · `camt054` · `camt052` | Bank statements |
 | `POST` | `/api/v1/payments/import` | Flat JSON bank export |
 | `GET` | `/api/v1/eeg/payouts` · `/{payout_id}` | EEG payout orders (`?status=`); one with its pain.001 |
-| `POST` | `/api/v1/eeg/payouts/run` | Pay a billing month's Vergütung receipt chains what each has outstanding (`billing_year`, `billing_month` required) |
+| `POST` | `/api/v1/eeg/payouts/run` | Pay a billing month's receipt chains, Vergütung and Marktprämie, what each has outstanding (`billing_year`, `billing_month` required) |
 | `GET` | `/api/v1/eeg/rueckforderungen` | Receipt chains paid beyond their current receipt, with the amount owed back |
-| `PUT` | `/api/v1/eeg/payouts/{payout_id}/status` | Decoded pain.002 status (`ACCP`/`RJCT`/`CANC`) |
+| `POST` | `/api/v1/eeg/rueckzahlungen` | Record an operator's repayment of one; `409` on a second the same day |
+| `PUT` | `/api/v1/eeg/payouts/{payout_id}/status` | Decoded pain.002 status (`ACCP`/`ACSC`/`RJCT`/`CANC`) |
 | `GET` | `/api/v1/eeg/enfg-zahlungen` | EEG/KWKG payments made in a billing month (`?year=&month=`, both required): `ACSC` payouts and Aufrechnungen |
 | `POST` | `/api/v1/eeg/aufrechnungen` | Record an Aufrechnung against an EEG claim; `409` on a repeat |
 | `POST` | `/api/v1/jahresabschluss/{malo_id}` | Annual settlement (`?year=`, `?dry_run=true`) |
@@ -320,6 +323,15 @@ first step closes every open case whose account owes nothing and clears its
 `POST /api/v1/dunning/{account_id}/escalate` is the manual override. It takes
 the Mahnstufe and the Zahlungsfrist in days as required fields — they are what
 the Mahnung tells the customer, so an omitted one is refused, not defaulted.
+
+**An EEG plant account is never dunned.** An account an EEG receipt was booked
+to (`pg::is_eeg_anlagenkonto`, read off `eeg_belege`) is the plant operator's,
+and what the operator owes back of an overpayment is no payment obligation from
+a supply contract. Such an account is not an Offener Posten, the worker opens
+and escalates no case on it, the Sperr-Sequenz skips it, and the manual
+escalation is `422` (`code: eeg_anlagenkonto`); `create_dunning_case` refuses it
+in the statement that writes the case. The claim is served by
+`GET /api/v1/eeg/rueckforderungen`.
 
 **The Mahnung document.** Every open case without a document is rendered as a
 `MAHNUNG` through `outputd` (`outputd::document::mahnung::MahnungView`) and
@@ -819,11 +831,13 @@ Revoke a mandate (§ 58 ZAG) with `DELETE /api/v1/sepa/mandates/{mandate_id}`.
 ### pain.001 — EEG payout (§ 25 EEG 2023)
 
 einsd announces every settlement receipt as `de.eeg.verguetung.berechnet` or
-`de.eeg.marktpraemie.berechnet`, carrying `receipt_id`, `korrektur_von` (the
-receipt a § 147 AO correction supersedes) and the period. A period — plant
-(`tr_id`), billing year and month — is one **receipt chain**, and every receipt
-in it states the period's *whole* amount; the chain's current receipt is the one
-einsd issued last (the CloudEvent `time`), whatever order the events arrive in.
+`de.eeg.marktpraemie.berechnet` — a zero included — carrying `receipt_id`,
+`korrektur_von` (the receipt a § 147 AO correction supersedes), the period and
+`ketten_folge`. A period — plant (`tr_id`), billing year and month — is one
+**receipt chain**, and every receipt in it states the period's *whole* amount;
+the current receipt is the one with the highest `ketten_folge`, the position
+einsd assigns when it writes the receipt — never the CloudEvent `time`, which
+replica clocks can skew. A second event at a taken position is `422`.
 accountingd records each in `eeg_belege` and applies two rules
 (`accountingd::eeg_auszahlung`):
 
@@ -833,13 +847,25 @@ accountingd records each in `eeg_belege` and applies two rules
   booking draft commit in one transaction.
 - **A payout pays what is outstanding:** the current receipt less what was
   already paid or ordered for the chain — every order not `RJCT`/`CANC`, plus
-  every Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG). A receipt corrected from
-  100,00 € to 110,00 € pays 10,00 € more; one corrected to 90,00 € pays nothing
-  and leaves 10,00 € owed back, listed by `GET /api/v1/eeg/rueckforderungen`. A
-  replayed event finds nothing outstanding. A Marktprämie is booked and not paid
-  out here.
+  every Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG), less every Rückzahlung. A receipt
+  corrected from 100,00 € to 110,00 € pays 10,00 € more; one corrected to
+  90,00 € — or re-settled to `kein_anspruch` at 0 — pays nothing and leaves the
+  difference owed back, listed by `GET /api/v1/eeg/rueckforderungen`. A
+  replayed event finds nothing outstanding. Vergütung and Marktprämie are paid
+  alike.
 
-With `[eeg] auto_payout = true` each Vergütung receipt is paid as it arrives;
+The Kontokorrent follows the money. A receipt credits the operator; the first
+`ACSC` for its payout — from `POST /api/v1/sepa/pain002` or the status `PUT` —
+books `EEG_AUSZAHLUNG`, so a paid 100,00 € leaves the account at 0, and a lower
+correction then leaves the amount owed back as a debit — never dunned (see
+[Mahnwesen](#mahnwesen)). A settled order keeps
+`ACSC`; a later status is `409` on the `PUT` and ignored in a pain.002.
+`POST /api/v1/eeg/rueckzahlungen` records the operator's repayment
+(`tr_id`, `billing_year`, `billing_month`, `amount_ct`, `eingegangen_am`), books
+`EEG_RUECKZAHLUNG` and drops the chain from the list once nothing is owed;
+more than is owed is `422`.
+
+With `[eeg] auto_payout = true` each receipt is paid as it arrives;
 otherwise, and to pay a chain again after a rejected order,
 `POST /api/v1/eeg/payouts/run` pays the billing month's chains by the same rule.
 `auto_payout = true` without a valid `debtor_iban`, or an unparseable
@@ -847,7 +873,7 @@ otherwise, and to pay a chain again after a rejected order,
 ordered — a pain.001 that does not build, an invalid creditor IBAN — answers the
 event `500`, so einsd redelivers it; the receipt stays recorded and the run pays
 it once the cause is fixed. A receipt missing its plant, billing month, receipt
-id, amount or `time` is refused `422`, never defaulted.
+id, amount or `ketten_folge` is refused `422`, never defaulted.
 
 The creditor is the event's `bank_iban` / `zahlungsempfaenger` from einsd's
 Einspeiser record, else the account's `zahlungsinformation`; with neither the
@@ -867,6 +893,7 @@ explicit.
 created → pain001_xml stored
   └─ POST to bank_submit_url (if set) → pain002_status = PDNG
        ├─ ACCP → settled_at set
+       ├─ ACSC → settled_at set, EEG_AUSZAHLUNG booked (terminal)
        └─ RJCT (reason_code) → de.accounting.eeg.payout.rejected; fix the IBAN and run the payouts
 ```
 
@@ -986,10 +1013,11 @@ Emitted through the outbox to `erp_webhook_url`:
 | `sepa_collection_entries` | One per collected mandate — the attribution key for replies |
 | `sepa_reversals` | One per pain.007; `UNIQUE (collection_entry_id)` |
 | `sepa_recalls` | One per camt.055, with its camt.029 outcome |
-| `eeg_belege` | Every EEG settlement receipt einsd announced, per receipt chain, with what its booking changed; `PRIMARY KEY (tenant, source_ce_id)` |
-| `eeg_ketten` (view) | Each chain's current receipt beside what was paid or ordered for it |
+| `eeg_belege` | Every EEG settlement receipt einsd announced, per receipt chain, with what its booking changed; `PRIMARY KEY (tenant, source_ce_id)`, one per `ketten_folge` |
+| `eeg_ketten` (view) | Each chain's current receipt beside what was paid or ordered for it, less repayments |
 | `eeg_payout_orders` | pain.001 payouts, each for one chain's outstanding difference |
 | `eeg_aufrechnungen` | EEG claims extinguished by Aufrechnung, with the Gegenforderung; `UNIQUE (tenant, tr_id, billing_year, billing_month, gegenforderung, erklaert_am)` |
+| `eeg_rueckzahlungen` | Operators' repayments of an overpaid chain; `UNIQUE (tenant, tr_id, billing_year, billing_month, eingegangen_am)` |
 | `interest_charges` | § 288 BGB charges with `rate_segments`; `UNIQUE (tenant, account_id, period_from, period_to)` |
 | `ecb_base_rates` | Bundesbank Basiszinssatz series |
 | `payment_plans` · `payment_plan_installments` | Zahlungsvereinbarungen |
@@ -1013,14 +1041,15 @@ Every handler extracts `Claims` (a JWT) and checks one Cedar action from
 |---|---|---|
 | `read-account` | Account, balance, Kontoauszug, open items, Vorauszahlung, plans, interest, business-partner views | any caller of the tenant |
 | `read-banking` | Mandates, `Zahlungsinformation`, collection entries, EEG payouts and their XML | `LF`, `MSB` |
-| `read-books` | Trial balance, aging, dunning list, seals, proofs, EEG Rückforderungen | `LF`, `MSB` |
+| `read-books` | Trial balance, aging, dunning list, seals, proofs | `LF`, `MSB` |
 | `write-account` | Account master data, Abschlag, Vorauszahlung, `Zahlungsinformation`, business-partner link | `LF`, `MSB` |
 | `post-entry` | Manual booking, clearing, reset, interest, reconcile | `LF`, `MSB` |
 | `manage-sepa` | Mandates, collection run, pain.002, pain.007 | `LF`, `MSB` |
 | `import-payments` | camt and flat imports | `LF`, `MSB` |
-| `run-payout` | EEG payout run and status | `LF`, `MSB` |
-| `read-enfg` | EEG/KWKG payments made per month (`/eeg/enfg-zahlungen`) | **`NB`** |
+| `run-payout` | EEG payout run and pain.002 status | **`NB`** |
+| `read-enfg` | EEG/KWKG payments made per month (`/eeg/enfg-zahlungen`), EEG Rückforderungen | **`NB`** |
 | `record-aufrechnung` | Record an Aufrechnung (`/eeg/aufrechnungen`) | **`NB`** |
+| `record-rueckzahlung` | Record an operator's repayment (`/eeg/rueckzahlungen`) | **`NB`** |
 | `manage-dunning` | Escalation, resolution, Abwendung offer, Mahnsperren, Einwände | **`LF`** |
 | `close-period` | Jahresabschluss, seal | **`LF`** |
 | `erase-pii` | Anonymization | **`LF`** |

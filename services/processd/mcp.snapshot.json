@@ -56,6 +56,33 @@
             "null"
           ],
           "default": null
+        },
+        "bilanzkreis": {
+          "description": "The Bilanzkreis an E/G Zustimmung names, where the entry lists\n`bilanzkreis` among the facts it still needs.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "versorgungsart": {
+          "description": "`SG10 CCI+Z36` on a Strom 55014: `ZC9`, `ZD0` or `ZE3`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "abrechnungsintervall_monate": {
+          "description": "`SG6 DTM+Z20` on a Gas 44014: 1, 3, 6 or 12.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "default": null
         }
       }
     },
@@ -516,6 +543,49 @@
             "bedeutung"
           ]
         },
+        "Fakt": {
+          "description": "A fact a decision states beside its code, under the body key `feld`.",
+          "type": "object",
+          "properties": {
+            "feld": {
+              "description": "The decision body's key: `bilanzkreis`, `versorgungsart` or\n`abrechnungsintervall_monate`.",
+              "type": "string"
+            },
+            "bezeichnung": {
+              "description": "What it is, with the segment it rides.",
+              "type": "string"
+            },
+            "werte": {
+              "description": "The values the segment admits; empty where the value is free text (a\nBilanzkreis is the LF's own code).",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FaktWert"
+              }
+            }
+          },
+          "required": [
+            "feld",
+            "bezeichnung",
+            "werte"
+          ]
+        },
+        "FaktWert": {
+          "description": "One admissible value of a [`Fakt`].",
+          "type": "object",
+          "properties": {
+            "wert": {
+              "description": "What the decision sends — a code, or a number written as text.",
+              "type": "string"
+            },
+            "bedeutung": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "wert",
+            "bedeutung"
+          ]
+        },
         "QueueStatus": {
           "type": "string",
           "enum": [
@@ -537,6 +607,8 @@
         "antwort",
         "codes_freigeben",
         "codes_ablehnen",
+        "fakten_freigeben",
+        "fakten_ablehnen",
         "kann_freigeben",
         "kann_ablehnen",
         "status",
@@ -614,6 +686,20 @@
               "type": "null"
             }
           ]
+        },
+        "fakten_freigeben": {
+          "description": "The facts approving states beside the code, where the entry's own did\nnot resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall\nof an E/G Zustimmung. Empty when there are none to state.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fakt"
+          }
+        },
+        "fakten_ablehnen": {
+          "description": "The same for rejecting — a held E/G Ablehnung is overridden by the\nBestätigung.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fakt"
+          }
         },
         "kann_freigeben": {
           "description": "Approving sends a market message.",
@@ -1153,6 +1239,20 @@
                 }
               ]
             },
+            "fakten_freigeben": {
+              "description": "The facts approving states beside the code, where the entry's own did\nnot resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall\nof an E/G Zustimmung. Empty when there are none to state.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Fakt"
+              }
+            },
+            "fakten_ablehnen": {
+              "description": "The same for rejecting — a held E/G Ablehnung is overridden by the\nBestätigung.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Fakt"
+              }
+            },
             "kann_freigeben": {
               "description": "Approving sends a market message.",
               "type": "boolean"
@@ -1201,6 +1301,8 @@
             "antwort",
             "codes_freigeben",
             "codes_ablehnen",
+            "fakten_freigeben",
+            "fakten_ablehnen",
             "kann_freigeben",
             "kann_ablehnen",
             "status",
@@ -1290,6 +1392,49 @@
           },
           "required": [
             "code",
+            "bedeutung"
+          ]
+        },
+        "Fakt": {
+          "description": "A fact a decision states beside its code, under the body key `feld`.",
+          "type": "object",
+          "properties": {
+            "feld": {
+              "description": "The decision body's key: `bilanzkreis`, `versorgungsart` or\n`abrechnungsintervall_monate`.",
+              "type": "string"
+            },
+            "bezeichnung": {
+              "description": "What it is, with the segment it rides.",
+              "type": "string"
+            },
+            "werte": {
+              "description": "The values the segment admits; empty where the value is free text (a\nBilanzkreis is the LF's own code).",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FaktWert"
+              }
+            }
+          },
+          "required": [
+            "feld",
+            "bezeichnung",
+            "werte"
+          ]
+        },
+        "FaktWert": {
+          "description": "One admissible value of a [`Fakt`].",
+          "type": "object",
+          "properties": {
+            "wert": {
+              "description": "What the decision sends — a code, or a number written as text.",
+              "type": "string"
+            },
+            "bedeutung": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "wert",
             "bedeutung"
           ]
         },
@@ -1445,6 +1590,33 @@
             "string",
             "null"
           ],
+          "default": null
+        },
+        "bilanzkreis": {
+          "description": "The Bilanzkreis an E/G Zustimmung names, where the entry lists\n`bilanzkreis` among the facts it still needs.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "versorgungsart": {
+          "description": "`SG10 CCI+Z36` on a Strom 55014: `ZC9`, `ZD0` or `ZE3`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "abrechnungsintervall_monate": {
+          "description": "`SG6 DTM+Z20` on a Gas 44014: 1, 3, 6 or 12.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
           "default": null
         }
       }

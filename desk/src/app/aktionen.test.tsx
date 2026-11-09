@@ -52,6 +52,8 @@ const FREIGABE = {
       { code: "A02", bedeutung: "nimmt nicht an der Marktkommunikation teil" },
     ],
   },
+  fakten_freigeben: [],
+  fakten_ablehnen: [],
   kann_freigeben: true,
   kann_ablehnen: true,
   status: "Pending",
@@ -148,7 +150,10 @@ const ABLEHNEN_A02 = {
 };
 
 /** Every read the four decision sources make, and every write recorded. */
-function deskFetch(posts: Post[], opts: { wartend?: Record<string, unknown> } = {}) {
+function deskFetch(
+  posts: Post[],
+  opts: { wartend?: Record<string, unknown>; freigabe?: Record<string, unknown> } = {},
+) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     if (
       url.includes("/api/v1/queue/") ||
@@ -168,7 +173,11 @@ function deskFetch(posts: Post[], opts: { wartend?: Record<string, unknown> } = 
     const m = JSON.parse(String(init?.body));
     const name = m.method === "tools/call" ? m.params.name : null;
     const out: Record<string, unknown> = {
-      list_pending_approvals: { freigaben: [FREIGABE], count: 1, saturated: false },
+      list_pending_approvals: {
+        freigaben: [opts.freigabe ?? FREIGABE],
+        count: 1,
+        saturated: false,
+      },
       list_disputes: { disputes: [DISPUT], count: 1, saturated: false },
       list_review_queue: { records: [POSTEN], count: 1, saturated: false },
       list_parked_bookings: { buchungen: [GEPARKT], count: 1, saturated: false },
@@ -245,6 +254,73 @@ describe("the action registry", () => {
       url: "/svc/processd/api/v1/queue/q-1/reject",
       body: { antwort_code: "A02", antwort_tree: "E_0622", bemerkung: "Nicht im Netz" },
     });
+  });
+
+  it("asks for the facts an E/G Bestätigung still needs, and sends them typed", async () => {
+    // A queued 44014 whose Bilanzkreis and Abrechnungsintervall did not
+    // resolve: processd lists both, the interval with the values DTM+Z20 admits.
+    const EOG = {
+      ...FREIGABE,
+      pid: 44013,
+      marktrolle: "LF",
+      codes_freigeben: { ebd: "E_3008", codes: [{ code: "E15", bedeutung: "Zustimmung" }] },
+      fakten_freigeben: [
+        { feld: "bilanzkreis", bezeichnung: "Bilanzkreis des LF", werte: [] },
+        {
+          feld: "abrechnungsintervall_monate",
+          bezeichnung: "Abrechnungsintervall des LF in Monaten (SG6 DTM+Z20)",
+          werte: [
+            { wert: "1", bedeutung: "1 Monat" },
+            { wert: "12", bedeutung: "12 Monate" },
+          ],
+        },
+      ],
+    };
+    const erwartet = {
+      url: "/svc/processd/api/v1/queue/q-1/approve",
+      body: {
+        antwort_code: "E15",
+        antwort_tree: "E_3008",
+        bilanzkreis: "BKGAS0001",
+        abrechnungsintervall_monate: 12,
+      },
+    };
+
+    const view: Post[] = [];
+    vi.stubGlobal("fetch", deskFetch(view, { freigabe: EOG }));
+    await open("/freigaben?id=q-1");
+    await screen.findByRole("heading", { name: /verbundenen Lieferanten/ });
+    fireEvent.click(screen.getByRole("radio", { name: "Freigeben" }));
+    fireEvent.click(screen.getByRole("radio", { name: /E15/ }));
+    const senden = screen.getByRole("button", { name: "Freigeben" });
+    expect(senden.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(screen.getByRole("textbox", { name: /Bilanzkreis/ }), {
+      target: { value: "BKGAS0001" },
+    });
+    expect(senden.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: /12 Monate/ }));
+    expect(senden.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(senden);
+    flush();
+    await waitFor(() => expect(view).toHaveLength(1));
+    expect(view[0]).toEqual(erwartet);
+    cleanup();
+
+    const palette: Post[] = [];
+    vi.stubGlobal("fetch", deskFetch(palette, { freigabe: EOG }));
+    await open("/heute");
+    await findenUndWaehlen("q-1", /Freigabe/);
+    aktion("Freigeben");
+    fireEvent.click(screen.getByRole("radio", { name: /E15/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: /Bilanzkreis/ }), {
+      target: { value: "BKGAS0001" },
+    });
+    sendenUndAbgeben();
+    expect(palette).toHaveLength(0);
+    fireEvent.click(screen.getByRole("radio", { name: /12 Monate/ }));
+    sendenUndAbgeben();
+    await waitFor(() => expect(palette).toHaveLength(1));
+    expect(palette).toEqual(view);
   });
 
   it("sends a Disput's Beilegen from ⌘K exactly as its view does", async () => {

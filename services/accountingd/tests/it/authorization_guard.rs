@@ -418,8 +418,14 @@ const READS: [&str; 5] = [
 ];
 
 /// The actions held to the Netzbetreiber: the EEG/KWKG payments are its own
-/// (§ 19 Abs. 1 EEG 2023, § 13 Abs. 1 EnFG), so an LF key holds neither.
-const NB_ACTIONS: [&str; 2] = ["read-enfg", "record-aufrechnung"];
+/// (§ 19 Abs. 1 EEG 2023, § 13 Abs. 1 EnFG), so an LF or MSB key holds none of
+/// them — running a payout and recording its pain.002 status among them.
+const NB_ACTIONS: [&str; 4] = [
+    "read-enfg",
+    "record-aufrechnung",
+    "record-rueckzahlung",
+    "run-payout",
+];
 
 /// Every action the handlers check that is not a read is forbidden to an
 /// advisory principal, and no read is.
@@ -466,10 +472,51 @@ fn a_non_advisory_principal_keeps_its_permits() {
             "an {who} principal must keep {action}"
         );
     }
+    let msb = mako_service::cedar::CedarPrincipal {
+        sub: "msb-operator".to_owned(),
+        tenant: "9900357000004".to_owned(),
+        roles: vec!["MSB".to_owned()],
+    };
     for action in NB_ACTIONS {
         assert!(
             enforcer.check(&lf, action, "9900357000004").is_err(),
             "an LF principal must not hold the Netzbetreiber's {action}"
         );
+        assert!(
+            enforcer.check(&msb, action, "9900357000004").is_err(),
+            "an MSB principal must not hold the Netzbetreiber's {action}"
+        );
     }
+}
+
+/// `POST /api/v1/eeg/payouts/run` and `PUT /api/v1/eeg/payouts/{id}/status`
+/// are both checked as `run-payout`, so a key carrying `NB` alone runs a payout
+/// and records its pain.002 status; and it reads what is owed back of one
+/// (`GET /api/v1/eeg/rueckforderungen`, `read-enfg`).
+#[test]
+fn an_nb_only_key_runs_a_payout_and_records_its_status() {
+    let held_to = |handler: &str, action: &str| {
+        let start = HANDLERS
+            .find(&format!("\npub async fn {handler}("))
+            .unwrap_or_else(|| panic!("{handler} is in handlers.rs"));
+        let tail = &HANDLERS[start + 1..];
+        let body = &tail[..tail.find("\npub async fn ").unwrap_or(tail.len())];
+        assert!(
+            body.contains(&format!(
+                r#"cedar.check(&claims.principal(), "{action}", &cfg.tenant)"#
+            )),
+            "{handler} is no longer held to {action}"
+        );
+    };
+    held_to("get_eeg_rueckforderungen", "read-enfg");
+    for handler in ["post_run_eeg_payouts", "put_eeg_payout_status"] {
+        held_to(handler, "run-payout");
+    }
+    let enforcer = mako_service::cedar::CedarEnforcer::from_policy_str(POLICY).expect("parses");
+    let nb = mako_service::cedar::CedarPrincipal {
+        sub: "nb-operator".to_owned(),
+        tenant: "9900357000004".to_owned(),
+        roles: vec!["NB".to_owned()],
+    };
+    assert!(enforcer.check(&nb, "run-payout", "9900357000004").is_ok());
 }

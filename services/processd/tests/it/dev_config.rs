@@ -9,7 +9,13 @@
 fn the_dev_config_loads() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/config/processd.toml");
-    if let Err(e) = mako_service::load_config_file::<processd::config::Config>("processd", &path) {
-        panic!("{e}");
+    let cfg = match mako_service::load_config_file::<processd::config::Config>("processd", &path) {
+        Ok(cfg) => cfg,
+        Err(e) => panic!("{e}"),
+    };
+    // What startup checks beyond the parse — `[lf] eog_auto_respond` without
+    // its Abrechnungsintervall among them.
+    if let Err(e) = <processd::Processd as mako_service::Daemon>::validate(&cfg) {
+        panic!("dev/config/processd.toml parses but is refused at startup: {e:#}");
     }
 }

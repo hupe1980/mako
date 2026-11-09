@@ -114,7 +114,7 @@ pub struct AnlageMonat {
     pub tr_id: String,
     /// The Regelzone (EIC) of the plant's Messlokation, from `marktd`.
     pub regelzone: Option<String>,
-    /// The month's `calculated` receipts, originals and corrections.
+    /// The month's decided receipts (`pg::SETTLED_STATUSES`), originals and corrections.
     pub belege: Vec<Beleg>,
 }
 
@@ -161,7 +161,7 @@ pub enum EnfgFehler {
     #[error("payment {zahlung_id} is for plant {tr_id}, which this tenant does not hold")]
     UnbekannteAnlage { tr_id: String, zahlung_id: String },
     #[error(
-        "plant {tr_id}: {paid_ct} ct paid, but no calculated receipt of the month rounds to it \
+        "plant {tr_id}: {paid_ct} ct paid, but no decided receipt of the month rounds to it \
          (receipts: {belege:?}) — a payment the receipts do not explain is not reported"
     )]
     Abweichung {
@@ -415,7 +415,7 @@ fn sect50_summe(positions: Option<&serde_json::Value>) -> Option<Decimal> {
     Some(sum)
 }
 
-/// The facts of the plants `tr_ids` for one month: their `calculated`
+/// The facts of the plants `tr_ids` for one month: their decided
 /// receipts and the Regelzone of their MeLo. A plant this tenant does not
 /// hold is absent from the map.
 ///
@@ -459,13 +459,18 @@ pub async fn anlagen_im_monat<S: Stammdaten>(
         "SELECT id, tr_id, settlement_model, settlement_eur, positions_json
            FROM settlement_receipts
           WHERE tenant = $1 AND billing_year = $2 AND billing_month = $3
-            AND tr_id = ANY($4) AND status = 'calculated' AND settlement_eur IS NOT NULL
+            AND tr_id = ANY($4) AND status = ANY($5) AND settlement_eur IS NOT NULL
           ORDER BY settled_at",
     )
     .bind(tenant)
     .bind(year)
     .bind(month)
     .bind(&ids)
+    // Every decided receipt is announced to accountingd and can be paid — a
+    // § 52 EEG 2021 reduced Vergütung (`sanctioned`), a KWKG month that ends the
+    // Förderdauer (`foerderung_beendet`) — so each is what a payment can
+    // reconcile to.
+    .bind(crate::pg::SETTLED_STATUSES.as_slice())
     .fetch_all(pool)
     .await?
     {

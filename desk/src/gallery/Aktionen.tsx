@@ -26,6 +26,8 @@ const FREIGABE: Freigabe = {
       { code: "A02", bedeutung: "nimmt nicht an der Marktkommunikation teil" },
     ],
   },
+  fakten_freigeben: [],
+  fakten_ablehnen: [],
   kann_freigeben: true,
   kann_ablehnen: true,
   status: "Pending",

@@ -622,6 +622,7 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
+                vorgang: Box::new(super::lf_vorgangsdaten(u)?),
             })
         },
     ));

@@ -224,6 +224,8 @@ fn every_entry_type_books_somewhere_deliberate() {
         "VERZUGSZINSEN",
         "EEG_GUTSCHRIFT",
         "EEG_MARKTPRAEMIE",
+        "EEG_AUSZAHLUNG",
+        "EEG_RUECKZAHLUNG",
         "JAHRESABSCHLUSS",
     ];
     for kind in ENTRY_TYPES {
@@ -238,6 +240,52 @@ fn every_entry_type_books_somewhere_deliberate() {
             ENTRY_TYPES.contains(kind),
             "{kind} has a contra arm but is not bookable"
         );
+    }
+}
+
+/// The upper-case tokens of `text` — the Buchungsarten a list names, taken
+/// whole so `GUTSCHRIFT` is not found inside `EEG_GUTSCHRIFT`.
+fn kinds_named(text: &str) -> std::collections::BTreeSet<&str> {
+    text.split(|c: char| !(c.is_ascii_uppercase() || c == '_'))
+        .filter(|t| t.len() > 2)
+        .collect()
+}
+
+/// Every place that lists the Buchungsarten names all of them: the two MCP
+/// lists an agent books from, and the Desk's words for them. A kind missing
+/// there is one an agent is told it cannot book, or one the Desk shows raw.
+#[test]
+fn every_buchungsart_is_named_where_the_kinds_are_listed() {
+    use accountingd::ledger::ENTRY_TYPES;
+    const MCP: &str = include_str!("../../src/mcp_server.rs");
+    const DESK: &str = include_str!("../../../../desk/src/data/buchung.ts");
+    let between = |text: &'static str, from: &str, to: &str| -> &'static str {
+        let start = text
+            .find(from)
+            .unwrap_or_else(|| panic!("{from:?} is present"));
+        let rest = &text[start..];
+        &rest[..rest
+            .find(to)
+            .unwrap_or_else(|| panic!("{to:?} follows {from:?}"))]
+    };
+    let lists = [
+        (
+            "ManualBuchungParams.entry_type",
+            between(MCP, "/// Buchungsart. One of:", "pub entry_type"),
+        ),
+        (
+            "post_manual_booking",
+            between(MCP, "Allowed entry_type:", "amount_ct:"),
+        ),
+        ("desk/src/data/buchung.ts", between(DESK, "const ART", "};")),
+    ];
+    for (place, list) in lists {
+        let named = kinds_named(list);
+        let missing: Vec<_> = ENTRY_TYPES
+            .iter()
+            .filter(|k| !named.contains(**k))
+            .collect();
+        assert!(missing.is_empty(), "{place} does not name {missing:?}");
     }
 }
 

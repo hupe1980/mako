@@ -535,8 +535,40 @@ CREATE TABLE settlement_receipts (
     correction_of               UUID,       -- FK to original receipt.id
     correction_reason           TEXT,
 
+    -- The receipt's place in its chain — the period (`tr_id`, `billing_year`,
+    -- `billing_month`). Every write of a receipt, a re-settle of the initial one
+    -- included, takes the next number (`settlement_receipts_ketten_folge`), and
+    -- the settlement CloudEvent carries it, so accountingd applies a chain's
+    -- receipts in the order einsd wrote them, not by any replica's clock.
+    ketten_folge                BIGINT      NOT NULL,
+
     settled_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX sr_ketten_folge
+    ON settlement_receipts (tenant, tr_id, billing_year, billing_month, ketten_folge);
+
+-- The next number of the chain, under a per-chain lock, so two writes of one
+-- period can never take the same one.
+CREATE OR REPLACE FUNCTION settlement_receipts_ketten_folge() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtextextended(
+        'einsd-kette:' || NEW.tenant || ':' || NEW.tr_id || ':'
+            || NEW.billing_year || ':' || NEW.billing_month, 0));
+    NEW.ketten_folge := (SELECT COALESCE(max(r.ketten_folge), 0) + 1
+                           FROM settlement_receipts r
+                          WHERE r.tenant = NEW.tenant AND r.tr_id = NEW.tr_id
+                            AND r.billing_year = NEW.billing_year
+                            AND r.billing_month = NEW.billing_month);
+    RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER settlement_receipts_ketten_folge
+    BEFORE INSERT OR UPDATE OF settlement_eur, status ON settlement_receipts
+    FOR EACH ROW EXECUTE FUNCTION settlement_receipts_ketten_folge();
 
 COMMENT ON TABLE settlement_receipts IS
     '§ 147 Abs. 3 AO / GoBD: immutable settlement audit log (Buchungsbelege, 8-year retention). '

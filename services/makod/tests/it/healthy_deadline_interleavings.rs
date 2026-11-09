@@ -231,6 +231,7 @@ fn geli_gas_lieferbeginn_survives_every_interleaving() {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: mako_engine::payload::Stammdaten::default(),
             },
             C::Activate,
         ],

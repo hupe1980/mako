@@ -273,8 +273,9 @@ impl AnmeldungPayload {
             .map(ToOwned::to_owned);
 
         let date_str = data.get("process_date")?.as_str()?;
-        // Includes the `CCYYMMDDHHMM±ZZ` shape an EDIFACT `SG4 DTM` arrives in.
-        let process_date = crate::wire_date::parse(date_str)?;
+        // Includes the `CCYYMMDDHHMM±ZZ` shape an EDIFACT `SG4 DTM` arrives in,
+        // read as the German day it begins in the PID's Sparte.
+        let process_date = parse_civil_date(date_str, sparte_of(pid))?;
 
         Some(Self {
             pid,
@@ -1014,7 +1015,10 @@ fn tranchen_lage(
                 .get(lfa)
                 .copied()
                 .unwrap_or(Decimal::ZERO),
-            antwort: waiting.antworten.get(lfa).and_then(lfa_antwort),
+            antwort: waiting
+                .antworten
+                .get(lfa)
+                .and_then(|v| lfa_antwort(v, anfrage.sparte)),
         })
         .collect();
     Some(mako_pruefung::TranchenLage {
@@ -1028,7 +1032,7 @@ fn tranchen_lage(
 ///
 /// A recorded entry with no `antwortcode` is a lapsed Frist, which is silence —
 /// the same `None` an LFA that never replied gets.
-fn lfa_antwort(v: &serde_json::Value) -> Option<mako_pruefung::LfaAntwort> {
+fn lfa_antwort(v: &serde_json::Value, sparte: Sparte) -> Option<mako_pruefung::LfaAntwort> {
     let code = v.get("antwortcode")?.as_str()?.to_owned();
     if v.get("zustimmung")
         .and_then(serde_json::Value::as_bool)
@@ -1039,7 +1043,7 @@ fn lfa_antwort(v: &serde_json::Value) -> Option<mako_pruefung::LfaAntwort> {
             zuordnungsende: v
                 .get("zuordnungsende")
                 .and_then(|d| d.as_str())
-                .and_then(parse_civil_date),
+                .and_then(|d| parse_civil_date(d, sparte)),
         })
     } else {
         Some(mako_pruefung::LfaAntwort::Widerspruch {
@@ -1140,7 +1144,7 @@ pub async fn resume_after_lfa_antwort(
     .then(|| {
         data.get("zuordnungsende")
             .and_then(|v| v.as_str())
-            .and_then(parse_civil_date)
+            .and_then(|d| parse_civil_date(d, anfrage.sparte))
     })
     .flatten();
 
@@ -1157,7 +1161,7 @@ pub async fn resume_after_lfa_antwort(
                     zuordnungsende: data
                         .get("zuordnungsende")
                         .and_then(|v| v.as_str())
-                        .and_then(parse_civil_date),
+                        .and_then(|d| parse_civil_date(d, anfrage.sparte)),
                 }
             } else {
                 mako_pruefung::LfaAntwort::Widerspruch { code, grund }
@@ -1781,7 +1785,7 @@ impl AbmeldungPayload {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let abmeldedatum = parse_civil_date(data.get("process_date")?.as_str()?)?;
+        let abmeldedatum = parse_civil_date(data.get("process_date")?.as_str()?, sparte_of(pid))?;
         Some(Self {
             pid,
             process_id,
@@ -1826,9 +1830,18 @@ impl AbmeldungPayload {
     }
 }
 
-/// Every date shape a process payload carries — see [`crate::wire_date`].
-fn parse_civil_date(raw: &str) -> Option<time::Date> {
-    crate::wire_date::parse(raw)
+/// Every date shape a process payload carries, a `303` stamp read as the
+/// German day it begins in `sparte` — see [`crate::wire_date`].
+fn parse_civil_date(raw: &str, sparte: Sparte) -> Option<time::Date> {
+    crate::wire_date::parse(raw, tagesgrenze(sparte))
+}
+
+/// The Sparte whose day boundary a process date of `sparte` is written on.
+const fn tagesgrenze(sparte: Sparte) -> mako_fristen::Sparte {
+    match sparte {
+        Sparte::Strom => mako_fristen::Sparte::Strom,
+        Sparte::Gas => mako_fristen::Sparte::Gas,
+    }
 }
 
 /// A date as the `makod` command payloads carry it, `YYYYMMDD`.

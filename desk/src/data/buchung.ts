@@ -67,6 +67,8 @@ const ART: Record<string, string> = {
   VERZUGSZINSEN: "Verzugszinsen",
   EEG_GUTSCHRIFT: "EEG-Gutschrift",
   EEG_MARKTPRAEMIE: "EEG-Marktprämie",
+  EEG_AUSZAHLUNG: "EEG-Auszahlung",
+  EEG_RUECKZAHLUNG: "EEG-Rückzahlung",
   JAHRESABSCHLUSS: "Jahresabschluss",
 };
 

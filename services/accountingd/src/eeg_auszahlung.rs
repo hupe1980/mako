@@ -15,17 +15,28 @@
 //! - **A payout pays what is outstanding.** The chain's current receipt less
 //!   what was already paid or ordered for it — every payout order the bank has
 //!   not rejected and that was not cancelled, and every Aufrechnung, which
-//!   § 13 Abs. 1 Satz 2 EnFG counts as paid. A lower correction pays nothing
-//!   and leaves the overpayment as the plant operator's debt — [`ausgleich`].
+//!   § 13 Abs. 1 Satz 2 EnFG counts as paid, less every Rückzahlung. A lower
+//!   correction pays nothing and leaves the overpayment as the plant
+//!   operator's debt — [`ausgleich`] — until the operator pays it back
+//!   ([`erfasse_rueckzahlung`]). The Vergütung and the Marktprämie are paid by
+//!   the same rule ([`zahle`]).
 //!
-//! The chain's current receipt is the one einsd issued last (the CloudEvent
-//! `time`), not the one that arrived last, so a redelivery overtaken by the
-//! next receipt cannot reopen the period at its old amount. Every write to a
-//! chain runs under a per-chain advisory lock, which is what makes a replayed
-//! receipt pay nothing: under the lock it finds nothing outstanding.
+//! The Kontokorrent follows the money: a receipt credits the operator, a
+//! payout the bank confirms with `ACSC` debits it ([`bestaetige_auszahlung`]),
+//! and a Rückzahlung credits it again — so the account shows what is left
+//! owed either way, never the claim beside its own payment.
+//!
+//! The chain's current receipt is the one einsd wrote last — the
+//! `ketten_folge` einsd assigns in the write that records the receipt — not the
+//! one that arrived last, and not the one whose CloudEvent `time` is latest,
+//! which two einsd replicas' clocks can put in either order. So a redelivery
+//! overtaken by the next receipt cannot reopen the period at its old amount.
+//! Every write to a chain runs under a per-chain advisory lock, which is what
+//! makes a replayed receipt pay nothing: under the lock it finds nothing
+//! outstanding.
 
 use sqlx::{PgConnection, Row as _};
-use time::{Date, OffsetDateTime};
+use time::Date;
 use uuid::Uuid;
 
 use crate::config::AccountingdConfig;
@@ -33,9 +44,10 @@ use crate::config::AccountingdConfig;
 /// Which einsd event announced a receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Art {
-    /// `de.eeg.verguetung.berechnet` — paid out by accountingd.
+    /// `de.eeg.verguetung.berechnet`.
     Verguetung,
-    /// `de.eeg.marktpraemie.berechnet` — booked, not paid out here.
+    /// `de.eeg.marktpraemie.berechnet` — the § 20 EEG 2023 Marktprämie, which
+    /// the Netzbetreiber owes the plant operator (§ 19 Abs. 1 Nr. 1).
     Marktpraemie,
 }
 
@@ -107,32 +119,23 @@ pub fn ausgleich(anspruch_ct: i64, geleistet_ct: i64) -> Ausgleich {
 }
 
 /// A chain's current receipt, as [`gutschrift_delta`] compares against it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Aktuell {
     pub anspruch_ct: i64,
-    pub beleg_zeit: OffsetDateTime,
-    pub source_ce_id: String,
+    pub ketten_folge: i64,
 }
 
 /// What a newly received receipt changes the chain's claim by — the amount its
 /// ledger entry books, positive for a credit to the plant operator.
 ///
-/// The chain's first receipt is its whole amount; one issued after the current
-/// receipt is the difference to it; one issued before — overtaken in delivery —
-/// changes nothing. Equal times are ordered by CloudEvent id, as `eeg_ketten`
-/// orders them.
+/// The chain's first receipt is its whole amount; one einsd wrote after the
+/// current receipt (a higher `ketten_folge`) is the difference to it; one
+/// written before — overtaken in delivery — changes nothing.
 #[must_use]
-pub fn gutschrift_delta(
-    anspruch_ct: i64,
-    beleg_zeit: OffsetDateTime,
-    source_ce_id: &str,
-    aktuell: Option<&Aktuell>,
-) -> i64 {
+pub fn gutschrift_delta(anspruch_ct: i64, ketten_folge: i64, aktuell: Option<Aktuell>) -> i64 {
     match aktuell {
         None => anspruch_ct,
-        Some(a) if (beleg_zeit, source_ce_id) > (a.beleg_zeit, a.source_ce_id.as_str()) => {
-            anspruch_ct.saturating_sub(a.anspruch_ct)
-        }
+        Some(a) if ketten_folge > a.ketten_folge => anspruch_ct.saturating_sub(a.anspruch_ct),
         Some(_) => 0,
     }
 }
@@ -151,7 +154,8 @@ pub struct Beleg {
     pub billing_month: i16,
     /// The receipt's settlement, in ct (kaufmännisch rounded).
     pub anspruch_ct: i64,
-    pub beleg_zeit: OffsetDateTime,
+    /// Its place in the chain, as einsd wrote it.
+    pub ketten_folge: i64,
     pub bank_iban: Option<String>,
     pub zahlungsempfaenger: Option<String>,
 }
@@ -164,6 +168,32 @@ pub struct Erfasst {
     /// What its ledger entry books (positive = credit). A draft is staged under
     /// the CloudEvent id exactly when this is non-zero.
     pub gutschrift_delta_ct: i64,
+}
+
+/// Why a receipt was not recorded.
+#[derive(Debug, thiserror::Error)]
+pub enum ErfassFehler {
+    /// Another receipt already holds the chain position this one claims, so it
+    /// is not a receipt einsd wrote.
+    #[error(
+        "receipt chain {tr_id} {year:04}-{month:02}: position {ketten_folge} is already held by \
+         CloudEvent {belegt_von}"
+    )]
+    FolgeVergeben {
+        tr_id: String,
+        year: i16,
+        month: i16,
+        ketten_folge: i64,
+        belegt_von: String,
+    },
+    #[error(transparent)]
+    Technisch(#[from] anyhow::Error),
+}
+
+impl From<sqlx::Error> for ErfassFehler {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Technisch(e.into())
+    }
 }
 
 /// Serialise every write to one chain for the rest of the transaction.
@@ -189,7 +219,8 @@ async fn sperre_kette(
 ///
 /// # Errors
 ///
-/// A database failure, or a draft the ledger would refuse.
+/// [`ErfassFehler::FolgeVergeben`] for a second receipt at a taken chain
+/// position; a database failure, or a draft the ledger would refuse.
 pub async fn erfasse(
     conn: &mut PgConnection,
     ledger: &crate::ledger::PgLedger,
@@ -197,7 +228,7 @@ pub async fn erfasse(
     lf_mp_id: &str,
     beleg: &Beleg,
     heute: Date,
-) -> anyhow::Result<Erfasst> {
+) -> Result<Erfasst, ErfassFehler> {
     sperre_kette(
         conn,
         tenant,
@@ -219,10 +250,31 @@ pub async fn erfasse(
             gutschrift_delta_ct: delta,
         });
     }
-    let aktuell = sqlx::query(
-        "SELECT anspruch_ct, beleg_zeit, source_ce_id FROM eeg_belege
+    let belegt_von: Option<String> = sqlx::query_scalar(
+        "SELECT source_ce_id FROM eeg_belege
           WHERE tenant = $1 AND tr_id = $2 AND billing_year = $3 AND billing_month = $4
-          ORDER BY beleg_zeit DESC, source_ce_id DESC
+            AND ketten_folge = $5",
+    )
+    .bind(tenant)
+    .bind(&beleg.tr_id)
+    .bind(beleg.billing_year)
+    .bind(beleg.billing_month)
+    .bind(beleg.ketten_folge)
+    .fetch_optional(&mut *conn)
+    .await?;
+    if let Some(belegt_von) = belegt_von {
+        return Err(ErfassFehler::FolgeVergeben {
+            tr_id: beleg.tr_id.clone(),
+            year: beleg.billing_year,
+            month: beleg.billing_month,
+            ketten_folge: beleg.ketten_folge,
+            belegt_von,
+        });
+    }
+    let aktuell = sqlx::query(
+        "SELECT anspruch_ct, ketten_folge FROM eeg_belege
+          WHERE tenant = $1 AND tr_id = $2 AND billing_year = $3 AND billing_month = $4
+          ORDER BY ketten_folge DESC
           LIMIT 1",
     )
     .bind(tenant)
@@ -233,19 +285,13 @@ pub async fn erfasse(
     .await?
     .map(|r| Aktuell {
         anspruch_ct: r.get("anspruch_ct"),
-        beleg_zeit: r.get("beleg_zeit"),
-        source_ce_id: r.get("source_ce_id"),
+        ketten_folge: r.get("ketten_folge"),
     });
-    let delta = gutschrift_delta(
-        beleg.anspruch_ct,
-        beleg.beleg_zeit,
-        &beleg.source_ce_id,
-        aktuell.as_ref(),
-    );
+    let delta = gutschrift_delta(beleg.anspruch_ct, beleg.ketten_folge, aktuell);
     sqlx::query(
         "INSERT INTO eeg_belege
              (tenant, source_ce_id, art, receipt_id, korrektur_von, tr_id, malo_id, account_id,
-              billing_year, billing_month, anspruch_ct, gutschrift_delta_ct, beleg_zeit,
+              billing_year, billing_month, anspruch_ct, gutschrift_delta_ct, ketten_folge,
               bank_iban, zahlungsempfaenger)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
     )
@@ -261,7 +307,7 @@ pub async fn erfasse(
     .bind(beleg.billing_month)
     .bind(beleg.anspruch_ct)
     .bind(delta)
-    .bind(beleg.beleg_zeit)
+    .bind(beleg.ketten_folge)
     .bind(beleg.bank_iban.as_deref())
     .bind(beleg.zahlungsempfaenger.as_deref())
     .execute(&mut *conn)
@@ -281,7 +327,9 @@ pub async fn erfasse(
             Some(beleg.art.beschreibung()),
             None,
         );
-        crate::booking::stage(conn, ledger, tenant, &draft).await?;
+        crate::booking::stage(conn, ledger, tenant, &draft)
+            .await
+            .map_err(anyhow::Error::from)?;
     }
     Ok(Erfasst {
         neu: true,
@@ -314,19 +362,6 @@ impl Kette {
     }
 }
 
-/// A `SELECT` of every `eeg_ketten` column [`kette`] reads, followed by `$rest`
-/// — spliced at compile time, so the statement stays a `'static` literal.
-macro_rules! ketten_select {
-    ($rest:literal) => {
-        concat!(
-            "SELECT tr_id, malo_id, billing_year, billing_month, account_id, art, receipt_id, \
-             source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger \
-             FROM eeg_ketten ",
-            $rest
-        )
-    };
-}
-
 fn kette(r: &sqlx::postgres::PgRow) -> Result<Kette, sqlx::Error> {
     let token: String = r.try_get("art")?;
     let art = Art::from_token(&token).ok_or_else(|| sqlx::Error::ColumnDecode {
@@ -349,24 +384,29 @@ fn kette(r: &sqlx::postgres::PgRow) -> Result<Kette, sqlx::Error> {
     })
 }
 
-/// The Vergütung chains of one billing month, optionally of one MaLo — what
-/// the payout run walks.
+/// The receipt chains of one billing month — Vergütung and Marktprämie —
+/// optionally of one MaLo: what the payout run walks.
 ///
 /// # Errors
 ///
 /// A database failure.
-pub async fn verguetungsketten_im_monat(
+pub async fn ketten_im_monat(
     pool: &sqlx::PgPool,
     tenant: &str,
     year: i16,
     month: i16,
     malo_id: Option<&str>,
 ) -> Result<Vec<Kette>, sqlx::Error> {
-    sqlx::query(ketten_select!(
-        "WHERE tenant = $1 AND billing_year = $2 AND billing_month = $3 AND art = 'VERGUETUNG'
-           AND ($4::text IS NULL OR malo_id = $4)
-         ORDER BY tr_id"
-    ))
+    // Each `eeg_ketten` statement is a plain literal, so `cargo xtask check-sql`
+    // prepares it against the schema.
+    sqlx::query(
+        "SELECT tr_id, malo_id, billing_year, billing_month, account_id, art, receipt_id,
+                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger
+           FROM eeg_ketten
+          WHERE tenant = $1 AND billing_year = $2 AND billing_month = $3
+            AND ($4::text IS NULL OR malo_id = $4)
+          ORDER BY tr_id",
+    )
     .bind(tenant)
     .bind(year)
     .bind(month)
@@ -388,10 +428,13 @@ pub async fn rueckforderungen(
     pool: &sqlx::PgPool,
     tenant: &str,
 ) -> Result<Vec<Kette>, sqlx::Error> {
-    sqlx::query(ketten_select!(
-        "WHERE tenant = $1 AND geleistet_ct > anspruch_ct
-         ORDER BY billing_year, billing_month, tr_id"
-    ))
+    sqlx::query(
+        "SELECT tr_id, malo_id, billing_year, billing_month, account_id, art, receipt_id,
+                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger
+           FROM eeg_ketten
+          WHERE tenant = $1 AND geleistet_ct > anspruch_ct
+          ORDER BY billing_year, billing_month, tr_id",
+    )
     .bind(tenant)
     .fetch_all(pool)
     .await?
@@ -420,9 +463,6 @@ pub enum Zahlung {
     /// receipt nor in the account's zahlungsinformation. The chain stays
     /// outstanding for the next run.
     OhneKonto { offen_ct: i64 },
-    /// The chain's current receipt is a Marktprämie, which accountingd does not
-    /// pay out.
-    KeineVerguetung,
     /// No receipt is recorded for the chain.
     KeinBeleg,
 }
@@ -459,9 +499,12 @@ pub async fn zahle(
 ) -> Result<Zahlung, AuszahlungFehler> {
     let tenant = cfg.tenant.as_str();
     sperre_kette(conn, tenant, tr_id, year, month).await?;
-    let Some(row) = sqlx::query(ketten_select!(
-        "WHERE tenant = $1 AND tr_id = $2 AND billing_year = $3 AND billing_month = $4"
-    ))
+    let Some(row) = sqlx::query(
+        "SELECT tr_id, malo_id, billing_year, billing_month, account_id, art, receipt_id,
+                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger
+           FROM eeg_ketten
+          WHERE tenant = $1 AND tr_id = $2 AND billing_year = $3 AND billing_month = $4",
+    )
     .bind(tenant)
     .bind(tr_id)
     .bind(year)
@@ -472,9 +515,6 @@ pub async fn zahle(
         return Ok(Zahlung::KeinBeleg);
     };
     let k = kette(&row)?;
-    if k.art != Art::Verguetung {
-        return Ok(Zahlung::KeineVerguetung);
-    }
     let a = k.ausgleich();
     if a.auszahlung_ct == 0 {
         return Ok(Zahlung::NichtsOffen {
@@ -605,10 +645,223 @@ pub async fn zahle(
     }))
 }
 
+/// Book a payout the bank confirmed settled (`ACSC`) on the plant's
+/// Kontokorrent, in the caller's transaction: the order's amount debits the
+/// operator's credit, so the account shows what is still owed rather than the
+/// claim beside its own payment. Returns the draft's key, for the caller to
+/// book after the commit.
+///
+/// The caller stages this once, on the order's transition to `ACSC`; the key
+/// is the payout, so a second staging of the same draft is a no-op.
+///
+/// # Errors
+///
+/// A database failure, an unknown order, or a draft the ledger would refuse.
+pub async fn bestaetige_auszahlung(
+    conn: &mut PgConnection,
+    ledger: &crate::ledger::PgLedger,
+    tenant: &str,
+    payout_id: Uuid,
+    heute: Date,
+) -> anyhow::Result<String> {
+    let row = sqlx::query(
+        "SELECT malo_id, tr_id, amount_ct, end_to_end_ref FROM eeg_payout_orders
+          WHERE payout_id = $1 AND tenant = $2",
+    )
+    .bind(payout_id)
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("no EEG payout order {payout_id}"))?;
+    let malo_id: String = row.try_get("malo_id")?;
+    let tr_id: String = row.try_get("tr_id")?;
+    let amount_ct: i64 = row.try_get("amount_ct")?;
+    let e2e: String = row.try_get("end_to_end_ref")?;
+    let key = format!("eeg-auszahlung:{payout_id}");
+    let draft = crate::pg::draft(
+        &malo_id,
+        tenant,
+        "EEG_AUSZAHLUNG",
+        amount_ct,
+        &key,
+        Some(&e2e),
+        Some(&tr_id),
+        heute,
+        heute,
+        Some("EEG Auszahlung (pain.002 ACSC)"),
+        None,
+    );
+    crate::booking::stage(conn, ledger, tenant, &draft).await?;
+    Ok(key)
+}
+
+/// A plant operator's repayment of an overpaid receipt chain, as the operator
+/// of accountingd records it.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RueckzahlungRequest {
+    /// The plant and billing month of the overpaid chain.
+    pub tr_id: String,
+    pub billing_year: i16,
+    pub billing_month: i16,
+    /// The amount received, in euro cent; positive, at most what is owed back.
+    pub amount_ct: i64,
+    /// The day the money arrived, `YYYY-MM-DD`.
+    pub eingegangen_am: String,
+    pub vermerk: Option<String>,
+}
+
+/// Why a repayment is refused before it is stored.
+#[derive(Debug, thiserror::Error)]
+pub enum RueckzahlungFehler {
+    #[error("{0}")]
+    Ungueltig(String),
+    /// The chain owes nothing back — none is recorded, or it is paid up.
+    #[error("plant {tr_id} {year:04}-{month:02} owes nothing back")]
+    NichtsZurueck {
+        tr_id: String,
+        year: i16,
+        month: i16,
+    },
+    #[error("a Rückzahlung for this plant, month and day is already recorded")]
+    Doppelt,
+    #[error(transparent)]
+    Technisch(#[from] anyhow::Error),
+}
+
+impl From<sqlx::Error> for RueckzahlungFehler {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Technisch(e.into())
+    }
+}
+
+/// A recorded repayment and the key of its staged booking.
+#[derive(Debug, Clone)]
+pub struct Rueckzahlung {
+    pub rueckzahlung_id: Uuid,
+    /// The booking draft's key, for the caller to book after the commit.
+    pub buchung: String,
+    /// What the chain still owes back after it, in ct.
+    pub verbleibend_ct: i64,
+}
+
+/// Record a repayment against chain (`tr_id`, year, month) and stage its
+/// `EEG_RUECKZAHLUNG` booking, in the caller's transaction, under the chain's
+/// lock — so it is never more than the chain owes back at that moment.
+///
+/// # Errors
+///
+/// [`RueckzahlungFehler::Ungueltig`] for a malformed request or an amount above
+/// what is owed back; [`RueckzahlungFehler::NichtsZurueck`] for a chain that
+/// owes nothing; [`RueckzahlungFehler::Doppelt`] for a second repayment of the
+/// chain on the same day.
+pub async fn erfasse_rueckzahlung(
+    conn: &mut PgConnection,
+    ledger: &crate::ledger::PgLedger,
+    tenant: &str,
+    req: &RueckzahlungRequest,
+    erfasst_von: Option<&str>,
+    heute: Date,
+) -> Result<Rueckzahlung, RueckzahlungFehler> {
+    if req.tr_id.trim().is_empty() {
+        return Err(RueckzahlungFehler::Ungueltig("tr_id is empty".to_owned()));
+    }
+    if req.amount_ct <= 0 {
+        return Err(RueckzahlungFehler::Ungueltig(
+            "amount_ct must be positive — the amount received".to_owned(),
+        ));
+    }
+    if !(1..=12).contains(&req.billing_month) {
+        return Err(RueckzahlungFehler::Ungueltig(
+            "billing_month must be 1–12".to_owned(),
+        ));
+    }
+    let eingegangen_am = mako_service::dates::parse_iso_date("eingegangen_am", &req.eingegangen_am)
+        .map_err(|e| RueckzahlungFehler::Ungueltig(e.to_string()))?;
+    if eingegangen_am > heute {
+        return Err(RueckzahlungFehler::Ungueltig(format!(
+            "eingegangen_am {eingegangen_am} lies in the future — a Rückzahlung is recorded once received"
+        )));
+    }
+    let (year, month) = (req.billing_year, req.billing_month);
+    sperre_kette(conn, tenant, &req.tr_id, year, month).await?;
+    let nichts = || RueckzahlungFehler::NichtsZurueck {
+        tr_id: req.tr_id.clone(),
+        year,
+        month,
+    };
+    let row = sqlx::query(
+        "SELECT tr_id, malo_id, billing_year, billing_month, account_id, art, receipt_id,
+                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger
+           FROM eeg_ketten
+          WHERE tenant = $1 AND tr_id = $2 AND billing_year = $3 AND billing_month = $4",
+    )
+    .bind(tenant)
+    .bind(&req.tr_id)
+    .bind(year)
+    .bind(month)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(nichts)?;
+    let k = kette(&row)?;
+    let offen = k.ausgleich().rueckforderung_ct;
+    if offen == 0 {
+        return Err(nichts());
+    }
+    if req.amount_ct > offen {
+        return Err(RueckzahlungFehler::Ungueltig(format!(
+            "amount_ct {} exceeds the {offen} ct plant {} owes back for {year:04}-{month:02}",
+            req.amount_ct, req.tr_id
+        )));
+    }
+    let id: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO eeg_rueckzahlungen
+             (tenant, tr_id, malo_id, billing_year, billing_month, amount_ct,
+              eingegangen_am, vermerk, erfasst_von)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (tenant, tr_id, billing_year, billing_month, eingegangen_am) DO NOTHING
+         RETURNING rueckzahlung_id",
+    )
+    .bind(tenant)
+    .bind(&req.tr_id)
+    .bind(&k.malo_id)
+    .bind(year)
+    .bind(month)
+    .bind(req.amount_ct)
+    .bind(eingegangen_am)
+    .bind(req.vermerk.as_deref())
+    .bind(erfasst_von)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let id = id.ok_or(RueckzahlungFehler::Doppelt)?;
+    let key = format!("eeg-rueckzahlung:{id}");
+    let draft = crate::pg::draft(
+        &k.malo_id,
+        tenant,
+        "EEG_RUECKZAHLUNG",
+        // The Kontokorrent sign: money received from the operator is a credit.
+        req.amount_ct.saturating_neg(),
+        &key,
+        None,
+        Some(&req.tr_id),
+        heute,
+        eingegangen_am,
+        Some("EEG Rückzahlung einer Überzahlung"),
+        erfasst_von,
+    );
+    crate::booking::stage(conn, ledger, tenant, &draft)
+        .await
+        .map_err(anyhow::Error::from)?;
+    Ok(Rueckzahlung {
+        rueckzahlung_id: id,
+        buchung: key,
+        verbleibend_ct: offen - req.amount_ct,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::macros::datetime;
 
     #[test]
     fn a_higher_correction_pays_the_difference() {
@@ -656,24 +909,34 @@ mod tests {
         );
     }
 
-    fn aktuell(ct: i64, zeit: OffsetDateTime) -> Aktuell {
+    fn aktuell(ct: i64, folge: i64) -> Aktuell {
         Aktuell {
             anspruch_ct: ct,
-            beleg_zeit: zeit,
-            source_ce_id: "ce-a".to_owned(),
+            ketten_folge: folge,
         }
     }
 
     #[test]
     fn the_ledger_books_what_a_receipt_changes() {
-        let t0 = datetime!(2026-11-02 08:00 UTC);
-        let t1 = datetime!(2026-11-05 08:00 UTC);
-        assert_eq!(gutschrift_delta(10_000, t0, "ce-a", None), 10_000);
-        let a = aktuell(10_000, t0);
-        assert_eq!(gutschrift_delta(11_000, t1, "ce-b", Some(&a)), 1_000);
-        assert_eq!(gutschrift_delta(9_000, t1, "ce-b", Some(&a)), -1_000);
-        // Overtaken: issued before the current receipt, it changes nothing.
-        let b = aktuell(11_000, t1);
-        assert_eq!(gutschrift_delta(10_000, t0, "ce-z", Some(&b)), 0);
+        assert_eq!(gutschrift_delta(10_000, 1, None), 10_000);
+        let a = aktuell(10_000, 1);
+        assert_eq!(gutschrift_delta(11_000, 2, Some(a)), 1_000);
+        assert_eq!(gutschrift_delta(9_000, 2, Some(a)), -1_000);
+        // Overtaken: written before the current receipt, it changes nothing.
+        let b = aktuell(11_000, 2);
+        assert_eq!(gutschrift_delta(10_000, 1, Some(b)), 0);
+    }
+
+    /// A zero receipt after a paid one is the whole amount owed back.
+    #[test]
+    fn a_zero_receipt_owes_back_what_was_paid() {
+        assert_eq!(gutschrift_delta(0, 2, Some(aktuell(10_000, 1))), -10_000);
+        assert_eq!(
+            ausgleich(0, 10_000),
+            Ausgleich {
+                auszahlung_ct: 0,
+                rueckforderung_ct: 10_000
+            }
+        );
     }
 }

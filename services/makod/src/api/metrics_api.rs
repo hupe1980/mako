@@ -23,6 +23,8 @@
 //! | `makod_process_initiated_total` | `family` | Process instances initiated |
 //! | `makod_process_completed_total` | `family`, `result` | Process instances completed |
 //! | `makod_validation_failed_total` | `message_type`, `release` | AHB validation failures |
+//! | `makod_inbound_findings_total` | `class`, `message_type` | AHB-Prüfung findings by rule-id class (`MIG`, `AHB`, `FMT`) |
+//! | `makod_formatbedingung_findings_total` | `message_type`, `bedingung` | Formatbedingung findings by number |
 //! | `makod_outbox_delivery_attempts_total` | `result` | AS4 delivery attempts |
 //! | `makod_deadline_fired_total` | `family` | Deadline scheduler firings |
 //! | `makod_dead_letter_recorded_total` | `reason` | Dead-letter sink writes |

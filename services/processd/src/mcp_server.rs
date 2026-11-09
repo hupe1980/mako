@@ -189,6 +189,16 @@ pub struct QueueActionParams {
     /// `FTX+ACB` Erläuterung; also the Begründung of a refusal with no code.
     #[serde(default)]
     pub bemerkung: Option<String>,
+    /// The Bilanzkreis an E/G Zustimmung names, where the entry lists
+    /// `bilanzkreis` among the facts it still needs.
+    #[serde(default)]
+    pub bilanzkreis: Option<String>,
+    /// `SG10 CCI+Z36` on a Strom 55014: `ZC9`, `ZD0` or `ZE3`.
+    #[serde(default)]
+    pub versorgungsart: Option<String>,
+    /// `SG6 DTM+Z20` on a Gas 44014: 1, 3, 6 or 12.
+    #[serde(default)]
+    pub abrechnungsintervall_monate: Option<u8>,
 }
 
 impl QueueActionParams {
@@ -199,6 +209,9 @@ impl QueueActionParams {
             antwort_tree: self.antwort_tree.clone(),
             antwort_codeliste: self.antwort_codeliste.clone(),
             bemerkung: self.bemerkung.clone(),
+            bilanzkreis: self.bilanzkreis.clone(),
+            versorgungsart: self.versorgungsart.clone(),
+            abrechnungsintervall_monate: self.abrechnungsintervall_monate,
         }
     }
 }

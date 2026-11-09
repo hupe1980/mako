@@ -159,6 +159,7 @@ async fn a_healthy_gas_anmeldung_survives_every_deadline() {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: mako_engine::payload::Stammdaten::default(),
             },
             RunOptions::new().attempts(3),
         )

@@ -13,7 +13,7 @@ use rmcp::schemars;
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::pg::approval::{ApprovalQueueEntry, QueueStatus};
+use crate::pg::approval::{ApprovalQueueEntry, QueueStatus, fehlende_fakten};
 use mako_pruefung::codes::{self, Cluster};
 
 /// Whether the answer is already decided.
@@ -84,6 +84,13 @@ pub struct Freigabe {
     /// held Ablehnung — the Zustimmungen, because rejecting a held answer
     /// sends the other cluster. `None` when the refusal carries no code.
     pub codes_ablehnen: Option<CodeAuswahl>,
+    /// The facts approving states beside the code, where the entry's own did
+    /// not resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall
+    /// of an E/G Zustimmung. Empty when there are none to state.
+    pub fakten_freigeben: Vec<Fakt>,
+    /// The same for rejecting — a held E/G Ablehnung is overridden by the
+    /// Bestätigung.
+    pub fakten_ablehnen: Vec<Fakt>,
     /// Approving sends a market message.
     pub kann_freigeben: bool,
     /// Rejecting sends a market message.
@@ -100,6 +107,73 @@ pub struct Freigabe {
     /// RFC 3339 in UTC.
     #[schemars(extend("format" = "date-time"))]
     pub decided_at: Option<String>,
+}
+
+/// A fact a decision states beside its code, under the body key `feld`.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct Fakt {
+    /// The decision body's key: `bilanzkreis`, `versorgungsart` or
+    /// `abrechnungsintervall_monate`.
+    pub feld: String,
+    /// What it is, with the segment it rides.
+    pub bezeichnung: String,
+    /// The values the segment admits; empty where the value is free text (a
+    /// Bilanzkreis is the LF's own code).
+    pub werte: Vec<FaktWert>,
+}
+
+/// One admissible value of a [`Fakt`].
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct FaktWert {
+    /// What the decision sends — a code, or a number written as text.
+    pub wert: String,
+    pub bedeutung: String,
+}
+
+/// The facts `command` still needs over `frozen`, described for the view.
+fn fakten(command: Option<&str>, frozen: Option<&serde_json::Value>) -> Vec<Fakt> {
+    let Some(command) = command else {
+        return Vec::new();
+    };
+    fehlende_fakten(command, frozen)
+        .into_iter()
+        .map(|feld| {
+            let wert = |wert: &str, bedeutung: &str| FaktWert {
+                wert: wert.to_owned(),
+                bedeutung: bedeutung.to_owned(),
+            };
+            let (bezeichnung, werte) = match feld {
+                "versorgungsart" => (
+                    "Versorgungsart (SG10 CCI+Z36)",
+                    vec![
+                        wert("ZD0", "Grundversorgung (§ 36 EnWG)"),
+                        wert("ZC9", "Ersatzversorgung (§ 38 EnWG)"),
+                        wert("ZE3", "vertragliche Ersatzbelieferung"),
+                    ],
+                ),
+                "abrechnungsintervall_monate" => (
+                    "Abrechnungsintervall des LF in Monaten (SG6 DTM+Z20)",
+                    mako_markt::commands::ABRECHNUNGSINTERVALLE_MONATE
+                        .iter()
+                        .map(|n| {
+                            let text = if *n == 1 {
+                                "1 Monat".to_owned()
+                            } else {
+                                format!("{n} Monate")
+                            };
+                            wert(&n.to_string(), &text)
+                        })
+                        .collect(),
+                ),
+                _ => ("Bilanzkreis des LF", Vec::new()),
+            };
+            Fakt {
+                feld: feld.to_owned(),
+                bezeichnung: bezeichnung.to_owned(),
+                werte,
+            }
+        })
+        .collect()
 }
 
 /// `list_pending_approvals`' answer.
@@ -237,6 +311,14 @@ impl Freigabe {
                 .as_ref()
                 .and_then(|_| erwarteter_code(entry, false))
                 .and_then(|(tree, cluster)| auswahl(tree, cluster)),
+            fakten_freigeben: fakten(
+                entry.approve_command.as_deref(),
+                entry.answer_payload.as_ref(),
+            ),
+            fakten_ablehnen: fakten(
+                entry.reject_command.as_deref(),
+                entry.reject_payload.as_ref(),
+            ),
             kann_freigeben: entry.approve_command.is_some(),
             kann_ablehnen: entry.reject_command.is_some(),
             status: entry.status,
@@ -400,7 +482,58 @@ mod tests {
             antwort_tree: Some(ablehnen.ebd.clone()),
             antwort_codeliste: None,
             bemerkung: None,
+            ..crate::pg::approval::OperatorAnswer::default()
         };
         assert!(crate::pg::approval::check_operator_code(&e, false, &operator).is_ok());
+    }
+
+    /// The view asks for exactly the facts `decision_body` refuses without: a
+    /// Gas E/G entry whose Abrechnungsintervall froze lists the Bilanzkreis
+    /// only, as free text; a bare Strom one lists both of its facts, the
+    /// Versorgungsart with the three codes `CCI+Z36` admits.
+    #[test]
+    fn the_view_lists_the_facts_a_release_still_needs() {
+        use mako_markt::commands as c;
+        let gas = ApprovalQueueEntry::pending(
+            Uuid::nil(),
+            44_013,
+            Some("51238696012".into()),
+            "test".into(),
+            time::macros::datetime!(2026-07-09 09:00 UTC),
+            "t".into(),
+        )
+        .with_commands(c::GELI_EOG_BESTAETIGEN, c::GELI_EOG_ABLEHNEN, Some("LF"))
+        .with_answer_payload(serde_json::json!({ "abrechnungsintervall_monate": 12 }));
+        let f = Freigabe::from_entry(&gas);
+        assert_eq!(f.art, FreigabeArt::Eskaliert, "frozen facts are no answer");
+        let felder: Vec<&str> = f.fakten_freigeben.iter().map(|x| x.feld.as_str()).collect();
+        assert_eq!(felder, ["bilanzkreis"]);
+        assert!(f.fakten_freigeben[0].werte.is_empty());
+        assert!(f.fakten_ablehnen.is_empty(), "a 44015 states no facts");
+
+        let strom = ApprovalQueueEntry::pending(
+            Uuid::nil(),
+            55_013,
+            Some("51238696012".into()),
+            "test".into(),
+            time::macros::datetime!(2026-07-09 09:00 UTC),
+            "t".into(),
+        )
+        .with_commands(c::GPKE_EOG_BESTAETIGEN, c::GPKE_EOG_ABLEHNEN, Some("LF"));
+        let f = Freigabe::from_entry(&strom);
+        let felder: Vec<&str> = f.fakten_freigeben.iter().map(|x| x.feld.as_str()).collect();
+        assert_eq!(felder, ["versorgungsart", "bilanzkreis"]);
+        let codes: Vec<&str> = f.fakten_freigeben[0]
+            .werte
+            .iter()
+            .map(|w| w.wert.as_str())
+            .collect();
+        for code in &codes {
+            assert!(
+                mako_gpke::Versorgungsart::from_code(code).is_some(),
+                "{code}"
+            );
+        }
+        assert_eq!(codes.len(), 3);
     }
 }

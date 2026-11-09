@@ -34,7 +34,7 @@ graph TB
     einsd <-->|"GET /api/v1/energy/{malo_id}?direction=EINSPEISUNG"| edmd
     einsd --> db
     einsd -->|"de.eeg.*"| erp
-    einsd -->|"de.eeg.verguetung.berechnet"| accountingd
+    einsd -->|"de.eeg.verguetung.berechnet · de.eeg.marktpraemie.berechnet"| accountingd
     einsd -->|"de.eeg.*"| agentd
 ```
 
@@ -910,8 +910,9 @@ month's payments from accountingd (`GET /api/v1/eeg/enfg-zahlungen`: payouts
 whose pain.002 status is `ACSC`, and recorded Aufrechnungen). A settled receipt
 with no such payment contributes nothing; the receipt only says which head a
 payment belongs to. The cents a plant was paid in the month must equal one of
-its `calculated` receipts rounded kaufmännisch to the cent; any other amount is
-refused with the plant, the cents and the receipts.
+its decided receipts (`calculated`, `foerderung_beendet`, `sanctioned`,
+`kein_anspruch`, `jahreskontingent_erschoepft`) rounded kaufmännisch to the
+cent; any other amount is refused with the plant, the cents and the receipts.
 
 | Head (`posten`) | Settlement models | Provision · Mitteilung item |
 |---|---|---|
@@ -1082,7 +1083,7 @@ nothing sets it from capacity.
 | Table | Purpose |
 |---|---|
 | `einspeiser` | Anlagenbetreiber |
-| `settlement_receipts` | One initial receipt per period (partial unique index `WHERE is_correction = false` — upserts must repeat the predicate) plus corrections; `pflichtzahlung_eur`, `marktwert_vorlaeufig`, `rechnung_json`, `gutschrift_nummer`, `faelligkeitsdatum`, `verlaengerungsanspruch_qh`, `billing_days_fraction`, `positions_json`, `is_correction`, `correction_of` |
+| `settlement_receipts` | One initial receipt per period (partial unique index `WHERE is_correction = false` — upserts must repeat the predicate) plus corrections; `pflichtzahlung_eur`, `marktwert_vorlaeufig`, `rechnung_json`, `gutschrift_nummer`, `faelligkeitsdatum`, `verlaengerungsanspruch_qh`, `billing_days_fraction`, `positions_json`, `is_correction`, `correction_of`, `ketten_folge` (unique per period) |
 | `settlement_receipt_history` | Snapshot of an initial receipt before a re-settle overwrites it |
 | `settlement_state_transitions` | `from_state`, `to_state`, `effective_from`, `reason` |
 | `eeg_pflichtverstoesse` | § 52 register; partial unique index `ep_offen` — one open entry per Nummer |
@@ -1100,17 +1101,27 @@ nothing sets it from capacity.
 
 | Type | When | Payload |
 |---|---|---|
-| `de.eeg.verguetung.berechnet` | Einspeisevergütung, KWKG or post-EEG settled | `receipt_id`, `korrektur_von` (the receipt a correction supersedes, else null), `tr_id`, `malo_id`, `billing_year/month`, `settlement_model`, `einspeisemenge_kwh`, `settlement_eur` (net), `status`, `pflichtzahlung_kumuliert_eur` (the running § 52 claim), `gutschrift_nummer`, `gutschrift_steuer_eur`, `gutschrift_brutto_eur`, `bank_iban`, `bank_bic`, `zahlungsempfaenger` |
-| `de.eeg.marktpraemie.berechnet` | Marktprämie settled | the same payload |
+| `de.eeg.verguetung.berechnet` | Einspeisevergütung, KWKG or post-EEG period decided | `receipt_id`, `ketten_folge`, `korrektur_von` (the receipt a correction supersedes, else null), `tr_id`, `malo_id`, `billing_year/month`, `settlement_model`, `einspeisemenge_kwh`, `settlement_eur` (net), `status`, `pflichtzahlung_kumuliert_eur` (the running § 52 claim), `gutschrift_nummer`, `gutschrift_steuer_eur`, `gutschrift_brutto_eur`, `bank_iban`, `bank_bic`, `zahlungsempfaenger` |
+| `de.eeg.marktpraemie.berechnet` | Marktprämie period decided | the same payload |
 | `de.eeg.anlage.mastr-registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
 | `de.eeg.anlage.foerderung-auslaufend` | EEG Förderende within 180 days, once per plant (worker every 6 h; never for KWKG) | `tr_id`, `foerderendedatum`, `days_remaining` |
 | `de.eeg.veraeusserungsform.gewechselt` | § 21b switch accepted | `tr_id`, new model, effective date |
 | `de.eeg.settlement.batch-due` | Monthly batch due | `billing_year`, `billing_month` |
 
 The period — `tr_id`, `billing_year`, `billing_month` — is the receipt chain:
-the initial receipt and each correction state the period's whole amount, and the
-event `time` orders them. accountingd books and pays the difference to what the
-chain already holds, so a correction is never paid in full a second time.
+the initial receipt and each correction state the period's whole amount.
+Every write of a receipt, a re-settle included, takes the chain's next
+`ketten_folge` under a per-chain lock (trigger
+`settlement_receipts_ketten_folge`), and that number — not the event `time` —
+orders the chain. accountingd books and pays the difference to what the chain
+already holds, so a correction is never paid in full a second time.
+
+Every decided period is announced, a zero included: a re-settle or correction
+ending at `kein_anspruch`, `foerderung_beendet`, `sanctioned` or
+`jahreskontingent_erschoepft` tells accountingd the new amount, so what it
+already paid becomes owed back. `no_data`, `price_missing`,
+`fassung_nicht_tabelliert` and `gehalten` state no amount and announce nothing;
+a decided receipt without `settlement_eur` rolls the settlement back.
 
 The bank fields come from `einspeiser` so accountingd can build the pain.001;
 they are null for `EIGENVERBRAUCH`. Deliveries are
@@ -1127,6 +1138,7 @@ they are null for `EIGENVERBRAUCH`. Deliveries are
   "time":        "2026-08-03T06:00:00Z",
   "data": {
     "receipt_id":      "0f6b2c1e-4d5a-4f7e-9a3b-2c1d0e9f8a7b",
+    "ketten_folge":    1,
     "korrektur_von":   null,
     "tr_id":           "TR-SOLAR-001",
     "malo_id":         "51238696012",

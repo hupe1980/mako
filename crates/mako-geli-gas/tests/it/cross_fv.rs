@@ -152,6 +152,7 @@ async fn cross_fv_antwort_accepted_on_fv_start_process() {
             antwort_ebd: None,
             bemerkung: None,
             obligations: vec![],
+            stammdaten: mako_engine::payload::Stammdaten::default(),
         },
         RunOptions::new(),
     )

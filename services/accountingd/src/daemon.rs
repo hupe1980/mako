@@ -363,6 +363,7 @@ impl Daemon for Accountingd {
             // GET  /api/v1/eeg/payouts/{id}        — single order with pain.001 XML
             // POST /api/v1/eeg/payouts/run         — pay a billing month's outstanding receipt chains
             // GET  /api/v1/eeg/rueckforderungen   — chains paid beyond their current receipt
+            // POST /api/v1/eeg/rueckzahlungen     — record an operator's repayment of one
             // PUT  /api/v1/eeg/payouts/{id}/status — process pain.002 ACCP/RJCT/CANC
             // EnFG Belastungsausgleich (§ 13 Abs. 1 EnFG): the payments made per
             // billing month, and the Aufrechnungen that count as made (Satz 2).
@@ -373,6 +374,10 @@ impl Daemon for Accountingd {
             .route(
                 "/api/v1/eeg/aufrechnungen",
                 post(handlers::post_eeg_aufrechnung),
+            )
+            .route(
+                "/api/v1/eeg/rueckzahlungen",
+                post(handlers::post_eeg_rueckzahlung),
             )
             .route(
                 "/api/v1/eeg/rueckforderungen",

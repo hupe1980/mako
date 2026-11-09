@@ -269,7 +269,7 @@ async fn one_anerkennung(msg: edi_energy::AnyMessage, pid: u32, workflow: &str) 
         aperak.orig_document_number.as_deref(),
         Some(format!("DOK{pid}").as_str())
     );
-    assert_eq!(aperak.orig_document_date.as_deref(), Some("202610010000"));
+    assert_eq!(aperak.orig_document_date.as_deref(), Some("202609302200"));
 }
 
 #[tokio::test]

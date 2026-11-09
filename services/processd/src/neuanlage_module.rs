@@ -421,8 +421,10 @@ impl NeuanlagePayload {
 }
 
 /// Every date shape a process payload carries — see [`crate::wire_date`].
+/// Both Neuanlage PIDs (55600, 55601) are Strom, so a `303` stamp is read on
+/// the Strom day boundary.
 fn parse_civil_date(raw: &str) -> Option<Date> {
-    crate::wire_date::parse(raw)
+    crate::wire_date::parse(raw, mako_fristen::Sparte::Strom)
 }
 
 #[cfg(test)]

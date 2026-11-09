@@ -789,9 +789,9 @@ pub async fn ingest_webhook(
         }
 
         // ── EEG settlement receipts (einsd) ──────────────────────────────────
-        // de.eeg.verguetung.berechnet  → EEG_GUTSCHRIFT, paid out when
-        //                                [eeg] auto_payout = true
+        // de.eeg.verguetung.berechnet   → EEG_GUTSCHRIFT
         // de.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE
+        // Each is paid out when [eeg] auto_payout = true.
         // Both book what the receipt changes its chain by, never a correction's
         // whole amount again — see `crate::eeg_auszahlung`.
         mako_events::eeg::VERGUETUNG_BERECHNET => {
@@ -829,9 +829,10 @@ pub async fn ingest_webhook(
 /// An EEG settlement receipt CloudEvent, read into a [`crate::eeg_auszahlung::Beleg`].
 ///
 /// Every field the chain rules need is required: a receipt without its
-/// plant, billing month, receipt id or issue time cannot be placed in its
-/// chain, and one without an amount cannot be booked — each is refused rather
-/// than defaulted (a defaulted month books the receipt into the wrong chain).
+/// plant, billing month, receipt id or chain position (`ketten_folge`) cannot
+/// be placed in its chain, and one without an amount cannot be booked — each
+/// is refused rather than defaulted (a defaulted month books the receipt into
+/// the wrong chain).
 fn eeg_beleg_aus(
     ce: &serde_json::Value,
     ce_id: &str,
@@ -875,13 +876,14 @@ fn eeg_beleg_aus(
         .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
         .to_i64()
         .ok_or("data.settlement_eur is out of range")?;
-    let beleg_zeit = ce
-        .get("time")
-        .and_then(|v| v.as_str())
-        .and_then(|t| {
-            time::OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339).ok()
-        })
-        .ok_or("the event carries no RFC 3339 time — the receipt cannot be ordered in its chain")?;
+    // The position einsd assigned in the write that recorded the receipt — the
+    // chain's order. The event's `time` is einsd's clock, which two replicas
+    // can skew, so it orders nothing.
+    let ketten_folge = data
+        .get("ketten_folge")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|f| *f > 0)
+        .ok_or("data.ketten_folge is missing or not a positive integer — the receipt cannot be ordered in its chain")?;
     Ok(crate::eeg_auszahlung::Beleg {
         source_ce_id: ce_id.to_owned(),
         art,
@@ -893,18 +895,19 @@ fn eeg_beleg_aus(
         billing_year: smallint("billing_year")?,
         billing_month,
         anspruch_ct,
-        beleg_zeit,
+        ketten_folge,
         bank_iban: text("bank_iban"),
         zahlungsempfaenger: text("zahlungsempfaenger"),
     })
 }
 
 /// `de.eeg.verguetung.berechnet` / `de.eeg.marktpraemie.berechnet`: record the
-/// receipt in its chain, book what it changes the chain by, and — for a
-/// Vergütung under `[eeg] auto_payout` — pay what the chain has outstanding.
+/// receipt in its chain, book what it changes the chain by, and — under
+/// `[eeg] auto_payout` — pay what the chain has outstanding.
 ///
 /// Every failure answers an error so the sender redelivers: a refused payload
-/// `422` (einsd dead-letters it), anything else `500`. A redelivery is safe —
+/// — a second receipt at a taken chain position among them — `422` (einsd
+/// dead-letters it), anything else `500`. A redelivery is safe —
 /// the receipt, its booking and the payout are each idempotent — so a payout
 /// that could not be ordered is retried with the event, and
 /// `POST /api/v1/eeg/payouts/run` pays the same outstanding difference.
@@ -957,12 +960,17 @@ async fn ingest_eeg_beleg(
         )
         .await?;
         tx.commit().await?;
-        anyhow::Ok(e)
+        Ok::<_, crate::eeg_auszahlung::ErfassFehler>(e)
     }
     .await;
     let erfasst = match erfasst {
         Ok(e) => e,
-        Err(e) => return ledger_failure(e.context("record EEG receipt")).into_response(),
+        Err(e @ crate::eeg_auszahlung::ErfassFehler::FolgeVergeben { .. }) => {
+            return ApiError::unprocessable(e.to_string()).into_response();
+        }
+        Err(crate::eeg_auszahlung::ErfassFehler::Technisch(e)) => {
+            return ledger_failure(e.context("record EEG receipt")).into_response();
+        }
     };
     if erfasst.gutschrift_delta_ct != 0 {
         let booked = match crate::booking::book(ledger, pool, &cfg.tenant, &ce_id).await {
@@ -980,7 +988,7 @@ async fn ingest_eeg_beleg(
         }
     }
 
-    if art == crate::eeg_auszahlung::Art::Verguetung && cfg.eeg.auto_payout {
+    if cfg.eeg.auto_payout {
         match zahle_eeg_kette(
             pool,
             cfg,
@@ -2320,6 +2328,18 @@ pub async fn escalate_dunning(
         }
         Err(e) => return ApiError::internal(e).into_response(),
     };
+    match crate::pg::is_eeg_anlagenkonto(&pool, &cfg.tenant, account_id).await {
+        Ok(false) => {}
+        Ok(true) => {
+            return ApiError::unprocessable(format!(
+                "account {account_id} is an EEG plant account: what its operator owes back is \
+                 an EEG Rückforderung (GET /api/v1/eeg/rueckforderungen), not dunned"
+            ))
+            .with_code("eeg_anlagenkonto")
+            .into_response();
+        }
+        Err(e) => return ApiError::internal(e).into_response(),
+    }
     let amount_due_ct = account.balance_ct.max(0);
 
     // Manual escalation announces the Mahnstufe exactly like the auto-dunning
@@ -3280,9 +3300,9 @@ pub struct VorauszahlungQuery {
 pub struct BuchenRequest {
     /// Buchungsart. Must be a valid `entry_type` value.
     /// Allowed: `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `EEG_GUTSCHRIFT`,
-    /// `EEG_MARKTPRAEMIE`, `BANKRUECKLAST`, `MAHNGEBUEHR`, `VERZUGSZINSEN`,
-    /// `ABSCHLAG`, `ABSCHLAG_VERRECHNUNG`, `SEPA_STORNO`, `JAHRESABSCHLUSS`,
-    /// `KORREKTUR`, `STORNO`.
+    /// `EEG_MARKTPRAEMIE`, `EEG_AUSZAHLUNG`, `EEG_RUECKZAHLUNG`, `BANKRUECKLAST`,
+    /// `MAHNGEBUEHR`, `VERZUGSZINSEN`, `ABSCHLAG`, `ABSCHLAG_VERRECHNUNG`,
+    /// `SEPA_STORNO`, `JAHRESABSCHLUSS`, `KORREKTUR`, `STORNO`.
     ///
     /// The same list [`crate::ledger::ENTRY_TYPES`] holds, so an automated path
     /// and the operator interface accept exactly the same kinds.
@@ -4924,8 +4944,8 @@ pub struct RunEegPayoutsRequest {
 
 /// `POST /api/v1/eeg/payouts/run`
 ///
-/// Pay every Vergütung receipt chain of one billing month what it has
-/// outstanding — the chain's current receipt less what was already paid or
+/// Pay every receipt chain of one billing month — Vergütung and Marktprämie —
+/// what it has outstanding — the chain's current receipt less what was already paid or
 /// ordered for it (`crate::eeg_auszahlung`). Each order carries the plant and
 /// billing month of the receipt it pays, so the EnFG ledger can attribute it;
 /// a chain already paid gets nothing, so a re-run is safe, and a chain whose
@@ -4955,7 +4975,7 @@ pub async fn post_run_eeg_payouts(
     }
     let use_instant = req.instant_override.unwrap_or(cfg.eeg.sepa_instant);
 
-    let ketten = match crate::eeg_auszahlung::verguetungsketten_im_monat(
+    let ketten = match crate::eeg_auszahlung::ketten_im_monat(
         &pool,
         &cfg.tenant,
         req.billing_year,
@@ -4986,7 +5006,7 @@ pub async fn post_run_eeg_payouts(
         {
             Ok(Zahlung::Auftrag(_)) => generated += 1,
             Ok(Zahlung::OhneKonto { .. }) => skipped_no_iban += 1,
-            Ok(Zahlung::NichtsOffen { .. } | Zahlung::KeineVerguetung | Zahlung::KeinBeleg) => {
+            Ok(Zahlung::NichtsOffen { .. } | Zahlung::KeinBeleg) => {
                 nothing_outstanding += 1;
             }
             // A chain whose pain.001 cannot be built (an invalid creditor IBAN)
@@ -5016,14 +5036,19 @@ pub async fn post_run_eeg_payouts(
 
 /// `GET /api/v1/eeg/rueckforderungen` — every receipt chain whose plant
 /// operator owes money back: a correction lowered the period below what was
-/// already paid or ordered for it. `rueckforderung_ct` is the difference.
+/// already paid or ordered for it, less what the operator paid back
+/// (`POST /api/v1/eeg/rueckzahlungen`). `rueckforderung_ct` is the difference.
+///
+/// The only place such a claim is served: an EEG plant account is never an
+/// Offener Posten and never dunned. Held to `read-enfg` — the claim is the
+/// Netzbetreiber's, like the payout it reverses.
 pub async fn get_eeg_rueckforderungen(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
 ) -> impl IntoResponse {
-    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+    if let Err(e) = cedar.check(&claims.principal(), "read-enfg", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
     match crate::eeg_auszahlung::rueckforderungen(&pool, &cfg.tenant).await {
@@ -5049,6 +5074,65 @@ pub async fn get_eeg_rueckforderungen(
     }
 }
 
+/// `POST /api/v1/eeg/rueckzahlungen` — record what a plant operator paid back
+/// of an overpaid receipt chain (`GET /api/v1/eeg/rueckforderungen`).
+///
+/// The repayment is booked `EEG_RUECKZAHLUNG` on the plant's Kontokorrent and
+/// counted against the chain, so a repaid chain leaves the Rückforderungen.
+/// More than the chain owes back is `422`, a chain owing nothing `422`, a
+/// second repayment of the chain on the same day `409`.
+pub async fn post_eeg_rueckzahlung(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Json(req): Json<crate::eeg_auszahlung::RueckzahlungRequest>,
+) -> impl IntoResponse {
+    use crate::eeg_auszahlung::RueckzahlungFehler;
+    if let Err(e) = cedar.check(&claims.principal(), "record-rueckzahlung", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    let erfasst = async {
+        let mut tx = pool.begin().await.map_err(anyhow::Error::from)?;
+        let r = crate::eeg_auszahlung::erfasse_rueckzahlung(
+            &mut tx,
+            &ledger,
+            &cfg.tenant,
+            &req,
+            Some(claims.sub()),
+            mako_fristen::heute(),
+        )
+        .await?;
+        tx.commit().await.map_err(anyhow::Error::from)?;
+        Ok::<_, RueckzahlungFehler>(r)
+    }
+    .await;
+    let r = match erfasst {
+        Ok(r) => r,
+        Err(e @ (RueckzahlungFehler::Ungueltig(_) | RueckzahlungFehler::NichtsZurueck { .. })) => {
+            return ApiError::unprocessable(e.to_string()).into_response();
+        }
+        Err(e @ RueckzahlungFehler::Doppelt) => {
+            return ApiError::conflict(e.to_string()).into_response();
+        }
+        Err(RueckzahlungFehler::Technisch(e)) => return ledger_failure(e).into_response(),
+    };
+    // Committed with the repayment; a failure here leaves the draft `offen`
+    // for the recovery worker.
+    if let Err(e) = crate::booking::book(&ledger, &pool, &cfg.tenant, &r.buchung).await {
+        tracing::warn!(key = %r.buchung, error = %e, "accountingd: EEG Rückzahlung booking deferred to recovery");
+    }
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "rueckzahlung_id": r.rueckzahlung_id,
+            "verbleibend_ct": r.verbleibend_ct,
+        })),
+    )
+        .into_response()
+}
+
 /// Request body for `PUT /api/v1/eeg/payouts/{payout_id}/status`
 ///
 /// Process a pain.002 Payment Status Report from the bank.
@@ -5063,7 +5147,7 @@ pub async fn get_eeg_rueckforderungen(
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pain002StatusUpdate {
-    /// `ACCP` | `RJCT` | `CANC`
+    /// `ACCP` | `ACSC` | `RJCT` | `CANC`
     pub status: String,
     /// EPC/ISO 20022 reason code (e.g. `"AC01"`). Absent for ACCP.
     pub reason_code: Option<String>,
@@ -5072,13 +5156,17 @@ pub struct Pain002StatusUpdate {
 /// `PUT /api/v1/eeg/payouts/{payout_id}/status`
 ///
 /// Record a pain.002 status report for a payout order.
-/// `ACCP` → sets `settled_at = now()`.
+/// `ACCP` / `ACSC` → sets `settled_at = now()`; `ACSC` — the funds moved — also
+/// books the payment on the plant's Kontokorrent (`EEG_AUSZAHLUNG`), once.
 /// `RJCT` / `CANC` → sets `pain002_reason` for audit; emits
 /// `de.accounting.eeg.payout.rejected` CloudEvent if ERP webhook is configured.
+/// A settled order stays settled: a later status is `409` — money returned
+/// after settlement arrives as a camt return, not as a pain.002.
 pub async fn put_eeg_payout_status(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(payout_id): Path<uuid::Uuid>,
     Json(req): Json<Pain002StatusUpdate>,
@@ -5086,23 +5174,49 @@ pub async fn put_eeg_payout_status(
     if let Err(e) = cedar.check(&claims.principal(), "run-payout", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    if !["ACCP", "RJCT", "CANC"].contains(&req.status.as_str()) {
-        return ApiError::unprocessable("status must be ACCP, RJCT, or CANC").into_response();
+    if !["ACCP", "ACSC", "RJCT", "CANC"].contains(&req.status.as_str()) {
+        return ApiError::unprocessable("status must be ACCP, ACSC, RJCT, or CANC").into_response();
     }
 
-    let settled_at: Option<time::OffsetDateTime> = if req.status == "ACCP" {
+    let settled_at: Option<time::OffsetDateTime> = if matches!(req.status.as_str(), "ACCP" | "ACSC")
+    {
         Some(time::OffsetDateTime::now_utc())
     } else {
         None
     };
 
-    // The status write and the RJCT/CANC CloudEvent commit atomically: the CE is
-    // enqueued in the SAME transaction as the eeg_payout_orders update
-    // (persist-before-dispatch), then delivered by the outbox worker.
+    // The status write, the RJCT/CANC CloudEvent and the ACSC booking draft
+    // commit atomically: the CE is enqueued and the draft staged in the SAME
+    // transaction as the eeg_payout_orders update (persist-before-dispatch).
     let mut tx = match pool.begin().await {
         Ok(t) => t,
         Err(e) => return ApiError::internal(e).into_response(),
     };
+    let vorher: Option<Option<String>> = match sqlx::query_scalar(
+        "SELECT pain002_status FROM eeg_payout_orders
+          WHERE payout_id = $1 AND tenant = $2 FOR UPDATE",
+    )
+    .bind(payout_id)
+    .bind(&cfg.tenant)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    let Some(vorher) = vorher else {
+        return ApiError::NotFound.into_response();
+    };
+    if vorher.as_deref() == Some("ACSC") {
+        if req.status == "ACSC" {
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        return ApiError::conflict(format!(
+            "payout {payout_id} is settled (ACSC); {} cannot undo a payment that was made",
+            req.status
+        ))
+        .into_response();
+    }
 
     let updated = match sqlx::query(
         r"UPDATE eeg_payout_orders
@@ -5131,8 +5245,25 @@ pub async fn put_eeg_payout_status(
     let amount_ct: i64 = updated.get("amount_ct");
     let payment_type: String = updated.get("payment_type");
 
+    let buchung = if req.status == "ACSC" {
+        match crate::eeg_auszahlung::bestaetige_auszahlung(
+            &mut tx,
+            &ledger,
+            &cfg.tenant,
+            payout_id,
+            mako_fristen::heute(),
+        )
+        .await
+        {
+            Ok(key) => Some(key),
+            Err(e) => return ledger_failure(e).into_response(),
+        }
+    } else {
+        None
+    };
+
     // Enqueue CloudEvent for RJCT / CANC so ERP can alert the operator.
-    if req.status != "ACCP" && cfg.erp_webhook_url.is_some() {
+    if matches!(req.status.as_str(), "RJCT" | "CANC") && cfg.erp_webhook_url.is_some() {
         let ce = mako_service::CloudEvent::new(
             mako_service::source("accountingd", &cfg.tenant),
             mako_events::accounting::EEG_PAYOUT_REJECTED,
@@ -5155,6 +5286,13 @@ pub async fn put_eeg_payout_status(
 
     if let Err(e) = tx.commit().await {
         return ApiError::internal(e).into_response();
+    }
+    // Committed with the status; a failure here leaves the draft `offen` for
+    // the recovery worker.
+    if let Some(key) = buchung
+        && let Err(e) = crate::booking::book(&ledger, &pool, &cfg.tenant, &key).await
+    {
+        tracing::warn!(%payout_id, error = %e, "accountingd: EEG payout booking deferred to recovery");
     }
 
     StatusCode::NO_CONTENT.into_response()
@@ -5199,6 +5337,7 @@ pub async fn import_pain002(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     body: String,
 ) -> impl IntoResponse {
@@ -5265,6 +5404,7 @@ pub async fn import_pain002(
 
             match apply_pain002_status(
                 &pool,
+                &ledger,
                 &cfg,
                 reference,
                 status,
@@ -5383,8 +5523,13 @@ enum Pain002Match {
 }
 
 /// Apply one pain.002 transaction status to whatever it refers to.
+///
+/// A payout's first `ACSC` books the payment on the plant's Kontokorrent
+/// (`EEG_AUSZAHLUNG`); a settled payout keeps `ACSC` whatever a later report
+/// says, because a return after settlement is a camt R-transaction.
 async fn apply_pain002_status(
     pool: &PgPool,
+    ledger: &crate::ledger::PgLedger,
     cfg: &AccountingdConfig,
     reference: &str,
     status: &crate::sepa::PaymentStatus,
@@ -5415,9 +5560,21 @@ async fn apply_pain002_status(
     let mut tx = pool.begin().await?;
 
     // ── A pain.001 payout order ──────────────────────────────────────────────
+    let vorher: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT pain002_status FROM eeg_payout_orders
+          WHERE end_to_end_ref = $1 AND tenant = $2 FOR UPDATE",
+    )
+    .bind(reference)
+    .bind(&cfg.tenant)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let schon_bezahlt = vorher
+        .as_ref()
+        .is_some_and(|v| v.as_deref() == Some("ACSC"));
     let payout = sqlx::query(
         r"UPDATE eeg_payout_orders
-          SET pain002_status  = COALESCE($1, pain002_status),
+          SET pain002_status  = CASE WHEN pain002_status = 'ACSC' THEN pain002_status
+                                     ELSE COALESCE($1, pain002_status) END,
               pain002_reason  = COALESCE($2, pain002_reason),
               settled_at      = COALESCE($3, settled_at),
               vop_outcome     = COALESCE($4, vop_outcome),
@@ -5442,7 +5599,22 @@ async fn apply_pain002_status(
         let amount_ct: i64 = row.try_get("amount_ct")?;
         let payment_type: String = row.try_get("payment_type")?;
 
-        if status.is_rejected() {
+        let buchung = if payment_status == Some("ACSC") && !schon_bezahlt {
+            Some(
+                crate::eeg_auszahlung::bestaetige_auszahlung(
+                    &mut tx,
+                    ledger,
+                    &cfg.tenant,
+                    payout_id,
+                    mako_fristen::heute(),
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+
+        if status.is_rejected() && !schon_bezahlt {
             let ce = mako_service::CloudEvent::new(
                 mako_service::source("accountingd", &cfg.tenant),
                 mako_events::accounting::EEG_PAYOUT_REJECTED,
@@ -5481,6 +5653,11 @@ async fn apply_pain002_status(
             mako_service::outbox::enqueue(&mut tx, &ce).await?;
         }
         tx.commit().await?;
+        if let Some(key) = buchung
+            && let Err(e) = crate::booking::book(ledger, pool, &cfg.tenant, &key).await
+        {
+            tracing::warn!(%payout_id, error = %e, "accountingd: EEG payout booking deferred to recovery");
+        }
         return Ok(Pain002Match::Payout);
     }
 

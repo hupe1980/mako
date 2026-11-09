@@ -59,13 +59,15 @@ const FV: &str = "FV2025-10-01";
 //
 // Minimal EDIFACT ORDERS — Bestellung Geräteübernahme (PID 17001).
 // Direction: MSBN (NAD+MS) → MSBA (NAD+MR).
-// `DTM+76` carries the Übernahmezeitpunkt; `DTM+137` the document date.
+// `DTM+203` carries the Übernahmezeitpunkt — `[UB3]` in ORDERS AHB 1.1b
+// Kap. 4.9.2, a day boundary: 01.03.2025 00:00 MEZ is `202502282300` UTC;
+// `DTM+137` is the document date.
 const ORDERS_17001_BYTES: &[u8] = b"\
 UNB+UNOC:3+9900357000004:500+4012345000023:14+250115:0800+WIM-GT-001'\
 UNH+MSG-001+ORDERS:D:09B:UN:1.4b'\
 BGM+Z55+00017001+9'\
 DTM+137:202501150800?+00:303'\
-DTM+76:202503010000?+00:303'\
+DTM+203:202502282300?+00:303'\
 RFF+Z13:DEV-001'\
 NAD+MS+9900357000004::293'\
 NAD+MR+4012345000023::293'\
@@ -129,13 +131,6 @@ impl MockMsba {
                 assert_eq!(receiver.as_str(), MSBA_ID, "receiver must be the MSBA");
                 assert_eq!(melo_id.as_str(), MELO_ID, "MeLo must match IDE+24");
                 assert_eq!(device_id.as_str(), DEVICE_ID, "Gerätenummer from RFF");
-                assert_eq!(
-                    termin.as_deref(),
-                    // DE 2379 `303` — `CCYYMMDDHHMMZZZ`, the format every
-                    // EDI@Energy MIG gives its dates.
-                    Some("202503010000+00"),
-                    "the Übernahmezeitpunkt rides DTM+76, not the document date",
-                );
                 assert_eq!(
                     message_ref.as_str(),
                     unh_ref.as_str(),
@@ -234,7 +229,7 @@ async fn wim_geraeteubernahme_bestellung_is_refused() {
 async fn wim_geraeteubernahme_gas_uses_its_own_tree() {
     let msba = MockMsba::new(Sparte::Gas);
 
-    msba.receive_bestellung(ORDERS_17001_BYTES).await;
+    msba.receive_bestellung(&orders_17001("202503010500")).await;
     msba.antworten("Z13").await;
 
     let state = msba.state().await;
@@ -279,6 +274,60 @@ async fn wim_geraeteubernahme_validation_failure_rejects() {
         matches!(state, GeraeteubernahmeState::Abgelehnt { .. }),
         "validation failure must reject; got: {state:?}",
     );
+}
+
+/// An ORDERS 17001 with `DTM+203` set to `stamp` (`CCYYMMDDHHMM`, UTC).
+fn orders_17001(stamp: &str) -> Vec<u8> {
+    String::from_utf8(ORDERS_17001_BYTES.to_vec())
+        .expect("fixture is ASCII")
+        .replace("DTM+203:202502282300", &format!("DTM+203:{stamp}"))
+        .into_bytes()
+}
+
+/// The adapter's `termin` for an ORDERS 17001 read in `sparte`.
+fn termin_of(wire: &[u8], sparte: Sparte) -> Result<Option<String>, String> {
+    let raw = Platform::with_all_profiles()
+        .parse(wire)
+        .expect("parse ORDERS wire bytes");
+    match wim_geraeteubernahme_registry(time::OffsetDateTime::now_utc(), sparte)
+        .dispatch(&raw as &dyn Any, &FormatVersion::new(FV))
+    {
+        Ok(GeraeteubernahmeCommand::ReceiveOrders { termin, .. }) => Ok(termin),
+        Ok(_) => panic!("expected ReceiveOrders"),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// The Übernahmezeitpunkt is a `303` day boundary (`[UB3]`): the UTC instant
+/// the German day begins — 00:00 Europe/Berlin in Strom, the Gastag's 06:00 in
+/// Gas (Allgemeine Festlegungen V6.1d Kap. 3.1). It reads back as the German
+/// date, never as its first eight digits, which in Strom are the day before.
+#[test]
+fn a_17001_on_the_first_of_january_reads_as_that_date() {
+    assert_eq!(
+        termin_of(&orders_17001("202612312300"), Sparte::Strom),
+        Ok(Some("20270101".to_owned())),
+    );
+    assert_eq!(
+        termin_of(&orders_17001("202701010500"), Sparte::Gas),
+        Ok(Some("20270101".to_owned())),
+    );
+    // Summer time: 01.07.2027 00:00 MESZ.
+    assert_eq!(
+        termin_of(&orders_17001("202706302200"), Sparte::Strom),
+        Ok(Some("20270701".to_owned())),
+    );
+}
+
+/// An instant that begins no German day in the Sparte is refused, never
+/// rounded to one: UTC midnight is 01:00 Berlin.
+#[test]
+fn a_17001_termin_that_begins_no_day_is_refused() {
+    let err = termin_of(&orders_17001("202701010000"), Sparte::Strom)
+        .expect_err("UTC midnight begins no Strom day");
+    assert!(err.contains("DTM+203"), "{err}");
+    // A Strom day boundary is not a Gastag's.
+    assert!(termin_of(&orders_17001("202612312300"), Sparte::Gas).is_err());
 }
 
 #[test]

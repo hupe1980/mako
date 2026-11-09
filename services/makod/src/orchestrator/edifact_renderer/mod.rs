@@ -912,9 +912,10 @@ mod tests {
         assert!(text.contains("PIA+5+9991000002082:Z11"), "{text}");
         assert!(text.contains("CCI+Z66"), "{text}");
         assert!(text.contains("CAV+ZV4:::11XBK-EEG------Q"), "{text}");
-        // `SG8 SEQ+ZH0` is Muss wherever `SEQ+Z79` is.
+        // `SG8 SEQ+ZH0` is Muss wherever `SEQ+Z79` is, and the 55608 column
+        // asks for exactly one `CCI+Z65` `Z02` (`Z02 X [1P1..1]`).
         assert!(text.contains("SEQ+ZH0+1"), "{text}");
-        assert!(text.contains("CCI+Z65+++Z01"), "{text}");
+        assert!(text.contains("CCI+Z65+++Z02"), "{text}");
         assert!(
             !text.contains("FTX+ACB"),
             "a 55608 Bestätigung carries no FTX+ACB: {text}"

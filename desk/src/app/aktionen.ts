@@ -14,12 +14,14 @@ import { type Entscheidung, entscheiden } from "../data/freigabe";
 import type { GeparkteBuchung } from "../data/gen/accountingd";
 import type { Pruefposten } from "../data/gen/billingd";
 import type { Disput } from "../data/gen/invoicd";
-import type { CodeAuswahl, Freigabe } from "../data/gen/processd";
+import type { CodeAuswahl, Fakt, Freigabe } from "../data/gen/processd";
 import { ablehnungSenden, beilegen, freigeben, geprueft } from "../data/rechnung";
 import type { Handlung } from "../data/verweigert";
 import type { BusinessDate, Instant } from "../format/brands";
+import { faktKoerper } from "../format/fakt";
 import type { Eintrag } from "../inbox/model";
 import type { Wartend } from "../inbox/quellen";
+import { faktenVollstaendig } from "./FaktFelder";
 import { useHold } from "./Holds";
 import { ABLEHNEN, FREIGEBEN, type Shortcut } from "./keys";
 
@@ -38,11 +40,13 @@ export const ART: Record<Entscheidbar["art"], string> = {
   buchung: "Geparkte Buchung",
 };
 
-/** What the person filled in: the answer code, and the one text field. */
+/** What the person filled in: the answer code, the one text field, and the facts. */
 export interface Werte {
   code: string | null;
   /** The Bemerkung, the Grund, or the Buchungsdatum (`YYYY-MM-DD`). */
   text: string;
+  /** The facts the action lists, by their body key. */
+  fakten?: Record<string, string>;
 }
 
 /** The one text parameter an action takes. */
@@ -69,6 +73,8 @@ export interface Aktion {
   /** The codes its tree publishes, as the service returned them; null where none is stated. */
   codes: CodeAuswahl | null;
   feld: Feld | null;
+  /** The facts it states beside the code, as the service listed them; none where absent. */
+  fakten?: Fakt[];
   /** What sending it does — said beside the send, since no decision asks for confirmation. */
   was: string;
   /** What the hold's toast says was decided. */
@@ -103,6 +109,7 @@ function freigabeAktionen(f: Freigabe): Aktion[] {
   const eine = (
     id: "freigeben" | "ablehnen",
     codes: CodeAuswahl | null,
+    fakten: Fakt[],
     rang: Aktion["rang"],
   ): Aktion => ({
     id,
@@ -113,9 +120,11 @@ function freigabeAktionen(f: Freigabe): Aktion[] {
     handlung: PROCESSD,
     codes,
     feld: BEMERKUNG,
+    fakten,
     was: "Sendet die Antwort als Marktnachricht an den Marktpartner, sobald das Halten endet.",
     gehalten: id === "freigeben" ? "Freigabe erteilt" : "Freigabe abgelehnt",
-    bereit: (w) => !codes || codeAus(codes, w.code) !== null,
+    bereit: (w) =>
+      (!codes || codeAus(codes, w.code) !== null) && faktenVollstaendig(fakten, w.fakten ?? {}),
     senden: (w, keepalive) => {
       const e: Entscheidung = { aktion: id };
       const code = codeAus(codes, w.code);
@@ -124,16 +133,19 @@ function freigabeAktionen(f: Freigabe): Aktion[] {
         e.antwort_tree = codes.ebd;
       }
       if (w.text.trim()) e.bemerkung = w.text.trim();
-      return entscheiden(f.id, e, keepalive);
+      return entscheiden(f.id, { ...e, ...faktKoerper(fakten, w.fakten ?? {}) }, keepalive);
     },
     vorbelegen: (v) => (v.aktion === id ? { code: codeAus(codes, v.antwortcode), text: "" } : null),
     stimmt: (v, w) => v.aktion === id && (v.antwortcode ?? null) === (w.code ?? null),
   });
   // processd says which actions the entry offers; one it does not is not listed.
   const alle: Aktion[] = [];
-  if (f.kann_freigeben) alle.push(eine("freigeben", f.codes_freigeben, "primaer"));
+  if (f.kann_freigeben)
+    alle.push(eine("freigeben", f.codes_freigeben, f.fakten_freigeben, "primaer"));
   if (f.kann_ablehnen)
-    alle.push(eine("ablehnen", f.codes_ablehnen, alle.length ? "sekundaer" : "primaer"));
+    alle.push(
+      eine("ablehnen", f.codes_ablehnen, f.fakten_ablehnen, alle.length ? "sekundaer" : "primaer"),
+    );
   return alle;
 }
 

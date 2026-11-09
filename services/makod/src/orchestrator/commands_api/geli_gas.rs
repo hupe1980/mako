@@ -691,6 +691,7 @@ pub(super) async fn dispatch_geli_gas_antwort(
             antwort_ebd: Some(antwort_ebd.clone()),
             bemerkung: bemerkung.clone(),
             obligations: vec![],
+            stammdaten: mako_engine::payload::Stammdaten::default(),
         },
     )
     .await
@@ -900,12 +901,138 @@ pub(super) fn cmd_geli_kuendigung_ablehnen<'a>(
 
 /// Dispatch the E/G supplier's answer to a Gas **EoG-Anmeldung** (44014/44015).
 ///
-/// `E_3008`; the Gas twin of `gpke.eog.bestaetigen`.
+/// `E_3008`; the Gas twin of `gpke.eog.bestaetigen`. An Ablehnung 44015 is
+/// the bare answer. A Bestätigung **44014** is read as
+/// [`mako_markt::commands::GeliEogBestaetigen`], refusing a key it does not
+/// declare. It carries the Marktlokation's record whole (UTILMD AHB Gas 1.2
+/// Kap. 5.9) — read from marktd on the process's Zuordnungsbeginn, as the
+/// 44013 was ([`super::eog_stammdaten`]) — and two facts of the LF's own the
+/// command must state:
+///
+/// | Field | Type | Notes |
+/// |---|---|---|
+/// | `bilanzkreis` | string | `SG10 CCI+Z19` Bilanzkreis (Muss with `DTM+158`) |
+/// | `abrechnungsintervall_monate` | `1`, `3`, `6` or `12` | `SG6 DTM+Z20` Abrechnungsintervall des LF — the four entries UTILMD MIG Gas G1.2 S. 55 admits |
+///
+/// A missing one is refused naming it, as is a fact marktd does not hold; the
+/// rendered 44014 is checked against its profile before anything is written.
 pub(super) async fn dispatch_geli_eog_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_geli_lf_antwort(state, payload, mako_pruefung::codes::EBD_ANMELDUNG_EOG_GAS).await
+    let ebd = mako_pruefung::codes::EBD_ANMELDUNG_EOG_GAS;
+    let (antwort_code, zustimmung) = geli_antwortcode(payload, ebd)?;
+    if !zustimmung {
+        return answer_gas_supplier_change(state, payload, false, &antwort_code, Some(ebd)).await;
+    }
+    let body: mako_markt::commands::GeliEogBestaetigen =
+        mako_service::json_from_value(payload.clone()).map_err(|e| {
+            DispatchError::InvalidPayload(format!(
+                "geli.eog.bestaetigen payload: {e} (Bestätigung EoG 44014, UTILMD AHB Gas 1.2 \
+                 Kap. 5.9)"
+            ))
+        })?;
+    let refuse = |field: &str, what: &str| {
+        DispatchError::InvalidPayload(format!(
+            "\"{field}\" is required — {what}, Muss on the Bestätigung EoG 44014 \
+             (UTILMD AHB Gas 1.2 Kap. 5.9)"
+        ))
+    };
+    let bilanzkreis = body
+        .bilanzkreis
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| refuse("bilanzkreis", "the LF's Bilanzkreis (SG10 CCI+Z19)"))?
+        .to_owned();
+    let abrechnungsintervall_monate = body
+        .abrechnungsintervall_monate
+        .filter(|n| mako_markt::commands::ABRECHNUNGSINTERVALLE_MONATE.contains(n))
+        .ok_or_else(|| {
+            refuse(
+                "abrechnungsintervall_monate",
+                "the LF's Abrechnungsintervall in Monaten, 1, 3, 6 or 12 (SG6 DTM+Z20, \
+                 DE 2379 802; UTILMD MIG Gas G1.2 S. 55)",
+            )
+        })?;
+    let malo_id = extract_malo_id(payload)?;
+    let bemerkung = body.bemerkung.or(body.reason);
+
+    let current = super::current_state::<GeliGasSupplierChangeWorkflow>(
+        state,
+        malo_id.as_str(),
+        mako_geli_gas::WORKFLOW_NAME,
+    )
+    .await?;
+    let mako_geli_gas::GasSupplierChangeState::ValidationPassed(data) = &current else {
+        return Err(DispatchError::InvalidPayload(format!(
+            "the Gas process on {malo_id} owes no answer (state {})",
+            current.status_str()
+        )));
+    };
+    let transaktionsgrund = data.vorgang.transaktionsgrund.clone().unwrap_or_default();
+    let stichtag = super::eog_stammdaten::stichtag(&data.process_date)?;
+    let record = super::eog_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
+    let stammdaten = super::eog_stammdaten::gas_44014(
+        &record,
+        &transaktionsgrund,
+        &super::eog_stammdaten::LfEogFakten {
+            bilanzkreis: &bilanzkreis,
+            abrechnungsintervall_monate,
+        },
+    )?;
+
+    dispatch_to_process_with_state::<GeliGasSupplierChangeWorkflow, _>(
+        state,
+        malo_id.as_str(),
+        mako_geli_gas::WORKFLOW_NAME,
+        move |current| {
+            use mako_engine::workflow::Workflow as _;
+            let cmd = GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                antwort_code,
+                antwort_ebd: Some(ebd.to_owned()),
+                bemerkung,
+                obligations: vec![],
+                stammdaten,
+            };
+            let out = GeliGasSupplierChangeWorkflow::handle(current, cmd.clone())
+                .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            Ok(cmd)
+        },
+    )
+    .await
+}
+
+/// Resolve `antwort_code` against its Gas Codeliste: the code and whether its
+/// Cluster is a Zustimmung.
+fn geli_antwortcode(
+    payload: &serde_json::Value,
+    ebd: &str,
+) -> Result<(String, bool), DispatchError> {
+    let antwort_code = payload
+        .get("antwort_code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "payload must contain \"antwort_code\" — a code from the {ebd} Codeliste, \
+                 rendered into SG4 STS+E01 of the answering UTILMD"
+            ))
+        })?;
+    let entry = mako_pruefung::codes::lookup(ebd, antwort_code).ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} is not published by {ebd}"
+        ))
+    })?;
+    let zustimmung = entry.ist_zustimmung().ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} belongs to {ebd}, whose Cluster is \"{}\" — not the \
+             Zustimmung/Ablehnung pair this answer's PID is derived from.",
+            entry.cluster.label(),
+        ))
+    })?;
+    Ok((antwort_code.to_owned(), zustimmung))
 }
 
 pub(super) fn cmd_geli_eog_bestaetigen<'a>(
@@ -932,28 +1059,8 @@ async fn dispatch_geli_lf_antwort(
     payload: &serde_json::Value,
     ebd: &str,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let antwort_code = payload
-        .get("antwort_code")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(format!(
-                "payload must contain \"antwort_code\" — a code from the {ebd} Codeliste, \
-                 rendered into SG4 STS+E01 of the answering UTILMD"
-            ))
-        })?;
-    let entry = mako_pruefung::codes::lookup(ebd, antwort_code).ok_or_else(|| {
-        DispatchError::InvalidPayload(format!(
-            "Antwortcode {antwort_code:?} is not published by {ebd}"
-        ))
-    })?;
-    let zustimmung = entry.ist_zustimmung().ok_or_else(|| {
-        DispatchError::InvalidPayload(format!(
-            "Antwortcode {antwort_code:?} belongs to {ebd}, whose Cluster is \"{}\" — not the \
-             Zustimmung/Ablehnung pair this answer's PID is derived from.",
-            entry.cluster.label(),
-        ))
-    })?;
-    answer_gas_supplier_change(state, payload, zustimmung, antwort_code, Some(ebd)).await
+    let (antwort_code, zustimmung) = geli_antwortcode(payload, ebd)?;
+    answer_gas_supplier_change(state, payload, zustimmung, &antwort_code, Some(ebd)).await
 }
 
 /// `ebd` is the tree the code was resolved in, which the event names so the
@@ -984,6 +1091,7 @@ async fn answer_gas_supplier_change(
             antwort_ebd: antwort_ebd.clone(),
             bemerkung: reason.clone(),
             obligations: vec![],
+            stammdaten: mako_engine::payload::Stammdaten::default(),
         },
     )
     .await

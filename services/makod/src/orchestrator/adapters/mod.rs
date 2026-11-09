@@ -53,7 +53,7 @@ use rust_decimal::Decimal;
 ///
 /// # Errors
 ///
-/// A `DTM+471` that names no German day — see [`prozesstag`].
+/// A `DTM+471` or `DTM+158` that names no German day — see [`prozesstag`].
 pub(crate) fn lf_vorgangsdaten(
     u: &edi_energy::messages::utilmd::UtilmdMessage,
 ) -> Result<mako_engine::lf_vorgang::LfVorgangsdaten, EngineError> {
@@ -76,6 +76,12 @@ pub(crate) fn lf_vorgangsdaten(
         // as its own field rather than folded into `process_date`.
         naechstmoeglicher_termin: prozesstag(
             sg4_dtm(first, dtm::ENDE_NAECHSTMOEGLICH),
+            utilmd_sparte(u),
+        )?,
+        // `DTM+158` — a Gas 44013's Bilanzierungsbeginn, which its 44014
+        // restates.
+        bilanzierungsbeginn: prozesstag(
+            sg4_dtm(first, dtm::BILANZIERUNGSBEGINN),
             utilmd_sparte(u),
         )?,
         // `SG12 NAD+Z09` — the Kundenname the LFN put in its Anmeldung, which
@@ -315,9 +321,7 @@ pub use wim::*;
 /// own call site, because whether an unchecked message may be acted on is a
 /// per-process decision.
 pub(crate) fn ahb_verdict(msg: &AnyMessage) -> (bool, Vec<String>) {
-    // Which Formatversion the message is judged under follows the day it is
-    // judged on, and that day is the German one — see `mako_fristen::heute`.
-    let Some(report) = msg.validate_on_date(mako_fristen::heute()).ok() else {
+    let Some(report) = ahb_pruefung(msg) else {
         return (false, Vec::new());
     };
     if report.is_valid() {
@@ -327,6 +331,47 @@ pub(crate) fn ahb_verdict(msg: &AnyMessage) -> (bool, Vec<String>) {
         false,
         report.errors().iter().map(|e| format!("{e}")).collect(),
     )
+}
+
+/// The whole report of `msg`'s AHB-Prüfung against its own release profile —
+/// errors and warnings, among them the `FMT-` Formatbedingung findings, which
+/// [`ahb_verdict`] leaves out because they never decide `validation_passed`.
+/// `None` when no profile is registered for the message's release.
+pub(crate) fn ahb_pruefung(msg: &AnyMessage) -> Option<edi_energy::EdiEnergyReport> {
+    // Which Formatversion the message is judged under follows the day it is
+    // judged on, and that day is the German one — see `mako_fristen::heute`.
+    msg.validate_on_date(mako_fristen::heute()).ok()
+}
+
+/// The findings of `report` that are AHB-Fehler of their class, each with its
+/// [`Fehlerklasse`]: every error but an element „not part of the
+/// Prüfschablone", which § 2.1.2 (S. 11) has the receiver ignore
+/// („Informationen, die gemäß des Prüfidentifikators nicht enthalten sein
+/// sollten"), and every Formatbedingung finding, which the validator raises as
+/// a warning.
+///
+/// [`Fehlerklasse`]: crate::ingest_dispatcher::Fehlerklasse
+pub(crate) fn ahb_findings(
+    report: &edi_energy::EdiEnergyReport,
+) -> impl Iterator<
+    Item = (
+        crate::ingest_dispatcher::Fehlerklasse,
+        &edifact_rs::ValidationIssue,
+    ),
+> {
+    use crate::ingest_dispatcher::Fehlerklasse;
+    report.iter_issues().filter_map(|e| {
+        let rule = e.rule_id()?;
+        let klasse = Fehlerklasse::of(rule)?;
+        let counted = match klasse {
+            Fehlerklasse::Fmt => true,
+            Fehlerklasse::Mig | Fehlerklasse::Ahb => {
+                e.severity == edifact_rs::ValidationSeverity::Error
+                    && !rule.ends_with("-NOT-PERMITTED")
+            }
+        };
+        counted.then_some((klasse, e))
+    })
 }
 
 /// What the Verarbeitbarkeitsprüfung's AHB step (APERAK AHB 1.1 § 2.1.2)
@@ -349,8 +394,11 @@ pub(crate) enum AhbBefund {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AhbFehler {
     /// The `ERC` DE 9321: `Z29` for a missing Muss element, `Z39` for a code
-    /// outside the permitted ones.
+    /// outside the permitted ones, `Z35` for a value that breaks its
+    /// Formatbedingung.
     pub(crate) code: &'static str,
+    /// The rule-id family the finding came from.
+    pub(crate) klasse: crate::ingest_dispatcher::Fehlerklasse,
     /// The MIG name of the faulty segment — the obligatory Ortsangabe
     /// (§ 2.1.2.1).
     pub(crate) ortsangabe: Option<String>,
@@ -358,52 +406,77 @@ pub(crate) struct AhbFehler {
     pub(crate) reason: String,
 }
 
+/// The `ERC` code an AHB-Prüfung finding is answered with, where APERAK
+/// AHB 1.1 has one for it (Kap. 2.1.2.1, S. 12, names all three; Kap. 4.3
+/// defines them):
+///
+/// * `AHB-…-MISSING` — `Z29` „Erforderliche Angabe für diesen Anwendungsfall
+///   fehlt" (S. 41).
+/// * `AHB-…-CODE` — `Z39` „Code nicht aus erlaubtem Wertebereich" (S. 46).
+/// * `FMT-…` — `Z35` „Format nicht eingehalten": „Der im Geschäftsvorfall
+///   angegebene Wert eines Datenelements erfüllt nicht die dafür festgelegte
+///   Formatdefinition", the Formatdefinitionen numbered 901 to 999 (S. 45);
+///   Kap. 2.1.2 (S. 10) makes them part of the Prüfschablone.
+///
+/// All three oblige the Ortsangabe of Kap. 2.1.2.1–2.1.2.2 (S. 12): the MIG
+/// name of the faulty segment.
+pub(crate) fn erc_of(rule: &str) -> Option<&'static str> {
+    if rule.starts_with(edi_energy::profile::validate::FMT_PREFIX) {
+        Some(mako_engine::erc::codes::Z35)
+    } else if !rule.starts_with("AHB-") {
+        None
+    } else if rule.ends_with("-MISSING") {
+        Some(mako_engine::erc::codes::Z29)
+    } else if rule.ends_with("-CODE") {
+        Some(mako_engine::erc::codes::Z39)
+    } else {
+        None
+    }
+}
+
 /// Classify `msg`'s AHB findings into what an APERAK can answer.
 ///
-/// An element „not part of the Prüfschablone" is no AHB-Fehler: § 2.1.2
-/// (S. 11) has the receiver ignore „Informationen, die gemäß des
-/// Prüfidentifikators nicht enthalten sein sollten". Every coded finding is
-/// its own [`AhbFehler`]; a finding with no code beside them is named in the
-/// first one's text, so nothing the check found goes unreported.
-pub(crate) fn ahb_befund(msg: &AnyMessage) -> AhbBefund {
-    let Some(report) = msg.validate_on_date(mako_fristen::heute()).ok() else {
+/// Every coded finding is its own [`AhbFehler`]; a finding with no code beside
+/// them is named in the first one's text, so nothing the check found goes
+/// unreported. Formatbedingung findings take part only with
+/// `formatbedingungen` — the door reports them where it refuses their class,
+/// and nowhere else while their inbound count is unexplained.
+pub(crate) fn ahb_befund(msg: &AnyMessage, formatbedingungen: bool) -> AhbBefund {
+    use crate::ingest_dispatcher::Fehlerklasse;
+    let Some(report) = ahb_pruefung(msg) else {
         return AhbBefund::Verarbeitbar;
     };
-    let errors: Vec<_> = report
-        .errors()
-        .iter()
-        .filter(|e| !e.rule_id().is_some_and(|r| r.ends_with("-NOT-PERMITTED")))
-        .collect();
-    if errors.is_empty() {
-        return AhbBefund::Verarbeitbar;
-    }
-    let code_of = |e: &edifact_rs::ValidationIssue| {
-        let rule = e.rule_id().filter(|r| r.starts_with("AHB-"))?;
-        if rule.ends_with("-MISSING") {
-            Some(mako_engine::erc::codes::Z29)
-        } else if rule.ends_with("-CODE") {
-            Some(mako_engine::erc::codes::Z39)
-        } else {
-            None
+    let findings = report.iter_issues().filter(|e| {
+        let rule = e.rule_id();
+        if rule.is_some_and(|r| r.starts_with(edi_energy::profile::validate::FMT_PREFIX)) {
+            return formatbedingungen;
         }
-    };
+        e.severity == edifact_rs::ValidationSeverity::Error
+            && !rule.is_some_and(|r| r.ends_with("-NOT-PERMITTED"))
+    });
     let mut fehler: Vec<AhbFehler> = Vec::new();
     let mut uncoded: Vec<String> = Vec::new();
-    for e in &errors {
-        match code_of(e) {
-            Some(code) => fehler.push(AhbFehler {
+    for e in findings {
+        let rule = e.rule_id().unwrap_or_default();
+        match (erc_of(rule), Fehlerklasse::of(rule)) {
+            (Some(code), Some(klasse)) => fehler.push(AhbFehler {
                 code,
+                klasse,
                 ortsangabe: e
                     .context_get("segment_name")
                     .map(str::to_owned)
                     .or_else(|| e.segment_tag().map(str::to_owned)),
                 reason: e.message.clone(),
             }),
-            None => uncoded.push(e.message.clone()),
+            _ => uncoded.push(e.message.clone()),
         }
     }
     let Some(first) = fehler.first_mut() else {
-        return AhbBefund::Ungeklaert;
+        return if uncoded.is_empty() {
+            AhbBefund::Verarbeitbar
+        } else {
+            AhbBefund::Ungeklaert
+        };
     };
     if !uncoded.is_empty() {
         first.reason = format!("{}; ferner: {}", first.reason, uncoded.join("; "));

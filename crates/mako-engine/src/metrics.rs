@@ -143,6 +143,8 @@ impl MetricVec {
 /// | [`process_initiated`] | `makod_process_initiated_total` | `family` |
 /// | [`process_completed`] | `makod_process_completed_total` | `family`, `result` |
 /// | [`validation_failed`] | `makod_validation_failed_total` | `message_type`, `release` |
+/// | [`inbound_finding`] | `makod_inbound_findings_total` | `class`, `message_type` |
+/// | [`formatbedingung_finding`] | `makod_formatbedingung_findings_total` | `message_type`, `bedingung` |
 /// | [`outbox_delivery_attempted`] | `makod_outbox_delivery_attempts_total` | `result` |
 /// | [`deadline_fired`] | `makod_deadline_fired_total` | `family` |
 /// | [`dead_letter_recorded`] | `makod_dead_letter_recorded_total` | `reason` |
@@ -157,6 +159,8 @@ impl MetricVec {
 /// [`process_initiated`]: EngineMetrics::process_initiated
 /// [`process_completed`]: EngineMetrics::process_completed
 /// [`validation_failed`]: EngineMetrics::validation_failed
+/// [`inbound_finding`]: EngineMetrics::inbound_finding
+/// [`formatbedingung_finding`]: EngineMetrics::formatbedingung_finding
 /// [`outbox_delivery_attempted`]: EngineMetrics::outbox_delivery_attempted
 /// [`deadline_fired`]: EngineMetrics::deadline_fired
 /// [`dead_letter_recorded`]: EngineMetrics::dead_letter_recorded
@@ -173,6 +177,15 @@ pub struct EngineMetrics {
     /// `makod_validation_failed_total{message_type,release}` — incremented
     /// when an inbound EDIFACT message fails AHB validation.
     validation_failed: MetricVec,
+
+    /// `makod_inbound_findings_total{class,message_type}` — one per finding of
+    /// an inbound message's AHB-Prüfung, by the rule-id family it carries
+    /// (`MIG`, `AHB`, `FMT`).
+    inbound_findings: MetricVec,
+
+    /// `makod_formatbedingung_findings_total{message_type,bedingung}` — one per
+    /// Formatbedingung finding of an inbound message, by its number.
+    formatbedingung_findings: MetricVec,
 
     /// `makod_outbox_delivery_attempts_total{result}` — incremented by the
     /// AS4 sender on every delivery attempt.
@@ -215,6 +228,8 @@ impl EngineMetrics {
             process_initiated: MetricVec::default(),
             process_completed: MetricVec::default(),
             validation_failed: MetricVec::default(),
+            inbound_findings: MetricVec::default(),
+            formatbedingung_findings: MetricVec::default(),
             outbox_delivery_attempts: MetricVec::default(),
             deadline_fired: MetricVec::default(),
             dead_letter_recorded: MetricVec::default(),
@@ -267,6 +282,27 @@ impl EngineMetrics {
     pub fn validation_failed(&self, message_type: &str, release: &str) {
         let label = format!("{message_type},{release}");
         self.validation_failed.increment(&label);
+    }
+
+    /// Increment `makod_inbound_findings_total{class=<class>,message_type=<type>}`.
+    ///
+    /// Call once per finding of an inbound message's AHB-Prüfung. `class` is
+    /// the rule-id family (`MIG`, `AHB`, `FMT`) — a bounded label, where the
+    /// full rule id is not.
+    pub fn inbound_finding(&self, class: &str, message_type: &str) {
+        let label = format!("{class},{message_type}");
+        self.inbound_findings.increment(&label);
+    }
+
+    /// Increment
+    /// `makod_formatbedingung_findings_total{message_type=<type>,bedingung=<n>}`.
+    ///
+    /// Call once per Formatbedingung finding of an inbound message; `bedingung`
+    /// is its number (`950`), unique across message types (Allgemeine
+    /// Festlegungen 6.1d Kap. 6.4).
+    pub fn formatbedingung_finding(&self, message_type: &str, bedingung: &str) {
+        let label = format!("{message_type},{bedingung}");
+        self.formatbedingung_findings.increment(&label);
     }
 
     /// Increment `makod_outbox_delivery_attempts_total{result=<result>}`.
@@ -330,6 +366,8 @@ impl EngineMetrics {
             process_initiated: self.process_initiated.snapshot(),
             process_completed: self.process_completed.snapshot(),
             validation_failed: self.validation_failed.snapshot(),
+            inbound_findings: self.inbound_findings.snapshot(),
+            formatbedingung_findings: self.formatbedingung_findings.snapshot(),
             outbox_delivery_attempts: self.outbox_delivery_attempts.snapshot(),
             deadline_fired: self.deadline_fired.snapshot(),
             dead_letter_recorded: self.dead_letter_recorded.snapshot(),
@@ -359,6 +397,11 @@ pub struct MetricsSnapshot {
     pub process_completed: Vec<(Box<str>, u64)>,
     /// `("message_type,release", count)` pairs for `makod_validation_failed_total`.
     pub validation_failed: Vec<(Box<str>, u64)>,
+    /// `("class,message_type", count)` pairs for `makod_inbound_findings_total`.
+    pub inbound_findings: Vec<(Box<str>, u64)>,
+    /// `("message_type,bedingung", count)` pairs for
+    /// `makod_formatbedingung_findings_total`.
+    pub formatbedingung_findings: Vec<(Box<str>, u64)>,
     /// `(result, count)` pairs for `makod_outbox_delivery_attempts_total`.
     pub outbox_delivery_attempts: Vec<(Box<str>, u64)>,
     /// `(family, count)` pairs for `makod_deadline_fired_total`.
@@ -407,6 +450,22 @@ impl MetricsSnapshot {
             "Total number of inbound EDIFACT messages that failed AHB validation.",
             &["message_type", "release"],
             &self.validation_failed,
+        );
+        Self::write_counter_vec(
+            &mut out,
+            "makod_inbound_findings_total",
+            "Findings of the AHB-Prüfung of inbound EDIFACT messages, by rule-id class \
+             (MIG, AHB, FMT) and message type.",
+            &["class", "message_type"],
+            &self.inbound_findings,
+        );
+        Self::write_counter_vec(
+            &mut out,
+            "makod_formatbedingung_findings_total",
+            "Formatbedingung findings of inbound EDIFACT messages, by message type and \
+             Formatbedingung number.",
+            &["message_type", "bedingung"],
+            &self.formatbedingung_findings,
         );
         Self::write_counter_vec(
             &mut out,

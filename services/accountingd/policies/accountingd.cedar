@@ -39,7 +39,9 @@
 //   "run-payout"         — POST an EEG payout run, PUT its pain.002 status
 //   "close-period"       — POST the Jahresabschluss and the Festschreibung seal
 //   "read-enfg"          — GET  the EEG/KWKG payments made per month (§ 13 Abs. 1 EnFG)
+//                          and the EEG Rückforderungen
 //   "record-aufrechnung" — POST an Aufrechnung against an EEG claim (§ 13 Abs. 1 Satz 2 EnFG)
+//   "record-rueckzahlung" — POST a plant operator's repayment of an EEG overpayment
 //   "erase-pii"          — POST the GDPR Art. 17 anonymization
 //   "use-mcp"            — permission to speak MCP at all. The gate the shared
 //                          middleware applies to every frame; what a frame may
@@ -68,7 +70,8 @@
 // Roles are the platform's **market** roles (`mako_roles`). accountingd is an LF
 // service: the retail supplier keeps the Kundenkonto. MSB is admitted because a
 // Messstellenbetreiber runs the same receivable machinery against its own
-// Messentgelt invoices.
+// Messentgelt invoices. The EEG payouts and the EnFG ledger are the
+// Netzbetreiber's and held to NB alone (see "EnFG Belastungsausgleich").
 
 // ── Reads: one customer ───────────────────────────────────────────────────────
 // Any authenticated caller may read their own tenant's customer accounts.
@@ -113,8 +116,7 @@ permit(
         Action::"write-account",
         Action::"post-entry",
         Action::"manage-sepa",
-        Action::"import-payments",
-        Action::"run-payout"
+        Action::"import-payments"
     ],
     resource
 ) when {
@@ -125,11 +127,18 @@ permit(
 // ── EnFG Belastungsausgleich ──────────────────────────────────────────────────
 // The EEG and KWKG payments are the Netzbetreiber's: § 19 Abs. 1 EEG 2023 gives
 // the plant operator its claim „gegen den Netzbetreiber", and § 13 Abs. 1 EnFG
-// has the ÜNB reimburse „ihren nachgelagerten Verteilernetzbetreibern". Reading
-// what was paid and recording an Aufrechnung that counts as paid are held to NB.
+// has the ÜNB reimburse „ihren nachgelagerten Verteilernetzbetreibern". Running
+// a payout and recording its pain.002 status, reading what was paid and what is
+// owed back, recording an Aufrechnung that counts as paid and recording a plant
+// operator's repayment of an overpayment are held to NB; LF and MSB pay no EEG.
 permit(
     principal,
-    action in [Action::"read-enfg", Action::"record-aufrechnung"],
+    action in [
+        Action::"run-payout",
+        Action::"read-enfg",
+        Action::"record-aufrechnung",
+        Action::"record-rueckzahlung"
+    ],
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&
@@ -221,6 +230,7 @@ forbid(
         Action::"import-payments",
         Action::"run-payout",
         Action::"record-aufrechnung",
+        Action::"record-rueckzahlung",
         Action::"close-period",
         Action::"erase-pii"
     ],

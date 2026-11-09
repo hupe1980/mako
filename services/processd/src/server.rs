@@ -192,6 +192,8 @@ pub struct RunConfig {
     pub lf_eog_auto_respond: bool,
     /// See [`crate::config::LfConfig::eog_versorgungsart`].
     pub lf_eog_versorgungsart: Option<String>,
+    /// See [`crate::config::LfConfig::eog_abrechnungsintervall_monate`].
+    pub lf_eog_abrechnungsintervall_monate: Option<u8>,
     /// `vertragd`, when this deployment runs the contract layer.
     ///
     /// Read by the LF and the MSB module alike: the split is by kind of fact,
@@ -420,6 +422,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             grundversorgungs_netzgebiete: cfg.lf_grundversorgungs_netzgebiete.clone(),
             eog_auto_respond: cfg.lf_eog_auto_respond,
             eog_versorgungsart: cfg.lf_eog_versorgungsart.clone(),
+            eog_abrechnungsintervall_monate: cfg.lf_eog_abrechnungsintervall_monate,
         };
         Some(Arc::new(LfState {
             config: lf_config,
@@ -778,8 +781,8 @@ mod rest {
         /// SG4 STS Transaktionsgrund, forwarded onto the outbound UTILMD.
         #[serde(default)]
         pub transaktionsgrund: Option<String>,
-        /// `SG8 SEQ+Z79` Bilanzkreis; falls back to the single configured
-        /// `[[lf.bilanzkreise]] standard` entry.
+        /// `SG8 SEQ+Z79` Bilanzkreis; falls back to the single `standard`
+        /// entry of the Strom fallback row of `[[lf.bilanzkreise]]`.
         #[serde(default)]
         pub bilanzkreis: Option<String>,
     }
@@ -797,8 +800,8 @@ mod rest {
         /// Einzug.
         #[serde(default)]
         pub transaktionsgrund: Option<String>,
-        /// `SG10 CCI+Z19` Bilanzkreis; falls back to the single configured
-        /// `[[lf.bilanzkreise]] standard` entry.
+        /// `SG10 CCI+Z19` Bilanzkreis; falls back to the single `standard`
+        /// entry of the Gas fallback row of `[[lf.bilanzkreise]]`.
         #[serde(default)]
         pub bilanzkreis: Option<String>,
     }
@@ -1329,18 +1332,27 @@ mod rest {
     /// endpoints stay reachable so the Cedar `initiate-supply` denial is the
     /// answer a caller gets, not a 404, and there is no `[[lf.bilanzkreise]]`.
     #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
-    fn anmeldung_bilanzkreis(state: &ProcessdState, requested: Option<String>) -> Option<String> {
+    fn anmeldung_bilanzkreis(
+        state: &ProcessdState,
+        requested: Option<String>,
+        sparte: mako_markt::domain::Sparte,
+    ) -> Option<String> {
         crate::lf_module::anmeldung_bilanzkreis(
             requested.as_deref(),
             state
                 .lf
                 .as_ref()
                 .map_or(&[][..], |lf| &lf.config.bilanzkreise),
+            sparte,
         )
     }
 
     #[cfg(not(any(feature = "role-lf-strom", feature = "role-lf-gas")))]
-    fn anmeldung_bilanzkreis(_state: &ProcessdState, requested: Option<String>) -> Option<String> {
+    fn anmeldung_bilanzkreis(
+        _state: &ProcessdState,
+        requested: Option<String>,
+        _sparte: mako_markt::domain::Sparte,
+    ) -> Option<String> {
         requested.filter(|s| !s.is_empty())
     }
 
@@ -1411,7 +1423,8 @@ mod rest {
         // otherwise it is the caller's to name, because MaBiS § 10.2.1 grants the
         // Zuordnungsermächtigung per (ZRT, BG, BK, LF) and the supplier picks
         // among those.
-        let bilanzkreis = anmeldung_bilanzkreis(&state, bilanzkreis);
+        let bilanzkreis =
+            anmeldung_bilanzkreis(&state, bilanzkreis, mako_markt::domain::Sparte::Strom);
         if bilanzkreis.is_none() {
             return Err(refuse(
                 "MISSING_BILANZKREIS",
@@ -1591,7 +1604,8 @@ mod rest {
         // GeLi Gas states the Bilanzkreis in one segment; the Strom `SG8
         // SEQ+Z79` Produktpaket does not exist here. `makod` refuses an
         // Anmeldung without one, so the caller learns at the edge.
-        let bilanzkreis = anmeldung_bilanzkreis(&state, bilanzkreis);
+        let bilanzkreis =
+            anmeldung_bilanzkreis(&state, bilanzkreis, mako_markt::domain::Sparte::Gas);
         let Some(bilanzkreis) = bilanzkreis else {
             return Err(refuse(
                 "MISSING_BILANZKREIS",

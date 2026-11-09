@@ -1202,6 +1202,8 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `geli.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `bilanzierungsbeginn`, `transaktionsgrund` — nothing else³ |
 | `gpke.eog.bestaetigen` | `malo_id`, `versorgungsart` (ZC9/ZD0/ZE3/ZZD), `bilanzkreis`¹ |
 | `gpke.eog.ablehnen` | `malo_id`, `reason` |
+| `geli.eog.bestaetigen` | `malo_id`, `antwort_code` (`E_3008`), `bilanzkreis`, `abrechnungsintervall_monate` (1, 3, 6 or 12)⁴ |
+| `gpke.neuanlage.bestaetigen` / `.ablehnen` | `malo_id` (or `process_id`), `antwort_code` (`E_0608`), `bemerkung` with `A99`⁵ |
 | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
 | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_mp_id`¹ |
 | `gpke.sperrung.beauftragen` · `gpke.entsperrung.beauftragen` · `gpke.sperrung.stornieren` | `malo_id` |
@@ -1244,6 +1246,18 @@ answers `422 stammdaten_unvollstaendig` naming each one; no marktd answers
 a Strom TLP Marktlokation and an OBIS whose `[257]`/`[274]` needs a
 Wertegranularität are refused by name. The message passes the pre-send AHB
 gate before the spawn, or the command is `invalid_payload` with each finding.
+⁴ The Bestätigung EoG 44014 restates the 44013's record: makod reads it from
+marktd for the process's Zuordnungsbeginn, as for the 44013, drops the
+`CCI+Z42` Betriebszustand the 44014 column does not list, and adds the LF's
+`CCI+Z19` Bilanzkreis and `SG6 DTM+Z20` Abrechnungsintervall. The 44013's
+Transaktionsgrund, Vorgangsnummer (`RFF+TN`) and `DTM+158` come from the
+process. The body is read as `mako_markt::commands::GeliEogBestaetigen`, so a
+key it does not declare is refused; a missing fact is refused naming it, and the
+44014 passes the pre-send gate before anything is written.
+⁵ Both run the pre-send gate before the answer is written. A Bestätigung
+55602/55603 is refused there today: its Ergänzung (`ZW6`/`ZW7`, `ZW0`/`ZW2`),
+`RFF+Z60` geplantes Produktpaket and, on `ZW7`, the Messlokationen with their
+MSB are facts no command or process yet carries.
 
 ### Integrated operators (NB + MSB, same MP-ID)
 
@@ -1619,10 +1633,12 @@ padding it to UTC midnight. A document date given as a date goes out as its
 Europe/Berlin midnight. The ESA dates (REQOTE `DTM+76`, ORDERS `DTM+203`,
 QUOTES `DTM+469`, IFTSTA 21042 `DTM+93`) are Strom dates.
 
-Inbound, the UTILMD adapters read a `303` process date back to the German date
-it names with `mako_fristen::tag_des_beginns` — `202612312300+00` on a Strom
-Anmeldung is 01.01.2027 — and refuse one that begins no day rather than reading
-its first eight digits. A counterparty's `102` document date is accepted.
+Inbound, the UTILMD adapters and the ORDERS 17001/17009 Geräteübernahme
+adapter (`DTM+203`, `[UB3]`, in the recipient's Sparte) read a `303` process
+date back to the German date it names with `mako_fristen::tag_des_beginns` —
+`202612312300+00` on a Strom Anmeldung is 01.01.2027 — and refuse one that
+begins no day rather than reading its first eight digits. A counterparty's
+`102` document date is accepted.
 
 ### MSCONS use cases
 
@@ -1920,21 +1936,34 @@ spawn and on a resume (APERAK AHB 1.1 §2.4.1, §2.3.1):
 | every other Strom message | next Werktag 12 Uhr | `aperak-strom-naechster-wt-1200` |
 | Gas | Folge- or Initialprozess window, only when the run enqueues an APERAK — a processable Gas message is answered by silence | `aperak-gas-*` |
 
-It also answers what the workflow does not, in the same write as the run (or
-as the dead letter):
+`FristAbgelaufen` is a breach to act on, not an outcome: the process keeps
+waiting, and a late answer still goes out or still lands.
+
+### The door's answers
+{: #door-answers }
+
+The ingest dispatcher answers what the workflow does not, in the same write as
+the run (or as the dead letter):
 
 | Inbound | Answer |
 |---|---|
 | processed Strom message, no APERAK from its workflow | Anerkennungsmeldung `BGM+312` (29002), naming the message's `UNH`, `BGM` and `DTM+137` in `SG2` — not for the WiM Gerätewechsel, whose operator decides it later (`wim.geraetewechsel.aperak`) |
-| failed AHB check, either Sparte | `Z29` (missing Muss element) or `Z39` (code not permitted), one `ERC` group per finding with the MIG segment name as `FTX+Z02` |
+| failed AHB check, either Sparte | `Z29` (missing Muss element) or `Z39` (code not permitted), one `ERC` group per finding with the MIG segment name as `FTX+Z02`; the message still reaches its workflow |
+| Formatbedingung finding (`FMT-`) | counted only — `Z35` once the `FMT` class is refused |
+| AHB-Fehler of a refused class | the same Fehlermeldung, every AHB-Fehler named (`Z35` for a Formatbedingung), and **no workflow** |
 | Prüfidentifikator no Marktrolle here processes | `Z31` |
 | follow-up no process takes, where the PID-Übersicht's „Stelle der Zuordnungsprüfung" is `V` | `Z33`, or a dead letter under [`unbekannter_vorgang`](#policy-ingest-unbekannter-vorgang) |
 
+The refusal is switched on per class — `MIG-`, `AHB-`, `FMT-`, the rule-id
+family — and every class is off (`ingest_dispatcher::ABGEWIESENE_KLASSEN`): a
+class is refused once a release has counted real counterparty traffic and its
+`makod_inbound_findings_total` is explained, because no counterparty message
+has yet been through these checks. A refused class is answered at the door, so
+the 30 adapter registries that never validate are covered too. A `MIG-` finding
+has no APERAK code here, so on its own it never refuses a message.
+
 Every notification a dispatched message causes carries the receipt instant as
 its CloudEvent `time`.
-
-`FristAbgelaufen` is a breach to act on, not an outcome: the process keeps
-waiting, and a late answer still goes out or still lands.
 
 ### The MaBiS-ZP register reports a repealed series
 
@@ -1976,6 +2005,8 @@ output.
 | `makod_dead_letter_recorded_total` | `reason` | Any. `not_dispatchable` is a mako coverage bug; `missing_interchange_party` a defect in the sender's message |
 | `makod_inbound_messages_total` | `pid`, `result` | `result = "error"` |
 | `makod_validation_failed_total` | `message_type`, `release` | A counterparty sends non-conformant messages |
+| `makod_inbound_findings_total` | `class` (`MIG`, `AHB`, `FMT`), `message_type` | Explain every non-zero count before its class is refused |
+| `makod_formatbedingung_findings_total` | `message_type`, `bedingung` (`950`) | The `FMT` count, by Formatbedingung |
 | **`makod_delivery_window_missed_total`** | `label` | **> 0** — an undelivered APERAK (APERAK AHB 1.1 §2.4.1 Strom / §2.3.1 Gas) or CONTRL (CONTRL AHB 1.0 §2.3.1); `label` names the window |
 
 | Gauge (unlabelled) | Reads | Alert condition |

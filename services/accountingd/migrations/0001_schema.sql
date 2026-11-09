@@ -20,6 +20,7 @@
 --   eeg_belege           — the EEG settlement receipts einsd announced, per receipt chain
 --   eeg_payout_orders    — EEG SCT/SCT Inst payout pipeline
 --   eeg_aufrechnungen    — EEG claims extinguished by Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG)
+--   eeg_rueckzahlungen   — what plant operators paid back of an EEG overpayment
 --   sepa_collection_runs — pain.008 XML archive for audit + replay
 --   jahresabschluss_runs — annual settlement idempotency
 --   account_audit_log    — §238 HGB master-data change trail
@@ -564,8 +565,9 @@ COMMENT ON TABLE auto_dunning_runs IS
 -- CloudEvent. A settlement period — plant (`tr_id`), billing year and month —
 -- is one **receipt chain**: einsd's initial receipt and every § 147 AO
 -- correction after it each state the *whole* amount owed for the period
--- (`anspruch_ct`), so the chain's current receipt is the one einsd issued last
--- (`beleg_zeit`, the CloudEvent `time`), whatever order the events arrive in.
+-- (`anspruch_ct`), so the chain's current receipt is the one einsd wrote last
+-- (`ketten_folge`, the position einsd assigns in the write that records the
+-- receipt), whatever order the events arrive in and whatever any clock says.
 --
 -- `gutschrift_delta_ct` is what the receipt changed the period's claim by, and
 -- is what its ledger entry books: the initial receipt books its amount, a
@@ -587,7 +589,7 @@ CREATE TABLE eeg_belege (
     -- Negative when the period nets to a claim on the plant operator.
     anspruch_ct         BIGINT      NOT NULL,
     gutschrift_delta_ct BIGINT      NOT NULL,
-    beleg_zeit          TIMESTAMPTZ NOT NULL,
+    ketten_folge        BIGINT      NOT NULL CHECK (ketten_folge > 0),
     -- Creditor as einsd forwarded it; NULL → the account's zahlungsinformation.
     bank_iban           TEXT,
     zahlungsempfaenger  TEXT,
@@ -595,13 +597,20 @@ CREATE TABLE eeg_belege (
     PRIMARY KEY (tenant, source_ce_id)
 );
 
-CREATE INDEX eeg_belege_kette ON eeg_belege (tenant, tr_id, billing_year, billing_month, beleg_zeit);
+-- One receipt per chain position: a second event claiming a position already
+-- taken is not a receipt einsd wrote.
+CREATE UNIQUE INDEX eeg_belege_kette ON eeg_belege (tenant, tr_id, billing_year, billing_month, ketten_folge);
+-- An account a receipt was booked to is an EEG plant account
+-- (`accountingd::pg::is_eeg_anlagenkonto`): never an Offener Posten, never
+-- dunned, never in the §§ 41f/41g sequence.
+CREATE INDEX eeg_belege_account ON eeg_belege (tenant, account_id);
 
 -- ── EEG Einspeisevergütung payout orders (§25 EEG 2023) ─────────────────────
 --
 -- A payout order pays a receipt chain's **outstanding difference**: the current
 -- receipt's `anspruch_ct` less what was already paid or ordered for the chain
--- (every order not `RJCT`/`CANC`, plus every Aufrechnung). A correction is
+-- (every order not `RJCT`/`CANC`, plus every Aufrechnung, less every
+-- Rückzahlung the operator made). A correction is
 -- therefore paid as the difference, never as its whole amount again; a
 -- rejected order is no longer counted, so the next run pays the chain again.
 -- The row tracks the lifecycle from pain.001 generation → bank submission →
@@ -738,17 +747,42 @@ CREATE TABLE eeg_aufrechnungen (
 
 CREATE INDEX eeg_aufrechnungen_month ON eeg_aufrechnungen (tenant, billing_year, billing_month);
 
+-- ── EEG Rückzahlungen ────────────────────────────────────────────────────────
+--
+-- What a plant operator paid back of a receipt chain's overpayment — a chain
+-- whose current receipt is below what was already paid for it
+-- (`GET /api/v1/eeg/rueckforderungen`). Each is booked `EEG_RUECKZAHLUNG` on
+-- the plant's Kontokorrent and counted against the chain in `eeg_ketten`, so a
+-- repaid chain leaves the list. Never more than is owed back
+-- (`accountingd::eeg_auszahlung::erfasse_rueckzahlung`).
+CREATE TABLE eeg_rueckzahlungen (
+    rueckzahlung_id UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant          TEXT        NOT NULL,
+    tr_id           TEXT        NOT NULL,
+    malo_id         TEXT        NOT NULL,
+    billing_year    SMALLINT    NOT NULL,
+    billing_month   SMALLINT    NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
+    amount_ct       BIGINT      NOT NULL CHECK (amount_ct > 0),
+    eingegangen_am  DATE        NOT NULL,
+    vermerk         TEXT,
+    erfasst_von     TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- One repayment per chain and day: a resent request is a conflict, not a
+    -- second repayment of the same claim.
+    UNIQUE (tenant, tr_id, billing_year, billing_month, eingegangen_am)
+);
+
 -- ── EEG receipt chains ───────────────────────────────────────────────────────
 --
 -- Each settlement period's current receipt beside what was paid or ordered for
 -- it. `geleistet_ct` counts every payout order the bank has not rejected or
 -- that was not cancelled, and every Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG counts
--- a claim extinguished by set-off as paid). What the chain still earns, or
--- what the plant operator owes back, is `anspruch_ct − geleistet_ct`
--- (`accountingd::eeg_auszahlung::ausgleich`).
+-- a claim extinguished by set-off as paid), less every Rückzahlung. What the
+-- chain still earns, or what the plant operator owes back, is
+-- `anspruch_ct − geleistet_ct` (`accountingd::eeg_auszahlung::ausgleich`).
 CREATE VIEW eeg_ketten AS
 SELECT b.tenant, b.tr_id, b.billing_year, b.billing_month, b.malo_id, b.account_id,
-       b.art, b.receipt_id, b.source_ce_id, b.anspruch_ct, b.beleg_zeit,
+       b.art, b.receipt_id, b.source_ce_id, b.anspruch_ct, b.ketten_folge,
        b.bank_iban, b.zahlungsempfaenger,
        (COALESCE((SELECT sum(o.amount_ct) FROM eeg_payout_orders o
                    WHERE o.tenant = b.tenant AND o.tr_id = b.tr_id
@@ -758,10 +792,13 @@ SELECT b.tenant, b.tr_id, b.billing_year, b.billing_month, b.malo_id, b.account_
       + COALESCE((SELECT sum(a.amount_ct) FROM eeg_aufrechnungen a
                    WHERE a.tenant = b.tenant AND a.tr_id = b.tr_id
                      AND a.billing_year = b.billing_year AND a.billing_month = b.billing_month), 0)
+      - COALESCE((SELECT sum(r.amount_ct) FROM eeg_rueckzahlungen r
+                   WHERE r.tenant = b.tenant AND r.tr_id = b.tr_id
+                     AND r.billing_year = b.billing_year AND r.billing_month = b.billing_month), 0)
        )::bigint AS geleistet_ct
   FROM (SELECT DISTINCT ON (tenant, tr_id, billing_year, billing_month) *
           FROM eeg_belege
-         ORDER BY tenant, tr_id, billing_year, billing_month, beleg_zeit DESC, source_ce_id DESC) b;
+         ORDER BY tenant, tr_id, billing_year, billing_month, ketten_folge DESC) b;
 
 -- ── SEPA pain.008 collection runs (persist for audit + replay) ─────────
 --

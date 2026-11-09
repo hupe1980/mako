@@ -1305,7 +1305,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         )
         .with_marktd_client(marktd_client.clone())
         .with_mp_id_registry(Arc::clone(&mp_id_registry))
-        .with_unbekannter_vorgang(cli.policy.ingest.unbekannter_vorgang.get()),
+        .with_unbekannter_vorgang(cli.policy.ingest.unbekannter_vorgang.get())
+        // AHB-Fehler classes answered at the door: none until each class's
+        // inbound count is explained.
+        .with_abgewiesene_klassen(ingest_dispatcher::ABGEWIESENE_KLASSEN),
     );
 
     // ── Shared health state ───────────────────────────────────────────────────

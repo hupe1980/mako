@@ -308,6 +308,19 @@ struct Generator<'a> {
 }
 
 impl Generator<'_> {
+    /// The `303` sample: 01.10.2026 as the UTC instant its day begins —
+    /// 00:00 MESZ (`202609302200+00`) in Strom, the Gastag's 06:00 MESZ
+    /// (`202610010400+00`) in Gas. A UTILMD Gas release (`G…`) is Gas; every
+    /// other profile is Strom or Sparte-neutral, where the Strom day start is
+    /// one.
+    fn tagesbeginn_303(&self) -> &'static str {
+        if self.profile.release().as_str().starts_with('G') {
+            "202610010400+00"
+        } else {
+            "202609302200+00"
+        }
+    }
+
     /// Emit the children of a group instance, in MIG order: the seed's
     /// segments where it has them (`instance` is the seed's instance of the
     /// group), the column's required ones where it has none.
@@ -947,7 +960,10 @@ impl Generator<'_> {
                     })
                     .unwrap_or_else(|| "303".into());
                 match format.as_str() {
-                    "303" => "202610010000+00".into(),
+                    // A process date is the UTC instant its German day
+                    // begins (Allgemeine Festlegungen V6.1d Kap. 3.1), and
+                    // that instant is a valid Zeitpunkt as well.
+                    "303" => self.tagesbeginn_303().into(),
                     "610" | "602" => "202610".into(),
                     "802" => "2026".into(),
                     "104" | "106" => "1001".into(),

@@ -756,32 +756,7 @@ where
     W::State: Default + serde::Serialize,
     F: FnOnce(&W::State) -> Result<W::Command, DispatchError>,
 {
-    let registry = state.store.as_process_registry();
-    let identities = registry
-        .lookup_correlated(state.tenant_id, business_key)
-        .await
-        .map_err(|e| {
-            DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string()))
-        })?;
-    let matching: Vec<_> = identities
-        .into_iter()
-        .filter(|id| id.workflow_id.name.as_ref() == workflow_name)
-        .collect();
-    let identity = match matching.len() {
-        0 => {
-            return Err(DispatchError::ProcessNotFound {
-                business_key: business_key.to_owned(),
-                workflow_name,
-            });
-        }
-        1 => matching.into_iter().next().expect("len == 1"),
-        n => {
-            return Err(DispatchError::AmbiguousProcess {
-                business_key: business_key.to_owned(),
-                count: n,
-            });
-        }
-    };
+    let identity = find_identity(state, business_key, workflow_name).await?;
     let process_id = identity.process_id;
     let process = mako_engine::process::Process::<
         W,
@@ -798,6 +773,58 @@ where
         .await?;
 
     Ok(DispatchOutcome::Dispatched { process_id })
+}
+
+/// The one running process of `workflow_name` under `business_key`.
+async fn find_identity(
+    state: &CommandsApiState,
+    business_key: &str,
+    workflow_name: &'static str,
+) -> Result<mako_engine::ids::ProcessIdentity, DispatchError> {
+    let identities = state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, business_key)
+        .await
+        .map_err(|e| {
+            DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string()))
+        })?;
+    let mut matching: Vec<_> = identities
+        .into_iter()
+        .filter(|id| id.workflow_id.name.as_ref() == workflow_name)
+        .collect();
+    match matching.len() {
+        0 => Err(DispatchError::ProcessNotFound {
+            business_key: business_key.to_owned(),
+            workflow_name,
+        }),
+        1 => Ok(matching.remove(0)),
+        n => Err(DispatchError::AmbiguousProcess {
+            business_key: business_key.to_owned(),
+            count: n,
+        }),
+    }
+}
+
+/// The current state of the one running process of `workflow_name` under
+/// `business_key` — for a door that must read a fact the process holds (its
+/// Stichtag) before it can assemble the command.
+async fn current_state<W>(
+    state: &CommandsApiState,
+    business_key: &str,
+    workflow_name: &'static str,
+) -> Result<W::State, DispatchError>
+where
+    W: mako_engine::workflow::Workflow,
+    W::State: Default + serde::Serialize,
+{
+    let identity = find_identity(state, business_key, workflow_name).await?;
+    Ok(mako_engine::process::Process::<
+        W,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::from_identity(Arc::clone(&state.store), identity)
+    .state()
+    .await?)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

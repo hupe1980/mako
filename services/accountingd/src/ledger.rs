@@ -310,6 +310,9 @@ impl Chart {
             // collection back, so the money leaves the bank account again and
             // the receivable re-opens.
             "ZAHLUNG" | "BANKRUECKLAST" | "SEPA_STORNO" => Self::BANK,
+            // An EEG payout the bank settled, and an operator's repayment of an
+            // overpaid one: money leaving, and returning to, the bank account.
+            "EEG_AUSZAHLUNG" | "EEG_RUECKZAHLUNG" => Self::BANK,
             "ABSCHLAG" | "ABSCHLAG_VERRECHNUNG" => Self::ANZAHLUNGEN,
             "MAHNGEBUEHR" => Self::MAHNERLOESE,
             "VERZUGSZINSEN" => Self::ZINSERTRAG,
@@ -346,6 +349,8 @@ pub const ENTRY_TYPES: &[&str] = &[
     "VERZUGSZINSEN",
     "EEG_GUTSCHRIFT",
     "EEG_MARKTPRAEMIE",
+    "EEG_AUSZAHLUNG",
+    "EEG_RUECKZAHLUNG",
     "JAHRESABSCHLUSS",
 ];
 

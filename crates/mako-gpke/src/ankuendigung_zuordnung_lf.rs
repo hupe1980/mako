@@ -122,6 +122,12 @@ pub enum AnkuendigungZuordnungLfEvent {
         pruefidentifikator: Pruefidentifikator,
         /// `SG4 IDE+24` DE 7402 — carried into the answer's `SG4 RFF+TN`.
         vorgangsnummer: Option<String>,
+        /// `SG4 STS+7` Transaktionsgrund and Ergänzung — restated on the answer.
+        #[serde(default)]
+        transaktionsgrund: Option<String>,
+        /// `SG4 STS+7` DE 9013 element 3.
+        #[serde(default)]
+        transaktionsgrund_ergaenzung: Option<String>,
     },
     /// EDIFACT message passed profile validation.
     ValidationPassed {
@@ -226,6 +232,14 @@ pub struct AnkuendigungZuordnungLfData {
     /// („Referenz Vorgangsnummer (aus Anfragenachricht)", Muss on every
     /// Antwortnachricht). It is never reused as the answer's own `IDE+24`.
     pub vorgangsnummer: Option<String>,
+    /// `SG4 STS+7` DE 9013 of the request — `E03` and the Ergänzung
+    /// `ZW8`/`ZW9`/`ZX0`/`ZX1`, which 55608 and 55609 restate (UTILMD AHB
+    /// Strom 2.2, Muss on both columns).
+    #[serde(default)]
+    pub transaktionsgrund: Option<String>,
+    /// `SG4 STS+7` DE 9013 element 3 of the request.
+    #[serde(default)]
+    pub transaktionsgrund_ergaenzung: Option<String>,
 }
 
 /// State of a GPKE Ankündigung Zuordnung LF process.
@@ -445,6 +459,8 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 process_date,
                 pruefidentifikator,
                 vorgangsnummer,
+                transaktionsgrund,
+                transaktionsgrund_ergaenzung,
                 ..
             } => AnkuendigungZuordnungLfState::Eingegangen(AnkuendigungZuordnungLfData {
                 location_id: location_id.clone(),
@@ -454,6 +470,8 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 process_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 vorgangsnummer: vorgangsnummer.clone(),
+                transaktionsgrund: transaktionsgrund.clone(),
+                transaktionsgrund_ergaenzung: transaktionsgrund_ergaenzung.clone(),
             }),
             AnkuendigungZuordnungLfEvent::ValidationPassed { .. } => match state {
                 AnkuendigungZuordnungLfState::Eingegangen(data) => {
@@ -550,6 +568,8 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
                     vorgangsnummer: vorgang.vorgangsnummer.clone(),
+                    transaktionsgrund: vorgang.transaktionsgrund.clone(),
+                    transaktionsgrund_ergaenzung: vorgang.transaktionsgrund_ergaenzung.clone(),
                 }];
                 if validation_passed {
                     events.push(AnkuendigungZuordnungLfEvent::ValidationPassed {
@@ -622,18 +642,34 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 // The outbox entry *is* the answer. Without it the event log
                 // recorded the process as answered while the counterparty saw
                 // nothing but its Frist expire.
-                let outbox = vec![
-                    crate::lf_antwort::antwort_outbox(
-                        response_code,
-                        &antwort,
-                        &data.location_id,
-                        &data.sender,
-                        &data.receiver,
-                        &data.process_date,
-                        data.vorgangsnummer.as_deref(),
-                    )
-                    .caused_by(0),
-                ];
+                let mut answer = crate::lf_antwort::antwort_outbox(
+                    response_code,
+                    &antwort,
+                    &data.location_id,
+                    &data.sender,
+                    &data.receiver,
+                    &data.process_date,
+                    data.vorgangsnummer.as_deref(),
+                );
+                // Neither answer column lists an `SG5` (UTILMD AHB Strom 2.2):
+                // the Vorgang is identified by `SG6 RFF+TN`, not by a Lokation.
+                if let Some(p) = answer.payload.as_object_mut() {
+                    p.remove("malo");
+                }
+                // `SG4 STS+7` — the request's Transaktionsgrund and Ergänzung,
+                // Muss on both answer columns.
+                for (key, value) in [
+                    ("transaktionsgrund", &data.transaktionsgrund),
+                    (
+                        "transaktionsgrund_ergaenzung",
+                        &data.transaktionsgrund_ergaenzung,
+                    ),
+                ] {
+                    if let Some(v) = value {
+                        answer.payload[key] = serde_json::Value::String(v.clone());
+                    }
+                }
+                let outbox = vec![answer.caused_by(0)];
                 Ok(WorkflowOutput::with_outbox(
                     vec![AnkuendigungZuordnungLfEvent::AntwortGesendet {
                         response_pid,
@@ -981,6 +1017,8 @@ mod tests {
             process_date: "20260101".to_owned(),
             pruefidentifikator: pid(55607),
             vorgangsnummer: Some("NNV1234".to_owned()),
+            transaktionsgrund: None,
+            transaktionsgrund_ergaenzung: None,
         });
         let out = GpkeAnkuendigungZuordnungLfWorkflow::handle(
             &eingegangen,
@@ -1055,6 +1093,8 @@ mod tests {
             process_date: "20260101".to_owned(),
             pruefidentifikator: pid(55607),
             vorgangsnummer: Some("NNV1234".to_owned()),
+            transaktionsgrund: None,
+            transaktionsgrund_ergaenzung: None,
         });
         let out = GpkeAnkuendigungZuordnungLfWorkflow::handle(
             &terminal,

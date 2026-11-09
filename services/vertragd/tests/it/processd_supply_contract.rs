@@ -95,10 +95,12 @@ fn a_body_with_a_key_processd_does_not_declare_is_refused() {
     assert!(err.to_string().contains("`nb_mp_id`"), "{err}");
 }
 
+const STROM: mako_markt::domain::Sparte = mako_markt::domain::Sparte::Strom;
+
 fn standard(bks: &[&str]) -> Vec<BilanzkreisEintrag> {
     vec![BilanzkreisEintrag {
         standard: bks.iter().map(|b| (*b).to_owned()).collect(),
-        ..BilanzkreisEintrag::default()
+        ..BilanzkreisEintrag::leer(mako_markt::domain::Sparte::Strom)
     }]
 }
 
@@ -121,17 +123,20 @@ fn an_activation_reaches_the_nb_with_a_bilanzkreis_or_is_refused() {
     // The contract names one: it reaches the NB whatever the deployment lists.
     for cfg in [standard(&[]), standard(&two), Vec::new()] {
         assert_eq!(
-            anmeldung_bilanzkreis(body(Some(BK)).as_deref(), &cfg).as_deref(),
+            anmeldung_bilanzkreis(body(Some(BK)).as_deref(), &cfg, STROM).as_deref(),
             Some(BK)
         );
     }
     // It names none: the single `standard` entry decides …
     assert_eq!(
-        anmeldung_bilanzkreis(body(None).as_deref(), &standard(&[BK])).as_deref(),
+        anmeldung_bilanzkreis(body(None).as_deref(), &standard(&[BK]), STROM).as_deref(),
         Some(BK)
     );
     // … and without exactly one, processd refuses (`MISSING_BILANZKREIS`).
     for cfg in [standard(&[]), standard(&two), Vec::new()] {
-        assert_eq!(anmeldung_bilanzkreis(body(None).as_deref(), &cfg), None);
+        assert_eq!(
+            anmeldung_bilanzkreis(body(None).as_deref(), &cfg, STROM),
+            None
+        );
     }
 }

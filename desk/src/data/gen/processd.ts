@@ -184,6 +184,17 @@ export interface ProcessdTools {
        */
       codes_ablehnen: CodeAuswahl | null;
       /**
+       * The facts approving states beside the code, where the entry's own did
+       * not resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall
+       * of an E/G Zustimmung. Empty when there are none to state.
+       */
+      fakten_freigeben: Fakt[];
+      /**
+       * The same for rejecting — a held E/G Ablehnung is overridden by the
+       * Bestätigung.
+       */
+      fakten_ablehnen: Fakt[];
+      /**
        * Approving sends a market message.
        */
       kann_freigeben: boolean;
@@ -363,6 +374,35 @@ export interface CodeBedeutung {
   bedeutung: string;
 }
 /**
+ * A fact a decision states beside its code, under the body key `feld`.
+ */
+export interface Fakt {
+  /**
+   * The decision body's key: `bilanzkreis`, `versorgungsart` or
+   * `abrechnungsintervall_monate`.
+   */
+  feld: string;
+  /**
+   * What it is, with the segment it rides.
+   */
+  bezeichnung: string;
+  /**
+   * The values the segment admits; empty where the value is free text (a
+   * Bilanzkreis is the LF's own code).
+   */
+  werte: FaktWert[];
+}
+/**
+ * One admissible value of a [`Fakt`].
+ */
+export interface FaktWert {
+  /**
+   * What the decision sends — a code, or a number written as text.
+   */
+  wert: string;
+  bedeutung: string;
+}
+/**
  * One open process with its Frist.
  */
 export interface ProcessRow {
@@ -438,6 +478,17 @@ export interface Freigabe {
    * sends the other cluster. `None` when the refusal carries no code.
    */
   codes_ablehnen: CodeAuswahl | null;
+  /**
+   * The facts approving states beside the code, where the entry's own did
+   * not resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall
+   * of an E/G Zustimmung. Empty when there are none to state.
+   */
+  fakten_freigeben: Fakt[];
+  /**
+   * The same for rejecting — a held E/G Ablehnung is overridden by the
+   * Bestätigung.
+   */
+  fakten_ablehnen: Fakt[];
   /**
    * Approving sends a market message.
    */

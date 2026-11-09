@@ -311,6 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: mako_engine::payload::Stammdaten::default(),
             },
             RunOptions::new().context(aperak_ctx),
         )

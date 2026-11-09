@@ -103,11 +103,12 @@ impl Periode {
     }
 
     /// A `de.eeg.verguetung.berechnet` CloudEvent for `receipt_id`, as einsd
-    /// emits it; `korrektur_von` names the receipt a correction supersedes.
+    /// emits it; `folge` is the chain position einsd wrote it at, and
+    /// `korrektur_von` names the receipt a correction supersedes.
     fn receipt(
         &self,
         ce_id: &str,
-        time: &str,
+        folge: i64,
         receipt_id: Uuid,
         korrektur_von: Option<Uuid>,
         settlement_eur: &str,
@@ -118,10 +119,11 @@ impl Periode {
             "source": format!("urn:mako:einsd:{TENANT}"),
             "type": "de.eeg.verguetung.berechnet",
             "subject": self.tr_id,
-            "time": time,
+            "time": "2026-11-02T08:00:00Z",
             "datacontenttype": "application/json",
             "data": {
                 "receipt_id": receipt_id,
+                "ketten_folge": folge,
                 "korrektur_von": korrektur_von,
                 "tr_id": self.tr_id,
                 "malo_id": self.malo_id,
@@ -179,26 +181,10 @@ async fn a_higher_correction_pays_the_difference() {
     };
     let p = Periode::new();
     let original = Uuid::new_v4();
+    deliver(&app, &p.receipt("ce-orig-1", 1, original, None, "100.00")).await;
     deliver(
         &app,
-        &p.receipt(
-            "ce-orig-1",
-            "2026-11-02T08:00:00Z",
-            original,
-            None,
-            "100.00",
-        ),
-    )
-    .await;
-    deliver(
-        &app,
-        &p.receipt(
-            "ce-korr-1",
-            "2026-11-05T08:00:00Z",
-            Uuid::new_v4(),
-            Some(original),
-            "110.00",
-        ),
+        &p.receipt("ce-korr-1", 2, Uuid::new_v4(), Some(original), "110.00"),
     )
     .await;
 
@@ -225,26 +211,10 @@ async fn a_lower_correction_pays_nothing_and_records_the_overpayment() {
     };
     let p = Periode::new();
     let original = Uuid::new_v4();
+    deliver(&app, &p.receipt("ce-orig-2", 1, original, None, "100.00")).await;
     deliver(
         &app,
-        &p.receipt(
-            "ce-orig-2",
-            "2026-11-02T08:00:00Z",
-            original,
-            None,
-            "100.00",
-        ),
-    )
-    .await;
-    deliver(
-        &app,
-        &p.receipt(
-            "ce-korr-2",
-            "2026-11-05T08:00:00Z",
-            Uuid::new_v4(),
-            Some(original),
-            "90.00",
-        ),
+        &p.receipt("ce-korr-2", 2, Uuid::new_v4(), Some(original), "90.00"),
     )
     .await;
 
@@ -280,13 +250,7 @@ async fn a_replayed_receipt_pays_nothing() {
         return;
     };
     let p = Periode::new();
-    let ce = p.receipt(
-        "ce-orig-3",
-        "2026-11-02T08:00:00Z",
-        Uuid::new_v4(),
-        None,
-        "100.00",
-    );
+    let ce = p.receipt("ce-orig-3", 1, Uuid::new_v4(), None, "100.00");
     deliver(&app, &ce).await;
     deliver(&app, &ce).await;
     let amounts: Vec<i64> = p.orders(&pool).await.into_iter().map(|o| o.0).collect();
@@ -295,8 +259,8 @@ async fn a_replayed_receipt_pays_nothing() {
 
 /// A receipt that arrives after the correction that supersedes it — a retried
 /// delivery overtaken by the next one — does not become the period's amount
-/// again: the chain is ordered by when einsd issued each receipt, not by
-/// arrival.
+/// again: the chain is ordered by the position einsd wrote each receipt at,
+/// not by arrival.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_overtaken_receipt_does_not_reopen_the_period() {
@@ -307,26 +271,10 @@ async fn an_overtaken_receipt_does_not_reopen_the_period() {
     let original = Uuid::new_v4();
     deliver(
         &app,
-        &p.receipt(
-            "ce-korr-4",
-            "2026-11-05T08:00:00Z",
-            Uuid::new_v4(),
-            Some(original),
-            "110.00",
-        ),
+        &p.receipt("ce-korr-4", 2, Uuid::new_v4(), Some(original), "110.00"),
     )
     .await;
-    deliver(
-        &app,
-        &p.receipt(
-            "ce-orig-4",
-            "2026-11-02T08:00:00Z",
-            original,
-            None,
-            "100.00",
-        ),
-    )
-    .await;
+    deliver(&app, &p.receipt("ce-orig-4", 1, original, None, "100.00")).await;
     let amounts: Vec<i64> = p.orders(&pool).await.into_iter().map(|o| o.0).collect();
     assert_eq!(amounts, vec![11_000]);
 }
@@ -344,13 +292,7 @@ async fn the_payout_run_pays_a_receipt_under_its_plant_and_month() {
     let p = Periode::new();
     deliver(
         &app,
-        &p.receipt(
-            "ce-orig-5",
-            "2026-11-02T08:00:00Z",
-            Uuid::new_v4(),
-            None,
-            "123.45",
-        ),
+        &p.receipt("ce-orig-5", 1, Uuid::new_v4(), None, "123.45"),
     )
     .await;
     assert!(
@@ -404,13 +346,7 @@ async fn a_rejected_payout_is_paid_by_the_next_run() {
     let p = Periode::new();
     deliver(
         &app,
-        &p.receipt(
-            "ce-orig-6",
-            "2026-11-02T08:00:00Z",
-            Uuid::new_v4(),
-            None,
-            "100.00",
-        ),
+        &p.receipt("ce-orig-6", 1, Uuid::new_v4(), None, "100.00"),
     )
     .await;
     sqlx::query("UPDATE eeg_payout_orders SET pain002_status = 'RJCT' WHERE malo_id = $1")
@@ -437,13 +373,7 @@ async fn a_payout_that_cannot_be_ordered_is_not_acknowledged() {
         return;
     };
     let p = Periode::new();
-    let mut ce = p.receipt(
-        "ce-orig-7",
-        "2026-11-02T08:00:00Z",
-        Uuid::new_v4(),
-        None,
-        "100.00",
-    );
+    let mut ce = p.receipt("ce-orig-7", 1, Uuid::new_v4(), None, "100.00");
     ce["data"]["bank_iban"] = serde_json::Value::String("DE00000000000000000000".into());
     let (status, body) = call(&app, post_json("/webhook", &ce)).await;
     assert_eq!(
@@ -474,8 +404,14 @@ async fn a_receipt_without_its_chain_is_refused() {
         return;
     };
     let p = Periode::new();
-    for field in ["billing_month", "receipt_id", "tr_id", "settlement_eur"] {
-        let mut ce = p.receipt("ce-x", "2026-11-02T08:00:00Z", Uuid::new_v4(), None, "1.00");
+    for field in [
+        "billing_month",
+        "receipt_id",
+        "tr_id",
+        "settlement_eur",
+        "ketten_folge",
+    ] {
+        let mut ce = p.receipt("ce-x", 1, Uuid::new_v4(), None, "1.00");
         ce["data"].as_object_mut().expect("data").remove(field);
         let (status, body) = call(&app, post_json("/webhook", &ce)).await;
         assert_eq!(
@@ -484,4 +420,382 @@ async fn a_receipt_without_its_chain_is_refused() {
             "{field}: {body}"
         );
     }
+}
+
+impl Periode {
+    /// The same receipt announced as `de.eeg.marktpraemie.berechnet` — a
+    /// Direktvermarktung plant's Marktprämie.
+    fn marktpraemie(&self, ce_id: &str, folge: i64, settlement_eur: &str) -> serde_json::Value {
+        let mut ce = self.receipt(ce_id, folge, Uuid::new_v4(), None, settlement_eur);
+        ce["type"] = "de.eeg.marktpraemie.berechnet".into();
+        ce["data"]["settlement_model"] = "DIREKTVERMARKTUNG".into();
+        ce
+    }
+
+    /// A receipt re-settled to `kein_anspruch`: the period owes nothing.
+    fn kein_anspruch(&self, ce_id: &str, folge: i64, receipt_id: Uuid) -> serde_json::Value {
+        let mut ce = self.receipt(ce_id, folge, receipt_id, None, "0");
+        ce["data"]["status"] = "kein_anspruch".into();
+        ce
+    }
+
+    /// Every payout order's EndToEndId, oldest first.
+    async fn end_to_end_refs(&self, pool: &sqlx::PgPool) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT end_to_end_ref FROM eeg_payout_orders
+              WHERE tenant = $1 AND malo_id = $2 ORDER BY created_at",
+        )
+        .bind(TENANT)
+        .bind(&self.malo_id)
+        .fetch_all(pool)
+        .await
+        .expect("read payout orders")
+    }
+
+    /// The period's row in `GET /api/v1/eeg/rueckforderungen`, if listed.
+    async fn rueckforderung(&self, app: &axum::Router) -> Option<serde_json::Value> {
+        let (status, body) = call(
+            app,
+            axum::http::Request::get("/api/v1/eeg/rueckforderungen")
+                .body(axum::body::Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        body["rueckforderungen"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|r| r["tr_id"] == self.tr_id.as_str())
+            .cloned()
+    }
+}
+
+/// The bank's pain.002 saying the credit transfer `e2e` settled (`ACSC`).
+fn pain002_acsc(e2e: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.002.001.10">
+  <CstmrPmtStsRpt>
+    <GrpHdr><MsgId>STS-EEG-1</MsgId><CreDtTm>2026-11-03T10:00:00</CreDtTm></GrpHdr>
+    <OrgnlGrpInfAndSts><OrgnlMsgId>EEG-RUN-1</OrgnlMsgId><OrgnlMsgNmId>pain.001.001.09</OrgnlMsgNmId></OrgnlGrpInfAndSts>
+    <OrgnlPmtInfAndSts>
+      <OrgnlPmtInfId>EEG-RUN-1-1</OrgnlPmtInfId>
+      <TxInfAndSts>
+        <OrgnlEndToEndId>{e2e}</OrgnlEndToEndId>
+        <TxSts>ACSC</TxSts>
+      </TxInfAndSts>
+    </OrgnlPmtInfAndSts>
+  </CstmrPmtStsRpt>
+</Document>"#
+    )
+}
+
+async fn settle_by_pain002(app: &axum::Router, e2e: &str) {
+    let request = axum::http::Request::post("/api/v1/sepa/pain002")
+        .header("content-type", "application/xml")
+        .body(axum::body::Body::from(pain002_acsc(e2e)))
+        .expect("request");
+    let (status, body) = call(app, request).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(body["payouts_updated"], 1, "{body}");
+}
+
+/// A plant paid 100,00 € whose period is re-settled to `kein_anspruch` — einsd
+/// announces the zero — owes the 100,00 € back.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_period_resettled_to_kein_anspruch_is_owed_back_in_full() {
+    let Some((app, pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    let receipt = Uuid::new_v4();
+    deliver(&app, &p.receipt("ce-null-1", 1, receipt, None, "100.00")).await;
+    deliver(&app, &p.kein_anspruch("ce-null-2", 2, receipt)).await;
+    let amounts: Vec<i64> = p.orders(&pool).await.into_iter().map(|o| o.0).collect();
+    assert_eq!(amounts, vec![10_000], "the zero pays nothing");
+    let row = p
+        .rueckforderung(&app)
+        .await
+        .expect("the paid 100,00 € is owed back");
+    assert_eq!(row["rueckforderung_ct"], 10_000, "{row}");
+    assert_eq!(row["anspruch_ct"], 0, "{row}");
+}
+
+/// A Direktvermarktung receipt is paid its Marktprämie once, on the
+/// auto-payout path; a replay of the event pays nothing.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_direktvermarktung_receipt_is_paid_its_marktpraemie_once() {
+    let Some((app, pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    let ce = p.marktpraemie("ce-mp-1", 1, "42.10");
+    deliver(&app, &ce).await;
+    deliver(&app, &ce).await;
+    let amounts: Vec<i64> = p.orders(&pool).await.into_iter().map(|o| o.0).collect();
+    assert_eq!(amounts, vec![4_210], "the Marktprämie is paid, once");
+}
+
+/// `POST /api/v1/eeg/payouts/run` pays a Marktprämie chain like a Vergütung
+/// one, and a second run pays nothing.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_payout_run_pays_the_marktpraemie() {
+    let Some((app, pool, _pg)) = app(false).await else {
+        return;
+    };
+    let p = Periode::new();
+    deliver(&app, &p.marktpraemie("ce-mp-2", 1, "42.10")).await;
+    let run = serde_json::json!({ "billing_year": p.year, "billing_month": p.month });
+    for _ in 0..2 {
+        let (status, body) = call(&app, post_json("/api/v1/eeg/payouts/run", &run)).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    }
+    assert_eq!(
+        p.orders(&pool).await,
+        vec![(4_210, Some(p.tr_id.clone()))],
+        "the run pays the Marktprämie under its plant, once"
+    );
+}
+
+/// A payout the bank settles (`ACSC`) is booked on the Kontokorrent: the
+/// 100,00 € claim and its payment leave the account at 0. A replayed pain.002
+/// books nothing more.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_settled_payout_leaves_the_account_at_zero() {
+    let Some((app, pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    deliver(
+        &app,
+        &p.receipt("ce-acsc-1", 1, Uuid::new_v4(), None, "100.00"),
+    )
+    .await;
+    assert_eq!(balance_ct(&pool, &p.malo_id).await, -10_000, "the claim");
+    let e2e = p.end_to_end_refs(&pool).await.remove(0);
+    settle_by_pain002(&app, &e2e).await;
+    assert_eq!(
+        balance_ct(&pool, &p.malo_id).await,
+        0,
+        "the payment discharges the claim"
+    );
+    settle_by_pain002(&app, &e2e).await;
+    assert_eq!(balance_ct(&pool, &p.malo_id).await, 0, "booked once");
+}
+
+/// An amount owed back is a receivable on the Kontokorrent; once the operator
+/// repays it, it leaves the Rückforderungen and the account is square.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_repaid_rueckforderung_leaves_the_list() {
+    let Some((app, pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    let receipt = Uuid::new_v4();
+    deliver(&app, &p.receipt("ce-rz-1", 1, receipt, None, "100.00")).await;
+    let e2e = p.end_to_end_refs(&pool).await.remove(0);
+    settle_by_pain002(&app, &e2e).await;
+    deliver(&app, &p.kein_anspruch("ce-rz-2", 2, receipt)).await;
+    assert_eq!(
+        balance_ct(&pool, &p.malo_id).await,
+        10_000,
+        "the operator owes the 100,00 € paid"
+    );
+    assert!(p.rueckforderung(&app).await.is_some());
+
+    let rueckzahlung = |amount_ct: i64| {
+        serde_json::json!({
+            "tr_id": p.tr_id,
+            "billing_year": p.year,
+            "billing_month": p.month,
+            "amount_ct": amount_ct,
+            "eingegangen_am": "2026-11-06",
+        })
+    };
+    let (status, body) = call(
+        &app,
+        post_json("/api/v1/eeg/rueckzahlungen", &rueckzahlung(10_001)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "more than is owed back: {body}"
+    );
+    let (status, body) = call(
+        &app,
+        post_json("/api/v1/eeg/rueckzahlungen", &rueckzahlung(10_000)),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+    assert_eq!(body["verbleibend_ct"], 0, "{body}");
+
+    assert!(
+        p.rueckforderung(&app).await.is_none(),
+        "a repaid Rückforderung leaves the list"
+    );
+    assert_eq!(
+        balance_ct(&pool, &p.malo_id).await,
+        0,
+        "the account is square"
+    );
+    let (status, body) = call(
+        &app,
+        post_json("/api/v1/eeg/rueckzahlungen", &rueckzahlung(100)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "nothing is owed back any more: {body}"
+    );
+}
+
+/// Two receipts of one period are applied in the order einsd wrote them
+/// (`ketten_folge`), whatever their CloudEvent times say: a replica whose
+/// clock runs behind stamps the correction earlier than the receipt it
+/// corrects, and the correction is still the period's amount.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn receipts_are_applied_in_their_sequence_not_their_time() {
+    let Some((app, pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    let original = Uuid::new_v4();
+    let mut erst = p.receipt("ce-seq-1", 1, original, None, "100.00");
+    erst["time"] = "2026-11-05T08:00:00Z".into();
+    let mut dann = p.receipt("ce-seq-2", 2, Uuid::new_v4(), Some(original), "110.00");
+    dann["time"] = "2026-11-02T08:00:00Z".into();
+    deliver(&app, &erst).await;
+    deliver(&app, &dann).await;
+    let amounts: Vec<i64> = p.orders(&pool).await.into_iter().map(|o| o.0).collect();
+    assert_eq!(
+        amounts,
+        vec![10_000, 1_000],
+        "the second receipt einsd wrote is the period's amount"
+    );
+    assert_eq!(balance_ct(&pool, &p.malo_id).await, -11_000);
+}
+
+/// A second event claiming a chain position already taken is not a receipt
+/// einsd wrote, and is refused rather than ordered by guesswork.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_second_receipt_at_a_taken_position_is_refused() {
+    let Some((app, _pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    deliver(
+        &app,
+        &p.receipt("ce-pos-1", 1, Uuid::new_v4(), None, "100.00"),
+    )
+    .await;
+    let (status, body) = call(
+        &app,
+        post_json(
+            "/webhook",
+            &p.receipt("ce-pos-2", 1, Uuid::new_v4(), None, "90.00"),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "{body}"
+    );
+}
+
+/// A plant operator owing 100,00 € back of a settled payout is not a customer in
+/// arrears: the EEG claim is no payment obligation from a supply contract, and
+/// the dunning sequence it would enter ends in an interruption of supply. The
+/// account is listed in neither `GET /api/v1/offene-posten` nor any dunning
+/// case — automatic or manual — and the claim stays visible in
+/// `GET /api/v1/eeg/rueckforderungen`.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_eeg_rueckforderung_is_never_dunned() {
+    let Some((app, pool, pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    let receipt = Uuid::new_v4();
+    deliver(&app, &p.receipt("ce-mahn-1", 1, receipt, None, "100.00")).await;
+    let e2e = p.end_to_end_refs(&pool).await.remove(0);
+    settle_by_pain002(&app, &e2e).await;
+    deliver(&app, &p.kein_anspruch("ce-mahn-2", 2, receipt)).await;
+    assert_eq!(
+        balance_ct(&pool, &p.malo_id).await,
+        10_000,
+        "the operator owes the 100,00 € paid"
+    );
+    assert!(p.rueckforderung(&app).await.is_some());
+
+    let (status, body) = call(
+        &app,
+        axum::http::Request::get("/api/v1/offene-posten")
+            .body(axum::body::Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert!(
+        !body
+            .as_array()
+            .expect("a list")
+            .iter()
+            .any(|a| a["malo_id"] == p.malo_id.as_str()),
+        "the plant account is not an Offener Posten: {body}"
+    );
+
+    let account_id: Uuid =
+        sqlx::query_scalar("SELECT account_id FROM accounts WHERE tenant = $1 AND malo_id = $2")
+            .bind(TENANT)
+            .bind(&p.malo_id)
+            .fetch_one(&pool)
+            .await
+            .expect("account");
+    let (status, body) = call(
+        &app,
+        post_json(
+            &format!("/api/v1/dunning/{account_id}/escalate"),
+            &serde_json::json!({ "stufe": 1, "due_days": 14 }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "a manual Mahnung on the plant account is refused: {body}"
+    );
+
+    let port = pg.get_host_port_ipv4(5432).await.expect("port");
+    let ledger = accountingd::ledger::PgLedger::connect(
+        &format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres"),
+        TENANT,
+        mako_fristen::heute(),
+    )
+    .await
+    .expect("ledger");
+    let run = accountingd::pg::run_auto_dunning(&ledger, &pool, TENANT, 0, 500, 1000, 1500)
+        .await
+        .expect("the dunning run completes");
+    assert_eq!(run.mahnstufe1_created, 0, "no Mahnstufe 1 on the plant");
+    let cases: i64 = sqlx::query_scalar("SELECT count(*) FROM dunning_cases WHERE account_id = $1")
+        .bind(account_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(cases, 0, "no dunning case on the plant account");
+    assert!(
+        p.rueckforderung(&app).await.is_some(),
+        "the claim is still listed as a Rückforderung"
+    );
 }

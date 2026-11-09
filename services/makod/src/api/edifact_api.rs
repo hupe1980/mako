@@ -473,30 +473,66 @@ pub(crate) async fn dead_letter_dispatch_failure(
 ///
 /// A message whose release has no registered profile is **not** counted: that
 /// is "there was no rule to break", not "the message broke a rule", and it is
-/// the normal shape for an answer PID. `ahb_verdict` reports that case as not
-/// passed with an empty error list, which is the discriminator used below.
+/// the normal shape for an answer PID.
 ///
-/// The verdict is recorded, not enforced: a non-conforming message still
-/// reaches its workflow, because whether to answer it with an Ablehnung, a
-/// negative APERAK, or nothing at all is a per-process decision the families
-/// that model `validation_passed` already make.
+/// # The findings, by class
+///
+/// Every finding is also counted on its own, by the rule-id family it carries
+/// (`makod_inbound_findings_total{class}`: `MIG`, `AHB`, `FMT`), and a
+/// Formatbedingung finding by its number as well
+/// (`makod_formatbedingung_findings_total{bedingung}`) — warnings included,
+/// since that is the severity a Formatbedingung finding has. A class is
+/// refused at the door only once its inbound count is explained
+/// ([`crate::ingest_dispatcher::ABGEWIESENE_KLASSEN`]); the count is what
+/// explains it. The full rule id is logged, never a label: it is unbounded.
+///
+/// A class the door does not refuse is recorded, not enforced: the message
+/// still reaches its workflow, and whether to answer it with an Ablehnung, a
+/// negative APERAK, or nothing at all is the decision the families that model
+/// `validation_passed` already make.
 pub(crate) fn record_ahb_conformance(msg: &AnyMessage) -> bool {
-    let (passed, errors) = crate::adapters::ahb_verdict(msg);
-    if passed || errors.is_empty() {
-        return passed;
-    }
+    let Some(report) = crate::adapters::ahb_pruefung(msg) else {
+        return false;
+    };
     let message_type = msg
         .try_message_type()
         .map_or("unknown", edi_energy::MessageType::as_str);
+    let metrics = mako_engine::metrics::EngineMetrics::global();
+    let mut format_rules: Vec<&str> = Vec::new();
+    for (klasse, issue) in crate::adapters::ahb_findings(&report) {
+        metrics.inbound_finding(klasse.label(), message_type);
+        if let Some(rule) = issue.rule_id()
+            && let Some(bedingung) = crate::ingest_dispatcher::Fehlerklasse::formatbedingung(rule)
+        {
+            metrics.formatbedingung_finding(message_type, bedingung);
+            format_rules.push(rule);
+        }
+    }
+    if !format_rules.is_empty() {
+        tracing::info!(
+            message_type,
+            message_ref = %msg.message_ref(),
+            rules = %format_rules.join(", "),
+            "inbound message breaks a Formatbedingung",
+        );
+    }
+    if report.is_valid() {
+        return true;
+    }
     let release = msg
         .detect_release()
         .map_or("unknown", edi_energy::Release::as_str);
-    mako_engine::metrics::EngineMetrics::global().validation_failed(message_type, release);
+    metrics.validation_failed(message_type, release);
     tracing::warn!(
         message_type,
         release,
         message_ref = %msg.message_ref(),
-        errors = %errors.join("; "),
+        errors = %report
+            .errors()
+            .iter()
+            .map(|e| format!("{e}"))
+            .collect::<Vec<_>>()
+            .join("; "),
         "inbound message does not conform to its AHB profile",
     );
     false
@@ -579,7 +615,6 @@ pub(crate) fn fehlermeldung_ohne_prozess(
     reason: String,
     tenant_id: TenantId,
 ) -> Option<mako_engine::outbox::OutboxMessage> {
-    use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
     if matches!(
         msg.try_message_type(),
         Some(edi_energy::MessageType::Aperak | edi_energy::MessageType::Contrl) | None
@@ -589,9 +624,19 @@ pub(crate) fn fehlermeldung_ohne_prozess(
     let (own, sender) = (msg.nad_receiver()?, msg.nad_sender()?);
     let payload =
         mako_engine::payload::AperakPayload::fehler(own, sender, msg.message_ref(), code, reason);
+    Some(aperak_ohne_prozess(&payload, sender, tenant_id))
+}
+
+/// An APERAK `payload` to `recipient` as an outbox entry no process owns.
+pub(crate) fn aperak_ohne_prozess(
+    payload: &mako_engine::payload::AperakPayload,
+    recipient: &str,
+    tenant_id: TenantId,
+) -> mako_engine::outbox::OutboxMessage {
+    use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
     let process_id = ProcessId::new();
-    let pending = mako_engine::outbox::PendingOutbox::typed(sender, &payload);
-    Some(mako_engine::outbox::OutboxMessage::new(
+    let pending = mako_engine::outbox::PendingOutbox::typed(recipient, payload);
+    mako_engine::outbox::OutboxMessage::new(
         StreamId::for_process(tenant_id, &process_id),
         process_id,
         tenant_id,
@@ -601,7 +646,7 @@ pub(crate) fn fehlermeldung_ohne_prozess(
         pending.message_type,
         pending.recipient,
         pending.payload,
-    ))
+    )
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────

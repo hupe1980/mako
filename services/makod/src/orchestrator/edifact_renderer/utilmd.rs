@@ -119,7 +119,7 @@ pub(super) fn render_utilmd(
         _ => match u.mabis_zaehlpunkt.as_deref() {
             Some(zp) if !zp.is_empty() => Some(zp),
             // Stammdaten carried whole name their own Lokationen.
-            _ if utilmd_carries_sg5_loc(&release, pid) && u.stammdaten.lokationen.is_empty() => {
+            _ if utilmd_requires_sg5_loc(&release, pid) && u.stammdaten.lokationen.is_empty() => {
                 return Err(RenderError::MissingField {
                     message_type: mt.into(),
                     field: format!("{location_id_key} or mabis_zaehlpunkt").into(),
@@ -215,9 +215,14 @@ pub(super) fn render_utilmd(
     // Strom 2.2 Kap. 13.3 fixes `Z07` „Aktivierung/Deaktivierung von MaBiS-ZP"
     // on all three of its Prüfidentifikatoren — so it defaults per PID rather
     // than relying on every caller to remember.
+    //
+    // Where the workflow states none and the column admits exactly one, that
+    // one is written: the Bestätigung Ende MSB 55052 is `E02` (UTILMD AHB Strom
+    // 2.2 Kap. 10.4).
+    let fixed_document_code = column_fixed_code(&release, pid, "BGM", None, "1001");
     let document_code = u.document_code.as_deref().or(match pid {
         55_062..=55_064 => Some(edi_energy::utilmd_codes::BGM_MABIS_ZP_LIFECYCLE),
-        _ => None,
+        _ => fixed_document_code.as_deref(),
     });
     if let Some(code) = document_code {
         builder = builder.document_code(code);
@@ -318,6 +323,10 @@ pub(super) fn render_utilmd(
                 .transaktionsgrund_ergaenzung
                 .as_deref()
                 .filter(|s| !s.is_empty());
+            let fixed_ergaenzung = match admitted_ergaenzungen(&release, pid).as_slice() {
+                [one] => Some(one.clone()),
+                _ => None,
+            };
             // `ZW4` „verbrauchende Marktlokation" is the default only where the
             // column admits it. 55077 and 55601 are the erzeugende pair and
             // admit `ZW0`/`ZW1`/`ZW2` — the Geschäftsvorfall — so a missing one
@@ -327,6 +336,12 @@ pub(super) fn render_utilmd(
                 Some(e) => e,
                 None if ergaenzung_admitted(&release, pid, ergaenzung::VERBRAUCHENDE_MALO) => {
                     ergaenzung::VERBRAUCHENDE_MALO
+                }
+                // A column that admits one code states it: the Ablehnung of a
+                // neue erzeugende Marktlokation 55605 is `ZW3` whatever the
+                // Anmeldung's Geschäftsvorfall was (UTILMD AHB Strom 2.2).
+                None if fixed_ergaenzung.is_some() => {
+                    fixed_ergaenzung.as_deref().expect("checked by the guard")
                 }
                 None => {
                     let admitted = admitted_ergaenzungen(&release, pid);
@@ -358,8 +373,13 @@ pub(super) fn render_utilmd(
     // cluster. DE 1131 is the Codeliste identifier, which is the EBD number
     // only where the AHB says „EBD Nr." — every WiM MSB-Wechsel answer names an
     // `S_00xx` or `G_00xx` list instead.
+    //
+    // Where the payload names no Codeliste and the PID's column fixes exactly
+    // one — every Gas Antwort does, `G_0013` on a 44014 (UTILMD AHB Gas 1.2
+    // Kap. 5.9) — that one is written: the column states it, nobody guesses it.
     if let Some(code) = u.antwort_code.as_deref() {
-        let antwort = match u.antwort_codeliste.as_deref() {
+        let fixed = column_fixed_codeliste(&release, pid);
+        let antwort = match u.antwort_codeliste.as_deref().or(fixed.as_deref()) {
             Some(cl) => AntwortStatus::from_codeliste(code, cl),
             None => AntwortStatus::bare(code),
         };
@@ -435,9 +455,11 @@ pub(super) fn render_utilmd(
                     &tranchengroesse(&u, pid)?,
                 ))
             }
-            _ => tx.produktpaket(edi_energy::utilmd_codes::Produktpaket::bilanzkreis(
-                bilanzkreis,
-            )),
+            _ => {
+                let mut paket = edi_energy::utilmd_codes::Produktpaket::bilanzkreis(bilanzkreis);
+                paket.umsetzung = column_umsetzungsgrad(&release, pid);
+                tx.produktpaket(paket)
+            }
         };
     }
 
@@ -821,8 +843,29 @@ fn render_utilmd_liste(
 /// Requiring a Lokation where the column lists none refuses the whole message,
 /// and a UTILMD that does not render leaves raw JSON on the AS4 leg. Emitting
 /// one anyway is `AHB-…-00050-LOC-NOT-PERMITTED` at the counterparty.
-fn utilmd_carries_sg5_loc(release: &edi_energy::Release, pid: u32) -> bool {
-    column_lists_segment(release, pid, "LOC")
+fn utilmd_requires_sg5_loc(release: &edi_energy::Release, pid: u32) -> bool {
+    let Some((profile, af)) = utilmd_column(release, pid) else {
+        return true;
+    };
+    // A column whose every `SG5` is conditional — 55605 names its
+    // Marktlokation only beside `A12`/`A13` (Bedingung `[43]`), 55604 „wenn
+    // bekannt" — admits an answer that names none; one with an unconditional
+    // `SG5` (`Muss`, or `Muss [2061]` „genau einmal je SG4 IDE") does not.
+    let unconditional = |s: &String| s == "Muss" || s == "Muss [2061]";
+    profile
+        .structure
+        .nodes
+        .iter()
+        .filter_map(|node| match &node.kind {
+            edi_energy::profile::structure::Kind::Segment { nr, tag, .. } if tag == "LOC" => {
+                Some(nr)
+            }
+            _ => None,
+        })
+        .any(|nr| {
+            af.group_status("SG5", nr)
+                .is_some_and(|st| st.iter().any(unconditional))
+        })
 }
 
 /// Whether the Prüfschablone of `pid` lists the `SG4 DTM` place `qualifier`
@@ -866,22 +909,79 @@ fn utilmd_carries_sg4_date(release: &edi_energy::Release, pid: u32, qualifier: &
         .any(|(_, nr)| af.segment_status(nr).is_some())
 }
 
-/// Whether the Prüfschablone of `pid` lists any place with the given tag.
-fn column_lists_segment(release: &edi_energy::Release, pid: u32, tag: &str) -> bool {
-    let Some((profile, af)) = utilmd_column(release, pid) else {
-        return true;
-    };
-    profile
+/// The `STS+E01` DE 1131 Codeliste the column of `pid` fixes, when it lists
+/// exactly one.
+fn column_fixed_codeliste(release: &edi_energy::Release, pid: u32) -> Option<String> {
+    column_fixed_code(release, pid, "STS", Some("E01"), "1131")
+}
+
+/// The one code the column of `pid` admits for data element `de` of segment
+/// `tag` — the segment picked by the code its first data element carries
+/// (`E01` for `STS+E01`), any when `qualifier` is `None`. `None` when the
+/// column admits none or several.
+fn column_fixed_code(
+    release: &edi_energy::Release,
+    pid: u32,
+    tag: &str,
+    qualifier: Option<&str>,
+    de: &str,
+) -> Option<String> {
+    let (profile, af) = utilmd_column(release, pid)?;
+    let mut codes: Vec<String> = profile
         .structure
-        .nodes
+        .layouts
         .iter()
-        .filter_map(|node| match &node.kind {
-            edi_energy::profile::structure::Kind::Segment { nr, tag: t, .. } if t == tag => {
-                Some(nr)
-            }
-            _ => None,
+        .filter(|l| {
+            l.tag == tag
+                && qualifier.is_none_or(|q| {
+                    l.leaves()
+                        .next()
+                        .is_some_and(|(_, _, e)| e.codes.iter().any(|c| c.code == q))
+                })
         })
-        .any(|nr| af.segment_status(nr).is_some())
+        .flat_map(|l| af.element_rules(&l.nr))
+        .filter(|r| r.de == de)
+        .flat_map(|r| r.operands.iter().filter_map(|o| o.code.clone()))
+        .collect();
+    codes.sort();
+    codes.dedup();
+    match codes.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
+/// The `SG10 CCI+Z65` Umsetzungsgradvorgabe a one-package answer states.
+///
+/// `Z01` „vollumfänglich umzusetzen" unless the column demands exactly one
+/// `Z02` in Paket `1P`: the Bestätigung of a Zuordnung to an erzeugende
+/// Marktlokation 55608 and the Bestätigung EoG 55014 list DE 4051 as
+/// `Z01 X [1P0..4]` / `Z02 X [1P1..1]` (UTILMD AHB Strom 2.2), so a single
+/// Produktpaket there is the `Z02` one.
+fn column_umsetzungsgrad(
+    release: &edi_energy::Release,
+    pid: u32,
+) -> edi_energy::utilmd_codes::Umsetzungsgrad {
+    use edi_energy::utilmd_codes::{Umsetzungsgrad, produkt};
+    let demands_in_teilen = utilmd_column(release, pid).is_some_and(|(profile, af)| {
+        profile
+            .structure
+            .layouts
+            .iter()
+            .filter(|l| l.tag == "CCI")
+            .flat_map(|l| af.element_rules(&l.nr))
+            .filter(|r| r.de == "4051")
+            .flat_map(|r| r.operands.iter())
+            .any(|o| {
+                o.code.as_deref() == Some(produkt::UMSETZUNG_IN_TEILEN)
+                    && o.operand.contains("[1P1..1]")
+            })
+    });
+    if demands_in_teilen {
+        Umsetzungsgrad::InTeilen
+    } else {
+        Umsetzungsgrad::Vollumfaenglich
+    }
 }
 
 /// The UTILMD profile of `release` and the column of `pid` inside it.

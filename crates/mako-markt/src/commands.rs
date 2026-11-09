@@ -430,6 +430,68 @@ pub struct GeliEogAnmelden {
     pub transaktionsgrund: String,
 }
 
+/// The Abrechnungsintervalle des LF a 44014 may state in `SG6 DTM+Z20` DE
+/// 2380, in Monaten: monatlich, vierteljährlich, halbjährlich, jährlich — the
+/// four entries UTILMD MIG Gas G1.2 S. 55 admits.
+pub const ABRECHNUNGSINTERVALLE_MONATE: [u8; 4] = [1, 3, 6, 12];
+
+/// The `payload` of [`GELI_EOG_BESTAETIGEN`] carrying a Zustimmung — the E/G
+/// Lieferant's Bestätigung `EoG` 44014. See [`GpkeEogAnmelden`] for why it is
+/// shared.
+///
+/// `makod` reads the Marktlokation's record from `marktd`; the body carries
+/// the Antwortcode and the two facts of the LF's own that UTILMD AHB Gas 1.2
+/// Kap. 5.9 makes Muss on a 44014 and that no record holds. Both are `Option`
+/// so the door can refuse a missing one by name.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeliEogBestaetigen {
+    /// The Marktlokation; `makod` finds the process by it.
+    pub malo_id: String,
+    /// The `E_3008` Antwortcode (`SG4 STS+E01`); its Cluster picks 44014.
+    pub antwort_code: String,
+    /// `SG10 CCI+Z19` — the LF's Bilanzkreis (AHB S. 80).
+    #[serde(default)]
+    pub bilanzkreis: Option<String>,
+    /// `SG6 DTM+Z20` „Abrechnungsintervall des LF", DE 2379 `802` Monat (AHB
+    /// S. 78), one of [`ABRECHNUNGSINTERVALLE_MONATE`].
+    #[serde(default)]
+    pub abrechnungsintervall_monate: Option<u8>,
+    /// `SG4 FTX+ACB` Erläuterung.
+    #[serde(default)]
+    pub bemerkung: Option<String>,
+    /// The Erläuterung under the key an operator's decision writes it to;
+    /// read where `bemerkung` is absent.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The process the answering service decided on. Echoed for the audit
+    /// trail; `makod` addresses the process by `malo_id`.
+    #[serde(default)]
+    pub process_id: Option<String>,
+    /// The Cluster as the answering service read it. Echoed; `makod` reads
+    /// the Cluster from `antwort_code` itself.
+    #[serde(default)]
+    pub zustimmung: Option<bool>,
+    /// The Codeliste the code was drawn from (`E_3008`). Echoed; `makod`
+    /// resolves the code in `E_3008` itself.
+    #[serde(default)]
+    pub antwort_codeliste: Option<String>,
+    /// The Entscheidungsbaum an operator named. Echoed, as `antwort_codeliste`.
+    #[serde(default)]
+    pub antwort_tree: Option<String>,
+    /// The Termin the walk checked, `YYYYMMDD`. Echoed; the 44014 states the
+    /// process's own Zuordnungsbeginn.
+    #[serde(default)]
+    pub termin: Option<String>,
+    /// Who released a held answer from processd's queue.
+    #[serde(default)]
+    pub approved_by: Option<String>,
+    /// Who overrode a held Ablehnung from processd's queue, sending this
+    /// Zustimmung instead.
+    #[serde(default)]
+    pub rejected_by: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DISPATCHED_BY_SERVICES, MAKOD_INTERNAL};

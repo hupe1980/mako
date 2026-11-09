@@ -1004,6 +1004,10 @@ pub struct SettleResult {
     /// The receipt this run wrote — for an initial settle the period's one
     /// initial receipt (a re-settle keeps its id), for a correction a new row.
     pub id: Uuid,
+    /// This write's place in the period's receipt chain — one more than every
+    /// write of the period before it, a re-settle of the initial receipt
+    /// included. accountingd orders the chain by it.
+    pub ketten_folge: i64,
     /// § 147 AO / GoBD — the receipt a correction supersedes; `None` for an
     /// initial settle. The receipt chain itself is the period
     /// (`tr_id`, `billing_year`, `billing_month`): every receipt in it states
@@ -1926,13 +1930,21 @@ struct ReceiptRow<'a> {
     policy_json: Option<serde_json::Value>,
 }
 
+/// The receipt a write left behind.
+struct Persisted {
+    id: Uuid,
+    /// Its place in the period's chain, taken by this write.
+    ketten_folge: i64,
+}
+
 /// Snapshot the initial receipt it is about to overwrite, then upsert `row`;
-/// returns the id of the receipt that exists afterwards.
+/// returns the receipt that exists afterwards and the chain position this
+/// write took (`settlement_receipts_ketten_folge`).
 async fn persist_receipt(
     conn: &mut sqlx::PgConnection,
     input: &SettleInput,
     row: &ReceiptRow<'_>,
-) -> anyhow::Result<Uuid> {
+) -> anyhow::Result<Persisted> {
     // Proposed id for a first settlement. An upsert that lands on the DO UPDATE
     // branch keeps the row's original id, which is what `RETURNING` yields — the
     // caller must get the id of the receipt that actually exists.
@@ -1988,7 +2000,7 @@ async fn persist_receipt(
     // Every money-bearing column is overwritten, not just the status: a
     // re-settle that ends at `foerderung_beendet` must not keep the old
     // `settlement_eur` and Gutschrift on the row.
-    let id: Uuid = sqlx::query_scalar(
+    let (id, ketten_folge): (Uuid, i64) = sqlx::query_as(
         r"INSERT INTO settlement_receipts
               (id, tr_id, tenant, billing_year, billing_month,
                settlement_model, einspeisemenge_kwh, settlement_eur, status,
@@ -2016,7 +2028,7 @@ async fn persist_receipt(
               gutschrift_nummer         = EXCLUDED.gutschrift_nummer,
               policy_json               = EXCLUDED.policy_json,
               settled_at                = now()
-          RETURNING id",
+          RETURNING id, ketten_folge",
     )
     .bind(id)
     .bind(&input.tr_id)
@@ -2042,7 +2054,7 @@ async fn persist_receipt(
     .fetch_one(&mut *conn)
     .await
     .context("persist settlement")?;
-    Ok(id)
+    Ok(Persisted { id, ketten_folge })
 }
 
 /// Record the period's absolute contribution to the plant's running totals
@@ -2235,7 +2247,7 @@ pub async fn run_settlement(
     // nothing.
     if input.award_expired {
         const STATUS: &str = "foerderung_beendet";
-        let id = persist_receipt(
+        let Persisted { id, ketten_folge } = persist_receipt(
             &mut *conn,
             &input,
             &ReceiptRow {
@@ -2258,6 +2270,7 @@ pub async fn run_settlement(
         apply_period_accrual(&mut *conn, &input, &PeriodAccrual::default(), STATUS).await?;
         return Ok(SettleResult {
             id,
+            ketten_folge,
             korrektur_von: input.correction.as_ref().and_then(|k| k.original_id),
             tr_id: input.tr_id,
             billing_year: input.billing_year,
@@ -2759,7 +2772,7 @@ pub async fn run_settlement(
             (None, None, None, None)
         };
 
-    let id = persist_receipt(
+    let Persisted { id, ketten_folge } = persist_receipt(
         &mut *conn,
         &input,
         &ReceiptRow {
@@ -2884,6 +2897,7 @@ pub async fn run_settlement(
 
     Ok(SettleResult {
         id,
+        ketten_folge,
         korrektur_von: input.correction.as_ref().and_then(|k| k.original_id),
         tr_id: input.tr_id,
         billing_year: input.billing_year,
@@ -2900,13 +2914,15 @@ pub async fn run_settlement(
     })
 }
 
-/// Statuses of a receipt that represent a settlement actually having happened.
+/// Statuses of a receipt that represent a settlement actually having happened
+/// — each states the period's amount, a zero included, and each is announced
+/// to accountingd (`handlers::enqueue_settlement_ce`).
 ///
 /// `price_missing` and `no_data` are the opposite: they record that the run
 /// found nothing to settle with. Treating them as settled meant a plant settled
 /// too early — before the ÜNB Marktwert or the complete edmd data existed —
 /// was never picked up again and simply went unpaid.
-const SETTLED_STATUSES: [&str; 5] = [
+pub const SETTLED_STATUSES: [&str; 5] = [
     "calculated",
     "foerderung_beendet",
     "sanctioned",

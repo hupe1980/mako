@@ -32,6 +32,10 @@ impl Daemon for Processd {
         Ok(())
     }
 
+    fn validate(cfg: &Self::Config) -> anyhow::Result<()> {
+        cfg.lf.validate()
+    }
+
     async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<axum::Router> {
         // Fail closed on both doors before anything else: the REST/MCP surfaces
         // and the inbound webhook each decide what this operator answers a
@@ -125,6 +129,7 @@ impl Daemon for Processd {
                 lf_grundversorgungs_netzgebiete: cfg.lf.grundversorgungs_netzgebiete.clone(),
                 lf_eog_auto_respond: cfg.lf.eog_auto_respond,
                 lf_eog_versorgungsart: cfg.lf.eog_versorgungsart.clone(),
+                lf_eog_abrechnungsintervall_monate: cfg.lf.eog_abrechnungsintervall_monate,
                 vertragd_url: cfg.vertragd.as_ref().map(|v| v.url.clone()),
                 vertragd_api_key: cfg
                     .vertragd

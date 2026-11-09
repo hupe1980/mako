@@ -451,9 +451,10 @@ pub fn build_settlement_ce(
             // The receipt chain is the period — `tr_id`, `billing_year`,
             // `billing_month` — and every receipt in it states the period's
             // whole amount. accountingd pays and books the difference to what
-            // the chain already holds, ordered by this event's `time`, so a
+            // the chain already holds, in `ketten_folge` order, so a
             // correction is never paid in full a second time.
             "receipt_id": result.id,
+            "ketten_folge": result.ketten_folge,
             "korrektur_von": result.korrektur_von,
             "tr_id": tr_id,
             "malo_id": malo_id,
@@ -495,13 +496,22 @@ pub fn build_settlement_ce(
 /// place that decides the event **type** and the emission **gate**.
 ///
 /// accountingd dispatches on the exact CE type, crediting the Massenkontokorrent
-/// and issuing the pain.001 payout only for `de.eeg.verguetung.berechnet` and
+/// and issuing the pain.001 payout for `de.eeg.verguetung.berechnet` and
 /// `de.eeg.marktpraemie.berechnet`. The REST and MCP settle paths both call this
-/// so neither can drift to a type accountingd ignores (a dead-letter payout) or
-/// emit a payout event for a non-`calculated` run.
+/// so neither can drift to a type accountingd ignores (a dead-letter payout).
+///
+/// The gate is a **decided** period ([`crate::pg::SETTLED_STATUSES`]), not a
+/// `calculated` one: accountingd keeps the last amount it was told for the
+/// period, so a re-settle or correction ending at `kein_anspruch`,
+/// `foerderung_beendet`, `sanctioned` or `jahreskontingent_erschoepft` has to
+/// reach it — at zero, or at the § 52 EEG 2021 reduced amount — or the earlier
+/// amount stays paid and is never claimed back. A run that decided nothing
+/// (`no_data`, `price_missing`, `fassung_nicht_tabelliert`) or held the payment
+/// (`gehalten`) states no amount, so it announces none.
 ///
 /// # Errors
-/// Propagates the outbox insert error so the caller can roll back the settlement.
+/// Propagates the outbox insert error so the caller can roll back the
+/// settlement; refuses a decided receipt without an amount.
 pub async fn enqueue_settlement_ce(
     tx: &mut sqlx::PgConnection,
     cfg: &EinsdConfig,
@@ -510,10 +520,18 @@ pub async fn enqueue_settlement_ce(
     result: &crate::pg::SettleResult,
     year: i16,
     month: i16,
-) -> Result<(), sqlx::Error> {
-    // Only a completed calculation credits a ledger / triggers a payout.
-    if result.status != "calculated" {
+) -> anyhow::Result<()> {
+    if !crate::pg::SETTLED_STATUSES.contains(&result.status.as_str()) {
         return Ok(());
+    }
+    if result.settlement_eur.is_none() {
+        anyhow::bail!(
+            "Anlage {}: receipt {} is {} but states no settlement_eur — a decided period \
+             without an amount cannot be announced",
+            result.tr_id,
+            result.id,
+            result.status
+        );
     }
     // de.eeg.marktpraemie.berechnet — the gleitende/wettbewerbliche Marktprämie
     // de.eeg.verguetung.berechnet   — everything else (FiT, Mieterstrom, Post-EEG, Flex, KWKG)

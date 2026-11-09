@@ -230,7 +230,8 @@ pub fn example(id: &str) -> Option<&'static str> {
         "922" => "D0000000010",
         "927" => "-1",
         "929" => "1000",
-        "931" => "202610010000+00",
+        // 01.10.2026 00:00 MESZ — a day start, the one a `303` sample takes.
+        "931" => "202609302200+00",
         // 30.09.2026 22:00 UTC is 01.10.2026 00:00 MESZ; 04:00 UTC the same
         // day is 06:00 MESZ, the start of the Gas-Tag.
         "932" | "UB1" | "UB3" => "202609302200+00",

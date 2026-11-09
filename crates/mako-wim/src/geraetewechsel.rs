@@ -1943,8 +1943,12 @@ impl Workflow for WimDeviceChangeWorkflow {
                     "antwort_codeliste": codeliste,
                     "antwort_tree":       ebd,
                 });
+                // `SG6 RFF+TN` „Referenz Vorgangsnummer (aus Anfragenachricht)",
+                // Muss on every answer column (UTILMD AHB Strom 2.2 Kap. 10, Gas
+                // 1.2 Kap. 6). The answer's own `IDE+24` is a fresh number: the
+                // MIG requires DE 7402 to be unique across every Vorgang sent.
                 if let Some(ref vn) = data.vorgangsnummer {
-                    payload["vorgangsnummer"] = serde_json::Value::String(vn.clone());
+                    payload["referenz_vorgangsnummer"] = serde_json::Value::String(vn.clone());
                 }
                 if let Some(ref text) = bemerkung {
                     payload["bemerkung"] = serde_json::Value::String(text.clone());
@@ -2631,7 +2635,11 @@ mod tests {
         assert_eq!(wire.payload["pid"], 55_043);
         assert_eq!(wire.payload["antwort_code"], "E15");
         assert_eq!(wire.payload["antwort_tree"], "E_0201");
-        assert_eq!(wire.payload["vorgangsnummer"], "VG-WIM-001");
+        assert_eq!(wire.payload["referenz_vorgangsnummer"], "VG-WIM-001");
+        assert!(
+            wire.payload.get("vorgangsnummer").is_none(),
+            "the answer's IDE+24 is its own, never the order's"
+        );
         // The answer inverts the roles of the order it answers.
         assert_eq!(wire.payload["sender"], "9900357000004");
         assert_eq!(wire.payload["receiver"], "4012345000023");

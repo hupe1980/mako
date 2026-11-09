@@ -504,15 +504,18 @@ pub fn wim_geraeteubernahme_registry(
                     .unwrap_or(""),
             );
             // The date the order turns on: the Übernahmezeitpunkt on a 17001,
-            // the Gerätewechseltermin on a 17009. Both ride `DTM+76`
-            // („Lieferdatum/-zeit, geplant"); `DTM+137` is the document date and
-            // is never the process date.
-            let termin = o
-                .dtm()
-                .iter()
-                .find(|d| !d.is_document_date())
-                .and_then(|d| d.value_str())
-                .map(str::to_owned);
+            // the Gerätewechseltermin on a 17009. Both ride `DTM+203`
+            // („Ausführungsdatum/-zeit"), a `303` day boundary — `[UB3]` on
+            // 17001, ORDERS AHB 1.1b Kap. 4.9.2 — read back as the German day
+            // it begins in the recipient's Sparte. `DTM+137` is the document
+            // date and is never the process date.
+            let termin = super::prozesstag(
+                o.dtm().iter().find(|d| d.qualifier == "203"),
+                match sparte {
+                    mako_engine::types::Sparte::Strom => mako_fristen::Sparte::Strom,
+                    mako_engine::types::Sparte::Gas => mako_fristen::Sparte::Gas,
+                },
+            )?;
             Ok(GeraeteubernahmeCommand::ReceiveOrders {
                 pid,
                 sender,

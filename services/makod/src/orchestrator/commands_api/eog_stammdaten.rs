@@ -10,7 +10,9 @@
 //! „Haushaltskunde“ ist" and „die Identität des derzeitigen
 //! Messstellenbetreibers". marktd holds that record; the command names the
 //! Marktlokation and the Grund, and this module turns marktd's facts into the
-//! `SG5`/`SG6`/`SG8`/`SG12` segments.
+//! `SG5`/`SG6`/`SG8`/`SG12` segments. The E/G's Bestätigung **44014** (LF →
+//! NB, same Kap. 5.9) restates the record with the LF's Bilanzkreis and
+//! Abrechnungsintervall beside it ([`gas_44014`]).
 //!
 //! **Every fact comes from marktd, or the command is refused naming it.** A
 //! Muss segment marktd holds no value for is collected into
@@ -344,6 +346,43 @@ pub(super) fn gas_44013(
     sd: &MaloUtilmdStammdaten,
     transaktionsgrund: &str,
 ) -> Result<Stammdaten, DispatchError> {
+    gas_eog(sd, transaktionsgrund, None)
+}
+
+/// What the E/G Lieferant states on a Bestätigung EoG 44014 beside the
+/// Marktlokation's record — its own facts, which marktd does not hold.
+#[derive(Debug)]
+pub(super) struct LfEogFakten<'a> {
+    /// `SG10 CCI+Z19` — the LF's Bilanzkreis, Muss with `DTM+158` (Bedingungen
+    /// `[2061]` ∧ `[64]`).
+    pub bilanzkreis: &'a str,
+    /// `SG6 DTM+Z20` Abrechnungsintervall des LF, in Monaten (DE 2379 `802`).
+    pub abrechnungsintervall_monate: u8,
+}
+
+/// The Stammdaten of a Gas Bestätigung EoG 44014 (UTILMD AHB Gas 1.2 Kap.
+/// 5.9, LF → NB): the record the 44013 carried, as marktd holds it on the
+/// Stichtag, with the LF's Bilanzkreis and Abrechnungsintervall. The 44014's
+/// column lists no `CCI+Z42` Betriebszustand, so none is sent.
+///
+/// # Errors
+///
+/// [`DispatchError::StammdatenUnvollstaendig`] naming every Muss fact marktd
+/// does not hold.
+pub(super) fn gas_44014(
+    sd: &MaloUtilmdStammdaten,
+    transaktionsgrund: &str,
+    lf: &LfEogFakten<'_>,
+) -> Result<Stammdaten, DispatchError> {
+    gas_eog(sd, transaktionsgrund, Some(lf))
+}
+
+/// The shared body of [`gas_44013`] and [`gas_44014`].
+fn gas_eog(
+    sd: &MaloUtilmdStammdaten,
+    transaktionsgrund: &str,
+    lf: Option<&LfEogFakten<'_>>,
+) -> Result<Stammdaten, DispatchError> {
     let mut f = Fehlend::default();
     let mut out = Stammdaten::default();
     let melos = &sd.messlokationen;
@@ -378,6 +417,16 @@ pub(super) fn gas_44013(
         );
         if let (Some(termin), Some(jahr), Some(intervall)) = (termin, jahr, intervall) {
             out.sg6.push(seg("RFF", vec![vec!["Z18", &sd.malo_id]]));
+            if let Some(lf) = lf {
+                out.sg6.push(seg(
+                    "DTM",
+                    vec![vec![
+                        "Z20",
+                        &lf.abrechnungsintervall_monate.to_string(),
+                        "802",
+                    ]],
+                ));
+            }
             out.sg6.push(seg("DTM", vec![vec!["Z21", termin, "106"]]));
             out.sg6
                 .push(seg("DTM", vec![vec!["Z09", &jahr.to_string(), "602"]]));
@@ -386,8 +435,12 @@ pub(super) fn gas_44013(
         }
     }
 
-    // `SG8 SEQ+Z01` Daten der Marktlokation.
+    // `SG8 SEQ+Z01` Daten der Marktlokation — on a 44014 headed by the LF's
+    // Bilanzkreis.
     let mut z01 = Vec::new();
+    if let Some(lf) = lf {
+        z01.push(seg("CCI", vec![vec!["Z19"], vec![], vec![lf.bilanzkreis]]));
+    }
     if let Some(gebiet) = f.need(
         sd.marktgebiet.as_deref(),
         "marktgebiet (SG10 CCI+Z21 Marktgebiet)",
@@ -482,9 +535,12 @@ pub(super) fn gas_44013(
                 "abrechnungsvariante (SG10 CAV+ZB1 Netznutzungsabrechnungsvariante)".to_owned(),
             ),
         }
-        match n.betriebszustand {
-            Some(b) => z01.push(seg("CCI", vec![vec!["Z42"], vec![], vec![betrieb(b)]])),
-            None => f.push("betriebszustand (SG10 CCI+Z42 Betriebszustand)".to_owned()),
+        match (n.betriebszustand, lf) {
+            (_, Some(_)) => {}
+            (Some(b), None) => z01.push(seg("CCI", vec![vec!["Z42"], vec![], vec![betrieb(b)]])),
+            (None, None) => {
+                f.push("betriebszustand (SG10 CCI+Z42 Betriebszustand)".to_owned());
+            }
         }
     }
     out.bloecke.push(block("Z01", z01));

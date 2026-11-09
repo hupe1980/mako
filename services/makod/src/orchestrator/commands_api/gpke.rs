@@ -941,12 +941,21 @@ pub(super) async fn dispatch_neuanlage_antwort(
         })?
         .to_owned();
 
-    dispatch_to_process::<mako_gpke::GpkeNeuanlageWorkflow, _>(
+    // The answer is checked against its profile before anything is written —
+    // the check the pre-send gate runs — so an answer whose Muss data the
+    // process does not hold is refused here, naming it, rather than written as
+    // a message the gate dead-letters.
+    dispatch_to_process_with_state::<mako_gpke::GpkeNeuanlageWorkflow, _>(
         state,
         &key,
         mako_gpke::neuanlage::WORKFLOW_NAME,
-        move || mako_gpke::NeuanlageCommand::SendAntwort {
-            antwort: antwort.clone(),
+        move |current| {
+            use mako_engine::workflow::Workflow as _;
+            let cmd = mako_gpke::NeuanlageCommand::SendAntwort { antwort };
+            let out = mako_gpke::GpkeNeuanlageWorkflow::handle(current, cmd.clone())
+                .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            Ok(cmd)
         },
     )
     .await

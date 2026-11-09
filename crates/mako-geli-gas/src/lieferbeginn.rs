@@ -328,6 +328,14 @@ pub struct GasSupplierChangeData {
     pub pruefidentifikator: Pruefidentifikator,
     /// EDIFACT message reference of the initial Anfrage.
     pub message_ref: MessageRef,
+    /// The inbound Anfrage's `SG4` facts — empty on a process the GNB opened.
+    ///
+    /// Every Antwort restates the Anfrage's Transaktionsgrund (`SG4 STS+7`)
+    /// and references its Vorgangsnummer (`SG6 RFF+TN`); a Bestätigung EoG
+    /// 44014 also its Bilanzierungsbeginn (`DTM+158`) — UTILMD AHB Gas 1.2
+    /// Kap. 5.9.
+    #[serde(default)]
+    pub vorgang: LfVorgangsdaten,
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -355,6 +363,9 @@ pub enum GasSupplierChangeEvent {
         message_ref: MessageRef,
         /// BDEW Prüfidentifikator of the Anfrage message.
         pruefidentifikator: Pruefidentifikator,
+        /// The Anfrage's `SG4` facts the Antwort restates.
+        #[serde(default)]
+        vorgang: Box<LfVorgangsdaten>,
     },
     /// AHB profile validation passed.
     ValidationPassed {
@@ -766,6 +777,11 @@ pub enum GasSupplierChangeCommand {
         bemerkung: Option<String>,
         /// Post-acceptance downstream obligations (co-persisted atomically).
         obligations: Vec<PendingOutbox>,
+        /// The Marktlokation's Stammdaten a Bestätigung carries whole — the
+        /// `SG6`, `SG8` and `SG12` of a 44014 (UTILMD AHB Gas 1.2 Kap. 5.9),
+        /// read from marktd and completed with the LF's own facts at the door.
+        /// Empty on every other answer.
+        stammdaten: Stammdaten,
     },
     /// GNB initiates a GNB-side process (initiator role).
     ///
@@ -899,6 +915,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 process_date,
                 message_ref,
                 pruefidentifikator,
+                vorgang,
             } => GasSupplierChangeState::Initiated(GasSupplierChangeData {
                 variant: *variant,
                 malo_id: malo_id.clone(),
@@ -908,6 +925,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 process_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 message_ref: message_ref.clone(),
+                vorgang: (**vorgang).clone(),
             }),
 
             GasSupplierChangeEvent::ValidationPassed { .. } => {
@@ -964,6 +982,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     process_date: process_date.clone(),
                     pruefidentifikator: *pruefidentifikator,
                     message_ref: message_ref.clone(),
+                    vorgang: LfVorgangsdaten::default(),
                 };
                 if variant.is_one_way() {
                     GasSupplierChangeState::Completed(data)
@@ -1075,6 +1094,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     process_date,
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
+                    vorgang: Box::new(vorgang.clone()),
                 }];
                 if validation_passed {
                     events.push(GasSupplierChangeEvent::ValidationPassed {
@@ -1158,6 +1178,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 antwort_ebd,
                 bemerkung,
                 obligations,
+                stammdaten,
             } => {
                 let data = match state {
                     GasSupplierChangeState::ValidationPassed(d) => d,
@@ -1208,6 +1229,28 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 }
                 outbox_payload["orig_message_ref"] =
                     serde_json::Value::String(data.message_ref.as_str().to_owned());
+                // Every Gas Antwort restates the Anfrage's `SG4 STS+7`
+                // Transaktionsgrund and references its `IDE+24` in `SG6
+                // RFF+TN` (UTILMD AHB Gas 1.2, every Antwort column).
+                let v = &data.vorgang;
+                if let Some(grund) = v.transaktionsgrund.as_deref() {
+                    outbox_payload["transaktionsgrund"] = grund.into();
+                }
+                if let Some(nr) = v.vorgangsnummer.as_deref() {
+                    outbox_payload["referenz_vorgangsnummer"] = nr.into();
+                }
+                // A Bestätigung EoG restates the Bilanzierungsbeginn (`DTM+158`,
+                // Bedingung `[18]`) and carries the Marktlokation's Stammdaten.
+                if accepted
+                    && data.variant == GasProcessVariant::EogAnmeldung
+                    && let Some(beginn) = v.bilanzierungsbeginn.as_deref()
+                {
+                    outbox_payload["bilanzierungsbeginn"] = beginn.into();
+                }
+                if !stammdaten.is_empty() {
+                    outbox_payload["stammdaten"] = serde_json::to_value(&stammdaten)
+                        .map_err(|e| WorkflowError::validation(e.to_string()))?;
+                }
 
                 let mut all_outbox = vec![PendingOutbox::new(
                     "UTILMD",
@@ -1636,6 +1679,7 @@ mod tests {
             process_date: "20250301".to_owned(),
             message_ref: MessageRef::new("MSG-GELI-001"),
             pruefidentifikator: pid(44001),
+            vorgang: Box::default(),
         };
         assert_eq!(
             anfrage.verlauf(),
@@ -1840,6 +1884,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -1877,6 +1922,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: Some("MaLo nicht bekannt".to_owned()),
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -1904,6 +1950,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -1934,6 +1981,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -2121,6 +2169,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -2172,6 +2221,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -2233,6 +2283,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -2342,6 +2393,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -2368,6 +2420,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -2459,6 +2512,7 @@ mod tests {
                 antwort_ebd: None,
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -2534,6 +2588,7 @@ mod tests {
                 antwort_ebd: tree.map(str::to_owned),
                 bemerkung: Some("Erläuterung".to_owned()),
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap()
@@ -2589,6 +2644,7 @@ mod tests {
                 antwort_ebd: Some("E_3019".to_owned()),
                 bemerkung: None,
                 obligations: vec![],
+                stammdaten: Stammdaten::default(),
             },
         )
         .expect_err("E_3019 answers a Lieferende, not a Lieferbeginn");

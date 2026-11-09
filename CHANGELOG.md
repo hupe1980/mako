@@ -9,6 +9,82 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.30.0] — unreleased
+
+### Added
+
+- makod counts every inbound AHB finding by class
+  (`makod_inbound_findings_total`) and every Formatbedingung finding by number
+  (`makod_formatbedingung_findings_total`); a Formatbedingung finding maps to
+  APERAK `Z35` with the MIG segment as Ortsangabe (APERAK AHB 1.1 Kap. 2.1.2,
+  4.3), and the door can refuse an AHB-Fehler per class before any workflow
+  runs — no class is refused until its counts are explained.
+- accountingd pays the Marktprämie by the same chain rule as the Vergütung,
+  books a payout on the Kontokorrent when its pain.002 confirms it (`ACSC`,
+  final), and records a plant operator's repayment
+  (`POST /api/v1/eeg/rueckzahlungen`), which takes the chain off
+  `GET /api/v1/eeg/rueckforderungen`.
+
+### Changed
+
+- **Breaking:** every processd `[[lf.bilanzkreise]]` row names its `sparte`
+  (`strom` / `gas`), and every Bilanzkreis lookup — the 55607, the E/G
+  Zustimmung, the start-supply default — reads only its own Sparte's rows, so
+  a supplier of both never names a Strom Bilanzkreis on a Gas message or the
+  reverse; startup refuses two rows for one Sparte and Bilanzierungsgebiet, an
+  `eeg`/`kwkg` list on a Gas row, and an `eog_versorgungsart` outside
+  `ZC9`/`ZD0`/`ZE3`.
+- processd: a queued E/G Bestätigung whose Bilanzkreis, Versorgungsart or
+  Abrechnungsintervall did not resolve is released with the operator's —
+  `bilanzkreis`, `versorgungsart`, `abrechnungsintervall_monate` on the
+  decision (REST and MCP), checked against what the segment admits; the
+  resolved ones stay frozen, and the view lists the rest with their admissible
+  values (`fakten_freigeben` / `fakten_ablehnen`). The answer contracts of
+  `gpke.eog.bestaetigen` and `geli.eog.bestaetigen` name these facts, so a
+  release without them is refused before anything reaches makod.
+- Desk: a Freigabe asks for the facts processd lists, in its view and in ⌘K,
+  and sends nothing until they are given.
+- **Breaking:** processd's automatic Bestätigung EoG Gas 44014 carries its
+  `bilanzkreis` (the `[[lf.bilanzkreise]]` row of the Marktlokation's
+  Bilanzierungsgebiet) and `abrechnungsintervall_monate` from the new `[lf]
+  eog_abrechnungsintervall_monate` — 1, 3, 6 or 12 (UTILMD MIG Gas G1.2) —
+  refused at startup when `eog_auto_respond` is on without it; makod reads the
+  44014 as `mako_markt::commands::GeliEogBestaetigen` and refuses undeclared
+  keys; a queued E/G answer freezes its facts, so the operator states only the
+  Antwortcode.
+- **Breaking:** the outbound UTILMD answers pass their AHB profile, held by
+  a sweep test: the Bestätigung EoG 44014 (now requiring `bilanzkreis` and
+  `abrechnungsintervall_monate`, its Stammdaten from marktd), 55052,
+  55604/55605 and 55608/55609; every Gas answer restates the Anfrage's `STS+7`
+  and `RFF+TN` and names its `STS+E01` Codeliste. 55602/55603 are refused at
+  the door naming the Muss data no command holds.
+- **Breaking:** the ORDERS 17001/17009 Termin is read from `DTM+203` as the
+  German day it begins; processd's `wire_date::parse` takes the Sparte and
+  reads a `303` stamp the same way.
+- **Breaking:** accountingd's `run-payout` and the Rückforderung list are the
+  NB's (EEG payouts are the Netzbetreiber's, § 19 Abs. 1 EEG 2023), no longer
+  LF's/MSB's; the MCP tool `list_overdue` takes `limit`, which is what its
+  `days_overdue` parameter always did.
+- **Breaking:** einsd announces every decided settlement — `kein_anspruch`,
+  `foerderung_beendet`, `sanctioned`, `jahreskontingent_erschoepft`, a zero
+  included — and numbers each period's receipts (`ketten_folge`, on the
+  event); accountingd orders a chain by that number, not the event time, and
+  refuses an event without it.
+
+### Fixed
+
+- Every Gas UTILMD answer left its `STS+E01` Codeliste empty; a WiM
+  MSB-Wechsel answer reused the order's Vorgangsnummer as its own; an ORDERS
+  17001 Geräteübernahme was always read without its Termin.
+- An EEG plant account owing money back could be dunned and handed to the
+  Sperr sequence; an account an EEG receipt was booked to is never an Offener
+  Posten, never dunned and never in a Sperr phase.
+- The door's `Z29`/`Z39` Fehlermeldung never rendered: the validator's
+  typographic quotes and dashes are outside UNOC. `FTX` text is mapped into
+  UNOC and capped at 512 characters.
+- An EEG period re-decided lower or to nothing was never claimed back, and a
+  § 52 EEG 2021 reduced Vergütung or a final KWKG month was never paid at all.
+
 ## [0.29.0] — 2026-11-08
 
 ### Added

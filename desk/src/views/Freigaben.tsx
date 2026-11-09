@@ -22,6 +22,7 @@ import {
 } from "../app/aktionen";
 import { DIENST, nichtErreichbar } from "../app/dienste";
 import { Entscheidungsstand } from "../app/Entscheidungsstand";
+import { FaktFelder } from "../app/FaktFelder";
 import { NAECHSTE, UEBERNEHMEN, VORIGE } from "../app/keys";
 import { ROLLEN, useRolle } from "../app/rollen";
 import type { Vorschlag } from "../data/agent";
@@ -87,6 +88,7 @@ export function Entscheiden({
   const [gewaehlt, setAktion] = useState<"freigeben" | "ablehnen" | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [bemerkung, setBemerkung] = useState("");
+  const [fakten, setFakten] = useState<Record<string, string>>({});
   const [gehalten, setGehalten] = useState(false);
   const [herkunft, setHerkunft] = useState<Herkunft | null>(null);
   // processd's policy refused this person a decision once: the reason stands
@@ -108,7 +110,7 @@ export function Entscheiden({
   const brauchtCode = Boolean(codes);
   const ding: Entscheidbar = { art: "freigabe", f };
   const gewaehlteAktion = gewaehlt ? aktion(ding, gewaehlt) : undefined;
-  const vollstaendig = Boolean(gewaehlteAktion?.bereit({ code, text: bemerkung }));
+  const vollstaendig = Boolean(gewaehlteAktion?.bereit({ code, text: bemerkung, fakten }));
 
   // The request and its hold are the action registry's, the ones ⌘K uses too.
   const halte = useHalten();
@@ -119,7 +121,7 @@ export function Entscheiden({
     halte(
       ding,
       gewaehlteAktion,
-      { code, text: bemerkung },
+      { code, text: bemerkung, fakten },
       {
         herkunft,
         gesendet: onDone,
@@ -252,6 +254,14 @@ export function Entscheiden({
                   </Radio>
                 ))}
               </RadioGroup>
+            )}
+
+            {gewaehlteAktion?.fakten && gewaehlteAktion.fakten.length > 0 && (
+              <FaktFelder
+                fakten={gewaehlteAktion.fakten}
+                werte={fakten}
+                onChange={(feld, wert) => setFakten({ ...fakten, [feld]: wert })}
+              />
             )}
 
             {gewaehlt && (

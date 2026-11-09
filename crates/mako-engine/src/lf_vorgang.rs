@@ -60,6 +60,12 @@ pub struct LfVorgangsdaten {
     /// Vertragsbindung — so this field's *presence* is load-bearing and it is
     /// omitted, never nulled, when the message carried a fixed date.
     pub naechstmoeglicher_termin: Option<String>,
+    /// `SG4 DTM+158` — the Bilanzierungsbeginn, `YYYYMMDD`, on a Gas 44013.
+    ///
+    /// The Bestätigung EoG 44014 restates it: UTILMD AHB Gas 1.2 Kap. 5.9
+    /// makes `DTM+158` Muss there wherever `DTM+93` is absent (Bedingung
+    /// `[18]`), and the answering LF has no other source for the date.
+    pub bilanzierungsbeginn: Option<String>,
     /// `SG12 NAD+Z09` `C080` — „Kunde des LF", the customer name the request
     /// carries, joined from the composite's up-to-five DE 3036 components.
     ///
@@ -140,6 +146,7 @@ impl LfVorgangsdaten {
         set("vorgangsnummer", &self.vorgangsnummer);
         set("uet_lieferanmeldung", &self.uet_lieferanmeldung);
         set("naechstmoeglicher_termin", &self.naechstmoeglicher_termin);
+        set("bilanzierungsbeginn", &self.bilanzierungsbeginn);
         set("kunde_name", &self.kunde_name);
         set("kunde_namensformat", &self.kunde_namensformat);
         set("lfn_mp_id", &self.lfn_mp_id);
@@ -185,6 +192,7 @@ mod tests {
             "vorgangsnummer",
             "uet_lieferanmeldung",
             "naechstmoeglicher_termin",
+            "bilanzierungsbeginn",
             "kunde_name",
             "kunde_namensformat",
             "lfn_mp_id",
@@ -203,6 +211,7 @@ mod tests {
                 vorgangsnummer: Some("NNV1234".into()),
                 uet_lieferanmeldung: Some("20260820".into()),
                 naechstmoeglicher_termin: Some("20261231".into()),
+                bilanzierungsbeginn: Some("20261201".into()),
                 kunde_name: Some("Mustermann Erika".into()),
                 kunde_namensformat: Some("Z01".into()),
                 lfn_mp_id: Some("9900357000004".into()),
@@ -214,6 +223,7 @@ mod tests {
         assert_eq!(p["vorgangsnummer"], "NNV1234");
         assert_eq!(p["uet_lieferanmeldung"], "20260820");
         assert_eq!(p["naechstmoeglicher_termin"], "20261231");
+        assert_eq!(p["bilanzierungsbeginn"], "20261201");
         assert_eq!(p["kunde_name"], "Mustermann Erika");
         assert_eq!(p["kunde_namensformat"], "Z01");
         assert_eq!(p["lfn_mp_id"], "9900357000004");

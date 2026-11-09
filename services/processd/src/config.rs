@@ -563,9 +563,18 @@ pub struct SperrConfig {
 /// authorise several BKs for the same (ZRT, BG, LF): the supplier then genuinely
 /// chooses. One entry is an unambiguous deployment policy; several is a choice,
 /// and a choice is an operator's to make.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+///
+/// Every row names its **Sparte**: a Strom Bilanzkreis is an EIC the ÜNB's
+/// Bilanzkreisvertrag registers, a Gas one is the MGV's, and one supplier
+/// serving both holds both kinds. A lookup reads the rows of the answer's
+/// Sparte only, so a Strom 55014 never names the Gas Bilanzkreis and a Gas
+/// 44014 never the Strom one.
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BilanzkreisEintrag {
+    /// `strom` or `gas` — the Sparte whose answers read this row.
+    #[serde(deserialize_with = "sparte_von_text")]
+    pub sparte: mako_markt::domain::Sparte,
     /// Bilanzierungsgebiet-EIC this row applies to, matched against `marktd`'s
     /// `malo.bilanzierungsgebiet`. Omit for the fallback row.
     #[serde(default)]
@@ -580,6 +589,70 @@ pub struct BilanzkreisEintrag {
     /// Nicht-EEG-/Nicht-KWKG-Marktlokationen carry no regime BK.
     #[serde(default)]
     pub standard: Vec<String>,
+}
+
+impl BilanzkreisEintrag {
+    /// A row of `sparte` for the fallback, listing nothing yet.
+    #[must_use]
+    pub const fn leer(sparte: mako_markt::domain::Sparte) -> Self {
+        Self {
+            sparte,
+            bilanzierungsgebiet: None,
+            eeg: Vec::new(),
+            kwkg: Vec::new(),
+            standard: Vec::new(),
+        }
+    }
+}
+
+/// `sparte = "strom"` / `"gas"` in any case.
+fn sparte_von_text<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<mako_markt::domain::Sparte, D::Error> {
+    let text = String::deserialize(d)?;
+    text.parse().map_err(|_| {
+        serde::de::Error::custom(format!(
+            "sparte = {text:?} is neither \"strom\" nor \"gas\""
+        ))
+    })
+}
+
+/// Refuse a `[[lf.bilanzkreise]]` table a lookup could not read unambiguously.
+///
+/// - Two rows for the same Sparte and Bilanzierungsgebiet (or two fallback rows
+///   of one Sparte): the lookup takes the first, so the second is a setting
+///   that does nothing.
+/// - An `eeg` or `kwkg` list on a Gas row: the EEG and the KWKG remunerate
+///   electricity, and the 55607 that reads those regimes is a Strom process.
+///
+/// # Errors
+///
+/// The first offending row, named by its position and key.
+pub fn validate_bilanzkreise(rows: &[BilanzkreisEintrag]) -> anyhow::Result<()> {
+    use mako_markt::domain::Sparte;
+    for (i, row) in rows.iter().enumerate() {
+        let bg = row.bilanzierungsgebiet.as_deref().unwrap_or("(Fallback)");
+        if let Some(j) = rows[..i].iter().position(|r| {
+            r.sparte == row.sparte && r.bilanzierungsgebiet == row.bilanzierungsgebiet
+        }) {
+            anyhow::bail!(
+                "[[lf.bilanzkreise]] rows {} and {} both name sparte {} and \
+                 bilanzierungsgebiet {bg}: one row per Sparte and Bilanzierungsgebiet",
+                j + 1,
+                i + 1,
+                row.sparte
+            );
+        }
+        if row.sparte == Sparte::Gas && !(row.eeg.is_empty() && row.kwkg.is_empty()) {
+            anyhow::bail!(
+                "[[lf.bilanzkreise]] row {} (sparte GAS, bilanzierungsgebiet {bg}) lists \
+                 eeg or kwkg Bilanzkreise: those regimes remunerate electricity and are \
+                 read by the Strom 55607 only — a Gas row lists `standard`",
+                i + 1
+            );
+        }
+    }
+    Ok(())
 }
 
 // The lookup is LF logic on a config type: `[[lf.bilanzkreise]]` is parsed in
@@ -615,6 +688,7 @@ pub struct LfConfig {
     ///
     /// ```toml
     /// [[lf.bilanzkreise]]
+    /// sparte = "strom"
     /// bilanzierungsgebiet = "11YN-BG-EON----A"
     /// eeg      = ["11XBK-EEG------Q"]
     /// kwkg     = ["11XBK-KWKG-----N"]
@@ -656,8 +730,8 @@ pub struct LfConfig {
     /// way and queues its outcome.
     #[serde(default)]
     pub eog_auto_respond: bool,
-    /// `SG10 CCI+Z36` — which fallback supply an automatic `E_0615` /
-    /// `E_3008` Zustimmung states: `ZC9` (§ 38 Ersatzversorgung), `ZD0` (§ 36
+    /// `SG10 CCI+Z36` — which fallback supply an automatic `E_0615`
+    /// Zustimmung (55014) states: `ZC9` (§ 38 Ersatzversorgung), `ZD0` (§ 36
     /// Grundversorgung) or `ZE3` (vertragliche Ersatzbelieferung). Those three
     /// are what DE 7037 publishes; the § 38a Übergangsversorgung is a `ZE3`
     /// carrying the Transaktionsgrund `ZZD`, not a fourth code here.
@@ -665,9 +739,57 @@ pub struct LfConfig {
     /// The AHB marks it Muss on a 55014 and no Entscheidungsbaum produces it —
     /// it is a legal classification of the case. Without it an automatic
     /// Zustimmung is queued rather than dispatched, because the message would
-    /// otherwise leave a Muss segment empty.
+    /// otherwise leave a Muss segment empty. The Gas 44014 carries no
+    /// `CCI+Z36` (UTILMD AHB Gas 1.2 Kap. 5.9), so a Gas answer ignores it.
     #[serde(default)]
     pub eog_versorgungsart: Option<String>,
+    /// `SG6 DTM+Z20` „Abrechnungsintervall des LF" — how many months apart this
+    /// supplier bills an Ersatz-/Grundversorgung, which every Gas Bestätigung
+    /// EoG 44014 states (UTILMD AHB Gas 1.2 Kap. 5.9, S. 78, Muss). The MSB
+    /// derives the further Ablesetermine from it; UTILMD MIG Gas G1.2 S. 55
+    /// admits `1`, `3`, `6` and `12`.
+    ///
+    /// A business fact of the operator — its own billing cadence — not a
+    /// reading of law, so it is a plain setting rather than a `[policy]`
+    /// choice. Required when `eog_auto_respond = true` in a build that answers
+    /// Gas: startup refuses the config without it ([`Self::validate`]).
+    #[serde(default)]
+    pub eog_abrechnungsintervall_monate: Option<u8>,
+}
+
+impl LfConfig {
+    /// Refuse an `[lf]` section the LF answer path cannot run on.
+    ///
+    /// # Errors
+    ///
+    /// `[[lf.bilanzkreise]]` is ambiguous ([`validate_bilanzkreise`]),
+    /// `eog_versorgungsart` is not a DE 7037 code `CCI+Z36` admits, or
+    /// `eog_abrechnungsintervall_monate` is outside the MIG's four entries or
+    /// absent where `eog_auto_respond` would send a Gas 44014.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        use mako_markt::commands::ABRECHNUNGSINTERVALLE_MONATE;
+        validate_bilanzkreise(&self.bilanzkreise)?;
+        if let Some(code) = &self.eog_versorgungsart
+            && mako_gpke::Versorgungsart::from_code(code).is_none()
+        {
+            anyhow::bail!(
+                "[lf] eog_versorgungsart = {code:?} is not one of ZC9, ZD0, ZE3 — the DE 7037 \
+                 codes SG10 CCI+Z36 admits on a 55014"
+            );
+        }
+        match self.eog_abrechnungsintervall_monate {
+            Some(n) if !ABRECHNUNGSINTERVALLE_MONATE.contains(&n) => anyhow::bail!(
+                "[lf] eog_abrechnungsintervall_monate = {n} is not one of 1, 3, 6, 12 — \
+                 the Abrechnungsintervall des LF in SG6 DTM+Z20 (UTILMD MIG Gas G1.2 S. 55)"
+            ),
+            None if self.eog_auto_respond && cfg!(feature = "role-lf-gas") => anyhow::bail!(
+                "[lf] eog_auto_respond = true needs [lf] eog_abrechnungsintervall_monate \
+                 (1, 3, 6 or 12): every Gas Bestätigung EoG 44014 states it in SG6 DTM+Z20 \
+                 (UTILMD AHB Gas 1.2 Kap. 5.9)"
+            ),
+            _ => Ok(()),
+        }
+    }
 }
 
 fn default_lf_auto_respond() -> bool {
@@ -682,6 +804,7 @@ impl Default for LfConfig {
             grundversorgungs_netzgebiete: Vec::new(),
             eog_auto_respond: false,
             eog_versorgungsart: None,
+            eog_abrechnungsintervall_monate: None,
         }
     }
 }

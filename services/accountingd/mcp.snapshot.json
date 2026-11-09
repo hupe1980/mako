@@ -249,8 +249,8 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
-        "days_overdue": {
-          "description": "Minimum days overdue (default 1).",
+        "limit": {
+          "description": "Maximum rows (default 100, capped at 1000), largest balance first.",
           "type": [
             "integer",
             "null"
@@ -452,7 +452,7 @@
           "type": "string"
         },
         "entry_type": {
-          "description": "Buchungsart. One of: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE,\nBANKRUECKLAST, MAHNGEBUEHR, VERZUGSZINSEN, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.",
+          "description": "Buchungsart. One of: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE,\nEEG_AUSZAHLUNG, EEG_RUECKZAHLUNG, BANKRUECKLAST, SEPA_STORNO, MAHNGEBUEHR, VERZUGSZINSEN,\nABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.",
           "type": "string"
         },
         "amount_ct": {

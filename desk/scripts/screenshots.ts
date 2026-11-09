@@ -350,6 +350,8 @@ const freigaben = [
         { code: "A02", bedeutung: "Marktlokation nimmt nicht an der Marktkommunikation teil" },
       ],
     },
+    fakten_freigeben: [],
+    fakten_ablehnen: [],
     kann_freigeben: true,
     kann_ablehnen: true,
     status: "Pending",
