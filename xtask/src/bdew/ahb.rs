@@ -1756,6 +1756,13 @@ fn element_rule_index(af: &mut Anwendungsfall, nr: &str, de: &str, occ: u8) -> u
 /// Text in the Bedingung column: `[n]` opens a condition, following text
 /// continues it. The longest reading of a number wins — the same Bedingung is
 /// printed wherever it is cited, and a page break can cut one short.
+///
+/// A `[n]` right after „Bedingung(en)", an operator or another citation — on
+/// the same line or at the end of the one before — is a citation inside
+/// another condition's sentence, not a legend entry: „bei der die Bedingungen
+/// `[266] ∧ [479]` an der Segmentgruppe erfüllt ist". Reading it as a definition
+/// gives `[479]` the rest of that sentence and cuts the citing one short
+/// (UTILMD AHB Strom 2.2, `[2010]`).
 fn collect_condition(
     line: &str,
     from_x: usize,
@@ -1767,9 +1774,25 @@ fn collect_condition(
     if toks.is_empty() {
         return;
     }
+    // „Bedingung(en)", an operator joining citations, or another citation.
+    let cites = |word: Option<&str>| {
+        word.is_some_and(|w| {
+            matches!(
+                w,
+                "Bedingung" | "Bedingungen" | "∧" | "∨" | "⊻" | "und" | "oder"
+            ) || cond_id.is_match(w)
+        })
+    };
     let mut buf = String::new();
     for k in toks {
-        if let Some(c) = cond_id.captures(k.text) {
+        // The word before this token: in this line's text so far, or at the
+        // end of the condition the previous line left open.
+        let before = buf.split_whitespace().next_back().or_else(|| {
+            cur.as_ref()
+                .and_then(|(_, acc)| acc.split_whitespace().next_back())
+        });
+        let opens = !cites(before);
+        if let Some(c) = cond_id.captures(k.text).filter(|_| opens) {
             if !buf.is_empty() {
                 append_condition(buf.trim(), cur);
                 buf.clear();
@@ -2375,6 +2398,41 @@ mod tests {
         let open = "Wenn DTM+137 (Nachrichtendatum vorhanden";
         assert!(super::better_reading(closed, open));
         assert!(!super::better_reading(open, closed));
+    }
+
+    #[test]
+    fn a_cited_condition_is_not_read_as_its_definition() {
+        // UTILMD AHB Strom 2.2: `[2006]`'s sentence wraps so that the line
+        // after „Bedingung" starts with the citation „[479]".
+        let cond_id = Regex::new(r"^\[(\d+P?|UB\d)\]$").unwrap();
+        let mut cur = None;
+        let mut conditions = BTreeMap::new();
+        for line in [
+            "[479] Wenn SG4 STS+7++xxx+ZW3 (Transaktionsgrundergänzung Erzeugende Marktlokation) vorhanden",
+            "[2006] Segmentgruppe ist genau einmal anzugeben, bei der die Bedingung",
+            "[479] an der Segmentgruppe erfüllt ist. Dabei ist die selbe Zeitraum-ID anzugeben",
+            "[2010] Segmentgruppe ist anzugeben, bei der die Bedingungen [266] ∧",
+            "[479] an der Segmentgruppe erfüllt ist",
+            "[480] Wenn SG4 STS+7++xxx+ZW4 vorhanden, wie Bedingung [479] es sagt",
+        ] {
+            super::collect_condition(line, 0, &cond_id, &mut cur, &mut conditions);
+        }
+        super::commit_condition(&mut cur, &mut conditions);
+        assert!(
+            conditions["479"].starts_with("Wenn SG4 STS+7++xxx+ZW3"),
+            "{:?}",
+            conditions["479"]
+        );
+        assert!(
+            conditions["2006"].ends_with("Bedingung [479] an der Segmentgruppe erfüllt ist. Dabei ist die selbe Zeitraum-ID anzugeben"),
+            "{:?}",
+            conditions["2006"]
+        );
+        assert!(
+            conditions["2010"]
+                .ends_with("Bedingungen [266] ∧ [479] an der Segmentgruppe erfüllt ist")
+        );
+        assert!(conditions["480"].ends_with("wie Bedingung [479] es sagt"));
     }
 
     #[test]

@@ -1039,7 +1039,7 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `geli.zuordnung.aufheben` | `GNB` | GeLi Gas | 44038 | Gas twin — am selben Tag wie die Antwort |
 | `gpke.eog.anmelden` | `NB` | GPKE | 55013 | NB assigns a contractless MaLo to the Grundversorger (§36/§38 EnWG) |
 | `geli.eog.anmelden` | `GNB` | GeLi Gas | 44013 | Gas twin of `gpke.eog.anmelden` |
-| `gpke.eog.bestaetigen` | `LF` | GPKE | 55014 | E/G confirms the EoG Zuordnung (Versorgungsart + Bilanzkreis, `SG8 SEQ+Z79`) |
+| `gpke.eog.bestaetigen` | `LF` | GPKE | 55014 | E/G confirms the EoG Zuordnung (Versorgungsart, Bilanzkreis `SG8 SEQ+Z79`, Grundlage nach EnFG; Gruppenzuordnung and Kunde from marktd) |
 | `gpke.eog.ablehnen` | `LF` | GPKE | 55015 | E/G rejects the EoG Zuordnung (EBD E_0615: A02/A04/A05) |
 | `gpke.sperrung.beauftragen` | `LF` | GPKE | 17115 | LF orders a disconnection from the NB |
 | `gpke.entsperrung.beauftragen` | `LF` | GPKE | 17117 | LF orders a reconnection from the NB |
@@ -1051,7 +1051,7 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas | 44001 | Gas supplier registers supply start |
 | `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas | 44002/44003 | Gas DSO accepts/rejects supply start |
 | `geli.lieferende.anmelden` | `LFG` | GeLi Gas | 44004 | Gas supplier registers supply end (Abmeldung NN) |
-| `geli.kuendigung.anmelden` | `LFG` | GeLi Gas | 44016 | LFN sends the Kündigung to the Altlieferant (GeLi Gas 3.0 § 3.1) |
+| `geli.kuendigung.anmelden` | `LFG` | GeLi Gas | 44016 | LFN sends the Kündigung to the Altlieferant (GeLi Gas 3.0 Kap. 3.1) |
 | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas | 44005/44006 | Gas DSO accepts/rejects supply end |
 | `wim.geraetewechsel.beauftragen` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Commission a meter-device change |
 | `wim.geraetewechsel.bestaetigen` | `NB` or `MSB` | WiM | 55040/55043/55052/55169 | Business Bestätigung — UTILMD with `SG4 STS+E01` from the process's EBD |
@@ -1198,15 +1198,15 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 
 | Command | Required ERP payload fields |
 |---------|-----------------------------|
-| `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum`, `bilanzkreis`, `transaktionsgrund`¹ |
+| `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum`, `bilanzkreis`, `transaktionsgrund` |
 | `gpke.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `transaktionsgrund` — nothing else³ |
 | `geli.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `bilanzierungsbeginn`, `transaktionsgrund` — nothing else³ |
-| `gpke.eog.bestaetigen` | `malo_id`, `versorgungsart` (ZC9/ZD0/ZE3/ZZD), `bilanzkreis`¹ |
+| `gpke.eog.bestaetigen` | `malo_id`, `versorgungsart` (ZC9/ZD0/ZE3), `bilanzkreis`, `enfg_grundlage` (ZF9/ZG0/ZG1), `enfg_grund` (ZU5…ZV3, beside ZF9 only)⁹ |
 | `gpke.eog.ablehnen` | `malo_id`, `reason` |
 | `geli.eog.bestaetigen` | `malo_id`, `antwort_code` (`E_3008`), `bilanzkreis`, `abrechnungsintervall_monate` (1, 3, 6 or 12)⁴ |
 | `gpke.neuanlage.bestaetigen` / `.ablehnen` | `malo_id` (or `process_id`), `antwort_code` (`E_0608`), `bemerkung` with `A99`⁵ |
-| `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
-| `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_mp_id`¹ |
+| `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum`, `transaktionsgrund`, optional `transaktionsgrund_ergaenzung`¹ |
+| `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `lfa_mp_id` — sent to that Altlieferant, never the NB; `STS+7++E03`¹ |
 | `gpke.sperrung.beauftragen` · `gpke.entsperrung.beauftragen` · `gpke.sperrung.stornieren` | `malo_id` |
 | `gpke.sperrung.bestaetigen` | `malo_id`, optional `note`/`reason` |
 | `gpke.sperrung.fehlgeschlagen` | `malo_id`, **`reason`** (or `note`) |
@@ -1234,10 +1234,16 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `mabis.abrechnung.einleiten` | `zeitreihe`, `mabis_zp_id`, `bilanzierungsmonat`, `version`, `biko_id`, `absender_mp_id` |
 | `mabis.abrechnung.daten-einreichen` | `version`, `pid`, `antwortcode`, `grund` (unless the code is the tree's Zustimmung) |
 
-¹ Conditional: `alter_lf_mp_id` only when the old supplier is a different legal
-entity — the ERP derives it from contract data.
+¹ `SG4 STS+7` is Muss on the 55004 and the 55016, Grund and Lokationsart
+Ergänzung each from its column; under `ZG9`/`ZH1`/`ZH2` the 55004 names the
+confirmed Beginn (`DTM+92`). An unstated Ergänzung is the MaLo's own, from its
+MaLo-Ident `energyDirection` (`ZW4` verbrauchende, `ZW3` erzeugende); a Tranche
+(`ZW5`) or a ruhende Marktlokation (`ZAP`) is named by the caller (UTILMD AHB
+Strom 2.2 Kap. 5.3/5.4).
+
 ² WiM Gerätewechsel is keyed by `melo_id`; NB and MSB MP-IDs come from the MeLo
 cache entry.
+
 ³ The Anmeldung EoG takes only the command's facts; makod reads the
 Marktlokation's Stammdaten from marktd for the Zuordnungsbeginn
 (`GET /api/v1/malos/{id}/utilmd-stammdaten`) and sets them down as the AHB
@@ -1248,6 +1254,7 @@ answers `422 stammdaten_unvollstaendig` naming each one; no marktd answers
 a Strom TLP Marktlokation and an OBIS whose `[257]`/`[274]` needs a
 Wertegranularität are refused by name. The message passes the pre-send AHB
 gate before the spawn, or the command is `invalid_payload` with each finding.
+
 ⁴ The Bestätigung EoG 44014 restates the 44013's record: makod reads it from
 marktd for the process's Zuordnungsbeginn, as for the 44013, drops the
 `CCI+Z42` Betriebszustand the 44014 column does not list, and adds the LF's
@@ -1256,10 +1263,12 @@ Transaktionsgrund, Vorgangsnummer (`RFF+TN`) and `DTM+158` come from the
 process. The body is read as `mako_markt::commands::GeliEogBestaetigen`, so a
 key it does not declare is refused; a missing fact is refused naming it, and the
 44014 passes the pre-send gate before anything is written.
+
 ⁵ Both run the pre-send gate before the answer is written. A Bestätigung
-55602/55603 is refused there today: its Ergänzung (`ZW6`/`ZW7`, `ZW0`/`ZW2`),
+55602/55603 is refused there: its Ergänzung (`ZW6`/`ZW7`, `ZW0`/`ZW2`),
 `RFF+Z60` geplantes Produktpaket and, on `ZW7`, the Messlokationen with their
-MSB are facts no command or process yet carries.
+MSB are facts no command or process carries.
+
 ⁶ An inbound Anfrage zur Stammdatenänderung opens the NB's
 `geli-gas-stammdatenaenderung` process and sends nothing: the NB checks it and
 answers within 10 WT (AWH GeLi Gas V1.2 Kap. 4.4.2 Nr. 2), and an unanswered
@@ -1291,6 +1300,7 @@ nothing. A Prognose auf Basis von Profilen is refused on the 44157: its
 `SEQ+Z35` Lastprofildaten are not held. The NB's 44163/44164 as Verteiler of a
 44162 (Kap. 5.12.7) follow the MSB's 44167 to the 44165 the NB forwards; they
 are not assembled and answer `501`.
+
 ⁷ The Anmeldung NN 44001 carries the Lieferant's contract facts UTILMD AHB Gas
 1.2 Kap. 5.6 makes Muss: `SG6 RFF+Z18 DTM+Z20` Abrechnungsintervall des LF
 (S. 48), `SG8 SEQ+Z01` with `CCI+Z19` Bilanzkreis, `CCI+++Z15`/`Z18`
@@ -1303,25 +1313,38 @@ is `mako_markt::commands::GeliLieferbeginnAnmelden`; a missing or malformed fact
 is `invalid_payload` naming it, and the 44001 passes the pre-send gate before
 anything is written. `processd` `POST /api/v1/start-supply-gas` builds it from
 the supply contract `vertragd` holds.
+
 ⁸ The answer to a Geschäftsdatenanfrage is the Lokationsbündel (UTILMD AHB
 Strom 2.2 Kap. 9.5, S. 599–665). makod reads the Marktlokation the Anfrage
 names from marktd twice for the Stichtag — its UTILMD Stammdaten and its
 Lokationsbündel (`GET /api/v1/malos/{id}/lokationsbuendel`) — and sets down
-`SG5 LOC+Z16`/`Z17`, `SEQ+ZD5` (`RFF+Z31` Lokationsbündelstruktur), one
-`SEQ+ZD6` per object (`RFF+Z33` Objektcode), `SEQ+Z98` (Jahresmenge, ÜNB and
-MSB, Spannungsebene, messtechnische Einordnung, Prognosegrundlage), one
-`SEQ+ZE1` per Netznutzungsabrechnungsposition, one `SEQ+ZE3` per OBIS-Kennzahl
-with its Verwendungszwecke for NB/LF/ÜNB, `SEQ+ZH9`, `SEQ+ZF3`, `SEQ+ZF5` and
-`SEQ+ZF6` per Messlokation and Zähler, `SEQ+ZG1` for an SLP Marktlokation and
-`SG12 NAD+Z63`. The Ergänzung `ZW4` follows from the Energierichtung `AUSSP`,
-which also decides 55035 over 55095. Not assembled, and refused by name:
+`SG5 LOC+Z16`/`Z17`, `SEQ+ZD5` (`RFF+Z31`), one `SEQ+ZD6` per object
+(`RFF+Z33`), `SEQ+Z98`, one `SEQ+ZE1` per Netznutzungsabrechnungsposition, one
+`SEQ+ZE3` per OBIS-Kennzahl, `SEQ+ZH9`/`ZF3`/`ZF5`/`ZF6` per Messlokation and
+Zähler, `SEQ+ZG1` for an SLP Marktlokation and `SG12 NAD+Z63`. The
+Energierichtung `AUSSP` gives the Ergänzung `ZW4` and decides 55035 over 55095.
+
+Not assembled, and refused by name:
 Netzlokationen, Technische and Steuerbare Ressourcen, further Marktlokationen
 of the bündel, a flexible object's references, an intelligentes Messsystem's
 Smartmeter-Gateway, a TLP Marktlokation, more than one Energiemenge-OBIS, an
 Anfrage naming a Messlokation (`501`), and the groups only 55095 and 55060
-carry — so those two answers are refused today. The answer passes the
+carry — so those two answers are refused. The answer passes the
 pre-send gate before anything is written; a refusal leaves the process `Offen`
 and its 1-WT window running.
+
+⁹ The Bestätigung EoG 55014 (UTILMD AHB Strom 2.2 Kap. 8.6, S. 124–140)
+restates the 55013's Transaktionsgrund with `ZW4` and names it by `SG6
+RFF+TN`; it names no `SG5` Lokation and no Marktlokationsanschrift, because
+its column lists neither. The command states the E/G's own facts: the
+Bilanzkreis (`SG8 SEQ+Z79` Produktpaket), the Versorgungsart (`SEQ+Z01
+CCI+Z36`) and the Grundlage nach EnFG (`SEQ+Z75 CCI+Z61`, with `CAV` the § of
+the privilege beside `ZF9`, `[463]`). makod reads the Gruppenzuordnung
+(`SEQ+Z01 CCI+++Z15`/`Z18`) and the Kunde des LF with his
+Korrespondenzanschrift (`SG12 NAD+Z09`/`Z04`, Muss on the Gründe of `[203]`)
+from marktd for the Zuordnungsbeginn. A missing fact is refused naming it —
+`invalid_payload` for the command's, `422 stammdaten_unvollstaendig` for
+marktd's — and the 55014 passes the pre-send gate before anything is written.
 
 ### Integrated operators (NB + MSB, same MP-ID)
 
@@ -1352,7 +1375,7 @@ and no `[[as4.partner]]` entry. Self-addressed by design:
 | 17116 (MSB role only) | spawn by MaLo | `gpke-sperrung-msb` — `ReceiveAnfrage`; 3 WT, a lapse counts as Zustimmung |
 | 55016 | spawn by MaLo | `gpke-kuendigung` — `ReceiveKuendigung` |
 | 55013 | spawn by MaLo | `gpke-eog` — `ReceiveAnmeldung` |
-| 55014/55015 | resume by `nb-anfrage:{MaLo}` | `gpke-eog` — `ReceiveAntwort` |
+| 55014/55015 | resume by `nb-eog-vorgang:{RFF+TN}` — the 55013's Vorgangsnummer | `gpke-eog` — `ReceiveAntwort` |
 | 55003–55006, 55017, 55018 | resume by MaLo | `gpke-lf-anmeldung` — `ReceiveAntwort` |
 | 44001–44021 except the six below | spawn by MaLo | `geli-gas-supplier-change` — `ReceiveUtilmd` |
 | 44008/44009, 44011/44012, 44014/44015 (NB role only) | resume by `gnb-anfrage:{MaLo}` | `geli-gas-supplier-change` — `ReceiveGnbAntwort`, keeping the `STS+E01` code and its tree (`E_3002` / `E_3020` / `E_3008`) |
@@ -1360,7 +1383,10 @@ and no `[[as4.partner]]` entry. Self-addressed by design:
 
 A process the Netzbetreiber opens itself is keyed apart from the bare MaLo:
 `gpke.eog.anmelden` (55013) under `nb-anfrage:{MaLo}`
-(`mako_gpke::eog_nb_anfrage_key`), `geli.eog.anmelden` (44013) under
+(`mako_gpke::eog_nb_anfrage_key`) and under its Vorgangsnummer
+`nb-eog-vorgang:{IDE+24}` (`mako_gpke::eog_nb_vorgang_key`) — the 55014/55015
+column names no Lokation, so the answer's `RFF+TN` is the only key it carries
+(UTILMD AHB Strom 2.2 Kap. 8.6, S. 127) —, `geli.eog.anmelden` (44013) under
 `gnb-anfrage:{MaLo}` (`mako_geli_gas::gnb_anfrage_key`); every process
 answering an inbound Anfrage stays on the bare MaLo. On a deployment that is NB
 and LF at once both sides of one EoG run one workflow name (`gpke-eog`,
@@ -1696,7 +1722,7 @@ Codeliste its column names, one per column (EBD 4.3 Kap. 13.10–13.12):
 A code the list does not publish is refused before anything is queued; a
 Zustimmung to a bilanzierungsrelevante Änderung dated other than a Monatserster
 goes out as `E17`. The Antwort restates the Änderung's `BGM` and names its
-`IDE+24` in `SG6 RFF+TN`. No ERP command sends it yet.
+`IDE+24` in `SG6 RFF+TN`. No ERP command sends it.
 
 **IFTSTA 21042** carries WiM Strom Teil 2 UC 4.4 „Beendigung durch MSB"
 (MSB → ESA): `BGM+Z09`, SG14 `CNI`, SG15 `STS` 9015=Z21 / 4405=105, `RFF+Z13`,
@@ -2056,10 +2082,10 @@ the run (or as the dead letter):
 | follow-up no process takes, where the PID-Übersicht's „Stelle der Zuordnungsprüfung" is `V` | `Z33`, or a dead letter under [`unbekannter_vorgang`](#policy-ingest-unbekannter-vorgang) |
 
 The refusal is switched on per class — `MIG-`, `AHB-`, `FMT-`, the rule-id
-family — and every class is off (`ingest_dispatcher::ABGEWIESENE_KLASSEN`): a
-class is refused once a release has counted real counterparty traffic and its
-`makod_inbound_findings_total` is explained, because no counterparty message
-has yet been through these checks. A refused class is answered at the door, so
+family — and every class is off (`ingest_dispatcher::ABGEWIESENE_KLASSEN`): no
+counterparty message has been through these checks, so a class is refused only
+once real counterparty traffic has been counted and its
+`makod_inbound_findings_total` explained. A refused class is answered at the door, so
 the 30 adapter registries that never validate are covered too. A `MIG-` finding
 has no APERAK code here, so on its own it never refuses a message.
 

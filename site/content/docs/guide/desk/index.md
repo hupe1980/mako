@@ -159,8 +159,11 @@ earliest Frist first; the sidebar shows how many wait.
 
 Each opens with its reason and its Frist. A held answer says which Antwortcode
 it will send; an open one asks you for the code, and the form offers only the
-codes its Entscheidungsbaum defines, each with its published wording. The
-process's Verlauf is beside it. Every decision sends a market message; what it
+codes its Entscheidungsbaum defines, each with its published wording. An
+E/G Bestätigung whose Bilanzkreis, Versorgungsart or Abrechnungsintervall the
+Prozessüberwachung could not resolve asks for each beside the code, offering
+the values processd lists for its segment; nothing is sent until they are
+given. The process's Verlauf is beside it. Every decision sends a market message; what it
 sends is said beside the button, the decision is held for five seconds before
 it goes (see [Taking a decision back](#taking-a-decision-back)), and it is
 recorded under your name.
@@ -220,7 +223,8 @@ an action: a question goes to the assistant.
 Choosing an action opens its parameters in the palette, never in a dialog,
 with the Frist beside them: the Antwortcode as a choice of the codes its
 Entscheidungsbaum publishes, each with the wording the Prozessüberwachung
-returns, and the Bemerkung, Grund or Buchungsdatum. A refusing verb is drawn
+returns, the facts a Freigabe still needs, and the Bemerkung, Grund or
+Buchungsdatum. A refusing verb is drawn
 red and asks nothing more. <kbd>↵</kbd> holds the decision and closes the
 palette onto the entry — the Freigabe in **Freigaben**, anything else in
 **Heute** — where a ring counts the hold down; <kbd>⌘Z</kbd> takes it back

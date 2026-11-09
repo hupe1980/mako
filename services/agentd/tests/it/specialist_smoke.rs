@@ -41,7 +41,7 @@ fn ce<'a>(id: &'a str, event_type: &'a str) -> Envelope<'a> {
 
 /// Answers every read with an empty-but-shaped result.
 #[derive(Debug, Default)]
-struct StubTools {
+pub(crate) struct StubTools {
     calls: AtomicUsize,
 }
 
@@ -71,7 +71,7 @@ impl ToolClient for StubTools {
 /// pattern, a format the validator enforces, an implicit cross-field rule —
 /// the specialist fails this suite, and that is a finding about the schema:
 /// the model gets no more guidance than the schema carries.
-fn instantiate(schema: &Value) -> Value {
+pub(crate) fn instantiate(schema: &Value) -> Value {
     if let Some(values) = schema.get("enum").and_then(Value::as_array) {
         return values.first().cloned().unwrap_or(Value::Null);
     }
@@ -117,7 +117,7 @@ fn instantiate(schema: &Value) -> Value {
     }
 }
 
-fn completion(structured: Value) -> Completion {
+pub(crate) fn completion(structured: Value) -> Completion {
     Completion {
         text: String::new(),
         model: None,
@@ -133,7 +133,7 @@ fn completion(structured: Value) -> Completion {
 
 /// A payload with one of everything the labeller can promote, so correlation
 /// and `$correlation/malo` memory subjects resolve for every specialist.
-fn event() -> Value {
+pub(crate) fn event() -> Value {
     json!({
         "malo_id": "51238696012",
         "melo_id": "DE0001234567890123456789012345678",

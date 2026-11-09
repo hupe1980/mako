@@ -384,7 +384,7 @@ unregistered `[9xx]` at a binding place, against a list that only shrinks.
 message invalid. APERAK AHB 1.1 makes a format violation an AHB-Fehler all the
 same — `Z35` „Format nicht eingehalten" (Kap. 2.1.2.1, S. 12) — so makod counts
 every inbound `FMT-` finding by its number and answers it `Z35` where its ingest
-door refuses the `FMT` class ([makod: the door's answers](@/docs/services/makod.md#door-answers)).
+door refuses the `FMT` class ([makod: the door's answers](@/docs/services/makod.md#the-door-s-answers)).
 No class is refused until its inbound count is explained.
 
 **A rule id is only meaningful together with the Formatversion.** The `Nr` is the

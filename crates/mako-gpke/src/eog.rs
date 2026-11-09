@@ -48,8 +48,12 @@
 //!
 //! The **Bestätigung 55014** carries the classification (SG10 CCI+Z36
 //! "Versorgungsart": `ZC9` Ersatzversorgung / `ZD0` Grundversorgung /
-//! `ZE3` Ersatzbelieferung / `ZZD` Übergangsversorgung) plus the
-//! Bilanzkreis. The Anmeldung only states the cause and whether the
+//! `ZE3` Ersatzbelieferung; `ZZD` Übergangsversorgung is a Transaktionsgrund)
+//! plus the Bilanzkreis in the Produktpaket `SG8 SEQ+Z79`, the
+//! Gruppenzuordnung, the Grundlage nach EnFG and the Kunde des LF. Neither
+//! answer names a Lokation: it is tied to its Anmeldung by `SG6 RFF+TN`
+//! (UTILMD AHB Strom 2.2 Kap. 8.6, S. 127–140), and the NB finds its process
+//! by [`nb_vorgang_key`]. The Anmeldung only states the cause and whether the
 //! Anschlussnutzer is a Haushaltskunde (CCI `Z15`/`Z18`), which drives
 //! the E/G's classification: §38 Ersatzversorgung applies ipso iure to
 //! every NSP-Letztverbraucher; Grundversorgung (§36) only to
@@ -126,6 +130,17 @@ pub const EOG_RESPONSE_WINDOW_LABEL: &str = "gpke-eog-response-window";
 #[must_use]
 pub fn nb_anfrage_key(malo_id: &str) -> String {
     format!("nb-anfrage:{malo_id}")
+}
+
+/// Correlation key under which the NB's EoG process is found by the answer's
+/// `SG6 RFF+TN` — the `SG4 IDE+24` Vorgangsnummer its 55013 carried.
+///
+/// The 55014/55015 column names no `SG5` Lokation at all (UTILMD AHB Strom 2.2
+/// Kap. 8.6, S. 127: `SG5` Marktlokation is listed on the 55013 alone), so the
+/// Referenz Vorgangsnummer is the only thing an answer ties to its Anmeldung.
+#[must_use]
+pub fn nb_vorgang_key(vorgangsnummer: &str) -> String {
+    format!("nb-eog-vorgang:{vorgangsnummer}")
 }
 
 /// Derive the outbound ANTWORT PID for the EoG Anmeldung.
@@ -253,6 +268,8 @@ pub enum EogEvent {
         /// Whether the Anschlussnutzer is a Haushaltskunde (CCI Z15/Z18),
         /// if known.
         haushaltskunde: Option<bool>,
+        /// `SG4 IDE+24` Vorgangsnummer of the 55013 sent.
+        vorgangsnummer: Option<String>,
     },
     /// NB (initiator) received the E/G's response (55014/55015).
     AntwortErhalten {
@@ -294,6 +311,8 @@ pub enum EogEvent {
         transaktionsgrund: String,
         /// Haushaltskunde flag (CCI Z15/Z18), if transmitted.
         haushaltskunde: Option<bool>,
+        /// `SG4 IDE+24` Vorgangsnummer of the received 55013.
+        vorgangsnummer: Option<String>,
     },
     /// EDIFACT message passed profile validation.
     ValidationPassed {
@@ -406,6 +425,10 @@ pub struct EogData {
     pub transaktionsgrund: String,
     /// Haushaltskunde flag (CCI Z15/Z18), if known.
     pub haushaltskunde: Option<bool>,
+    /// `SG4 IDE+24` Vorgangsnummer of the 55013 — on the E/G's side the
+    /// number its answer restates in `SG6 RFF+TN`, on the NB's side the number
+    /// that answer is matched by ([`nb_vorgang_key`]).
+    pub vorgangsnummer: Option<String>,
 }
 
 /// State of a GPKE EoG process.
@@ -582,6 +605,9 @@ pub enum EogCommand {
         /// Messlokationen, the `SG8` groups and the `SG12` Anschriften the
         /// 55013 carries. Read at the transport boundary, never here.
         stammdaten: Stammdaten,
+        /// `SG4 IDE+24` DE 7402 — unique per outbound Vorgang, and the number
+        /// the E/G's answer names in `SG6 RFF+TN`. Drawn at the boundary.
+        vorgangsnummer: String,
     },
     /// NB (initiator): the E/G's response (55014/55015) arrived.
     ReceiveAntwort {
@@ -616,6 +642,8 @@ pub enum EogCommand {
         transaktionsgrund: String,
         /// Haushaltskunde flag (CCI Z15/Z18), if transmitted.
         haushaltskunde: Option<bool>,
+        /// `SG4 IDE+24` Vorgangsnummer of the 55013.
+        vorgangsnummer: Option<String>,
         /// `true` if validation returned no errors.
         validation_passed: bool,
         /// Validation error strings.
@@ -629,10 +657,25 @@ pub enum EogCommand {
         accepted: bool,
         /// Versorgungsart (required for a Bestätigung: ZC9/ZD0/ZE3).
         versorgungsart: Option<Versorgungsart>,
-        /// Bilanzkreis (EIC) the MaLo is assigned to (Bestätigung).
+        /// Bilanzkreis (EIC) the MaLo is assigned to — `SG8 SEQ+Z79`
+        /// Produktpaket, Muss on the Bestätigung.
         bilanzkreis: Option<String>,
         /// Rejection reason / EBD code (required for an Ablehnung).
         reason: Option<String>,
+        /// `SG8 SEQ+Z01 CCI+++Z15`/`Z18` Gruppenzuordnung — Muss on the
+        /// Bestätigung; the NB's record of the Marktlokation, read at the
+        /// boundary.
+        haushaltskunde: Option<bool>,
+        /// `SG8 SEQ+Z75 CCI+Z61` Grundlage zur Verringerung der Umlagen nach
+        /// EnFG (`ZF9`/`ZG0`/`ZG1`) — Muss on the Bestätigung, the E/G's own
+        /// fact about its Kunde.
+        enfg_grundlage: Option<String>,
+        /// `SG10 CAV` Grund der Privilegierung nach EnFG (`ZU5`…`ZV3`) — Muss
+        /// beside `ZF9` (Bedingung `[463]`).
+        enfg_grund: Option<String>,
+        /// The `SG12` Kunde des LF and his Korrespondenzanschrift, read at the
+        /// boundary.
+        stammdaten: Stammdaten,
     },
     /// A registered deadline fired.
     ///
@@ -729,6 +772,7 @@ impl Workflow for GpkeEogWorkflow {
                 pruefidentifikator,
                 transaktionsgrund,
                 haushaltskunde,
+                vorgangsnummer,
             } => EogState::Angemeldet(EogData {
                 location_id: location_id.clone(),
                 sender: sender.clone(),
@@ -737,6 +781,7 @@ impl Workflow for GpkeEogWorkflow {
                 pruefidentifikator: *pruefidentifikator,
                 transaktionsgrund: transaktionsgrund.clone(),
                 haushaltskunde: *haushaltskunde,
+                vorgangsnummer: vorgangsnummer.clone(),
             }),
             EogEvent::AntwortErhalten {
                 accepted,
@@ -780,6 +825,7 @@ impl Workflow for GpkeEogWorkflow {
                 pruefidentifikator,
                 transaktionsgrund,
                 haushaltskunde,
+                vorgangsnummer,
                 ..
             } => EogState::Eingegangen(EogData {
                 location_id: location_id.clone(),
@@ -789,6 +835,7 @@ impl Workflow for GpkeEogWorkflow {
                 pruefidentifikator: *pruefidentifikator,
                 transaktionsgrund: transaktionsgrund.clone(),
                 haushaltskunde: *haushaltskunde,
+                vorgangsnummer: vorgangsnummer.clone(),
             }),
             EogEvent::ValidationPassed { .. } => match state {
                 EogState::Eingegangen(data) => EogState::ValidationPassed(data),
@@ -843,6 +890,7 @@ impl Workflow for GpkeEogWorkflow {
                 transaktionsgrund_ergaenzung,
                 haushaltskunde,
                 stammdaten,
+                vorgangsnummer,
             } => {
                 if !matches!(state, EogState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -878,6 +926,7 @@ impl Workflow for GpkeEogWorkflow {
                         process_date: Some(process_date.clone()),
                         transaktionsgrund: Some(transaktionsgrund.clone()),
                         transaktionsgrund_ergaenzung: Some(transaktionsgrund_ergaenzung),
+                        vorgangsnummer: Some(vorgangsnummer.clone()),
                         stammdaten,
                         ..UtilmdPayload::default()
                     },
@@ -905,6 +954,7 @@ impl Workflow for GpkeEogWorkflow {
                     pruefidentifikator: pid,
                     transaktionsgrund,
                     haushaltskunde,
+                    vorgangsnummer: Some(vorgangsnummer),
                 };
                 Ok(WorkflowOutput::with_outbox(
                     vec![event],
@@ -962,6 +1012,7 @@ impl Workflow for GpkeEogWorkflow {
                 message_ref,
                 transaktionsgrund,
                 haushaltskunde,
+                vorgangsnummer,
                 validation_passed,
                 validation_errors,
                 received_at,
@@ -991,6 +1042,7 @@ impl Workflow for GpkeEogWorkflow {
                     pruefidentifikator: pid,
                     transaktionsgrund,
                     haushaltskunde,
+                    vorgangsnummer,
                 }];
                 if validation_passed {
                     events.push(EogEvent::ValidationPassed {
@@ -1061,6 +1113,10 @@ impl Workflow for GpkeEogWorkflow {
                 versorgungsart,
                 bilanzkreis,
                 reason,
+                haushaltskunde,
+                enfg_grundlage,
+                enfg_grund,
+                stammdaten,
             } => {
                 let data = match state {
                     EogState::ValidationPassed(d) => d,
@@ -1076,6 +1132,35 @@ impl Workflow for GpkeEogWorkflow {
                         "Bestätigung EOG requires the Versorgungsart (CCI+Z36: ZC9/ZD0/ZE3)"
                             .to_owned(),
                     ));
+                }
+                // The Bestätigung's column makes `SG8 SEQ+Z79` Produktpaket
+                // (the Bilanzkreis), `SEQ+Z01` with the Gruppenzuordnung and
+                // `SEQ+Z75` with the EnFG-Grundlage Muss (UTILMD AHB Strom 2.2
+                // Kap. 8.6, S. 129, 136, 138).
+                if accepted {
+                    let fehlend: Vec<&str> = [
+                        (
+                            bilanzkreis.is_none(),
+                            "Bilanzkreis (SG8 SEQ+Z79 Produktpaket)",
+                        ),
+                        (
+                            haushaltskunde.is_none(),
+                            "Gruppenzuordnung (SG10 CCI+++Z15/Z18)",
+                        ),
+                        (
+                            enfg_grundlage.is_none(),
+                            "Grundlage nach EnFG (SG8 SEQ+Z75 CCI+Z61)",
+                        ),
+                    ]
+                    .into_iter()
+                    .filter_map(|(fehlt, was)| fehlt.then_some(was))
+                    .collect();
+                    if !fehlend.is_empty() {
+                        return Err(WorkflowError::rejected(format!(
+                            "Bestätigung EOG 55014 requires {}",
+                            fehlend.join(", ")
+                        )));
+                    }
                 }
                 if !accepted && reason.is_none() {
                     return Err(WorkflowError::rejected(
@@ -1103,22 +1188,38 @@ impl Workflow for GpkeEogWorkflow {
                     }
                     code
                 };
-                // Outbound UTILMD 55014/55015 to the NB. The Versorgungsart
-                // (`SG10 CCI+Z36`) has no field in the UTILMD payload and is
-                // recorded on the event only.
-                let mut outbox = vec![PendingOutbox::new(
-                    "UTILMD",
+                // Outbound UTILMD 55014/55015 to the NB. Neither column names
+                // an `SG5` Lokation — the Marktlokation is the 55013's alone
+                // (UTILMD AHB Strom 2.2 Kap. 8.6, S. 127) — so the answer is
+                // tied to its Anmeldung by `SG6 RFF+TN` (Muss, S. 129) and
+                // restates the Anmeldung's `STS+7` Transaktionsgrund (S. 125–126).
+                let mut outbox = vec![PendingOutbox::typed(
                     data.sender.as_str(),
-                    serde_json::json!({
-                        "pid":               response_pid.as_u32(),
-                        "sender":            data.receiver.as_str(),
-                        "receiver":          data.sender.as_str(),
-                        "malo":              data.location_id.as_str(),
-                        "process_date":      data.process_date,
-                        "bilanzkreis":       bilanzkreis,
-                        "antwort_code":      antwort_code,
-                        "antwort_codeliste": EBD_ANMELDUNG_EOG,
-                    }),
+                    &UtilmdPayload {
+                        pid: response_pid.as_u32(),
+                        sender: data.receiver.as_str().to_owned(),
+                        receiver: Some(data.sender.as_str().to_owned()),
+                        process_date: Some(data.process_date.clone()),
+                        referenz_vorgangsnummer: data.vorgangsnummer.clone(),
+                        transaktionsgrund: Some(data.transaktionsgrund.clone()),
+                        antwort_code: Some(antwort_code),
+                        antwort_codeliste: Some(EBD_ANMELDUNG_EOG.to_owned()),
+                        bilanzkreis: bilanzkreis.clone().filter(|_| accepted),
+                        kundengruppe: haushaltskunde
+                            .filter(|_| accepted)
+                            .map(|h| if h { "Z15" } else { "Z18" }.to_owned()),
+                        versorgungsart: versorgungsart
+                            .filter(|_| accepted)
+                            .map(|v| v.code().to_owned()),
+                        enfg_grundlage: enfg_grundlage.filter(|_| accepted),
+                        enfg_grund: enfg_grund.filter(|_| accepted),
+                        stammdaten: if accepted {
+                            stammdaten
+                        } else {
+                            Stammdaten::default()
+                        },
+                        ..UtilmdPayload::default()
+                    },
                 )];
                 if accepted {
                     // The E/G's own marktd records the fallback supply from
@@ -1192,6 +1293,7 @@ mod tests {
             transaktionsgrund_ergaenzung: "ZW6".to_owned(),
             haushaltskunde: Some(true),
             stammdaten: Stammdaten::default(),
+            vorgangsnummer: "EOGV0001".to_owned(),
         }
     }
 
@@ -1206,6 +1308,7 @@ mod tests {
             message_ref: mref("EOG-001"),
             transaktionsgrund: "ZT7".to_owned(),
             haushaltskunde: Some(true),
+            vorgangsnummer: Some("EOGV0001".to_owned()),
             validation_passed: ok,
             validation_errors: if ok {
                 vec![]
@@ -1427,6 +1530,7 @@ mod tests {
                 transaktionsgrund_ergaenzung: "ZW7".to_owned(),
                 haushaltskunde,
                 stammdaten: stammdaten.clone(),
+                vorgangsnummer: "EOGV0001".to_owned(),
             },
             _ => unreachable!(),
         };
@@ -1460,6 +1564,7 @@ mod tests {
                 transaktionsgrund_ergaenzung: " ".to_owned(),
                 haushaltskunde,
                 stammdaten,
+                vorgangsnummer: "EOGV0001".to_owned(),
             },
             _ => unreachable!(),
         };
@@ -1480,6 +1585,7 @@ mod tests {
                 transaktionsgrund_ergaenzung: "ZW6".to_owned(),
                 haushaltskunde: None,
                 stammdaten: Stammdaten::default(),
+                vorgangsnummer: "EOGV0001".to_owned(),
             },
         );
         assert!(result.is_err());
@@ -1499,6 +1605,7 @@ mod tests {
                 transaktionsgrund_ergaenzung: "ZW6".to_owned(),
                 haushaltskunde: None,
                 stammdaten: Stammdaten::default(),
+                vorgangsnummer: "EOGV0001".to_owned(),
             },
         );
         assert!(result.is_err());
@@ -1522,6 +1629,10 @@ mod tests {
                 versorgungsart: Some(Versorgungsart::Grundversorgung),
                 bilanzkreis: Some("11XGRUNDV-BK---9".to_owned()),
                 reason: None,
+                haushaltskunde: Some(true),
+                enfg_grundlage: Some("ZG1".to_owned()),
+                enfg_grund: None,
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();
@@ -1531,6 +1642,14 @@ mod tests {
         assert_eq!(out.outbox[0].payload["pid"], 55014);
         assert_eq!(out.outbox[0].payload["antwort_code"], "A09");
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0615");
+        // The column names no Lokation; the answer is tied to its Anmeldung
+        // by `RFF+TN` and restates its Transaktionsgrund.
+        assert!(out.outbox[0].payload.get("malo").is_none());
+        assert_eq!(out.outbox[0].payload["referenz_vorgangsnummer"], "EOGV0001");
+        assert_eq!(out.outbox[0].payload["transaktionsgrund"], "ZT7");
+        assert_eq!(out.outbox[0].payload["versorgungsart"], "ZD0");
+        assert_eq!(out.outbox[0].payload["kundengruppe"], "Z15");
+        assert_eq!(out.outbox[0].payload["enfg_grundlage"], "ZG1");
         assert_eq!(out.outbox[1].message_type.as_ref(), "ProcessCompleted");
         assert_eq!(out.outbox[1].payload["eog_art"], "GRUNDVERSORGUNG");
         let state = apply_all(state, &out.events);
@@ -1551,9 +1670,39 @@ mod tests {
                 versorgungsart: None,
                 bilanzkreis: None,
                 reason: None,
+                haushaltskunde: None,
+                enfg_grundlage: None,
+                enfg_grund: None,
+                stammdaten: Stammdaten::default(),
             },
         );
         assert!(result.is_err());
+    }
+
+    /// The Bestätigung's column makes the Produktpaket, the Gruppenzuordnung
+    /// and the Grundlage nach EnFG Muss, so a 55014 without one is not written.
+    #[test]
+    fn responder_bestaetigung_requires_its_muss_facts() {
+        let out = GpkeEogWorkflow::handle(&EogState::New, receive_anmeldung_cmd(true)).unwrap();
+        let state = apply_all(EogState::New, &out.events);
+        let err = GpkeEogWorkflow::handle(
+            &state,
+            EogCommand::SendAntwort {
+                accepted: true,
+                versorgungsart: Some(Versorgungsart::Ersatzversorgung),
+                bilanzkreis: None,
+                reason: None,
+                haushaltskunde: None,
+                enfg_grundlage: None,
+                enfg_grund: None,
+                stammdaten: Stammdaten::default(),
+            },
+        )
+        .expect_err("a 55014 without its Muss facts is refused")
+        .to_string();
+        for named in ["Bilanzkreis", "Gruppenzuordnung", "EnFG"] {
+            assert!(err.contains(named), "{named} in {err}");
+        }
     }
 
     #[test]
@@ -1567,6 +1716,10 @@ mod tests {
                 versorgungsart: None,
                 bilanzkreis: None,
                 reason: None,
+                haushaltskunde: None,
+                enfg_grundlage: None,
+                enfg_grund: None,
+                stammdaten: Stammdaten::default(),
             },
         );
         assert!(result.is_err());
@@ -1583,6 +1736,10 @@ mod tests {
                 versorgungsart: None,
                 bilanzkreis: None,
                 reason: Some("A05".to_owned()),
+                haushaltskunde: None,
+                enfg_grundlage: None,
+                enfg_grund: None,
+                stammdaten: Stammdaten::default(),
             },
         )
         .unwrap();

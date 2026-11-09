@@ -120,14 +120,15 @@ impl MockLfn {
             .process
             .run(
                 LfAnmeldungCommand::InitiateAnmeldung {
-                    transaktionsgrund_ergaenzung: None,
+                    // `SG4 STS+7` is Muss on the 55004.
+                    transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
                     tranchengroesse: None,
                     pid: Pruefidentifikator::new(55004).unwrap(),
                     sender: MarktpartnerCode::new(LFN_ID),
                     receiver: MarktpartnerCode::new(NB_ID),
                     location_id: MaLo::new(malo_id),
                     process_date: process_date.to_owned(),
-                    transaktionsgrund: None,
+                    transaktionsgrund: Some("ZT5".to_owned()),
                     bilanzkreis: Some("11XBK-LF-------9".to_owned()),
                 },
                 RunOptions::new(),

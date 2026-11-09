@@ -847,7 +847,7 @@ endpoint:
 
 | Stage | Refuses | `code` |
 |---|---|---|
-| 1. **Discriminator** | a `Zaehler` posted to the `Geraet` endpoint. `_typ` is injected when absent — the endpoint already fixes which BO it takes — and read off the type's `Bo4eTyped::TYP_WIRE` constant without constructing a value, so it cannot drift from what the type serialises | `bo4e.discriminator` |
+| 1. **Discriminator** | a `Zaehler` posted to the `Geraet` endpoint. An absent `_typ` is injected from the type's `Bo4eTyped::TYP_WIRE`, so it cannot drift from what the type serialises | `bo4e.discriminator` |
 | 2. **Schema** | a value the type cannot hold | `bo4e.schema` |
 | 3. **Strict enums** | `"sparte": "STROMM"`, at any depth, reported by JSON-path (`rubo4e`'s `Bo4eStrict::ensure_known_enums`) | `bo4e.unknown_enum` |
 | 4. **BO4E rules** | a document the standard's prose forbids | `bo4e.rule` |

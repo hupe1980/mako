@@ -299,8 +299,8 @@ pub fn lieferbeginn_body(
 ///
 /// The body is `processd`'s request type, as for [`lieferbeginn_body`]:
 /// `end-supply` takes `lieferende_datum` (ISO-8601), `end-supply-gas` a
-/// `YYYYMMDD` `process_date` and the Transaktionsgrund `grund` decides
-/// ([`crate::domain::Kuendigungsgrund::abmeldung_gas_transaktionsgrund`]).
+/// `YYYYMMDD` `process_date`; both carry the Transaktionsgrund `grund` decides
+/// ([`crate::domain::Kuendigungsgrund::abmeldung_transaktionsgrund`]).
 #[must_use]
 pub fn lieferende(
     komp_id: Uuid,
@@ -315,7 +315,7 @@ pub fn lieferende(
             serde_json::json!({
                 "malo_id": malo_id,
                 "process_date": compact_date(lieferende),
-                "transaktionsgrund": grund.abmeldung_gas_transaktionsgrund(),
+                "transaktionsgrund": grund.abmeldung_transaktionsgrund(),
             }),
         )
     } else {
@@ -324,6 +324,7 @@ pub fn lieferende(
             serde_json::json!({
                 "malo_id": malo_id,
                 "lieferende_datum": lieferende.to_string(),
+                "transaktionsgrund": grund.abmeldung_transaktionsgrund(),
             }),
         )
     };

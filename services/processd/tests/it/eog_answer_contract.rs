@@ -180,3 +180,17 @@ fn a_strom_answer_never_reads_a_gas_row() {
         None
     );
 }
+
+/// A Strom 55014 with its Versorgungsart and Bilanzkreis configured still
+/// waits for the operator: its Grundlage nach EnFG (UTILMD AHB Strom 2.2 Kap.
+/// 8.6, S. 138, Muss) is a fact about the Kunde that no configuration states.
+#[test]
+fn a_strom_zustimmung_waits_for_its_enfg_grundlage() {
+    let fakten = EogFakten::fuer(&config(None), &processd::lf_module::ANMELDUNG_EOG, Some(BG));
+    assert_eq!(fakten.versorgungsart.as_deref(), Some("ZD0"));
+    assert_eq!(fakten.bilanzkreis.as_deref(), Some(BK_STROM));
+    let fehlt = fakten
+        .fehlt()
+        .expect("the EnFG Grundlage is the operator's");
+    assert!(fehlt.contains("EnFG"), "{fehlt}");
+}

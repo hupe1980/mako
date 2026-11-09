@@ -117,6 +117,8 @@ Commands:
   check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
                         agrees with that server's own `read_only_hint`
   check-clippy-bans   Every clippy.toml ban fires on its planted use in xtask/clippy-fixtures
+  check-sts-codes     Refuse an adapter reading an STS code from DE 4405 (`status_code`) or a
+                        raw STS segment outside the admitted IFTSTA readers — codes ride C556
   check-thin-main     Refuse a services/*/src/main.rs that is more than
                         `mako_service::run::<D>().await` — the daemon lives in the library
   check-desk          The Desk's npm licences are within deny.toml's allow list, and
@@ -184,6 +186,7 @@ mod check_runner_disk;
 mod check_runner_routes;
 mod check_specs;
 mod check_sql;
+mod check_sts_codes;
 mod check_tenant_predicate;
 mod check_thin_main;
 mod check_tool_grants;
@@ -277,6 +280,7 @@ fn main() {
         Some("check-tool-grants") => check_tool_grants(),
         Some("check-clippy-bans") => root_task(check_clippy_bans::run),
         Some("check-thin-main") => root_task(check_thin_main::run),
+        Some("check-sts-codes") => root_task(check_sts_codes::run),
         Some("check-desk") => root_task(check_desk::run),
         Some("check-error-tuples") => root_task(check_error_tuples::run),
         Some("validate-ebd-codes") => validate_ebd_codes(),

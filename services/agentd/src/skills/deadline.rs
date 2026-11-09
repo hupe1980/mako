@@ -177,6 +177,26 @@ fn remaining_secs(now: Timestamp, deadline: &str) -> Option<i64> {
     Some(parsed.unix_timestamp() - now.unix_timestamp())
 }
 
+/// The text of the worklist row a breach opens — the Hinweis the Desk shows as
+/// it is, in the operator's language.
+///
+/// Counts this skill computed and nothing else, so it carries no
+/// [`MACHINE_GENERATED`](crate::plane::MACHINE_GENERATED) disclosure: no model
+/// wrote it, and a marking on a row no model touched teaches an operator to
+/// skip the marking.
+pub(crate) fn breach_summary(breached: usize, unclassifiable: usize) -> String {
+    format!(
+        "{breached} Marktprozess{} nach der Frist{}. Die Frist ist abgelaufen; diese Zeile \
+         meldet, was versäumt wurde, und hält nichts an.",
+        if breached == 1 { "" } else { "e" },
+        if unclassifiable > 0 {
+            format!(", {unclassifiable} weitere mit einer Frist, die mako nicht lesen konnte")
+        } else {
+            String::new()
+        }
+    )
+}
+
 #[async_trait::async_trait]
 impl Skill for DeadlineTriage {
     fn descriptor(&self) -> SkillDescriptor {
@@ -376,18 +396,7 @@ impl DeadlineTriage {
         .await
         .map_err(|e| SkillError::Other(format!("register the triage obligation: {e}")))?;
 
-        // In the operator's language: the Desk shows this sentence as it is.
-        let summary = format!(
-            "{} Marktprozess{} nach der Frist{}. Die Frist ist abgelaufen; diese Zeile \
-             meldet, was versäumt wurde, und hält nichts an.",
-            breached.len(),
-            if breached.len() == 1 { "" } else { "e" },
-            if unclassifiable > 0 {
-                format!(", {unclassifiable} weitere mit einer Frist, die mako nicht lesen konnte")
-            } else {
-                String::new()
-            }
-        );
+        let summary = breach_summary(breached.len(), unclassifiable);
 
         let spec = TaskSpec::new(
             "deadline.breach",

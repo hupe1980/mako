@@ -629,8 +629,8 @@ the requested date is less than 20 Werktage out.
 >
 > **Direction:** as requester mako sends the ORDERS and ingests the ORDRSP; as
 > MSB it answers the REQOTE 35005 and receives the 17011 (`ReceiveAuftrag`,
-> under the sender and the Dokumentennummer, with its own 10-WT window). The
-> MSB's ORDRSP 19005/19006 out of the four trees above is not built yet.
+> under the sender and the Dokumentennummer, with its own 10-WT window). mako
+> does not send the MSB's ORDRSP 19005/19006 out of the four trees above.
 
 ### ESA Wertebestellung (WiM Strom Teil 2, Kap. 4)
 

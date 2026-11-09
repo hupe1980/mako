@@ -683,7 +683,7 @@ pub struct LfConfig {
     ///
     /// A UTILMD 55607 Zustimmung must name one (GPKE Teil 2 § 2.4.2.2 Nr. 2),
     /// and which ones are admissible is the BKV's grant, not the supplier's
-    /// choice alone: MaBiS § 10.2.1 issues the Zuordnungsermächtigung „je ZRT,
+    /// choice alone: MaBiS Kap. 10.2.1 issues the Zuordnungsermächtigung „je ZRT,
     /// BG, BK und LF".
     ///
     /// ```toml

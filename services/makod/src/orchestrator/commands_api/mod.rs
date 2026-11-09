@@ -345,12 +345,15 @@ mod netzzugang;
 mod registry;
 mod stornierung;
 mod types;
+mod vorgangsnummer;
 mod wim;
 
 #[cfg(test)]
 mod geli_frist_tests;
 #[cfg(test)]
 mod geli_lf_anmeldung_tests;
+#[cfg(test)]
+mod gpke_lf_anmeldung_tests;
 #[cfg(test)]
 mod invoic_stellen_tests;
 #[cfg(test)]

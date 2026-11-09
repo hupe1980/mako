@@ -31,7 +31,7 @@
 //! ## §19 UStG Kleinunternehmer
 //!
 //! Operators whose total annual turnover does not exceed **€ 25 000** (from
-//! 01.01.2025; previously € 22 000) are treated as Kleinunternehmer and charge no
+//! 01.01.2025; € 22 000 for earlier years) are treated as Kleinunternehmer and charge no
 //! USt on any business income, including EEG feed-in. The Gutschrift shows the
 //! §19 exemption reason (EN 16931 BT-120) and no USt.
 //!

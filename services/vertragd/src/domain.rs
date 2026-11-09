@@ -134,14 +134,15 @@ impl Kuendigungsgrund {
         }
     }
 
-    /// The `SG4 STS+7` Transaktionsgrund of the Abmeldung NN 44004 this
-    /// Kündigung sends (UTILMD AHB Gas 1.2 Kap. 5.5, S. 41).
+    /// The `SG4 STS+7` Transaktionsgrund of the Abmeldung this Kündigung
+    /// sends — the Strom 55004 and the Gas 44004 admit the same codes (UTILMD
+    /// AHB Strom 2.2 Kap. 5.4, S. 166; UTILMD AHB Gas 1.2 Kap. 5.5, S. 41).
     ///
     /// Every reason here is the customer's own notice, or the new supplier's on
     /// his behalf: `ZT5` „Ende wegen Kündigung durch Kunde/LFN" — and a move,
     /// `E01` „Ein-/Auszug (Umzug)".
     #[must_use]
-    pub const fn abmeldung_gas_transaktionsgrund(self) -> &'static str {
+    pub const fn abmeldung_transaktionsgrund(self) -> &'static str {
         match self {
             Self::Umzug => "E01",
             Self::Ordentlich | Self::Preisanpassung | Self::Lieferantenwechsel => "ZT5",

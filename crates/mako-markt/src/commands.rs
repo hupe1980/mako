@@ -435,6 +435,51 @@ pub struct GeliEogAnmelden {
 /// jährlich — the four entries UTILMD MIG Gas G1.2 S. 55 admits.
 pub const ABRECHNUNGSINTERVALLE_MONATE: [u8; 4] = [1, 3, 6, 12];
 
+/// `SG8 SEQ+Z75 SG10 CCI+Z61` DE 7037 „Grundlage zur Verringerung der Umlagen
+/// nach `EnFG`" on a Bestätigung `EoG` 55014, with the AHB's wording (UTILMD AHB
+/// Strom 2.2 Kap. 8.6, S. 138). A fact about the Kunde, which the E/G states.
+pub const ENFG_GRUNDLAGEN: [(&str, &str); 3] = [
+    ("ZF9", "Kunde erfüllt die Voraussetzung nach EnFG"),
+    ("ZG0", "Kunde erfüllt nicht die Voraussetzung nach EnFG"),
+    (
+        "ZG1",
+        "Keine Angabe, da Marktlokation die Voraussetzung zur Verringerung der Umlagen nach \
+         EnFG nicht erfüllt",
+    ),
+];
+
+/// Whether `grundlage` is the [`ENFG_GRUNDLAGEN`] code beside which the Grund
+/// der Privilegierung is Muss — `ZF9`, „Wenn in derselben SG10 das
+/// CCI+Z61++ZF9 … vorhanden" (Bedingung `[463]`, S. 139).
+#[must_use]
+pub fn enfg_mit_grund(grundlage: &str) -> bool {
+    grundlage == "ZF9"
+}
+
+/// `SG10 CAV` DE 7111 „Grund der Privilegierung nach `EnFG`" — Muss beside
+/// `ZF9` ([`enfg_mit_grund`]) and listed under no other code — with the AHB's wording
+/// (UTILMD AHB Strom 2.2 Kap. 8.6, S. 139).
+pub const ENFG_PRIVILEGIERUNGEN: [(&str, &str); 9] = [
+    ("ZU5", "§ 21 EnFG Stromspeicher und Verlustenergie"),
+    ("ZU6", "§ 22 EnFG elektrisch angetriebene Wärmepumpen"),
+    (
+        "ZU7",
+        "§ 23 EnFG Umlageerhebung bei Anlagen zur Verstromung von Kuppelgasen",
+    ),
+    ("ZU8", "§ 24 EnFG Herstellung von Grünen Wasserstoff"),
+    ("ZU9", "§§ 30 - 35 EnFG stromkostenintensive Unternehmen"),
+    (
+        "ZV0",
+        "§ 36 EnFG Herstellung von Wasserstoff in stromkostenintensiven Unternehmen",
+    ),
+    ("ZV1", "§ 37 EnFG Schienenbahnen"),
+    (
+        "ZV2",
+        "§ 38 EnFG elektrische betriebene Bussen im Linienverkehr",
+    ),
+    ("ZV3", "§ 39 EnFG Landstromanlagen"),
+];
+
 /// The `payload` of [`GELI_LIEFERBEGINN_ANMELDEN`] — the LF's Anmeldung NN
 /// **44001** (UTILMD AHB Gas 1.2 Kap. 5.6, S. 43–66). See [`GpkeEogAnmelden`]
 /// for why it is shared.

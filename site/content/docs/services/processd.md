@@ -448,8 +448,10 @@ substance of the answer is that Bilanzkreis (`A01` / `A99` are the only codes).
 UTILMD AHB Strom 2.2 Bedingungen [161]–[164] map `ZW8`–`ZX1` onto
 `E_0603`–`E_0606`. The BK rides `SG8 SEQ+Z79`, Produkt-Code `9991000002082`,
 Merkmalswert in `SG10 CAV+ZV4` (the AHB admits `SG4 FTX+ACB` on the 55609
-only, Bedingung [48]). `[[lf.bilanzkreise]]` is keyed on the Sparte and the
-Bilanzierungsgebiet because MaBiS § 10.2.1 grants the Zuordnungsermächtigung
+only, Bedingung [48]).
+
+`[[lf.bilanzkreise]]` is keyed on the Sparte and the
+Bilanzierungsgebiet because MaBiS (BK6-24-174 Anlage 3) Kap. 10.2.1 grants the Zuordnungsermächtigung
 „je ZRT, BG, BK und LF"; several BKs for one regime are an operator choice. A
 lookup reads only the rows of the answer's Sparte, the fallback row included,
 so a supplier of Strom and Gas never names one Sparte's Bilanzkreis on the
@@ -490,15 +492,22 @@ top of `auto_respond`. An empty `grundversorgungs_netzgebiete` escalates every
 | 55014 | Versorgungsart `SG10 CCI+Z36` (`ZC9`, `ZD0`, `ZE3`) | `[lf] eog_versorgungsart` |
 | 55014 / 44014 | Bilanzkreis (`SG8 SEQ+Z79` / `SG10 CCI+Z19`) | the one `standard` entry of the answer's Sparte in `[[lf.bilanzkreise]]` for the Marktlokation's Bilanzierungsgebiet, else that Sparte's fallback row's |
 | 44014 | Abrechnungsintervall des LF `SG6 DTM+Z20` | `[lf] eog_abrechnungsintervall_monate` |
+| 55014 | Grundlage nach EnFG `SG8 SEQ+Z75 CCI+Z61` and, beside `ZF9`, the Grund der Privilegierung `SG10 CAV` | the operator, on the decision |
 
 The 44014 carries no `CCI+Z36` and both of its facts are Muss (UTILMD AHB Gas
-1.2 Kap. 5.9). A fact that does not resolve queues the answer with its Frist and
+1.2 Kap. 5.9). The 55014's Grundlage nach EnFG is Muss too (UTILMD AHB Strom
+2.2 Kap. 8.6, S. 138–139), and it is a fact about the Kunde — whether he meets
+an EnFG privilege's prerequisites — that no Festlegung fixes for the supplier,
+so it has no setting: every Strom E/G Zustimmung is queued for the operator to
+state it. A fact that does not resolve queues the answer with its Frist and
 the fact named. `eog_auto_respond = true` in a Gas build without
 `eog_abrechnungsintervall_monate` is refused at startup. A queue entry for an
 E/G Anmeldung starts its Bestätigung from the facts that resolved, frozen; the
 view lists the rest in `fakten_freigeben` / `fakten_ablehnen`, and the operator
 states them on the decision as `bilanzkreis`, `versorgungsart` (`ZC9`, `ZD0`,
-`ZE3`) or `abrechnungsintervall_monate` (1, 3, 6, 12). A value the segment does
+`ZE3`), `abrechnungsintervall_monate` (1, 3, 6, 12) or `enfg` — `ZG0`, `ZG1`, or
+`ZF9+<Grund>` with the Grund `ZU5`…`ZV3`, sent to makod as `enfg_grundlage` and
+`enfg_grund` (the Grund rides only beside `ZF9`, Bedingung `[463]`). A value the segment does
 not admit, a fact the command does not carry, and a fact replacing a frozen one
 are `422`.
 
@@ -521,7 +530,7 @@ both (`answer_payload`, `reject_payload`). The operator states the rest:
 ```
 
 An E/G Bestätigung adds the facts its entry lists as missing (`bilanzkreis`,
-`versorgungsart`, `abrechnungsintervall_monate`).
+`versorgungsart`, `abrechnungsintervall_monate`, `enfg`).
 
 The body is optional and refuses unknown keys. A field the frozen answer
 already holds cannot be replaced (`422`): an approval sends the answer that was
@@ -680,8 +689,9 @@ Kap. 2.5.2 Nr. 1), enforced here; an Einzug passes with a
 `vorlauffrist_hinweis`, because the NB corrects the date rather than rejecting
 (Kap. 4). The GNB answers 44002 / 44003 by **Ablauf des 4. WT** (Kap. 3.2.3).
 
-`POST /api/v1/end-supply` takes `malo_id` and `lieferende_datum` (ISO-8601) and
-forwards `gpke.lieferende.anmelden` as `LF`. `POST /api/v1/end-supply-gas` takes
+`POST /api/v1/end-supply` takes `malo_id`, `lieferende_datum` (ISO-8601) and the
+`transaktionsgrund` the Abmeldung 55004 makes Muss, and forwards
+`gpke.lieferende.anmelden` as `LF`. `POST /api/v1/end-supply-gas` takes
 `malo_id`, `process_date` (YYYYMMDD, `INVALID_DATE` otherwise) and the
 `transaktionsgrund` the Abmeldung 44004 makes Muss (`SG4 STS+7`) — the fields
 `geli.lieferende.anmelden` reads — and forwards it as `LFG`, the only role that

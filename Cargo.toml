@@ -232,7 +232,7 @@ sqlx             = { version = "0.9", default-features = false, features = ["pos
 # The one consumer is `edmd` (kafka_ingest), for high-volume metering ingest;
 # marktd's fan-out is the durable event_log/event_delivery worker and needs no
 # broker.
-krafka           = { version = "0.22" }
+krafka           = { version = "0.28" }
 
 # ── Arrow (edmd meterstore tier) ────────────────────────────────────────────
 # `edmd` stores metering time series through the `meterstore` crate, which

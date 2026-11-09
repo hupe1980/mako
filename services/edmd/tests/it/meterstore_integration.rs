@@ -102,7 +102,7 @@ fn test_erasure_keys() -> Vec<Vec<u8>> {
     vec![b"edmd-test-erasure-key-32-bytes-min".to_vec()]
 }
 
-async fn setup() -> (
+pub(crate) async fn setup() -> (
     MeterStoreTimeSeriesRepository,
     sqlx::PgPool,
     PgContainer,

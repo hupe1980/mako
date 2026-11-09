@@ -843,6 +843,10 @@ mod rest {
         pub malo_id: String,
         /// Lieferende, ISO-8601 date (`YYYY-MM-DD`).
         pub lieferende_datum: String,
+        /// `SG4 STS+7` DE 9013 — Muss on the Abmeldung 55004 (UTILMD AHB Strom
+        /// 2.2 Kap. 5.4); makod holds it against the column's codes. The
+        /// Lokationsart Ergänzung is the MaLo's own, which makod reads.
+        pub transaktionsgrund: String,
     }
 
     /// `POST /api/v1/end-supply-gas` — GeLi Gas Lieferende (44004).
@@ -1358,7 +1362,7 @@ mod rest {
     /// Both Anmeldungen need one — UTILMD AHB Strom 2.2 Kap. 5.3 makes the
     /// `SG8 SEQ+Z79` Produktpaket Muss on a 55001, AHB Gas 1.2 makes
     /// `SG10 CCI+Z19` Muss on a 44001 — and a deployment that lists exactly one
-    /// has already made the choice MaBiS § 10.2.1 leaves to the supplier.
+    /// has already made the choice MaBiS Kap. 10.2.1 leaves to the supplier.
     ///
     /// Without the LF module compiled in only the caller's counts: the
     /// endpoints stay reachable so the Cedar `initiate-supply` denial is the
@@ -1452,7 +1456,7 @@ mod rest {
         //
         // A deployment that lists exactly one Bilanzkreis for the Marktlokation's
         // Bilanzierungsgebiet may leave it out and let the configuration decide;
-        // otherwise it is the caller's to name, because MaBiS § 10.2.1 grants the
+        // otherwise it is the caller's to name, because MaBiS Kap. 10.2.1 grants the
         // Zuordnungsermächtigung per (ZRT, BG, BK, LF) and the supplier picks
         // among those.
         let bilanzkreis =
@@ -1906,6 +1910,7 @@ mod rest {
         let EndSupplyRequest {
             malo_id,
             lieferende_datum,
+            transaktionsgrund,
         } = body;
         if malo_id.is_empty() {
             return Err(refuse("MISSING_MALO_ID", "\"malo_id\" is required"));
@@ -1916,9 +1921,16 @@ mod rest {
                 "\"lieferende_datum\" is required (ISO-8601 date)",
             ));
         }
+        if transaktionsgrund.trim().is_empty() {
+            return Err(refuse(
+                "MISSING_TRANSAKTIONSGRUND",
+                "\"transaktionsgrund\" is required — SG4 STS+7 is Muss on the Abmeldung 55004",
+            ));
+        }
         let payload = serde_json::json!({
             "malo_id": malo_id,
             "lieferende_datum": lieferende_datum,
+            "transaktionsgrund": transaktionsgrund.trim(),
         });
         end_supply_inner(
             state,

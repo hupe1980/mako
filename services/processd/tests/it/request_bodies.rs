@@ -291,12 +291,16 @@ async fn end_supply_body_is_typed() {
     let received = Arc::new(Mutex::new(Vec::new()));
     let base = processd(Arc::clone(&received)).await;
     let url = format!("{base}/api/v1/end-supply");
-    let valid = json!({ "malo_id": "51238696012", "lieferende_datum": "2099-01-01" });
+    let valid = json!({
+        "malo_id": "51238696012",
+        "lieferende_datum": "2099-01-01",
+        "transaktionsgrund": "ZT5",
+    });
     assert_refusals(
         reqwest::Method::POST,
         &url,
         &valid,
-        &["malo_id", "lieferende_datum"],
+        &["malo_id", "lieferende_datum", "transaktionsgrund"],
     )
     .await;
     assert!(

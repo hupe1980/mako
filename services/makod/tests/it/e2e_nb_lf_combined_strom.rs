@@ -113,11 +113,8 @@ impl Combined {
     /// Deliver every pending UTILMD to this deployment's own ingest, as the AS4
     /// loopback does for a message addressed to one of its own MP-IDs, and
     /// acknowledge everything else the outbox holds — ERP notifications are not
-    /// market messages. The NB's 55013 must pass its AHB profile first, as the
-    /// pre-send gate (`transport::as4_sender`) requires on the loopback; the
-    /// LF's 55014 goes as rendered — what `gpke.eog.bestaetigen` writes
-    /// carries the Antwort's head without the Marktlokation's Stammdaten, and
-    /// the subject of that leg is which process it reaches.
+    /// market messages. Every UTILMD must pass its AHB profile first, as the
+    /// pre-send gate (`transport::as4_sender`) requires on the loopback.
     async fn loopback(&self) -> Vec<(u32, IngestOutcome)> {
         use edi_energy::EdiEnergyMessage as _;
         let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
@@ -132,18 +129,14 @@ impl Combined {
                     "the UTILMD is addressed to this deployment, got {}",
                     om.recipient
                 );
-                let msg = if om.payload["pid"] == 55013 {
+                if om.payload["pid"] == 55013 {
                     assert_eq!(
                         &*om.recipient, LF_MP,
                         "the 55013 is addressed to this deployment's own LF"
                     );
                     assert_eq!(om.payload["sender"], NB_MP);
-                    gated(om, &self.registry)
-                } else {
-                    let wire = makod::edifact_renderer::render_to_wire_bytes(om, &self.registry)
-                        .unwrap_or_else(|e| panic!("render UTILMD: {e:?}"));
-                    edi_energy::parse(&wire.bytes).unwrap_or_else(|e| panic!("parse UTILMD: {e:?}"))
-                };
+                }
+                let msg = gated(om, &self.registry);
                 let pid = msg
                     .detect_pruefidentifikator()
                     .expect("a Prüfidentifikator")
@@ -355,14 +348,11 @@ async fn a_combined_deployment_runs_the_strom_eog_to_its_answer() {
         "the NB still waits for the answer"
     );
 
-    // 3. The LF confirms the Grundversorgung.
-    let answered = dispatch_command(
-        &c.state,
-        "gpke.eog.bestaetigen",
-        &serde_json::json!({ "malo_id": MALO, "versorgungsart": "ZD0" }),
-    )
-    .await
-    .expect("the LF answers its own process");
+    // 3. The LF confirms the Ersatzversorgung; the loopback below holds the
+    //    55014 to its profile.
+    let answered = dispatch_command(&c.state, "gpke.eog.bestaetigen", &bestaetigung())
+        .await
+        .expect("the LF answers its own process");
     assert!(
         matches!(answered, DispatchOutcome::Dispatched { process_id } if process_id == lf),
         "gpke.eog.bestaetigen answers the LF's process, got {answered:?}"
@@ -381,10 +371,14 @@ async fn a_combined_deployment_runs_the_strom_eog_to_its_answer() {
         ),
         other => panic!("the 55014 must resume the NB's process, got {other:?}"),
     }
-    assert!(
-        matches!(c.state_of(nb).await, EogState::Zugeordnet { .. }),
-        "the NB's EoG is concluded by the Bestätigung"
-    );
+    match c.state_of(nb).await {
+        EogState::Zugeordnet { bilanzkreis, .. } => assert_eq!(
+            bilanzkreis.as_deref(),
+            Some(BILANZKREIS),
+            "the NB reads the E/G's Bilanzkreis from SEQ+Z79 CAV+ZV4"
+        ),
+        other => panic!("the NB's EoG is concluded by the Bestätigung, got {other:?}"),
+    }
     assert!(
         matches!(c.state_of(lf).await, EogState::AntwortGesendet { .. }),
         "the 55014 must not reach the LF's own process"
@@ -434,4 +428,130 @@ async fn a_55013_payload_without_its_ergaenzung_does_not_render() {
         .expect("a UTILMD");
     assert_eq!(om.payload["transaktionsgrund_ergaenzung"], "ZW7");
     gated(om, &c.registry);
+}
+
+/// The LF's 55014 as `gpke.eog.bestaetigen` writes it on a combined
+/// deployment — the NB's 55013 delivered to the LF side, then answered.
+pub(crate) async fn rendered_55014() -> mako_engine::outbox::OutboxMessage {
+    let c = combined().await;
+    dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
+        .await
+        .expect("gpke.eog.anmelden spawns");
+    c.loopback().await;
+    dispatch_command(&c.state, "gpke.eog.bestaetigen", &bestaetigung())
+        .await
+        .expect("the LF answers");
+    let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+    OutboxStore::pending(&*c.store, 100, now)
+        .await
+        .expect("pending outbox")
+        .into_iter()
+        .find(|om| &*om.message_type == "UTILMD" && om.payload["pid"] == 55014)
+        .expect("the 55014 is written")
+}
+
+/// `11XBK-STD------Y`, the Strom Bilanzkreis EIC the profile skeleton samples.
+const BILANZKREIS: &str = "11XBK-STD------Y";
+
+/// The E/G's Bestätigung: the Versorgungsart — `ZC9` Ersatzversorgung, as the
+/// fixture's Kunde is no Haushaltskunde — and the three facts of its own a
+/// 55014 carries beside the Marktlokation's record — the Bilanzkreis, and the
+/// Grundlage nach EnFG with the § of the privilege it claims.
+fn bestaetigung() -> serde_json::Value {
+    serde_json::json!({
+        "malo_id": MALO,
+        "versorgungsart": "ZC9",
+        "bilanzkreis": BILANZKREIS,
+        "enfg_grundlage": "ZF9",
+        "enfg_grund": "ZU6",
+    })
+}
+
+/// **A 55014 without one of the E/G's own Muss facts is refused**, naming it —
+/// never written as a message the pre-send gate dead-letters — and so is a
+/// Marktlokation whose Gruppenzuordnung marktd does not hold. The process
+/// still owes its answer afterwards.
+#[tokio::test]
+async fn gpke_eog_bestaetigen_without_a_muss_fact_is_refused() {
+    let c = combined().await;
+    dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
+        .await
+        .expect("gpke.eog.anmelden spawns");
+    let lf = match c.loopback().await.as_slice() {
+        [(55013, IngestOutcome::Spawned { process_id, .. })] => *process_id,
+        other => panic!("the LF's copy of the 55013 opens its process, got {other:?}"),
+    };
+    for missing in [
+        "versorgungsart",
+        "bilanzkreis",
+        "enfg_grundlage",
+        "enfg_grund",
+    ] {
+        let mut body = bestaetigung();
+        body.as_object_mut().expect("an object").remove(missing);
+        let err = dispatch_command(&c.state, "gpke.eog.bestaetigen", &body)
+            .await
+            .expect_err("a 55014 without it is refused");
+        assert!(
+            format!("{err:?}").contains(missing),
+            "the refusal names {missing:?}: {err:?}"
+        );
+    }
+    let mut body = bestaetigung();
+    body["enfg_grundlage"] = serde_json::json!("ZG0");
+    let err = dispatch_command(&c.state, "gpke.eog.bestaetigen", &body)
+        .await
+        .expect_err("a Privilegierung beside ZG0 is refused");
+    assert!(format!("{err:?}").contains("[463]"), "{err:?}");
+
+    let mut record = crate::support::strom_stammdaten(MALO, NB_MP);
+    if let Some(n) = record.netznutzung.as_mut() {
+        n.haushaltskunde = None;
+    }
+    let mut c = c;
+    c.state.marktd_client = Some(Arc::new(crate::support::stub_marktd(Some(record)).await));
+    match dispatch_command(&c.state, "gpke.eog.bestaetigen", &bestaetigung()).await {
+        Err(makod::commands_api::DispatchError::StammdatenUnvollstaendig { fehlend, .. }) => {
+            assert!(
+                fehlend.iter().any(|f| f.contains("haushaltskunde")),
+                "{fehlend:?}"
+            );
+        }
+        other => panic!("refused as incomplete Stammdaten, got {other:?}"),
+    }
+    assert!(
+        matches!(c.state_of(lf).await, EogState::ValidationPassed(_)),
+        "a refused answer leaves the LF's process owing it"
+    );
+}
+
+/// **A 55015 reaches the NB's process by its `RFF+TN` alone**: the Ablehnung's
+/// column names no Lokation either (UTILMD AHB Strom 2.2 Kap. 8.6), and the
+/// loopback holds it to its profile before it resumes the NB.
+#[tokio::test]
+async fn a_combined_deployment_runs_the_strom_eog_to_its_ablehnung() {
+    let c = combined().await;
+    let nb = match dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
+        .await
+        .expect("gpke.eog.anmelden spawns")
+    {
+        DispatchOutcome::Spawned { process_id } => process_id,
+        other => panic!("gpke.eog.anmelden must spawn, got {other:?}"),
+    };
+    c.loopback().await;
+    dispatch_command(
+        &c.state,
+        "gpke.eog.ablehnen",
+        &serde_json::json!({ "malo_id": MALO, "reason": "A05" }),
+    )
+    .await
+    .expect("the LF refuses");
+    match c.loopback().await.as_slice() {
+        [(55015, IngestOutcome::Dispatched { process_id, .. })] => assert_eq!(*process_id, nb),
+        other => panic!("the 55015 must resume the NB's process, got {other:?}"),
+    }
+    assert!(
+        matches!(c.state_of(nb).await, EogState::Abgelehnt { .. }),
+        "the NB's EoG ends in the Ablehnung"
+    );
 }

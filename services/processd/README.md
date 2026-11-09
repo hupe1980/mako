@@ -73,7 +73,7 @@ a genuine absence of that data escalates to an operator.
 | `GET` | `/api/v1/queue` | `read-queue` | Approval-queue entries |
 | `POST` | `/api/v1/queue/{id}/approve` · `/reject` | `decide-queue` | Decide an entry; dispatches the answer frozen on it, or the operator's (`antwort_code`, `antwort_tree`, `antwort_codeliste`, `bemerkung` in the optional body) — refused with `422` when the command's answer contract is not met |
 | `POST` | `/api/v1/start-supply` · `-gas` | `initiate-supply` | LFN bootstrap (Strom / Gas). Both require a **Bilanzkreis** — Strom as the `SG8 SEQ+Z79` Produktpaket, Gas as `SG10 CCI+Z19` — falling back to the single `standard` entry of that Sparte's `[[lf.bilanzkreise]]` fallback row, else `422` |
-| `POST` | `/api/v1/end-supply` · `-gas` | `initiate-supply` | LF Lieferende bootstrap |
+| `POST` | `/api/v1/end-supply` · `-gas` | `initiate-supply` | LF Lieferende bootstrap; `transaktionsgrund` (the 55004 / 44004 `SG4 STS+7`) required |
 | `GET` | `/api/v1/eog` | `read-eog` | EoG case log (`?status=`) |
 | `GET` | `/api/v1/neuanlage` | `read-neuanlage` | `E_0608` case log (`?status=`), with each case's `letzter_pruefungstag` |
 | `PUT` | `/api/v1/neuanlage/{id}/identifikation` | `identify-neuanlage` | Record the MaLo-ID the NB matched from address/device data |

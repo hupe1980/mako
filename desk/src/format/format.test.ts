@@ -9,6 +9,7 @@ import {
 } from "./bilanz";
 import type { BusinessDate, Decimal, Instant } from "./brands";
 import { formatBusinessDate, formatInstant, formatInstantUtc } from "./date";
+import { faktKoerper } from "./fakt";
 import { band, distance, seit } from "./frist";
 import { formatCent, formatDecimal, formatEuro } from "./money";
 
@@ -150,5 +151,18 @@ describe("antwortTeile", () => {
   });
   it("is nothing on a message that gives no answer", () => {
     expect(antwortTeile({ antwortcode: null })).toBeNull();
+  });
+});
+
+describe("faktKoerper", () => {
+  it("sends the Abrechnungsintervall as a number and the EnFG Grundlage as listed", () => {
+    const fakten = [
+      { feld: "abrechnungsintervall_monate", bezeichnung: "", werte: [] },
+      { feld: "enfg", bezeichnung: "", werte: [] },
+      { feld: "bilanzkreis", bezeichnung: "", werte: [] },
+    ];
+    expect(
+      faktKoerper(fakten, { abrechnungsintervall_monate: "12", enfg: "ZF9+ZU6", bilanzkreis: " " }),
+    ).toEqual({ abrechnungsintervall_monate: 12, enfg: "ZF9+ZU6" });
   });
 });

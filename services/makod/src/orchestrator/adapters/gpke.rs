@@ -2235,13 +2235,12 @@ pub fn gpke_eog_registry(
                     // 55013 has an authored AHB rulepack (UTILMD AHB Strom 2.2
                     // Kap. 2 — BGM+E01, SG4 IDE 7495=24, STS 9013=E06
                     // Ersatzbelieferung), so `validate()` is a real MIG/AHB check.
+                    // `SG4 STS+7` DE 9013 — the Grund rides `C556`, not DE 4405;
+                    // the 55014/55015 restate it (UTILMD AHB Strom 2.2 Kap.
+                    // 8.6, S. 125–126).
                     let transaktionsgrund = first_tx
-                        .and_then(|t| {
-                            t.sts
-                                .iter()
-                                .find(|s| s.category.as_deref() == Some("7"))
-                                .and_then(|s| s.status_code.clone())
-                        })
+                        .and_then(|t| t.transaktionsgrund())
+                        .map(|g| g.grund)
                         .unwrap_or_default();
                     Ok(mako_gpke::EogCommand::ReceiveAnmeldung {
                         pid,
@@ -2268,6 +2267,11 @@ pub fn gpke_eog_registry(
                         transaktionsgrund,
                         // SG10 CCI Z15/Z18 household indicator (best-effort).
                         haushaltskunde: super::extract_haushaltskunde(u.segments()),
+                        // `SG4 IDE+24` — the number the 55014/55015 restates
+                        // in `SG6 RFF+TN`.
+                        vorgangsnummer: first_tx
+                            .and_then(|t| t.vorgangsnummer())
+                            .map(ToOwned::to_owned),
                         validation_passed,
                         validation_errors,
                         received_at,
@@ -2280,11 +2284,13 @@ pub fn gpke_eog_registry(
                     // marktd defaults to Ersatzversorgung (§38 ipso iure).
                     versorgungsart: super::extract_versorgungsart(u.segments())
                         .and_then(|c| mako_gpke::Versorgungsart::from_code(&c)),
-                    // The E/G's Bilanzkreis is resolved from the deposited
-                    // default-BK (GrundversorgerRecord) on the marktd side, not
-                    // parsed here — the 55014 BK segment placement is AHB-version
-                    // dependent.
-                    bilanzkreis: None,
+                    // The E/G's Bilanzkreis — the Produktpaket `SG8 SEQ+Z79`
+                    // product `9991000002082`, value in `CAV+ZV4`, Muss on the
+                    // 55014 (UTILMD AHB Strom 2.2 Kap. 8.6, S. 129–130). A
+                    // 55015 carries none.
+                    bilanzkreis: first_tx
+                        .and_then(|t| t.bilanzkreis())
+                        .map(ToOwned::to_owned),
                     reason: None,
                 }),
                 other => Err(EngineError::Deserialization(format!(
@@ -2357,16 +2363,14 @@ pub fn gpke_stammdaten_registry(
             let pid_u32 = pid.as_u32();
             if mako_gpke::is_rueckmeldung_pid(pid_u32) {
                 // Resume our initiated change — the Rückmeldung reports A01/A02.
+                // `SG4 STS+E01++<code>:<Codeliste>` — the code rides `C556`
+                // DE 9013, which `antwort()` reads; DE 4405 is another
+                // catalogue's status and never holds it.
                 let qualitaet = if u
                     .transactions()
                     .first()
-                    .and_then(|t| {
-                        t.sts
-                            .iter()
-                            .find(|s| s.category.as_deref() == Some("E01"))
-                            .and_then(|s| s.status_code.clone())
-                    })
-                    .as_deref()
+                    .and_then(|t| t.antwort())
+                    .map(|a| a.code.as_str())
                     == Some("A02")
                 {
                     mako_gpke::Qualitaet::UebernommenMitKorrektur

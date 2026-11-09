@@ -330,11 +330,13 @@ impl EdifactIngestDispatcher {
             // responder. The answer window (15:00 next Werktag) is registered
             // by the workflow itself from `received_at`.
             // PIDs 55014/55015 (Bestätigung/Ablehnung, LF → NB) — resume the
-            // NB initiator under `eog_nb_anfrage_key`, the key
-            // `gpke.eog.anmelden` spawned it under. Never the bare MaLo: on a
-            // combined NB+LF deployment the E/G's process answering the same
-            // Anmeldung runs there. Never a spawn: an answer with no
-            // Anmeldung behind it has nothing to answer.
+            // NB initiator under `eog_nb_vorgang_key` of the answer's `SG6
+            // RFF+TN`, the 55013's Vorgangsnummer `gpke.eog.anmelden`
+            // registered. Neither answer names a Lokation (UTILMD AHB Strom
+            // 2.2 Kap. 8.6, S. 127), so the Referenz is the only key; and
+            // never the bare MaLo, on a combined NB+LF deployment the E/G's
+            // process answering the same Anmeldung runs there. Never a spawn:
+            // an answer with no Anmeldung behind it has nothing to answer.
             "gpke-eog" => match pid {
                 55013 => {
                     let cmd = adapters::gpke_eog_registry(received_at).dispatch(raw, &fv)?;
@@ -352,11 +354,24 @@ impl EdifactIngestDispatcher {
                 }
                 55014 | 55015 => {
                     let cmd = adapters::gpke_eog_registry(received_at).dispatch(raw, &fv)?;
-                    let malo_id = extract_malo_from_msg(msg);
-                    let key = if malo_id.as_str().is_empty() {
+                    let referenz = match msg {
+                        AnyMessage::Utilmd(u) => u
+                            .transactions()
+                            .first()
+                            .and_then(|t| {
+                                t.references.iter().find(|r| {
+                                    r.qualifier
+                                        == edi_energy::utilmd_codes::rff::REFERENZ_VORGANGSNUMMER
+                                })
+                            })
+                            .and_then(|r| r.reference.as_deref())
+                            .unwrap_or_default(),
+                        _ => "",
+                    };
+                    let key = if referenz.is_empty() {
                         String::new()
                     } else {
-                        mako_gpke::eog_nb_anfrage_key(malo_id.as_str())
+                        mako_gpke::eog_nb_vorgang_key(referenz)
                     };
                     self.resume_by_key::<mako_gpke::GpkeEogWorkflow>(inbound, &key, "gpke-eog", cmd)
                         .await

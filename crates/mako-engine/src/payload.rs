@@ -293,6 +293,11 @@ pub struct UtilmdPayload {
     /// `SG8 SEQ+Z01 CCI` Gruppenzuordnung nach EnWG.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kundengruppe: Option<String>,
+    /// `SG8 SEQ+Z01 CCI+Z36` Versorgungsart der Marktlokation (`ZC9`/`ZD0`/
+    /// `ZE3`), in the same block as the Gruppenzuordnung — the Bestätigung
+    /// EoG 55014.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versorgungsart: Option<String>,
     /// `SG8 SEQ+Z75 CCI+Z61` Grundlage nach EnFG.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enfg_grundlage: Option<String>,

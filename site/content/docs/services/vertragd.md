@@ -326,10 +326,11 @@ the Lieferende UTILMDs and the Schlussablesung (a task of its own, so a
 the § 41 Abs. 8 Nr. 2 EnWG Textform confirmation. `eingang` records when the
 Kündigung was received, since the notice period runs from receipt.
 
-A gas component's Abmeldung 44004 states the `grund` as its `SG4 STS+7`
-Transaktionsgrund, which the column makes Muss: `UMZUG` is `E01` „Ein-/Auszug
+The Abmeldung — Strom 55004, Gas 44004 — states the `grund` as its `SG4 STS+7`
+Transaktionsgrund, which both columns make Muss: `UMZUG` is `E01` „Ein-/Auszug
 (Umzug)", every other reason `ZT5` „Ende wegen Kündigung durch Kunde/LFN"
-(UTILMD AHB Gas 1.2 Kap. 5.5, S. 41).
+(UTILMD AHB Strom 2.2 Kap. 5.4, S. 166; UTILMD AHB Gas 1.2 Kap. 5.5, S. 41).
+makod adds the Strom Lokationsart from the MaLo.
 
 Supply continues until the Lieferende: the daily worker ends the components then
 and closes the contract with `de.vertrag.abgeschlossen`.

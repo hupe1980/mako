@@ -199,6 +199,11 @@ pub struct QueueActionParams {
     /// `SG6 DTM+Z20` on a Gas 44014: 1, 3, 6 or 12.
     #[serde(default)]
     pub abrechnungsintervall_monate: Option<u8>,
+    /// The Grundlage nach EnFG on a Strom 55014: `ZG0`, `ZG1` or
+    /// `ZF9+<Grund der Privilegierung ZU5…ZV3>`, where the entry lists `enfg`
+    /// among the facts it still needs.
+    #[serde(default)]
+    pub enfg: Option<String>,
 }
 
 impl QueueActionParams {
@@ -212,6 +217,7 @@ impl QueueActionParams {
             bilanzkreis: self.bilanzkreis.clone(),
             versorgungsart: self.versorgungsart.clone(),
             abrechnungsintervall_monate: self.abrechnungsintervall_monate,
+            enfg: self.enfg.clone(),
         }
     }
 }

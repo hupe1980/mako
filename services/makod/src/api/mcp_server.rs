@@ -151,8 +151,8 @@ pub struct SubmitCommandParams {
     /// | Command | Required fields |
     /// |---|---|
     /// | `gpke.lieferbeginn.anmelden` | `malo_id` (11-digit), `lieferbeginn_datum` (YYYY-MM-DD) |
-    /// | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
-    /// | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum` |
+    /// | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum`, `transaktionsgrund`, optional `transaktionsgrund_ergaenzung` (default: the MaLo's energy direction) |
+    /// | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `lfa_mp_id` (the Altlieferant) |
     /// | `geli.lieferbeginn.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund`, `bilanzkreis`, `abrechnungsintervall_monate`, `haushaltskunde`, `netznutzungsvertrag`, `netznutzung_zahler`, `gemeinderabatt_prozent`, `kunde`, `ablesekarte` — `mako_markt::commands::GeliLieferbeginnAnmelden`, no other key |
     /// | `geli.lieferende.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund` — `mako_markt::commands::GeliLieferendeAnmelden`, no other key |
     /// | `geli.kuendigung.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `lfa_mp_id` (the Altlieferant) — `mako_markt::commands::GeliKuendigungAnmelden`, no other key |

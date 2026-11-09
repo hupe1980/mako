@@ -83,6 +83,14 @@
           "minimum": 0,
           "maximum": 255,
           "default": null
+        },
+        "enfg": {
+          "description": "The Grundlage nach EnFG on a Strom 55014: `ZG0`, `ZG1` or\n`ZF9+<Grund der Privilegierung ZU5…ZV3>`, where the entry lists `enfg`\namong the facts it still needs.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       }
     },
@@ -548,7 +556,7 @@
           "type": "object",
           "properties": {
             "feld": {
-              "description": "The decision body's key: `bilanzkreis`, `versorgungsart` or\n`abrechnungsintervall_monate`.",
+              "description": "The decision body's key: `bilanzkreis`, `versorgungsart`,\n`abrechnungsintervall_monate` or `enfg`.",
               "type": "string"
             },
             "bezeichnung": {
@@ -688,7 +696,7 @@
           ]
         },
         "fakten_freigeben": {
-          "description": "The facts approving states beside the code, where the entry's own did\nnot resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall\nof an E/G Zustimmung. Empty when there are none to state.",
+          "description": "The facts approving states beside the code, where the entry's own did\nnot resolve — the Bilanzkreis, Versorgungsart, Abrechnungsintervall or\nGrundlage nach EnFG of an E/G Zustimmung. Empty when there are none to\nstate.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Fakt"
@@ -1240,7 +1248,7 @@
               ]
             },
             "fakten_freigeben": {
-              "description": "The facts approving states beside the code, where the entry's own did\nnot resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall\nof an E/G Zustimmung. Empty when there are none to state.",
+              "description": "The facts approving states beside the code, where the entry's own did\nnot resolve — the Bilanzkreis, Versorgungsart, Abrechnungsintervall or\nGrundlage nach EnFG of an E/G Zustimmung. Empty when there are none to\nstate.",
               "type": "array",
               "items": {
                 "$ref": "#/$defs/Fakt"
@@ -1400,7 +1408,7 @@
           "type": "object",
           "properties": {
             "feld": {
-              "description": "The decision body's key: `bilanzkreis`, `versorgungsart` or\n`abrechnungsintervall_monate`.",
+              "description": "The decision body's key: `bilanzkreis`, `versorgungsart`,\n`abrechnungsintervall_monate` or `enfg`.",
               "type": "string"
             },
             "bezeichnung": {
@@ -1617,6 +1625,14 @@
           "format": "uint8",
           "minimum": 0,
           "maximum": 255,
+          "default": null
+        },
+        "enfg": {
+          "description": "The Grundlage nach EnFG on a Strom 55014: `ZG0`, `ZG1` or\n`ZF9+<Grund der Privilegierung ZU5…ZV3>`, where the entry lists `enfg`\namong the facts it still needs.",
+          "type": [
+            "string",
+            "null"
+          ],
           "default": null
         }
       }

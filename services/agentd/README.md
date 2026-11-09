@@ -29,7 +29,7 @@ a model-backed specialist.
 | **Journal** | `redb` (single instance) or Postgres; optional sealing (`[keyring]`), workload signatures (`[attestation]`) and C2SP `tlog-witness` cosigning (`[witness]`) |
 | **Erasure** | every run joins a case keyed on its MaLo; `POST /api/v1/erasure` crypto-shreds the case key or forgets a memory subject (GDPR Art. 17) |
 | **Providers** | Anthropic · OpenAI · Gemini · any OpenAI-compatible endpoint · AWS Bedrock with `--features bedrock` |
-| **Role builds** | `role-lf` · `role-nb` · `role-msb` carry only one arm's specialists and desks, so a misconfigured plane cannot answer as a role it was not built for. The confidentiality duty of §§ 6a, 7a EnWG is the deployment's Cedar access policy, enforced at runtime |
+| **Role builds** | `role-lf` · `role-nb` · `role-msb` carry only one arm's specialists and desks, so a misconfigured plane cannot answer as another role. Confidentiality (§§ 6a, 7a EnWG) is the deployment's Cedar policy |
 
 ## Routes
 

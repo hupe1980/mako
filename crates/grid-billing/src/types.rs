@@ -1060,9 +1060,8 @@ impl BillingPositionKind {
             // AWH Gas positions carry a 2-01-7-xxx Artikel-ID from the input.
             (K::GasAwhSperrung | K::GasAwhEntsperrung | K::GasAwhSonstige, _) => None,
             (K::Blindmehrarbeit, _) => Some("BLINDMEHRARBEIT"),
-            // Netzseitige Umlagen (EnFG). `OFFSHORE_HAFTUNGSUMLAGE` is the code's
-            // legacy name — the levy was renamed Offshore-Netzumlage, the article
-            // number was not.
+            // Netzseitige Umlagen (EnFG). `OFFSHORE_HAFTUNGSUMLAGE` is the code
+            // for the Offshore-Netzumlage; the article number is the same.
             (K::Sect19StromNevUmlage, _) => Some("PARAGRAF_19_STROM_NEV_UMLAGE"),
             // Bilateral payment outside the INVOIC market processes — the
             // codelist has no article number for it.

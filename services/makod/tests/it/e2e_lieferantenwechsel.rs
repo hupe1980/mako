@@ -213,14 +213,14 @@ impl MockLfn {
             .lfa_leg
             .run(
                 LfAnmeldungCommand::InitiateAnmeldung {
-                    transaktionsgrund_ergaenzung: None,
+                    transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
                     tranchengroesse: None,
                     pid: Pruefidentifikator::new(55016).unwrap(),
                     sender: MarktpartnerCode::new(LFN_ID),
                     receiver: MarktpartnerCode::new(LFA_ID),
                     location_id: MaLo::new(malo_id),
                     process_date: process_date.to_owned(),
-                    transaktionsgrund: None,
+                    transaktionsgrund: Some("E03".to_owned()),
                     bilanzkreis: Some("11XBK-LF-------9".to_owned()),
                 },
                 RunOptions::new(),

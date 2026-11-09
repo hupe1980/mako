@@ -6369,9 +6369,9 @@ dependencies = [
 
 [[package]]
 name = "krafka"
-version = "0.22.0"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5708df34867da7feb7e296457debb61c74fcd1c1f6e159dcdff788639ff3a00"
+checksum = "60335c5de8ceea70f3673ea707daeba85adc069a04b13fb0046c32cdfbb12eb0"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -6387,6 +6387,7 @@ dependencies = [
  "pbkdf2",
  "rand 0.9.5",
  "rustls",
+ "ruzstd",
  "sha2 0.10.9",
  "snap",
  "socket2 0.5.10",
@@ -6394,6 +6395,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
+ "tokio-socks",
  "tokio-util",
  "tracing",
  "webpki-roots 1.0.11",
@@ -10279,6 +10281,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruzstd"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12057,6 +12068,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9cc2678c2cdd569ef8215e2afd7954ada2ae20b4fdd2c5fe6139a3b02d105db"
 dependencies = [
  "rustls",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-socks"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7e2948f60dbe26b35f2c7fb74ac2854c1fddded0fe9d7548fcc674a246f7615"
+dependencies = [
+ "either",
+ "futures-util",
+ "thiserror 1.0.69",
  "tokio",
 ]
 

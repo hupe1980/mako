@@ -136,6 +136,7 @@ fn every_lieferende_body_is_the_request_processd_reads() {
     assert_eq!(endpoint, "end-supply");
     let req: EndSupplyRequest = mako_service::json_from_value(body).expect("end-supply body");
     assert_eq!(req.lieferende_datum, "2027-06-30");
+    assert_eq!(req.transaktionsgrund, "ZT5");
 
     for (grund, code) in [
         (Kuendigungsgrund::Ordentlich, "ZT5"),

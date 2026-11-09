@@ -702,20 +702,18 @@ pub fn mabis_anforderung_ablehnung_registry() -> AdapterRegistry<MabisAnforderun
                 })
                 .and_then(convert_pid)?;
 
-            // `STS+E01+<code>:<EBD>` — the Antwortcode and the tree it belongs to.
-            let sts = o
-                .segments()
-                .iter()
-                .find(|s| s.tag == "STS")
-                .ok_or_else(|| {
-                    EngineError::Deserialization(
-                        "MaBiS Ablehnung adapter: no STS segment — the Ablehnung carries \
-                         no Antwortcode"
-                            .into(),
-                    )
-                })?;
-            let code = sts.component_str(1, 0).unwrap_or_default().to_owned();
-            let ebd = sts.component_str(1, 1).unwrap_or_default().to_owned();
+            // `SG2 AJT+<code>+<EBD>` — the Antwortcode (DE 4465) and the tree it
+            // belongs to (DE 1082), Muss on the 19204 (ORDRSP AHB, Nr 00015).
+            // The ORDRSP MIG defines no `STS` segment at all.
+            let ajt = o.ajt().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "MaBiS Ablehnung adapter: no SG2 AJT — the Ablehnung carries no \
+                     Antwortcode"
+                        .into(),
+                )
+            })?;
+            let code = ajt.antwortcode.clone();
+            let ebd = ajt.ebd.clone().unwrap_or_default();
 
             Ok(AnforderungCommand::ReceiveAblehnung {
                 pid,

@@ -39,8 +39,9 @@ use super::*;
 /// | `kunde_name` | on 55010 (`ZW4`/`ZAP`) | `SG12 NAD+Z09` „Kunde des LF" — a **name**, in `C080`, not an MP-ID |
 /// | `kunde_namensformat` | with `kunde_name` | `NAD` DE 3045 — `Z01` Person, `Z02` Firma; defaults to `Z01` |
 /// | `kunde_anschrift` | on 55001 | `SG12 NAD+Z04` Korrespondenzanschrift — `{strasse, plz, ort, land}` beside `kunde_name` |
-/// | `kundengruppe` | on 55001 | `SG8 SEQ+Z01 CCI+++<code>` Gruppenzuordnung nach EnWG — `Z15` Haushaltskunde, `Z18` kein Haushaltskunde |
-/// | `enfg_grundlage` | on 55001 | `SG8 SEQ+Z75 CCI+Z61++<code>` — `ZF9` erfüllt die Voraussetzung nach EnFG, `ZG0` erfüllt nicht, `ZG1` keine Angabe |
+/// | `kundengruppe` | on 55001, 55014 | `SG8 SEQ+Z01 CCI+++<code>` Gruppenzuordnung nach EnWG — `Z15` Haushaltskunde, `Z18` kein Haushaltskunde |
+/// | `versorgungsart` | on 55014 | `SG8 SEQ+Z01 CCI+Z36++<code>` Versorgungsart — `ZC9` Ersatzversorgung, `ZD0` Grundversorgung, `ZE3` Ersatzbelieferung — in the block of the Gruppenzuordnung |
+/// | `enfg_grundlage` | on 55001, 55014 | `SG8 SEQ+Z75 CCI+Z61++<code>` — `ZF9` erfüllt die Voraussetzung nach EnFG, `ZG0` erfüllt nicht, `ZG1` keine Angabe |
 /// | `enfg_grund` | with `ZF9` | `CAV+<code>` the § of the privilege (`ZU5` § 21 Stromspeicher … `ZV3` § 39 Landstrom) |
 /// | `dritter_antwortcode` | **on `A50` / `A57`** | `SG4 STS+Z35` — the LFA's own `E_0624` code, restated |
 /// | `dritter_referenz_lokation` | erzeugende Ablehnung | `STS+Z35` `C555` DE 9012 — which MaLo/Tranche the restated answer is about |
@@ -567,12 +568,21 @@ pub(super) fn render_utilmd(
 
     // `SG8 SEQ+Z01` Daten der Marktlokation — the Gruppenzuordnung nach EnWG
     // (`CCI+++Z15` Haushaltskunde / `Z18` kein Haushaltskunde), Muss on a
-    // 55001.
-    if let Some(gruppe) = u.kundengruppe.as_deref().filter(|s| !s.is_empty()) {
-        tx = tx
-            .stammdaten(edi_energy::utilmd_codes::SEQ_DATEN_DER_MARKTLOKATION)
-            .cci("", gruppe)
-            .done();
+    // 55001, and on a Bestätigung EoG 55014 the Versorgungsart `CCI+Z36`
+    // after it. One block: the 55014 column lists `SEQ+Z01` „genau einmal je
+    // SG4 IDE" (`[2061]`) with both `SG10` inside it (UTILMD AHB Strom 2.2
+    // Kap. 8.6, S. 133, 136).
+    let gruppe = u.kundengruppe.as_deref().filter(|s| !s.is_empty());
+    let versorgungsart = u.versorgungsart.as_deref().filter(|s| !s.is_empty());
+    if gruppe.is_some() || versorgungsart.is_some() {
+        let mut block = tx.stammdaten(edi_energy::utilmd_codes::SEQ_DATEN_DER_MARKTLOKATION);
+        if let Some(gruppe) = gruppe {
+            block = block.cci("", gruppe);
+        }
+        if let Some(art) = versorgungsart {
+            block = block.cci("Z36", art);
+        }
+        tx = block.done();
     }
     // `SG8 SEQ+Z75` Daten des Kunden des Lieferanten — `CCI+Z61` Grundlage
     // zur Verringerung der Umlagen nach EnFG (`ZF9` erfüllt, `ZG0` erfüllt

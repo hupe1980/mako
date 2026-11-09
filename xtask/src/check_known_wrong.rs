@@ -88,6 +88,13 @@ const RULES: &[Rule] = &[
                  naming a Werktag runs to the end of that day",
     },
     Rule {
+        id: "mabis-paragraph",
+        row: "MaBiS § 10.2.1 grants the Zuordnungsermächtigung",
+        pattern: r"MaBiS §",
+        reason: "MaBiS (BK6-24-174 Anlage 3) is numbered in Kapitel, not §§ — cite \
+                 „MaBiS Kap. n\"",
+    },
+    Rule {
         id: "gpke-kap-1-7",
         row: "GPKE Teil 1 Kap. 1.7 defines the Werktag",
         pattern: r"GPKE Teil 1,? Kap(\.|itel)? ?1\.7",
@@ -814,6 +821,10 @@ mod tests {
             (
                 "gpke-kap-1-7",
                 "Saturday is not a Werktag (GPKE Teil 1 Kap. 1.7).",
+            ),
+            (
+                "mabis-paragraph",
+                "/// MaBiS § 10.2.1 grants the Zuordnungsermächtigung",
             ),
             (
                 "asx-sign-only",

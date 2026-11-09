@@ -5,6 +5,7 @@
 mod deadline_triage;
 mod desk_answer;
 mod dev_config;
+mod disclosure;
 mod durability;
 mod evidence;
 mod ingest;

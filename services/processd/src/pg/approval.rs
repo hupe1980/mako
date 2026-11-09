@@ -379,6 +379,42 @@ pub enum Pflichtfeld {
     Versorgungsart,
     /// `abrechnungsintervall_monate` — `SG6 DTM+Z20` on a Gas 44014, a number.
     Abrechnungsintervall,
+    /// The Grundlage nach EnFG on a Strom 55014 — `enfg_grundlage` (`SG8
+    /// SEQ+Z75 CCI+Z61`) and, beside `ZF9`, `enfg_grund` (`SG10 CAV`,
+    /// Bedingung `[463]`). The operator states both as one [`enfg_fakt`] value.
+    Enfg,
+}
+
+/// The values an operator states the Grundlage nach EnFG with: `ZG0`, `ZG1`,
+/// or `ZF9+<Grund>` for each Grund der Privilegierung — the one shape that
+/// cannot name a Grund beside `ZG0`/`ZG1` or leave it out beside `ZF9`.
+#[must_use]
+pub fn enfg_werte() -> Vec<(String, String)> {
+    use mako_markt::commands::{ENFG_GRUNDLAGEN, ENFG_PRIVILEGIERUNGEN, enfg_mit_grund};
+    let mut out = Vec::new();
+    for (code, text) in ENFG_GRUNDLAGEN {
+        if enfg_mit_grund(code) {
+            for (grund, grund_text) in ENFG_PRIVILEGIERUNGEN {
+                out.push((format!("{code}+{grund}"), format!("{text}: {grund_text}")));
+            }
+        } else {
+            out.push((code.to_owned(), text.to_owned()));
+        }
+    }
+    out
+}
+
+/// `(enfg_grundlage, enfg_grund)` of an [`enfg_werte`] value, or `None` when
+/// it is none of them.
+#[must_use]
+pub fn enfg_fakt(wert: &str) -> Option<(String, Option<String>)> {
+    enfg_werte()
+        .iter()
+        .any(|(w, _)| w == wert)
+        .then(|| match wert.split_once('+') {
+            Some((grundlage, grund)) => (grundlage.to_owned(), Some(grund.to_owned())),
+            None => (wert.to_owned(), None),
+        })
 }
 
 impl Pflichtfeld {
@@ -400,6 +436,14 @@ impl Pflichtfeld {
             Self::Abrechnungsintervall => body
                 .get("abrechnungsintervall_monate")
                 .is_some_and(serde_json::Value::is_u64),
+            Self::Enfg => match body
+                .get("enfg_grundlage")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some(g) if mako_markt::commands::enfg_mit_grund(g) => has("enfg_grund"),
+                Some(g) => !g.is_empty(),
+                None => false,
+            },
         }
     }
 
@@ -416,6 +460,7 @@ impl Pflichtfeld {
             Self::Bilanzkreis => "bilanzkreis",
             Self::Versorgungsart => "versorgungsart",
             Self::Abrechnungsintervall => "abrechnungsintervall_monate",
+            Self::Enfg => "enfg",
         }
     }
 }
@@ -430,8 +475,8 @@ impl Pflichtfeld {
 /// command this table does not hold.
 pub const ANSWER_CONTRACTS: &[(&str, &[Pflichtfeld])] = {
     use Pflichtfeld::{
-        Abrechnungsintervall, Antwortcode, Begruendung, Bilanzkreis, Lokation, MaloId, MeloId,
-        TxId, Versorgungsart,
+        Abrechnungsintervall, Antwortcode, Begruendung, Bilanzkreis, Enfg, Lokation, MaloId,
+        MeloId, TxId, Versorgungsart,
     };
     use mako_markt::commands as c;
     const MALO_CODE: &[Pflichtfeld] = &[MaloId, Antwortcode];
@@ -470,10 +515,11 @@ pub const ANSWER_CONTRACTS: &[(&str, &[Pflichtfeld])] = {
         ),
         (c::GELI_EOG_ABLEHNEN, MALO_CODE),
         // `dispatch_gpke_eog_antwort` reads the cluster from the command; a
-        // 55014 states the Versorgungsart and the Bilanzkreis.
+        // 55014 states the Versorgungsart, the Bilanzkreis and the Grundlage
+        // nach EnFG (UTILMD AHB Strom 2.2 Kap. 8.6, S. 129, 136, 138).
         (
             c::GPKE_EOG_BESTAETIGEN,
-            &[MaloId, Versorgungsart, Bilanzkreis],
+            &[MaloId, Versorgungsart, Bilanzkreis, Enfg],
         ),
         (c::GPKE_EOG_ABLEHNEN, &[MaloId]),
         // WiM MSB-Wechsel (`dispatch_wim_antwort`): the code defaults from the
@@ -507,8 +553,9 @@ pub const ANSWER_CONTRACTS: &[(&str, &[Pflichtfeld])] = {
 };
 
 /// The facts — [`Pflichtfeld::Bilanzkreis`], [`Pflichtfeld::Versorgungsart`],
-/// [`Pflichtfeld::Abrechnungsintervall`] — `command` needs that `frozen` does
-/// not hold: what the operator states on the decision, beside the code.
+/// [`Pflichtfeld::Abrechnungsintervall`], [`Pflichtfeld::Enfg`] — `command`
+/// needs that `frozen` does not hold: what the operator states on the decision,
+/// beside the code.
 #[must_use]
 pub fn fehlende_fakten(command: &str, frozen: Option<&serde_json::Value>) -> Vec<&'static str> {
     let empty = serde_json::Map::new();
@@ -524,6 +571,7 @@ pub fn fehlende_fakten(command: &str, frozen: Option<&serde_json::Value>) -> Vec
                 Pflichtfeld::Bilanzkreis
                     | Pflichtfeld::Versorgungsart
                     | Pflichtfeld::Abrechnungsintervall
+                    | Pflichtfeld::Enfg
             ) && !f.satisfied_by(body)
         })
         .map(|f| f.key())
@@ -569,6 +617,10 @@ pub struct OperatorAnswer {
     /// `SG6 DTM+Z20` on a Gas 44014 — 1, 3, 6 or 12.
     #[serde(default)]
     pub abrechnungsintervall_monate: Option<u8>,
+    /// The Grundlage nach EnFG on a Strom 55014 — `ZG0`, `ZG1` or
+    /// `ZF9+<Grund der Privilegierung>` ([`enfg_werte`]).
+    #[serde(default)]
+    pub enfg: Option<String>,
 }
 
 /// Why a decision cannot be dispatched.
@@ -738,6 +790,34 @@ pub fn decision_body(
             },
         ),
     ];
+    // The Grundlage nach EnFG goes out as two keys: `enfg_grundlage` and,
+    // beside `ZF9`, `enfg_grund`.
+    if let Some(wert) = operator.enfg.as_deref().filter(|v| !v.is_empty()) {
+        let Some((grundlage, grund)) = enfg_fakt(wert) else {
+            return Err(DecisionRefusal::InvalidFact {
+                field: "enfg",
+                value: wert.to_owned(),
+                admitted: "ZG0, ZG1 or ZF9+<ZU5…ZV3> (SG8 SEQ+Z75 CCI+Z61 and, beside ZF9, \
+                           SG10 CAV [463])",
+            });
+        };
+        if !contract.contains(&Pflichtfeld::Enfg) {
+            return Err(DecisionRefusal::FactNotTaken {
+                command: command.to_owned(),
+                field: Pflichtfeld::Enfg.key(),
+            });
+        }
+        if body.contains_key("enfg_grundlage") || body.contains_key("enfg_grund") {
+            return Err(DecisionRefusal::AnswerFrozen);
+        }
+        body.insert(
+            "enfg_grundlage".into(),
+            serde_json::Value::String(grundlage),
+        );
+        if let Some(grund) = grund {
+            body.insert("enfg_grund".into(), serde_json::Value::String(grund));
+        }
+    }
     for (feld, value) in fakten {
         let Some(value) = value else { continue };
         if !contract.contains(&feld) {
@@ -1153,18 +1233,53 @@ mod decision_tests {
         );
     }
 
-    /// A Strom 55014 from the queue states its Versorgungsart and Bilanzkreis;
-    /// a code `CCI+Z36` does not publish is refused.
+    /// A Strom 55014 from the queue states its Versorgungsart, Bilanzkreis and
+    /// Grundlage nach EnFG; a code `CCI+Z36` does not publish is refused.
     #[test]
-    fn a_queued_55014_needs_versorgungsart_and_bilanzkreis() {
+    fn a_queued_55014_needs_versorgungsart_bilanzkreis_and_enfg() {
         use mako_markt::commands::{GPKE_EOG_ABLEHNEN, GPKE_EOG_BESTAETIGEN};
         let e = entry(GPKE_EOG_BESTAETIGEN, GPKE_EOG_ABLEHNEN);
         let refused = decision_body(&e, GPKE_EOG_BESTAETIGEN, None, &OperatorAnswer::default());
         assert!(
             matches!(&refused, Err(DecisionRefusal::Missing { fields, .. })
-                if fields == &["versorgungsart", "bilanzkreis"]),
+                if fields == &["versorgungsart", "bilanzkreis", "enfg"]),
             "{refused:?}"
         );
+        // `ZF9+<Grund>` goes out as both keys; `ZG0` as the Grundlage alone.
+        for (wert, grundlage, grund) in [("ZF9+ZU6", "ZF9", Some("ZU6")), ("ZG0", "ZG0", None)] {
+            let body = decision_body(
+                &e,
+                GPKE_EOG_BESTAETIGEN,
+                None,
+                &OperatorAnswer {
+                    versorgungsart: Some("ZC9".into()),
+                    bilanzkreis: Some("11XBK-STD------Y".into()),
+                    enfg: Some(wert.into()),
+                    ..OperatorAnswer::default()
+                },
+            )
+            .expect("a complete 55014 body");
+            assert_eq!(body["enfg_grundlage"], grundlage);
+            assert_eq!(body.get("enfg_grund").and_then(|v| v.as_str()), grund);
+        }
+        for falsch in ["ZF9", "ZG0+ZU6", "ZU6"] {
+            let refused = decision_body(
+                &e,
+                GPKE_EOG_BESTAETIGEN,
+                None,
+                &OperatorAnswer {
+                    enfg: Some(falsch.into()),
+                    ..OperatorAnswer::default()
+                },
+            );
+            assert!(
+                matches!(
+                    refused,
+                    Err(DecisionRefusal::InvalidFact { field: "enfg", .. })
+                ),
+                "{falsch}: {refused:?}"
+            );
+        }
         let wrong = decision_body(
             &e,
             GPKE_EOG_BESTAETIGEN,

@@ -28,9 +28,12 @@
 //! At-least-once: offsets are committed only after the batch is stored. A
 //! replayed batch is idempotent — `store_reads` upserts on the primary key,
 //! and a value-changing replay leaves a § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit row like any other
-//! redelivery. Records that fail to parse are logged and skipped (a poison
-//! pill must not wedge the partition); records that fail to store abort the
-//! poll loop iteration without committing, so they are redelivered.
+//! redelivery. Records that fail to parse, fail their signature, or whose
+//! content is refused are logged and skipped (a poison pill must not wedge the
+//! partition); records that fail to store abort the poll loop without
+//! committing, so they are redelivered. Every exit leaves the consumer group,
+//! and a commit refused for a rebalance in flight is retried after the next
+//! poll instead of reconnecting.
 //!
 //! Every batch runs the same `ValidatedReads::validate` pass and the same quality
 //! grading as the REST ingest doors, and records the verdict in
@@ -44,7 +47,9 @@ use std::time::Duration;
 
 use crate::domain::repository::TimeSeriesRepository;
 use crate::domain::{IngestionSource, MeterRead, QualityFlag, Sparte};
-use krafka::consumer::Consumer;
+use krafka::consumer::{AutoOffsetReset, Consumer};
+use krafka::error::ErrorCode;
+use krafka::{ConsumerRecord, Kafka, KrafkaError};
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -134,30 +139,8 @@ async fn run_consumer(
     tenant: &str,
     shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
-    let consumer: Consumer = Consumer::builder()
-        .bootstrap_servers(cfg.bootstrap_servers.clone())
-        .group_id(cfg.group_id.clone())
-        .client_id("edmd-kafka-ingest")
-        // A fresh group must start at the beginning of the topic: with the
-        // client default (`Latest`), every record produced before the group's
-        // first commit would be silently lost — meter readings are not a
-        // live feed to tail but a backlog to drain (caught by the FakeBroker
-        // e2e test).
-        .auto_offset_reset(krafka::consumer::AutoOffsetReset::Earliest)
-        // Offsets are committed manually after a successful store — the
-        // at-least-once contract depends on it.
-        .enable_auto_commit(false)
-        .build()
-        .await
-        .map_err(|e| anyhow::anyhow!("kafka consumer build: {e}"))?;
-
-    consumer
-        .subscribe(&[cfg.topic.as_str()])
-        .await
-        .map_err(|e| anyhow::anyhow!("kafka subscribe {}: {e}", cfg.topic))?;
-
-    // Per-message HMAC (optional): resolve the secret once. `env:` refs are
-    // resolved here so the TOML never carries the raw key.
+    // Per-message HMAC (optional): resolve the secret before anything joins the
+    // group. `env:` refs are resolved here so the TOML never carries the raw key.
     let message_secret: Option<String> = match cfg.message_hmac_secret.as_deref() {
         Some(raw) => Some(
             crate::config::resolve_env(raw)
@@ -166,6 +149,57 @@ async fn run_consumer(
         None => None,
     };
 
+    let kafka = Kafka::builder(cfg.bootstrap_servers.clone())
+        .client_id("edmd-kafka-ingest")
+        .connect()
+        .await
+        .map_err(|e| anyhow::anyhow!("kafka connect: {e}"))?;
+    let consumer: Consumer = kafka
+        .consumer(cfg.group_id.clone())
+        // A fresh group must start at the beginning of the topic: with the
+        // client default (`Latest`), every record produced before the group's
+        // first commit would be lost — meter readings are not a live feed to
+        // tail but a backlog to drain.
+        .auto_offset_reset(AutoOffsetReset::Earliest)
+        // Offsets are committed manually after a successful store — the
+        // at-least-once contract depends on it.
+        .enable_auto_commit(false)
+        .build()
+        .await
+        .map_err(|e| anyhow::anyhow!("kafka consumer build: {e}"))?;
+
+    let result = consume(
+        &consumer,
+        cfg,
+        repo,
+        tenant,
+        message_secret.as_deref(),
+        shutdown,
+    )
+    .await;
+    // Leave the group on every exit, so the reconnect after a failure — or the
+    // next instance after a shutdown — is assigned the partitions at once
+    // rather than after the session timeout. Auto-commit is off, so closing
+    // commits nothing: a batch that failed to store is redelivered.
+    if let Err(e) = consumer.close().await {
+        warn!(error = %e, "edmd kafka-ingest: consumer close failed");
+    }
+    result
+}
+
+async fn consume(
+    consumer: &Consumer,
+    cfg: &KafkaIngestConfig,
+    repo: &MeterStoreTimeSeriesRepository,
+    tenant: &str,
+    message_secret: Option<&str>,
+    shutdown: &CancellationToken,
+) -> anyhow::Result<()> {
+    consumer
+        .subscribe([cfg.topic.as_str()])
+        .await
+        .map_err(|e| anyhow::anyhow!("kafka subscribe {}: {e}", cfg.topic))?;
+
     info!(
         topic = %cfg.topic,
         group = %cfg.group_id,
@@ -173,6 +207,11 @@ async fn run_consumer(
         "edmd kafka-ingest: consuming"
     );
 
+    // Positions advance when `poll` returns records and only a commit makes
+    // them durable. A commit refused for a rebalance in flight is retried
+    // after the next poll, which applies the rebalance — so this stays set
+    // until a commit lands, including across polls that return nothing.
+    let mut uncommitted = false;
     loop {
         if shutdown.is_cancelled() {
             return Ok(());
@@ -183,9 +222,6 @@ async fn run_consumer(
                 r.map_err(|e| anyhow::anyhow!("kafka poll: {e}"))?
             }
         };
-        if records.is_empty() {
-            continue;
-        }
 
         let mut stored_batches = 0usize;
         for record in &records {
@@ -202,38 +238,15 @@ async fn run_consumer(
             // another offset does not verify. The broker gives ordering and
             // retention that HTTP does not, so there is no timestamp-freshness
             // check here — the offset is the replay boundary.
-            if let Some(ref secret) = message_secret {
-                let header = |name: &[u8]| {
-                    record
-                        .headers
-                        .iter()
-                        .find(|(k, _)| k.as_ref() == name)
-                        .and_then(|(_, v)| v.as_ref())
-                        .and_then(|v| std::str::from_utf8(v).ok())
-                };
-                let ok = match (
-                    header(mako_service::webhook::ID_HEADER.as_bytes()),
-                    header(mako_service::webhook::TIMESTAMP_HEADER.as_bytes())
-                        .and_then(|t| t.trim().parse::<i64>().ok()),
-                    header(mako_service::webhook::SIGNATURE_HEADER.as_bytes()),
-                ) {
-                    (Some(id), Some(ts), Some(sig)) => mako_service::webhook::verify_signature(
-                        secret.as_bytes(),
-                        id,
-                        ts,
-                        value,
-                        sig,
-                    ),
-                    _ => false,
-                };
-                if !ok {
-                    warn!(
-                        topic = %record.topic, partition = record.partition,
-                        offset = record.offset,
-                        "edmd kafka-ingest: message signature missing/invalid — record skipped"
-                    );
-                    continue;
-                }
+            if let Some(secret) = message_secret
+                && !record_signature_verifies(record, value, secret)
+            {
+                warn!(
+                    topic = %record.topic, partition = record.partition,
+                    offset = record.offset,
+                    "edmd kafka-ingest: message signature missing/invalid — record skipped"
+                );
+                continue;
             }
             let batch: WireBatch = match serde_json::from_slice(value) {
                 Ok(b) => b,
@@ -248,7 +261,21 @@ async fn run_consumer(
                     continue;
                 }
             };
-            match store_batch(repo, tenant, batch).await {
+            let reads = match to_reads(tenant, &batch) {
+                Ok(reads) => reads,
+                Err(refusal) => {
+                    // Refused content is a poison pill too: redelivering it
+                    // can only be refused again, and would hold back every
+                    // record behind it on the partition.
+                    warn!(
+                        topic = %record.topic, partition = record.partition,
+                        offset = record.offset, reason = %refusal,
+                        "edmd kafka-ingest: refused record skipped"
+                    );
+                    continue;
+                }
+            };
+            match store_reads(repo, tenant, &batch, reads).await {
                 Ok(n) => {
                     stored_batches += 1;
                     tracing::debug!(intervals = n, "edmd kafka-ingest: batch stored");
@@ -260,11 +287,22 @@ async fn run_consumer(
                 }
             }
         }
+        uncommitted |= !records.is_empty();
+        if !uncommitted {
+            continue;
+        }
 
-        consumer
-            .commit()
-            .await
-            .map_err(|e| anyhow::anyhow!("kafka commit: {e}"))?;
+        match consumer.commit().await {
+            Ok(()) => uncommitted = false,
+            Err(KrafkaError::Broker {
+                code: ErrorCode::RebalanceInProgress,
+                ..
+            }) => {
+                tracing::debug!("edmd kafka-ingest: commit deferred — rebalance in progress");
+                continue;
+            }
+            Err(e) => return Err(anyhow::anyhow!("kafka commit: {e}")),
+        }
         if stored_batches > 0 {
             info!(
                 records = records.len(),
@@ -274,20 +312,44 @@ async fn run_consumer(
     }
 }
 
-/// Convert one wire batch into `MeterRead`s, run the V-rules, and store.
-async fn store_batch(
-    repo: &MeterStoreTimeSeriesRepository,
-    tenant: &str,
-    batch: WireBatch,
-) -> anyhow::Result<usize> {
+/// Whether `record` carries Standard Webhooks headers whose signature over
+/// `value` verifies under `secret`.
+fn record_signature_verifies(record: &ConsumerRecord, value: &[u8], secret: &str) -> bool {
+    let header = |name: &str| {
+        record
+            .headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .and_then(|(_, v)| v.as_ref())
+            .and_then(|v| std::str::from_utf8(v).ok())
+    };
+    match (
+        header(mako_service::webhook::ID_HEADER),
+        header(mako_service::webhook::TIMESTAMP_HEADER).and_then(|t| t.trim().parse::<i64>().ok()),
+        header(mako_service::webhook::SIGNATURE_HEADER),
+    ) {
+        (Some(id), Some(ts), Some(sig)) => {
+            mako_service::webhook::verify_signature(secret.as_bytes(), id, ts, value, sig)
+        }
+        _ => false,
+    }
+}
+
+/// Convert one wire batch into `MeterRead`s, or name why it is refused.
+///
+/// Pure: everything that can be wrong with a record's *content* is decided
+/// here, so the consumer loop can tell a refusal — skipped, because a
+/// redelivery would be refused again — from a storage failure, which is
+/// redelivered.
+fn to_reads(tenant: &str, batch: &WireBatch) -> anyhow::Result<Vec<MeterRead>> {
     // An unrecognised Sparte or source is **refused**, not coerced — the same
     // rule the REST doors follow. Falling back silently put a gas batch into an
     // electricity store labelled STROM, and stamped `MSCONS` provenance on a
     // head-end feed that never went near EDIFACT (`IngestionSource::from_db_str`
     // is for read-back, where the column CHECK has already vouched for the
-    // value). A record that fails here is a poison pill: it is skipped and
-    // logged like any other unparseable one, so one broken producer does not
-    // wedge the partition.
+    // value). A record refused here is a poison pill: it is skipped and logged
+    // like any other unparseable one, so one broken producer does not wedge the
+    // partition.
     let sparte = match batch.sparte.as_deref() {
         None => Sparte::Strom,
         Some(raw) => raw.trim().parse::<Sparte>().map_err(|_| {
@@ -365,9 +427,20 @@ async fn store_batch(
             mscons_version: batch.mscons_version,
         });
     }
+    Ok(reads)
+}
+
+/// Run the V-rules over `reads`, store them, and raise the quality warning.
+async fn store_reads(
+    repo: &MeterStoreTimeSeriesRepository,
+    tenant: &str,
+    batch: &WireBatch,
+    reads: Vec<MeterRead>,
+) -> anyhow::Result<usize> {
     if reads.is_empty() {
         return Ok(0);
     }
+    let sparte = reads[0].sparte;
 
     // Same validation pass — and the same quality grade — as every REST ingest path.
     let malo_id = reads[0].malo_id.clone();
@@ -434,5 +507,30 @@ mod tests {
         let json = r#"{"malo_id": "51238696781", "intervals": [], "extra": 1}"#;
         let batch: WireBatch = serde_json::from_str(json).expect("lenient parse");
         assert!(batch.intervals.is_empty());
+    }
+
+    /// A refusal is decided before any storage is touched, so the consumer can
+    /// skip it rather than abort and have it redelivered without end.
+    #[test]
+    fn content_refusals_are_decided_without_the_store() {
+        let batch = |sparte: &str, quality: &str| -> WireBatch {
+            serde_json::from_value(serde_json::json!({
+                "malo_id": "51238696012",
+                "sparte": sparte,
+                "intervals": [
+                    {"from": "2026-07-01T00:00:00Z", "to": "2026-07-01T00:15:00Z",
+                     "value_kwh": "1.25", "quality": quality}
+                ]
+            }))
+            .expect("wire shape")
+        };
+        assert_eq!(
+            to_reads("T1", &batch("STROM", "MEASURED"))
+                .expect("accepted")
+                .len(),
+            1
+        );
+        assert!(to_reads("T1", &batch("KOHLE", "MEASURED")).is_err());
+        assert!(to_reads("T1", &batch("STROM", "GUESSED")).is_err());
     }
 }

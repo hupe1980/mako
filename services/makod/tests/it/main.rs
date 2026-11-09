@@ -3,6 +3,7 @@
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
 mod adapter_pid_source;
+mod adapter_sts_codes;
 mod admin_error_shape;
 mod anmeldung_stammdaten_extraction;
 mod as4_security;

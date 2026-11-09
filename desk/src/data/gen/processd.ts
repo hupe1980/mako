@@ -185,8 +185,9 @@ export interface ProcessdTools {
       codes_ablehnen: CodeAuswahl | null;
       /**
        * The facts approving states beside the code, where the entry's own did
-       * not resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall
-       * of an E/G Zustimmung. Empty when there are none to state.
+       * not resolve — the Bilanzkreis, Versorgungsart, Abrechnungsintervall or
+       * Grundlage nach EnFG of an E/G Zustimmung. Empty when there are none to
+       * state.
        */
       fakten_freigeben: Fakt[];
       /**
@@ -378,8 +379,8 @@ export interface CodeBedeutung {
  */
 export interface Fakt {
   /**
-   * The decision body's key: `bilanzkreis`, `versorgungsart` or
-   * `abrechnungsintervall_monate`.
+   * The decision body's key: `bilanzkreis`, `versorgungsart`,
+   * `abrechnungsintervall_monate` or `enfg`.
    */
   feld: string;
   /**
@@ -480,8 +481,9 @@ export interface Freigabe {
   codes_ablehnen: CodeAuswahl | null;
   /**
    * The facts approving states beside the code, where the entry's own did
-   * not resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall
-   * of an E/G Zustimmung. Empty when there are none to state.
+   * not resolve — the Bilanzkreis, Versorgungsart, Abrechnungsintervall or
+   * Grundlage nach EnFG of an E/G Zustimmung. Empty when there are none to
+   * state.
    */
   fakten_freigeben: Fakt[];
   /**

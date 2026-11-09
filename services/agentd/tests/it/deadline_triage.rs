@@ -219,6 +219,13 @@ async fn a_breach_is_a_hinweis_filed_under_its_malo() {
     assert_eq!(h.prioritaet, "urgent");
     assert!(h.faellig.is_some());
     assert!(h.text.contains("nach der Frist"), "{}", h.text);
+    // Arithmetic in Rust wrote this row, so it must not say a model did
+    // — a false marking teaches an operator to skip the true one.
+    assert!(
+        !h.text.starts_with(agentd::plane::MACHINE_GENERATED),
+        "a coded row is served disclosed as AI-generated: {}",
+        h.text
+    );
     let anker: Vec<(&str, &str)> = h
         .anker
         .iter()

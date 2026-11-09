@@ -148,11 +148,17 @@ pub struct LfModuleConfig {
 /// |---|---|---|---|
 /// | Strom 55014 | Versorgungsart | `SG10 CCI+Z36` | `[lf] eog_versorgungsart` |
 /// | Strom 55014 | Bilanzkreis | `SG8 SEQ+Z79` | `[[lf.bilanzkreise]]` `standard` |
+/// | Strom 55014 | Grundlage nach EnFG | `SG8 SEQ+Z75 CCI+Z61` (+ `CAV` beside `ZF9`) | the operator, at release |
 /// | Gas 44014 | Bilanzkreis | `SG10 CCI+Z19` | `[[lf.bilanzkreise]]` `standard` |
 /// | Gas 44014 | Abrechnungsintervall des LF | `SG6 DTM+Z20` | `[lf] eog_abrechnungsintervall_monate` |
 ///
 /// The Gas rows are Muss on a 44014 (UTILMD AHB Gas 1.2 Kap. 5.9, S. 78 and
-/// S. 80), whose column lists no `CCI+Z36`. The Bilanzkreis is the one
+/// S. 80), whose column lists no `CCI+Z36`. The Grundlage nach EnFG is Muss on
+/// a 55014 (UTILMD AHB Strom 2.2 Kap. 8.6, S. 138) and is a fact about the
+/// Kunde — whether he meets the prerequisites of an EnFG privilege — which no
+/// Festlegung fixes for the supplier and which an E/G, who holds no contract
+/// with him, cannot state once for all; so it has no config default and every
+/// Strom Zustimmung waits for the operator to state it. The Bilanzkreis is the one
 /// `standard` entry for the Marktlokation's Bilanzierungsgebiet, else the
 /// fallback row's ([`bilanzkreis_fuer`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +205,10 @@ impl EogFakten {
             (false, _, None) => {
                 Some("ein eindeutiger Bilanzkreis aus [[lf.bilanzkreise]] (SG8 SEQ+Z79)")
             }
+            (false, _, Some(_)) => Some(
+                "die Grundlage nach EnFG zum Kunden (SG8 SEQ+Z75 CCI+Z61, beside ZF9 the \
+                 Grund der Privilegierung) — stated on the Freigabe",
+            ),
             (true, _, None) => Some(
                 "ein eindeutiger standard-Bilanzkreis aus [[lf.bilanzkreise]] für das \
                  Bilanzierungsgebiet der Marktlokation (SG10 CCI+Z19)",
@@ -1609,7 +1619,7 @@ mod tests {
         );
     }
 
-    /// **Several authorised BKs is a choice, not a default.** MaBiS § 10.2.1
+    /// **Several authorised BKs is a choice, not a default.** MaBiS Kap. 10.2.1
     /// lets the BKV authorise more than one BK for the same (ZRT, BG, LF); the
     /// supplier picks. Picking the first in code would invent that decision.
     #[test]

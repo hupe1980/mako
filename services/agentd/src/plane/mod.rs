@@ -257,12 +257,9 @@ mod tests {
     #[test]
     fn every_manifest_either_declares_execution_or_has_a_coded_skill() {
         // The specialists whose conduct is Rust. Adding one means adding its
-        // registration in `Plane::new`, and this list is what keeps the two
-        // from drifting apart.
-        const CODED: &[&str] = &[
-            crate::skills::DeadlineTriage::NAME,
-            crate::skills::GabiAllocationTriage::NAME,
-        ];
+        // registration in `Plane::new`, and `skills::CODED` is what keeps the
+        // two from drifting apart.
+        use crate::skills::CODED;
 
         for embedded in manifests() {
             let (name, m) = (embedded.0.as_str(), embedded.1);
@@ -668,17 +665,14 @@ mod tests {
                 .as_ref()
                 .is_some_and(|o| !o.triage.is_empty());
             // A coded specialist cannot declare `oversight` at all — agentplane
-            // refuses the block on a manifest with no `execution` — so it opens
-            // its row with `StepCtx::open_task`. That was stated here as an
-            // exemption and checked by nothing, and the one coded specialist did
-            // not do it: `deadline-alert-agent` could report `BREACH` and told
-            // nobody. `CODED_TRIAGE` is the list of coded specialists whose Rust
-            // *does* open a row, asserted below rather than assumed.
-            const CODED_TRIAGE: &[&str] = &[
-                crate::skills::DeadlineTriage::NAME,
-                crate::skills::GabiAllocationTriage::NAME,
-            ];
-            let coded = m.spec.execution.is_none() && CODED_TRIAGE.contains(&name.as_str());
+            // refuses the block on a manifest with no `execution` — so it must
+            // open its row in Rust with `StepCtx::open_task`. The exemption is
+            // therefore only as good as that call: a coded specialist exempted
+            // here without opening a row reports `BREACH` into the journal and
+            // tells nobody. Every name in `skills::CODED` opens one, which
+            // `skills::tests` asserts on each one's row text, and the suites
+            // `deadline_triage` and `oversight` on the row served.
+            let coded = m.spec.execution.is_none() && crate::skills::CODED.contains(&name.as_str());
             if !triaged && !coded {
                 silent.push(name.as_str());
             }

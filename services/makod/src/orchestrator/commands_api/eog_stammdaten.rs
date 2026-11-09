@@ -12,7 +12,8 @@
 //! Marktlokation and the Grund, and this module turns marktd's facts into the
 //! `SG5`/`SG6`/`SG8`/`SG12` segments. The E/G's Bestätigung **44014** (LF →
 //! NB, same Kap. 5.9) restates the record with the LF's Bilanzkreis and
-//! Abrechnungsintervall beside it ([`gas_44014`]).
+//! Abrechnungsintervall beside it ([`gas_44014`]); the Strom Bestätigung
+//! **55014** its Gruppenzuordnung and the Kunde des LF ([`strom_55014`]).
 //!
 //! **Every fact comes from marktd, or the command is refused naming it.** A
 //! Muss segment marktd holds no value for is collected into
@@ -331,7 +332,7 @@ pub(super) fn strom_55013(
         Qualifier {
             kunde: "Z65",
             korrespondenz: "Z66",
-            marktlokation: "Z63",
+            marktlokation: Some("Z63"),
             ablesekarte: None,
         },
         &mut out,
@@ -344,6 +345,69 @@ pub(super) fn strom_55013(
         haushaltskunde,
         stammdaten: out,
     })
+}
+
+/// What a Bestätigung EoG 55014 takes from the Marktlokation's record.
+#[derive(Debug)]
+pub(super) struct Eog55014 {
+    /// `SG8 SEQ+Z01 CCI+++Z15`/`Z18` Gruppenzuordnung, Muss (S. 136).
+    pub haushaltskunde: bool,
+    /// The `SG12` Kunde des LF and his Korrespondenzanschrift.
+    pub stammdaten: Stammdaten,
+}
+
+/// The record a Strom Bestätigung EoG 55014 (UTILMD AHB Strom 2.2 Kap. 8.6,
+/// LF → NB) restates: the Gruppenzuordnung nach EnWG in `SG8 SEQ+Z01` (Muss,
+/// S. 136) and, Muss on the Gründe of `[203]` and sent when known otherwise
+/// (`[165]`), `SG12 NAD+Z09` Kunde des LF with `NAD+Z04` his
+/// Korrespondenzanschrift (`[213]`, S. 139–140). The column lists no `SG5`
+/// Lokation and no Marktlokationsanschrift, so none is sent; the Bilanzkreis,
+/// the Versorgungsart and the Grundlage nach EnFG are the E/G's own facts and
+/// come with the command.
+///
+/// # Errors
+///
+/// [`DispatchError::StammdatenUnvollstaendig`] naming every Muss fact marktd
+/// does not hold.
+pub(super) fn strom_55014(
+    sd: &MaloUtilmdStammdaten,
+    transaktionsgrund: &str,
+) -> Result<Eog55014, DispatchError> {
+    let mut f = Fehlend::default();
+    let mut out = Stammdaten::default();
+    let haushaltskunde = f
+        .need(
+            sd.netznutzung.as_ref(),
+            "Netznutzungsdaten on the Stichtag (PUT /api/v1/malos/{id}/netznutzungsdaten)",
+        )
+        .and_then(|n| {
+            f.need(
+                n.haushaltskunde,
+                "haushaltskunde (SG10 CCI+++Z15/Z18 Gruppenzuordnung)",
+            )
+        });
+    kunde_und_anschrift(
+        sd,
+        transaktionsgrund,
+        Qualifier {
+            kunde: "Z09",
+            korrespondenz: "Z04",
+            marktlokation: None,
+            ablesekarte: None,
+        },
+        &mut out,
+        &mut f,
+    );
+    f.refuse(&sd.malo_id)?;
+    haushaltskunde
+        .map(|haushaltskunde| Eog55014 {
+            haushaltskunde,
+            stammdaten: out,
+        })
+        .ok_or_else(|| DispatchError::StammdatenUnvollstaendig {
+            malo_id: sd.malo_id.clone(),
+            fehlend: vec!["haushaltskunde (SG10 CCI+++Z15/Z18 Gruppenzuordnung)".to_owned()],
+        })
 }
 
 /// The Stammdaten of a Gas Anmeldung EoG 44013.
@@ -642,7 +706,7 @@ fn gas_eog(
         Qualifier {
             kunde: "Z09",
             korrespondenz: "Z04",
-            marktlokation: "DP",
+            marktlokation: Some("DP"),
             ablesekarte: Some("Z05"),
         },
         &mut out,
@@ -1332,7 +1396,8 @@ fn konzessionsabgabe(
 struct Qualifier {
     kunde: &'static str,
     korrespondenz: &'static str,
-    marktlokation: &'static str,
+    /// `None` where the column lists no Marktlokationsanschrift (the 55014).
+    marktlokation: Option<&'static str>,
     ablesekarte: Option<&'static str>,
 }
 
@@ -1387,15 +1452,14 @@ fn kunde_und_anschrift(
         )),
         (None, false) => {}
     }
-    match sd.anschrift.as_ref().and_then(anschrift_elemente) {
-        Some(adresse) => out
-            .sg12
-            .push(nad(q.marktlokation, vec![], vec![], Some(&adresse))),
-        None => f.push(format!(
-            "the Marktlokationsanschrift with Straße, Ort, PLZ and Land (Marktlokation.\
-             lokationsadresse, SG12 NAD+{}, Muss)",
-            q.marktlokation
-        )),
+    if let Some(qual) = q.marktlokation {
+        match sd.anschrift.as_ref().and_then(anschrift_elemente) {
+            Some(adresse) => out.sg12.push(nad(qual, vec![], vec![], Some(&adresse))),
+            None => f.push(format!(
+                "the Marktlokationsanschrift with Straße, Ort, PLZ and Land (Marktlokation.\
+                 lokationsadresse, SG12 NAD+{qual}, Muss)"
+            )),
+        }
     }
     out.sg12.extend(ablesekarte);
 }

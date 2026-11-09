@@ -8,9 +8,10 @@
 //! passes, so a renderer or workflow change that drops a Muss place fails here
 //! rather than dead-lettering the message in production.
 //!
-//! The Gas Bestätigung EoG 44014 carries the Marktlokation's record from
-//! marktd; its case runs the combined GNB+LF deployment of
-//! `e2e_gnb_lf_combined_gas`, whose loopback gates every UTILMD.
+//! The Bestätigungen EoG 44014 and 55014 carry the Marktlokation's record
+//! from marktd; their cases run the combined deployments of
+//! `e2e_gnb_lf_combined_gas` and `e2e_nb_lf_combined_strom`, whose loopbacks
+//! gate every UTILMD.
 
 use mako_engine::outbox::PendingOutbox;
 use mako_engine::types::{MaLo, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator};
@@ -69,6 +70,38 @@ async fn the_gas_bestaetigung_eog_passes_its_profile() {
     assert_eq!(pending.payload["pid"], 44014);
     let found = findings(&pending);
     assert!(found.is_empty(), "44014: {found:#?}");
+}
+
+/// The Strom Bestätigung EoG, rendered from marktd's record and the
+/// Versorgungsart the E/G states, passes its profile.
+#[tokio::test]
+async fn the_strom_bestaetigung_eog_passes_its_profile() {
+    let om = crate::e2e_nb_lf_combined_strom::rendered_55014().await;
+    let pending = PendingOutbox::new(&*om.message_type, &*om.recipient, om.payload.clone());
+    assert_eq!(pending.payload["pid"], 55014);
+    let found = findings(&pending);
+    assert!(found.is_empty(), "55014: {found:#?}");
+    let wire = String::from_utf8(
+        makod::edifact_renderer::render_to_wire_bytes(&om, &registry())
+            .expect("renders")
+            .bytes,
+    )
+    .expect("UNOC text");
+    for place in [
+        "STS+7++ZT6+ZW4'",
+        "RFF+TN:",
+        "SEQ+Z79",
+        "SEQ+Z01'CCI+++Z18'CCI+Z36++ZC9'",
+        "SEQ+Z75'CCI+Z61++ZF9'CAV+ZU6'",
+        "NAD+Z09",
+        "NAD+Z04",
+    ] {
+        assert!(wire.contains(place), "{place} in {wire}");
+    }
+    assert!(
+        !wire.contains("LOC+"),
+        "the 55014 names no Lokation: {wire}"
+    );
 }
 
 fn registry() -> makod::party_registry::MpIdRegistry {

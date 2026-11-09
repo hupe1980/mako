@@ -9,7 +9,7 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
-## [0.30.0] — unreleased
+## [0.30.0] — 2026-11-09
 
 ### Added
 
@@ -54,6 +54,11 @@ History before this file is in `git log`.
 
 ### Changed
 
+- edmd runs on krafka 0.28. The Kafka ingest consumer leaves its group on
+  every exit, so a reconnect or the next instance takes the partitions at once
+  rather than after the session timeout, and a commit refused for a rebalance
+  in flight is retried after the next poll instead of reconnecting. The
+  `[kafka_ingest]` keys are unchanged.
 - **Breaking:** `mako_engine::payload` types (`UtilmdPayload`, `AperakPayload`,
   `MaloIdentifiedPayload` and their nested types) refuse unknown keys, and
   `PendingOutbox::new` refuses an undeclared key in debug builds
@@ -146,14 +151,14 @@ History before this file is in `git log`.
   Bilanzierungsgebiet) and `abrechnungsintervall_monate` from the new `[lf]
   eog_abrechnungsintervall_monate` — 1, 3, 6 or 12 (UTILMD MIG Gas G1.2) —
   refused at startup when `eog_auto_respond` is on without it; makod reads the
-  44014 as `mako_markt::commands::GeliEogBestaetigen` and refuses undeclared
-  keys; a queued E/G answer freezes its facts, so the operator states only the
-  Antwortcode.
+  44014 as `mako_markt::commands::GeliEogBestaetigen`, refuses undeclared keys
+  and takes its Stammdaten from marktd; a queued E/G answer freezes the facts
+  that resolved.
 - **Breaking:** the outbound UTILMD answers pass their AHB profile, held by
-  a sweep test: the Bestätigung EoG 44014 (now requiring `bilanzkreis` and
-  `abrechnungsintervall_monate`, its Stammdaten from marktd), 55052,
+  a sweep test: the Bestätigung EoG 44014, 55052,
   55604/55605 and 55608/55609; every Gas answer restates the Anfrage's `STS+7`
-  and `RFF+TN` and names its `STS+E01` Codeliste. 55602/55603 are refused at
+  and `RFF+TN` and names its `STS+E01` Codeliste, which every one left
+  empty. 55602/55603 are refused at
   the door naming the Muss data no command holds.
 - **Breaking:** the ORDERS 17001/17009 Termin is read from `DTM+203` as the
   German day it begins; processd's `wire_date::parse` takes the Sparte and
@@ -167,23 +172,79 @@ History before this file is in `git log`.
   included — and numbers each period's receipts (`ketten_folge`, on the
   event); accountingd orders a chain by that number, not the event time, and
   refuses an event without it.
+- **Breaking:** `gpke.kuendigung.anmelden` and `geli.kuendigung.anmelden`
+  take `lfa_mp_id` and send to that Altlieferant — the 55016 with
+  `STS+7++E03` and its Lokationsart; the Gas body is
+  `mako_markt::commands::GeliKuendigungAnmelden` and refuses an undeclared key.
+- **Breaking:** processd's `POST /api/v1/end-supply` and `/end-supply-gas`,
+  makod's `gpke.lieferende.anmelden` and `geli.lieferende.anmelden`
+  (`GeliLieferendeAnmelden`) take a required `transaktionsgrund` (Strom: an
+  optional `transaktionsgrund_ergaenzung`); vertragd states it from the
+  Kündigungsgrund (`UMZUG` → `E01`, every other → `ZT5`).
+- **Breaking:** `gpke.eog.bestaetigen` requires `bilanzkreis` and
+  `enfg_grundlage` (`enfg_grund` beside `ZF9`, `[463]`) and refuses a missing
+  fact by name; `EogCommand::Anmelden` takes a `vorgangsnummer`,
+  `ReceiveAnmeldung` one read from `IDE+24`, `SendAntwort` the
+  Gruppenzuordnung, the EnFG facts and the `SG12` Stammdaten.
 
 ### Fixed
 
-- The GeLi Gas Kündigung 44016 went to the grid operator: the door resolved
-  the GNB from the MaLo cache for every Anfrage, while the Kündigung is the
-  Neulieferant's message to the Altlieferant (GeLi Gas 3.0 Kap. 3.1).
-  **Breaking:** `geli.kuendigung.anmelden` takes `lfa_mp_id` and sends to it;
-  its body is `mako_markt::commands::GeliKuendigungAnmelden` and refuses an
-  undeclared key.
-- The GeLi Gas Abmeldung 44004 carried no `SG4 STS+7`, which its column makes
-  Muss (UTILMD AHB Gas 1.2 Kap. 5.5, `[2061]`), so the pre-send gate
-  dead-lettered every one. **Breaking:** `geli.lieferende.anmelden`
-  (`GeliLieferendeAnmelden`) and processd's `POST /api/v1/end-supply-gas` take a
-  required `transaktionsgrund`; vertragd states it from the Kündigungsgrund
-  (`UMZUG` → `E01`, every other → `ZT5`); under `ZG9`/`ZH1`/`ZH2` the 44004
-  names the confirmed Beginn as `DTM+92` (Bedingungen `[7]`/`[11]`). Every
-  GeLi Gas LF Anfrage is now held against its profile before it is written.
+- processd cited the Zuordnungsermächtigung by a paragraph sign; MaBiS
+  (BK6-24-174 Anlage 3) has Kapitel, not §§ — it is Kap. 10.2.1, and
+  `check-known-wrong` refuses the paragraph form.
+- The Kündigung went to the grid operator: the GPKE 55016 and the GeLi Gas
+  44016 are „LFN an LFA" (GeLi Gas 3.0 Kap. 3.1), and the Gas door resolved
+  the GNB from the MaLo cache for every Anfrage. A test over the command
+  registry holds every door whose AHB column reads „LFN an LFA" to the
+  Altlieferant.
+- The Abmeldung carried no `SG4 STS+7`, which its column makes Muss — the
+  55004 with a Lokationsart Ergänzung (UTILMD AHB Strom 2.2 Kap. 5.4), the
+  44004 per UTILMD AHB Gas 1.2 Kap. 5.5, `[2061]` — so the pre-send gate
+  dead-lettered every one. makod takes the Strom Ergänzung from the MaLo's
+  `energyDirection` unless the caller names `ZW5`/`ZAP`; under
+  `ZG9`/`ZH1`/`ZH2` both name the confirmed Beginn as `DTM+92` (Gas
+  Bedingungen `[7]`/`[11]`); the GPKE Abmeldung and Kündigung and every GeLi
+  Gas LF Anfrage are held against their profile before they are written.
+- The profile importer read a citation inside a Bedingung as that condition's
+  definition: „Bedingungen [266] ∧ [479] an der Segmentgruppe …" gave `[479]`
+  the rest of `[2010]`'s sentence and cut `[2006]`–`[2010]` and `[2018]` short
+  in the UTILMD Strom profiles, so a valid 55004 for an erzeugende
+  Marktlokation (`ZW3`) failed its own profile. A `[n]` after „Bedingung(en)",
+  an operator or another citation is text; both profiles are re-imported.
+- The Strom Bestätigung EoG 55014 carries every group its column makes Muss
+  (UTILMD AHB Strom 2.2 Kap. 8.6, S. 124–140) and passes the pre-send gate: the
+  55013's Transaktionsgrund with `ZW4`, `SG6 RFF+TN`, the Bilanzkreis as `SG8
+  SEQ+Z79` Produktpaket, `SEQ+Z01` with the Gruppenzuordnung and the
+  Versorgungsart `CCI+Z36` (the new `UtilmdPayload::versorgungsart`), `SEQ+Z75`
+  with the Grundlage nach EnFG, and the `SG12` Kunde des LF with his
+  Korrespondenzanschrift — the Gruppenzuordnung and the Kunde from marktd. The
+  55014 and 55015 name no `SG5` Lokation, which their column does not list, so
+  the NB finds its process by the answer's `RFF+TN`
+  (`mako_gpke::eog_nb_vorgang_key`) — the 55013's Vorgangsnummer, which
+  `gpke.eog.anmelden` draws and registers. The 55013 adapter reads the
+  Transaktionsgrund from `STS+7` `C556`, where it rides, not DE 4405.
+- processd's E/G Strom Zustimmung states its Grundlage nach EnFG: the
+  operator gives it on the Freigabe as `enfg` (`ZG0`, `ZG1` or
+  `ZF9+<ZU5…ZV3>`, listed with the AHB's wording in `fakten_freigeben`, the
+  Desk and the MCP queue actions), and processd sends it to makod as
+  `enfg_grundlage`/`enfg_grund`. No setting states it — it is a fact about the
+  Kunde — so every Strom E/G Zustimmung is queued. **Breaking:** the
+  `gpke.eog.bestaetigen` answer contract requires `enfg`.
+- Adapters read an Antwortcode where the MIG puts it: the GPKE Rückmeldung
+  reads `STS+E01` from `C556` (DE 4405 is empty, so an `A02` read as
+  `Uebernommen`), and the MaBiS Ablehnung 19204 from `SG2 AJT` (an ORDRSP has
+  no `STS`, so every 19204 was refused). `cargo xtask check-sts-codes` refuses
+  a `status_code` read and a raw `STS` read outside the IFTSTA readers.
+- The Vorgangsnummer makod draws for a Beendigung der Zuordnung fits `IDE`
+  DE 7402 (`an..35`); it was 36 characters. Every door draws it through one
+  helper, held against the UTILMD MIGs' bound by a test.
+- The NB reads the E/G's Bilanzkreis from a 55014's Produktpaket `SEQ+Z79
+  CAV+ZV4` and records it on the Zuordnung.
+- edmd's Kafka ingest skips a record whose content is refused (an unknown
+  `sparte`, `source` or `quality`, or an unparseable interval) and commits past
+  it, as the operator guide states. Treating the refusal as a storage failure
+  redelivered the record without end and held back every record behind it on
+  the partition; `kafka_ingest::` in edmd's integration suite pins it.
 - `check-command-constructors` read a test module kept in its own file
   (`#[cfg(test)] mod name;`) as shipped code, so a variant only a test
   constructs passed as wired; such a file is now test code, as an inline
@@ -208,9 +269,8 @@ History before this file is in `git log`.
   by a Lokation the ORDRSP does not carry; 19007 resumes `gpke-datenabruf`.
 - marktd: the MSB-Rahmenvertrag `PUT` stores the contract and its CloudEvent
   in one transaction.
-- Every Gas UTILMD answer left its `STS+E01` Codeliste empty; a WiM
-  MSB-Wechsel answer reused the order's Vorgangsnummer as its own; an ORDERS
-  17001 Geräteübernahme was always read without its Termin.
+- A WiM MSB-Wechsel answer reused the order's Vorgangsnummer as its own; an
+  ORDERS 17001 Geräteübernahme was always read without its Termin.
 - An EEG plant account owing money back could be dunned and handed to the
   Sperr sequence; an account an EEG receipt was booked to is never an Offener
   Posten, never dunned and never in a Sperr phase.

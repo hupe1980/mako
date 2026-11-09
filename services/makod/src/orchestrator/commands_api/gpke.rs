@@ -339,21 +339,62 @@ pub(super) async fn dispatch_lf_anmeldung(
             ))
         })?;
 
+    // ── Receiver and the Abmeldung/Kündigung STS+7 ───────────────────────────
+    //
+    // The Kündigung 55016 is „LFN an LFA": it goes to the Altlieferant the
+    // caller names, never to the grid operator. Its column admits one
+    // Transaktionsgrund, `E03`. The Abmeldung 55004 and the Kündigung each
+    // carry a Lokationsart Ergänzung; where the caller states none it is the
+    // NB's own fact about the Marktlokation — its MaLo-Ident `energyDirection`
+    // (`ZW4` verbrauchende, `ZW3` erzeugende); a Tranche (`ZW5`) or a ruhende
+    // Marktlokation (`ZAP`) the caller has to name.
+    use mako_gpke::lf_anmeldung::{ABMELDUNG_PID, KUENDIGUNG_GRUND, KUENDIGUNG_PID};
+    let kuendigung = pid_code == KUENDIGUNG_PID;
+    let receiver = if kuendigung {
+        let lfa = require_payload_str(payload, "lfa_mp_id")?;
+        let lfa = rubo4e::identifiers::MarktpartnerId::new(lfa.trim()).map_err(|e| {
+            DispatchError::InvalidPayload(format!(
+                "gpke.kuendigung.anmelden: lfa_mp_id {lfa:?} is not an MP-ID: {e}"
+            ))
+        })?;
+        MarktpartnerCode::new(lfa.to_string())
+    } else {
+        nb_mp_id
+    };
+    let stated = |key: &str| {
+        payload
+            .get(key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let transaktionsgrund = if kuendigung {
+        Some(KUENDIGUNG_GRUND.to_owned())
+    } else {
+        stated("transaktionsgrund")
+    };
+    let transaktionsgrund_ergaenzung = stated("transaktionsgrund_ergaenzung").or_else(|| {
+        (pid_code == ABMELDUNG_PID || kuendigung).then(|| {
+            use energy_api::models::electricity::EnergyDirection;
+            match malo_record.data_market_location.energy_direction {
+                EnergyDirection::Consumption => "ZW4".to_owned(),
+                EnergyDirection::Production => "ZW3".to_owned(),
+            }
+        })
+    });
+
     // ── Build typed domain command ────────────────────────────────────────────
     let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
 
     let domain_cmd = LfAnmeldungCommand::InitiateAnmeldung {
         pid,
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
-        receiver: nb_mp_id,
+        receiver,
         location_id: malo_id.clone(),
         process_date,
-        // SG4 STS Transaktionsgrund (E01 Ein-/Auszug, E03 Wechsel) —
-        // rendered as the outbound STS segment when supplied by the ERP.
-        transaktionsgrund: payload
-            .get("transaktionsgrund")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned),
+        // `SG4 STS+7` Transaktionsgrund — Muss on 55004/55016, checked
+        // against the column by the workflow and the profile below.
+        transaktionsgrund,
         // `SG8 SEQ+Z79` Produktpaket — Muss on 55001 / 55077. The workflow
         // refuses an Anmeldung without one rather than sending a message the
         // NB cannot act on (UTILMD AHB Strom 2.2 Kap. 5.3).
@@ -366,16 +407,24 @@ pub(super) async fn dispatch_lf_anmeldung(
         // three Geschäftsvorfälle; the workflow refuses an Anmeldung that
         // states none rather than letting the renderer default to the
         // verbrauchende `ZW4`.
-        transaktionsgrund_ergaenzung: payload
-            .get("transaktionsgrund_ergaenzung")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned),
+        transaktionsgrund_ergaenzung,
         // `SG8 SEQ+Z79` Produkt `9991000002090` — Muss in Geschäftsvorfall 3
         // (Codeliste der Konfigurationen 1.4 Kap. 6.1.1). A bare string is the
         // prozentuale Aufteilung; `{art, wert}` names one of the other two.
         tranchengroesse: payload.get("tranchengroesse").cloned(),
     };
+
+    // The Abmeldung and the Kündigung are rendered and held against their
+    // profile before anything is written — the check the pre-send gate runs.
+    if pid_code == ABMELDUNG_PID || kuendigung {
+        use mako_engine::workflow::Workflow as _;
+        let out = GpkeLfAnmeldungWorkflow::handle(
+            &mako_gpke::lf_anmeldung::LfAnmeldungState::New,
+            domain_cmd.clone(),
+        )
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+    }
 
     // ── Duplicate guard ───────────────────────────────────────────────────────
     //
@@ -1305,6 +1354,10 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
 
     let pid = Pruefidentifikator::new(mako_gpke::EOG_ANMELDUNG_PID)
         .map_err(DispatchError::InvalidPayload)?;
+    // `SG4 IDE+24` must be unique per outbound Vorgang, and the E/G's answer
+    // names it in `SG6 RFF+TN` — the only key that answer carries.
+    let vorgangsnummer = super::vorgangsnummer::neu("");
+    let vorgang_key = mako_gpke::eog_nb_vorgang_key(&vorgangsnummer);
     let domain_cmd = mako_gpke::EogCommand::Anmelden {
         pid,
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
@@ -1315,6 +1368,7 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
         transaktionsgrund_ergaenzung: eog.ergaenzung.to_owned(),
         haushaltskunde: eog.haushaltskunde,
         stammdaten: eog.stammdaten,
+        vorgangsnummer,
     };
     {
         use mako_engine::workflow::Workflow as _;
@@ -1365,7 +1419,7 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
         workflow_id,
         domain_cmd,
         &deadlines,
-        &[&nb_key],
+        &[&nb_key, &vorgang_key],
     )
     .await?;
 
@@ -1374,26 +1428,47 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
 
 /// Dispatch the E/G's response to an inbound EoG Zuordnung (PIDs 55014/55015).
 ///
-/// Called for `gpke.eog.bestaetigen` (→ 55014, requires `versorgungsart`) and
-/// `gpke.eog.ablehnen` (→ 55015, requires `reason` — EBD E_0615 A02/A04/A05).
+/// Called for `gpke.eog.bestaetigen` (→ 55014) and `gpke.eog.ablehnen`
+/// (→ 55015, requires `reason` — EBD E_0615 A02/A04/A05).
+///
+/// The Bestätigung 55014 carries, beside `STS+E01`, the Anmeldung's
+/// Transaktionsgrund, `SG6 RFF+TN`, the Produktpaket `SG8 SEQ+Z79` with the
+/// Bilanzkreis, `SEQ+Z01` with the Gruppenzuordnung and the Versorgungsart,
+/// `SEQ+Z75` with the Grundlage nach EnFG and the `SG12` Kunde des LF with his
+/// Korrespondenzanschrift (UTILMD AHB Strom 2.2 Kap. 8.6, S. 125–140). The
+/// Gruppenzuordnung and the Kunde come from marktd's record of the
+/// Marktlokation on the Zuordnungsbeginn ([`super::eog_stammdaten::strom_55014`]);
+/// the rest are the E/G's own facts, which the command states. A missing one
+/// refuses the command naming it, and the 55014 is held against its profile
+/// before it is written.
 ///
 /// ## Payload fields
 ///
 /// | Field | Type | Notes |
 /// |---|---|---|
 /// | `malo_id` | string | Marktlokations-ID identifying the process |
-/// | `versorgungsart` | string | `SG10 CCI+Z36`: `ZC9`/`ZD0`/`ZE3` — mandatory for Bestätigung |
-/// | `bilanzkreis` | string (opt.) | EIC of the Bilanzkreis (Bestätigung) |
-/// | `reason` | string (opt.) | mandatory for Ablehnung |
+/// | `versorgungsart` | string | `SG10 CCI+Z36`: `ZC9`/`ZD0`/`ZE3` — Bestätigung |
+/// | `bilanzkreis` | string | EIC of the Bilanzkreis, `SG8 SEQ+Z79` — Bestätigung |
+/// | `enfg_grundlage` | string | `SG10 CCI+Z61`: `ZF9`/`ZG0`/`ZG1` — Bestätigung |
+/// | `enfg_grund` | string | `SG10 CAV` `ZU5`…`ZV3` — beside `ZF9` only (`[463]`) |
+/// | `reason` | string | Ablehnung |
 pub(super) async fn dispatch_gpke_eog_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
     accepted: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
     let malo_id = extract_malo_id(payload)?;
+    let text = |key: &str| {
+        payload
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
 
-    let versorgungsart = match payload.get("versorgungsart").and_then(|v| v.as_str()) {
-        Some(code) => Some(mako_gpke::Versorgungsart::from_code(code).ok_or_else(|| {
+    let versorgungsart = match text("versorgungsart") {
+        Some(code) => Some(mako_gpke::Versorgungsart::from_code(&code).ok_or_else(|| {
             DispatchError::InvalidPayload(format!(
                 "invalid \"versorgungsart\" {code:?} — SG10 CCI+Z36 DE 7037 publishes \
                  ZC9 (§38 Ersatzversorgung), ZD0 (§36 Grundversorgung) and ZE3 \
@@ -1403,24 +1478,125 @@ pub(super) async fn dispatch_gpke_eog_antwort(
         })?),
         None => None,
     };
-    let bilanzkreis = payload
-        .get("bilanzkreis")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
-    let reason = payload
-        .get("reason")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    let bilanzkreis = text("bilanzkreis");
+    let reason = text("reason");
+    let enfg_grundlage = text("enfg_grundlage");
+    let enfg_grund = text("enfg_grund");
 
-    dispatch_to_process::<mako_gpke::GpkeEogWorkflow, _>(
+    if !accepted {
+        return dispatch_to_process::<mako_gpke::GpkeEogWorkflow, _>(
+            state,
+            malo_id.as_str(),
+            mako_gpke::EOG_WORKFLOW_NAME,
+            move || mako_gpke::EogCommand::SendAntwort {
+                accepted,
+                versorgungsart,
+                bilanzkreis,
+                reason,
+                haushaltskunde: None,
+                enfg_grundlage: None,
+                enfg_grund: None,
+                stammdaten: mako_engine::payload::Stammdaten::default(),
+            },
+        )
+        .await;
+    }
+
+    let refuse = |field: &str, what: &str| {
+        DispatchError::InvalidPayload(format!(
+            "\"{field}\" is required — {what}, Muss on the Bestätigung EoG 55014 \
+             (UTILMD AHB Strom 2.2 Kap. 8.6)"
+        ))
+    };
+    if versorgungsart.is_none() {
+        return Err(refuse(
+            "versorgungsart",
+            "the Versorgungsart ZC9/ZD0/ZE3 (SG10 CCI+Z36, S. 136)",
+        ));
+    }
+    if bilanzkreis.is_none() {
+        return Err(refuse(
+            "bilanzkreis",
+            "the E/G's Bilanzkreis (SG8 SEQ+Z79 Produktpaket, S. 129)",
+        ));
+    }
+    let Some(grundlage) = enfg_grundlage.as_deref() else {
+        return Err(refuse(
+            "enfg_grundlage",
+            "the Grundlage zur Verringerung der Umlagen nach EnFG ZF9/ZG0/ZG1 \
+             (SG8 SEQ+Z75 CCI+Z61, S. 138)",
+        ));
+    };
+    use mako_markt::commands::{ENFG_GRUNDLAGEN, ENFG_PRIVILEGIERUNGEN, enfg_mit_grund};
+    if !ENFG_GRUNDLAGEN.iter().any(|(c, _)| *c == grundlage) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "\"enfg_grundlage\" {grundlage:?} is not ZF9, ZG0 or ZG1 (SG10 CCI+Z61 DE 7037, \
+             UTILMD AHB Strom 2.2 S. 138)"
+        )));
+    }
+    if let Some(grund) = enfg_grund.as_deref()
+        && !ENFG_PRIVILEGIERUNGEN.iter().any(|(c, _)| *c == grund)
+    {
+        return Err(DispatchError::InvalidPayload(format!(
+            "\"enfg_grund\" {grund:?} is not one of ZU5…ZV3 (SG10 CAV DE 7111, UTILMD AHB \
+             Strom 2.2 S. 139)"
+        )));
+    }
+    // `CAV` Grund der Privilegierung — Muss „Wenn in derselben SG10 das
+    // CCI+Z61++ZF9 … vorhanden" (`[463]`, S. 139), and listed under no other.
+    match (enfg_mit_grund(grundlage), enfg_grund.is_some()) {
+        (true, false) => {
+            return Err(refuse(
+                "enfg_grund",
+                "the § of the EnFG privilege ZU5…ZV3 beside ZF9 (SG10 CAV, [463], S. 139)",
+            ));
+        }
+        (false, true) => {
+            return Err(DispatchError::InvalidPayload(format!(
+                "\"enfg_grund\" is stated beside enfg_grundlage {grundlage:?}: the SG10 CAV \
+                 Grund der Privilegierung rides only beside ZF9 ([463], UTILMD AHB Strom 2.2 \
+                 S. 139)"
+            )));
+        }
+        _ => {}
+    }
+
+    let current = super::current_state::<mako_gpke::GpkeEogWorkflow>(
         state,
         malo_id.as_str(),
         mako_gpke::EOG_WORKFLOW_NAME,
-        move || mako_gpke::EogCommand::SendAntwort {
-            accepted,
-            versorgungsart,
-            bilanzkreis,
-            reason,
+    )
+    .await?;
+    let mako_gpke::EogState::ValidationPassed(data) = current.offen() else {
+        return Err(DispatchError::InvalidPayload(format!(
+            "the EoG process on {malo_id} owes no answer (state {})",
+            current.label()
+        )));
+    };
+    let stichtag = super::eog_stammdaten::stichtag(&data.process_date)?;
+    let record = super::eog_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
+    let marktlokation = super::eog_stammdaten::strom_55014(&record, &data.transaktionsgrund)?;
+
+    dispatch_to_process_with_state::<mako_gpke::GpkeEogWorkflow, _>(
+        state,
+        malo_id.as_str(),
+        mako_gpke::EOG_WORKFLOW_NAME,
+        move |current| {
+            use mako_engine::workflow::Workflow as _;
+            let cmd = mako_gpke::EogCommand::SendAntwort {
+                accepted,
+                versorgungsart,
+                bilanzkreis,
+                reason,
+                haushaltskunde: Some(marktlokation.haushaltskunde),
+                enfg_grundlage,
+                enfg_grund,
+                stammdaten: marktlokation.stammdaten,
+            };
+            let out = mako_gpke::GpkeEogWorkflow::handle(current, cmd.clone())
+                .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            Ok(cmd)
         },
     )
     .await
@@ -1604,7 +1780,7 @@ async fn dispatch_gpke_beendigung_zuordnung_anfragen(
         process_date,
         // `SG4 IDE+24` must be unique per outbound Vorgang; the process the
         // Anfrage opens is the only thing guaranteed to be.
-        vorgangsnummer: format!("ANF-{}", uuid::Uuid::new_v4().simple()),
+        vorgangsnummer: super::vorgangsnummer::neu("ANF"),
         anmeldung_process_id,
         kunde_name: payload
             .get("kunde_name")

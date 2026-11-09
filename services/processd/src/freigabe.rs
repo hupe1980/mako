@@ -85,8 +85,9 @@ pub struct Freigabe {
     /// sends the other cluster. `None` when the refusal carries no code.
     pub codes_ablehnen: Option<CodeAuswahl>,
     /// The facts approving states beside the code, where the entry's own did
-    /// not resolve — the Bilanzkreis, Versorgungsart or Abrechnungsintervall
-    /// of an E/G Zustimmung. Empty when there are none to state.
+    /// not resolve — the Bilanzkreis, Versorgungsart, Abrechnungsintervall or
+    /// Grundlage nach EnFG of an E/G Zustimmung. Empty when there are none to
+    /// state.
     pub fakten_freigeben: Vec<Fakt>,
     /// The same for rejecting — a held E/G Ablehnung is overridden by the
     /// Bestätigung.
@@ -112,8 +113,8 @@ pub struct Freigabe {
 /// A fact a decision states beside its code, under the body key `feld`.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct Fakt {
-    /// The decision body's key: `bilanzkreis`, `versorgungsart` or
-    /// `abrechnungsintervall_monate`.
+    /// The decision body's key: `bilanzkreis`, `versorgungsart`,
+    /// `abrechnungsintervall_monate` or `enfg`.
     pub feld: String,
     /// What it is, with the segment it rides.
     pub bezeichnung: String,
@@ -163,6 +164,14 @@ fn fakten(command: Option<&str>, frozen: Option<&serde_json::Value>) -> Vec<Fakt
                             };
                             wert(&n.to_string(), &text)
                         })
+                        .collect(),
+                ),
+                "enfg" => (
+                    "Grundlage zur Verringerung der Umlagen nach EnFG (SG8 SEQ+Z75 CCI+Z61; \
+                     beside ZF9 the Grund der Privilegierung, SG10 CAV)",
+                    crate::pg::approval::enfg_werte()
+                        .iter()
+                        .map(|(w, b)| wert(w, b))
                         .collect(),
                 ),
                 _ => ("Bilanzkreis des LF", Vec::new()),
@@ -489,8 +498,9 @@ mod tests {
 
     /// The view asks for exactly the facts `decision_body` refuses without: a
     /// Gas E/G entry whose Abrechnungsintervall froze lists the Bilanzkreis
-    /// only, as free text; a bare Strom one lists both of its facts, the
-    /// Versorgungsart with the three codes `CCI+Z36` admits.
+    /// only, as free text; a bare Strom one lists its three facts, the
+    /// Versorgungsart with the three codes `CCI+Z36` admits and the Grundlage
+    /// nach EnFG with each Grund der Privilegierung beside `ZF9`.
     #[test]
     fn the_view_lists_the_facts_a_release_still_needs() {
         use mako_markt::commands as c;
@@ -522,7 +532,15 @@ mod tests {
         .with_commands(c::GPKE_EOG_BESTAETIGEN, c::GPKE_EOG_ABLEHNEN, Some("LF"));
         let f = Freigabe::from_entry(&strom);
         let felder: Vec<&str> = f.fakten_freigeben.iter().map(|x| x.feld.as_str()).collect();
-        assert_eq!(felder, ["versorgungsart", "bilanzkreis"]);
+        assert_eq!(felder, ["versorgungsart", "bilanzkreis", "enfg"]);
+        // The Grundlage nach EnFG: ZG0, ZG1, and ZF9 once per Grund.
+        let enfg: Vec<&str> = f.fakten_freigeben[2]
+            .werte
+            .iter()
+            .map(|w| w.wert.as_str())
+            .collect();
+        assert_eq!(enfg.len(), 11, "{enfg:?}");
+        assert!(enfg.contains(&"ZG0") && enfg.contains(&"ZF9+ZU6") && !enfg.contains(&"ZF9"));
         let codes: Vec<&str> = f.fakten_freigeben[0]
             .werte
             .iter()

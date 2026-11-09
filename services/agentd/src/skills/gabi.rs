@@ -11,6 +11,13 @@ const TRIAGE_OBLIGATION: &str = "gabi-final-allocation-review";
 const TRIAGE_AUDIENCE: &str = "gas-operations";
 const TRIAGE_ESCALATION: &str = "mako-operations";
 
+/// The text of the worklist row a missing final ALOCAT opens.
+///
+/// A fixed sentence, with no model anywhere in the path, so it carries no
+/// [`MACHINE_GENERATED`](crate::plane::MACHINE_GENERATED) disclosure.
+pub(crate) const TRIAGE_SUMMARY: &str =
+    "Die verbindliche finale Allokation (ALOCAT) fehlt. Klärfall anlegen und verfolgen.";
+
 /// Opens operator clearing work for a deterministic final-allocation breach.
 #[derive(Debug, Default)]
 pub struct GabiAllocationTriage;
@@ -76,14 +83,7 @@ impl Skill for GabiAllocationTriage {
         });
         let task = TaskSpec::new(
             "gabi.final-allocation.missing",
-            Justification::new(
-                Tainted::trusted(
-                    "Die verbindliche finale Allokation (ALOCAT) fehlt. Klärfall anlegen und \
-                     verfolgen."
-                        .to_owned(),
-                ),
-                justification,
-            ),
+            Justification::new(Tainted::trusted(TRIAGE_SUMMARY.to_owned()), justification),
             TRIAGE_OBLIGATION,
         )
         .role(TRIAGE_AUDIENCE)

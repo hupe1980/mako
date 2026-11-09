@@ -944,20 +944,19 @@ impl Plane {
         }) {
             let name = name.as_str();
             let m = Arc::new(declaration.clone());
-            let mut agent = Agent::new(&m);
             // A specialist whose work is computation carries a coded skill
             // instead of an `execution` block. The manifest still governs it —
             // same grants, same ceilings, same digest — but the conduct is Rust,
             // so the thresholds are testable and no model is asked to subtract.
-            if name == crate::skills::DeadlineTriage::NAME {
-                // No wiring: `StepCtx::call_tool` dispatches through the plane's
-                // own catalogue, which `try_build` derived from these manifests
-                // and checked against them. A skill that carried its own could
-                // grant itself reach the declaration never described.
-                agent = agent.skill(crate::skills::DeadlineTriage::new());
-            } else if name == crate::skills::GabiAllocationTriage::NAME {
-                agent = agent.skill(crate::skills::GabiAllocationTriage::new());
-            }
+            let agent = if crate::skills::CODED.contains(&name) {
+                crate::skills::register(name, Agent::new(&m)).map_err(|_| {
+                    format!(
+                        "{name} is in `skills::CODED` and `skills::register` has no skill for it"
+                    )
+                })?
+            } else {
+                Agent::new(&m)
+            };
             builder = builder.agent(agent);
         }
 
@@ -2028,14 +2027,11 @@ mod tests {
     #[test]
     fn coded_specialists_are_reported_as_coded() {
         let router = Router::build(&Activation::all()).expect("routes");
-        for name in [
-            crate::skills::DeadlineTriage::NAME,
-            crate::skills::GabiAllocationTriage::NAME,
-        ] {
+        for name in crate::skills::CODED {
             let route = router
                 .routes()
                 .iter()
-                .find(|route| route.name == name)
+                .find(|route| route.name == *name)
                 .expect("coded route");
             assert_eq!(route.execution, RouteExecution::Coded, "{name}");
         }

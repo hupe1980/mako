@@ -555,6 +555,9 @@ One JSON document per record, the bulk-endpoint shape:
   boundary.
 - At-least-once: offsets commit after the store; a storage failure redelivers
   the batch. A new consumer group starts at the **earliest** offset.
+- The consumer leaves its group whenever it stops, so a reconnect or the next
+  instance is assigned the partitions at once. A commit refused during a
+  rebalance is retried after the next poll.
 
 ### Zählerstandsgang
 

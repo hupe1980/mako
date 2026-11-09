@@ -90,6 +90,35 @@ pub const ANMELDUNG_PIDS_MIT_BILANZKREIS: &[u32] = &[
     55077, // Anmeldung erz. MaLo
 ];
 
+/// The Abmeldung — LF an NB.
+pub const ABMELDUNG_PID: u32 = 55004;
+/// The Kündigung — „LFN an LFA": it goes to the Altlieferant, never the NB.
+pub const KUENDIGUNG_PID: u32 = 55016;
+
+/// The `SG4 STS+7` Transaktionsgründe the Abmeldung 55004 admits (UTILMD AHB
+/// Strom 2.2 Kap. 5.4, S. 165–166).
+pub const ABMELDUNG_GRUENDE: &[&str] = &[
+    "E01", "Z33", "Z41", "ZG9", "ZH1", "ZH2", "ZT4", "ZT5", "ZZD",
+];
+
+/// The 55004 Gründe that name the confirmed Beginn instead of the Ende:
+/// „Aufhebung einer zukünftigen Zuordnung" makes `DTM+92` Muss (Bedingung
+/// `[7]`, filled „mit dem ursprünglich vom NB bestätigten Beginnzeitpunkt",
+/// `[577]`) and `DTM+93` only under every other Grund (`[11]`) — S. 165.
+pub const ABMELDUNG_AUFHEBUNG_GRUENDE: &[&str] = &["ZG9", "ZH1", "ZH2"];
+
+/// The Lokationsart Ergänzungen the 55004 admits: `ZW3` erzeugende, `ZW4`
+/// verbrauchende Marktlokation, `ZW5` Tranche, `ZAP` ruhende Marktlokation
+/// (S. 166). Each selects its own `SG5 LOC` (`[479]`/`[480]`, `[481]`,
+/// `[96]`), so none is a default for another.
+pub const ABMELDUNG_ERGAENZUNGEN: &[&str] = &["ZW3", "ZW4", "ZW5", "ZAP"];
+
+/// The 55016's one Transaktionsgrund, `E03` Wechsel, and its Ergänzungen
+/// `ZW3`/`ZW4`/`ZW5` (UTILMD AHB Strom 2.2 Kap. 5.3).
+pub const KUENDIGUNG_GRUND: &str = "E03";
+/// See [`KUENDIGUNG_GRUND`].
+pub const KUENDIGUNG_ERGAENZUNGEN: &[&str] = &["ZW3", "ZW4", "ZW5"];
+
 /// The Anfrage-PIDs whose `SG4 STS+7` Ergänzung is a **Geschäftsvorfall**.
 ///
 /// The erzeugende Anmeldung admits `ZW0`/`ZW1`/`ZW2` and nothing else, where
@@ -585,6 +614,32 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                     }
                 }
 
+                // The Abmeldung and the Kündigung each make `SG4 STS+7` Muss
+                // with a Lokationsart Ergänzung; a missing or foreign code is
+                // a message the NB or the LFA refuses.
+                let admitted = match pid.as_u32() {
+                    ABMELDUNG_PID => Some((ABMELDUNG_GRUENDE, ABMELDUNG_ERGAENZUNGEN)),
+                    KUENDIGUNG_PID => Some((&[KUENDIGUNG_GRUND][..], KUENDIGUNG_ERGAENZUNGEN)),
+                    _ => None,
+                };
+                if let Some((gruende, ergaenzungen)) = admitted {
+                    let grund = transaktionsgrund.as_deref().unwrap_or("");
+                    let erg = transaktionsgrund_ergaenzung.as_deref().unwrap_or("");
+                    if !gruende.contains(&grund) || !ergaenzungen.contains(&erg) {
+                        return Err(WorkflowError::rejected(format!(
+                            "{pid}: SG4 STS+7 ist Muss — Transaktionsgrund {} und \
+                             Ergänzung {} (UTILMD AHB Strom 2.2), nicht {grund:?}/{erg:?}",
+                            gruende.join("/"),
+                            ergaenzungen.join("/"),
+                        )));
+                    }
+                }
+                let dtm_qualifier = (pid.as_u32() == ABMELDUNG_PID
+                    && transaktionsgrund
+                        .as_deref()
+                        .is_some_and(|g| ABMELDUNG_AUFHEBUNG_GRUENDE.contains(&g)))
+                .then(|| "92".to_owned());
+
                 let event = LfAnmeldungEvent::Initiated {
                     pruefidentifikator: pid,
                     location_id: location_id.clone(),
@@ -629,6 +684,8 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                         transaktionsgrund_ergaenzung,
                         // `SG8 SEQ+Z79` Produkt 9991000002090 — Muss on ZW2.
                         tranchengroesse,
+                        // `92` on an Aufhebung 55004 ([7]/[11]).
+                        dtm_qualifier,
                         ..Default::default()
                     },
                 );
@@ -729,16 +786,94 @@ mod tests {
     use super::*;
 
     fn make_initiate(pid: u32) -> LfAnmeldungCommand {
+        // The Abmeldung and the Kündigung carry their Muss STS+7.
+        let (grund, erg) = match pid {
+            ABMELDUNG_PID => (Some("ZT5".to_owned()), Some("ZW4".to_owned())),
+            KUENDIGUNG_PID => (Some(KUENDIGUNG_GRUND.to_owned()), Some("ZW4".to_owned())),
+            _ => (None, None),
+        };
         LfAnmeldungCommand::InitiateAnmeldung {
-            transaktionsgrund_ergaenzung: None,
+            transaktionsgrund_ergaenzung: erg,
             tranchengroesse: None,
             pid: Pruefidentifikator::new(pid).unwrap(),
             sender: MarktpartnerCode::new("4012345000009"),
             receiver: MarktpartnerCode::new("9900123456789"),
             location_id: MaLo::new("10001234558"),
             process_date: "2026-10-01".to_owned(),
-            transaktionsgrund: None,
+            transaktionsgrund: grund,
             bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+        }
+    }
+
+    fn with_codes(pid: u32, grund: Option<&str>, erg: Option<&str>) -> LfAnmeldungCommand {
+        let LfAnmeldungCommand::InitiateAnmeldung {
+            pid: p,
+            sender,
+            receiver,
+            location_id,
+            process_date,
+            bilanzkreis,
+            tranchengroesse,
+            ..
+        } = make_initiate(pid)
+        else {
+            unreachable!()
+        };
+        LfAnmeldungCommand::InitiateAnmeldung {
+            pid: p,
+            sender,
+            receiver,
+            location_id,
+            process_date,
+            transaktionsgrund: grund.map(str::to_owned),
+            bilanzkreis,
+            transaktionsgrund_ergaenzung: erg.map(str::to_owned),
+            tranchengroesse,
+        }
+    }
+
+    /// `SG4 STS+7` is Muss on the 55004 and the 55016, Grund and Ergänzung
+    /// each from its column; anything else is refused before the wire.
+    #[test]
+    fn the_abmeldung_and_kuendigung_need_their_column_codes() {
+        let state = LfAnmeldungState::New;
+        for (pid, grund, erg) in [
+            (ABMELDUNG_PID, None, Some("ZW4")),
+            (ABMELDUNG_PID, Some("ZT5"), None),
+            (ABMELDUNG_PID, Some("E03"), Some("ZW4")),
+            (ABMELDUNG_PID, Some("ZT5"), Some("ZW0")),
+            (KUENDIGUNG_PID, Some("ZT5"), Some("ZW4")),
+            (KUENDIGUNG_PID, Some("E03"), Some("ZAP")),
+        ] {
+            assert!(
+                GpkeLfAnmeldungWorkflow::handle(&state, with_codes(pid, grund, erg)).is_err(),
+                "{pid} {grund:?}/{erg:?}"
+            );
+        }
+    }
+
+    /// An Aufhebung 55004 names the confirmed Beginn (`DTM+92`, `[7]`); every
+    /// other Grund the Ende (`[11]`).
+    #[test]
+    fn an_aufhebung_55004_names_the_beginn() {
+        let state = LfAnmeldungState::New;
+        for (grund, q) in [
+            ("ZG9", Some("92")),
+            ("ZH2", Some("92")),
+            ("ZT5", None),
+            ("E01", None),
+        ] {
+            let out = GpkeLfAnmeldungWorkflow::handle(
+                &state,
+                with_codes(ABMELDUNG_PID, Some(grund), Some("ZW4")),
+            )
+            .expect("written");
+            let payload = &out.outbox[0].payload;
+            assert_eq!(
+                payload.get("dtm_qualifier").and_then(|v| v.as_str()),
+                q,
+                "{grund}"
+            );
         }
     }
 

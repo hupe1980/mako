@@ -444,7 +444,7 @@ stops; `makod::dvgw_ingest::try_ingest` calls it first on all three inbound path
 |---|---|---|
 | `gabi-gas-nomination` | 70030–70034 (NOMINT), 70035–70039 (NOMRES) | Transportkunde ↔ NB/MGV — both ends: `SendNomination` states the positions and enqueues this tenant's NOMINT, `ReceiveNomint` records a Transportkunde's and `SendNomres` answers it; either opens the process the NOMRES closes |
 | `gabi-gas-allocation` | 70001–70023 (ALOCAT) | NB → MGV, MGV → BKV, ENB/ANB → NB, MGV → NB, NB → BKV |
-| `gabi-gas-mehr-mindermengen` | 70095 (SLP), 70096 (RLM) (SSQNOT) | NB → MGV — one process per Netzkonto and Abrechnungszeitraum, hosting both ends: `ReceiveSsqnot` records what a Netzbetreiber reports, `Melden` enqueues this tenant's own SSQNOT; a later report for the same period stands, and a RLM report for a Zeitraum from 1.10.2015 is refused |
+| `gabi-gas-mehr-mindermengen` | 70095 (SLP), 70096 (RLM) (SSQNOT) | NB → MGV — one process per Netzkonto and Abrechnungszeitraum: `ReceiveSsqnot` records a Netzbetreiber's report, `Melden` enqueues this tenant's own; a later report for the period stands; a RLM report for a Zeitraum from 1.10.2015 is refused |
 
 Four properties of the dispatch:
 

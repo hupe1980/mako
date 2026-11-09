@@ -93,6 +93,22 @@ async fn a_missing_final_alocat_completes_and_opens_urgent_triage() {
     assert_eq!(task.on_expiry, OnExpiry::Escalate);
     assert!(task.may_decide("user:anna", &[AUDIENCE.to_owned()]));
     assert!(!task.may_decide("user:mallory", &["billing-operations".to_owned()]));
+
+    // As the Desk is served it: no model wrote the row, so it does not say one
+    // did.
+    let hinweise = plane
+        .hinweise(&[AUDIENCE.to_owned()])
+        .await
+        .expect("the worklist is readable");
+    assert_eq!(hinweise.len(), 1, "{hinweise:#?}");
+    assert!(
+        !hinweise[0].text.is_empty()
+            && !hinweise[0]
+                .text
+                .starts_with(agentd::plane::MACHINE_GENERATED),
+        "a coded row is served disclosed as AI-generated: {}",
+        hinweise[0].text
+    );
 }
 
 #[tokio::test]
