@@ -24,7 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::check_workflow_purity::{
-    blank_cfg_test, code_mask, is_word_end, is_word_start, match_brace, walk_rs,
+    blank_cfg_test, cfg_test_module_files, code_mask, is_word_end, is_word_start, match_brace,
+    walk_rs,
 };
 
 /// Command variants with no shipped constructor, and why that is correct.
@@ -131,6 +132,8 @@ pub fn run(workspace_root: &Path) -> bool {
     };
     let crates: Vec<(String, String)> = crate_files.iter().map(read).collect();
     let services: Vec<(String, String)> = service_files.iter().map(read).collect();
+    // A test module in its own file is test code, as an inline one is.
+    let (crates, services) = (shipped(crates), shipped(services));
 
     let enums = command_enums(&crates);
     if enums.len() < MIN_COMMAND_ENUMS {
@@ -171,6 +174,15 @@ pub fn run(workspace_root: &Path) -> bool {
          shrinks."
     );
     false
+}
+
+/// `files` without those a `#[cfg(test)] mod name;` declaration pulls in.
+fn shipped(files: Vec<(String, String)>) -> Vec<(String, String)> {
+    let tests = cfg_test_module_files(&files);
+    files
+        .into_iter()
+        .filter(|(rel, _)| !tests.contains(rel))
+        .collect()
 }
 
 /// Every command enum named by a `type Command = X;`, keyed by `X`.
@@ -491,6 +503,39 @@ async fn door() { p.run(PingCommand::Send { to: x }, o).await; }
 mod tests { fn t() { let _ = PingCommand::Receive(1); } }
 "#,
         );
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].contains("PingCommand::Receive"), "{findings:?}");
+    }
+
+    #[test]
+    fn a_variant_constructed_only_in_a_test_module_file_is_refused() {
+        let files = shipped(vec![
+            ("crates/ping/src/lib.rs".to_owned(), DEF.to_owned()),
+            (
+                "services/makod/src/door/mod.rs".to_owned(),
+                "async fn door() { p.run(PingCommand::Send { to: x }, o).await; }\n\
+                 #[cfg(test)]\nmod receive_tests;\nmod shipped;\n"
+                    .to_owned(),
+            ),
+            (
+                "services/makod/src/door/receive_tests.rs".to_owned(),
+                "fn t() { let _ = PingCommand::Receive(1); }".to_owned(),
+            ),
+            (
+                "services/makod/src/door/shipped.rs".to_owned(),
+                "fn f() -> PingCommand { PingCommand::TimeoutExpired { deadline_id: d, label: l } }"
+                    .to_owned(),
+            ),
+        ]);
+        assert_eq!(
+            files.len(),
+            3,
+            "{:?}",
+            files.iter().map(|f| &f.0).collect::<Vec<_>>()
+        );
+        let enums = command_enums(&files[..1]);
+        let constructed = constructed_variants(&enums, files.iter());
+        let findings = verdict(&enums, &constructed, &[]);
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert!(findings[0].contains("PingCommand::Receive"), "{findings:?}");
     }

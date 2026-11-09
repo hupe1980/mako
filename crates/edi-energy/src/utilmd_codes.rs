@@ -412,6 +412,21 @@ pub mod nad {
     /// `VY` — andere zugehörige Partei, `SG12`. On a 55010 the
     /// **Neulieferant** (Bedingung `[567]`).
     pub const ZUGEHOERIGE_PARTEI: &str = "VY";
+    /// `Z05` — Name und Adresse für die Ablesekarte, `SG12` (UTILMD AHB Gas
+    /// 1.2 Kap. 5.6, S. 65).
+    pub const ABLESEKARTE: &str = "Z05";
+}
+
+/// `SG4 IMD` „Identifikationslogik" — how a Gas Vorgang identifies its
+/// Marktlokation (UTILMD AHB Gas 1.2 Kap. 5.6, S. 44).
+pub mod imd {
+    /// DE 7081 `Z36` — Identifikationslogik.
+    pub const IDENTIFIKATIONSLOGIK: &str = "Z36";
+    /// DE 7009 `Z12` — Marktlokations-ID: `SG5 LOC+172` carries it (Bedingung
+    /// `[328]`).
+    pub const MARKTLOKATIONS_ID: &str = "Z12";
+    /// DE 7009 `Z13` — Alle Identifikationsdaten (Bedingung `[333]`).
+    pub const ALLE_IDENTIFIKATIONSDATEN: &str = "Z13";
 }
 
 /// `SG10 CCI` DE 7037 — Merkmal codes.

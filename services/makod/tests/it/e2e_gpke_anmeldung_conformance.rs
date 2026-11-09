@@ -39,7 +39,6 @@ fn registry() -> MpIdRegistry {
 fn anmeldung(ergaenzung: &str, tranchengroesse: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "pid": 55077,
-        "direction": "outbound",
         "sender": LFN,
         "receiver": NB,
         "malo": MALO,

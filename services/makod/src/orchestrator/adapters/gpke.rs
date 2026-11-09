@@ -357,13 +357,12 @@ pub fn gpke_abrechnung_remadv_registry() -> AdapterRegistry<GpkeAbrechnungWorkfl
                     "GPKE REMADV adapter: expected REMADV message (PIDs 33001–33004)".into(),
                 ));
             };
-            let pid = r
-                .bgm()
-                .and_then(|b| b.pruefidentifikator())
-                .ok_or_else(|| {
-                    EngineError::Deserialization(
-                        "GPKE REMADV adapter: PID not found in REMADV BGM".into(),
-                    )
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE REMADV adapter: PID detection failed: {e}"
+                    ))
                 })
                 .and_then(convert_pid)?;
             Ok(InvoicCommand::ReceiveRemadv {
@@ -1417,13 +1416,128 @@ pub fn gpke_konfiguration_aenderung_registry() -> AdapterRegistry<GpkeKonfigurat
     registry
 }
 
-// ── GPKE Datenabruf ORDRSP / Ablehnung (PIDs 17102, 17113) ───────────────────
+// ── MSB side: ORDERS 17116 / 17004 / 17102 / 17113 ───────────────────────────
+
+/// `NAD+MS` and the first `SG2 LOC` DE 3225 of an inbound ORDERS, with its
+/// `BGM` DE 1004.
+fn orders_head(o: &edi_energy::messages::orders::OrdersMessage) -> (String, String, String) {
+    let sender = o
+        .sender()
+        .and_then(|n| n.party_id.as_deref())
+        .unwrap_or("")
+        .to_owned();
+    let lokation = o
+        .segments()
+        .iter()
+        .find(|s| s.tag == "LOC")
+        .and_then(|s| s.component_str(1, 0))
+        .unwrap_or("")
+        .to_owned();
+    let nummer = o
+        .segments()
+        .iter()
+        .find(|s| s.tag == "BGM")
+        .and_then(|s| s.component_str(1, 0))
+        .unwrap_or("")
+        .to_owned();
+    (sender, lokation, nummer)
+}
+
+/// Build an [`AdapterRegistry`] for [`GpkeSperrungMsbWorkflow`]: the MSB's
+/// copy of the NB's Anfrage Sperrung (ORDERS 17116) becomes
+/// [`SperrungMsbCommand::ReceiveAnfrage`].
+#[must_use]
+pub fn gpke_sperrung_msb_registry() -> AdapterRegistry<GpkeSperrungMsbWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Sperrung MSB adapter".into(),
+                )
+            })?;
+            let AnyMessage::Orders(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Sperrung MSB adapter: expected ORDERS 17116".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Sperrung MSB adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+            let (sender, lokation, _) = orders_head(o);
+            Ok(SperrungMsbCommand::ReceiveAnfrage {
+                pid,
+                anfrage: AnfrageSperrung {
+                    netzbetreiber: mako_engine::types::MarktpartnerCode::new(sender),
+                    malo: mako_engine::types::MaLo::new(lokation),
+                    message_ref: MessageRef::new(msg.message_ref()),
+                },
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for [`GpkeDatenabrufMsbWorkflow`]: the MSB's
+/// copy of an ORDERS 17004 / 17102 / 17113 becomes
+/// [`DatenabrufMsbCommand::ReceiveAnfrage`].
+#[must_use]
+pub fn gpke_datenabruf_msb_registry() -> AdapterRegistry<GpkeDatenabrufMsbWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Datenabruf MSB adapter".into(),
+                )
+            })?;
+            let AnyMessage::Orders(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Datenabruf MSB adapter: expected ORDERS 17004/17102/17113".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Datenabruf MSB adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+            let (sender, lokation_id, dokumentennummer) = orders_head(o);
+            Ok(DatenabrufMsbCommand::ReceiveAnfrage {
+                pid,
+                anfrage: WerteAnfrage {
+                    anfragender: mako_engine::types::MarktpartnerCode::new(sender),
+                    dokumentennummer,
+                    lokation_id,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                },
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE Datenabruf ORDRSP / Ablehnung (PIDs 19007, 19102, 19114) ────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeDatenabrufWorkflow`].
 ///
-/// The Datenabruf process is LF-initiated (outbound ORDERS); the only inbound
-/// message is a rejection ORDRSP from NB/MSB. Produces
-/// [`DatenabrufCommand::ReceiveAblehnung`].
+/// The requesting side sends the ORDERS; the only inbound message is the
+/// MSB's rejection ORDRSP. Produces [`DatenabrufCommand::ReceiveAblehnung`].
 #[must_use]
 pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatenabrufWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -1437,7 +1551,8 @@ pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatenabrufWorkflow> {
             })?;
             let AnyMessage::Ordrsp(o) = msg else {
                 return Err(EngineError::Deserialization(
-                    "GPKE Datenabruf adapter: expected ORDRSP message (PIDs 17102, 17113)".into(),
+                    "GPKE Datenabruf adapter: expected ORDRSP message (PIDs 19007, 19102, 19114)"
+                        .into(),
                 ));
             };
             let ordrsp_pid = msg

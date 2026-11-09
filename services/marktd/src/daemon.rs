@@ -47,6 +47,7 @@ use crate::{
         event_ingest::{InboundWebhookSecret, ingest_event},
         event_log::list_event_log,
         grundversorger::{get_grundversorger, put_grundversorger},
+        lokationsbuendel,
         lokationszuordnung::{
             delete_lokationszuordnung, get_malo_buendel, get_malo_lokationen, get_melo_lokationen,
             put_lokationszuordnung,
@@ -57,7 +58,7 @@ use crate::{
         melo::{get_melo, get_melo_standorteigenschaften, put_melo},
         melo_msb::{get_melo_msb_at, get_melo_msb_history, put_melo_msb},
         mmma_preise,
-        msb_rahmenvertrag_gas::{get_msb_rv_gas, list_msb_rv_gas, upsert_msb_rv_gas},
+        msb_rahmenvertrag::{check_msb_rv, get_msb_rv, list_msb_rv, upsert_msb_rv},
         nb_contract::{
             get_nb_contract, get_nb_contract_by_malo, list_nb_contracts, put_nb_contract,
         },
@@ -296,6 +297,17 @@ fn malo_routes() -> Router<S> {
             "/api/v1/malos/{id}/netznutzungsdaten",
             put(utilmd_stammdaten::put_netznutzungsdaten),
         )
+        // The Lokationsbündel of a Marktlokation on a Stichtag (makod reads it
+        // for the Geschäftsdatenanfrage answers 55035/55095/55060), and the
+        // NB's Angaben of it no BO4E object carries.
+        .route(
+            "/api/v1/malos/{id}/lokationsbuendel",
+            get(lokationsbuendel::get_lokationsbuendel),
+        )
+        .route(
+            "/api/v1/malos/{id}/lokationsbuendel-angaben",
+            put(lokationsbuendel::put_lokationsbuendel_angaben),
+        )
         .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
         .route("/api/v1/malos/{id}/buendel", get(get_malo_buendel))
         // VersorgungsStatus per MaLo, with point-in-time and full history.
@@ -500,12 +512,14 @@ fn registry_routes() -> Router<S> {
             "/api/v1/netzzugang/antraege/{id}/status",
             patch(set_antrag_status),
         )
-        // Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0 Tenor 13–16).
+        // MSB-Rahmenvertrag registry, both Sparten (read by processd's
+        // Anmeldung MSB check).
         .route(
-            "/api/v1/msb-rahmenvertraege-gas",
-            put(upsert_msb_rv_gas).get(list_msb_rv_gas),
+            "/api/v1/msb-rahmenvertraege",
+            put(upsert_msb_rv).get(list_msb_rv),
         )
-        .route("/api/v1/msb-rahmenvertraege-gas/{id}", get(get_msb_rv_gas))
+        .route("/api/v1/msb-rahmenvertraege/check", get(check_msb_rv))
+        .route("/api/v1/msb-rahmenvertraege/{id}", get(get_msb_rv))
         .route("/api/v1/correlations", get(list_correlations))
         .route("/api/v1/correlations/{id}", get(get_correlation))
 }
@@ -623,9 +637,10 @@ fn repository_layers(app: Router, pool: &PgPool) -> Router {
         PgDeviceRepository,
         PgEinwilligungRepository,
         PgNetzzugangRepository,
-        PgMsbRahmenvertragGasRepository,
+        PgMsbRahmenvertragRepository,
         PgZaehlzeitRepository,
         PgUtilmdStammdatenRepository,
+        PgLokationsbuendelRepository,
     )
 }
 

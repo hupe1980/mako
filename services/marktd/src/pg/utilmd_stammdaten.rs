@@ -12,8 +12,8 @@ use mako_markt::{
     error::MdmError,
     utilmd_stammdaten::{
         Abrechnungsvariante, Anschrift, Betriebszustand, BilanzierungStammdaten, Kunde,
-        MaloUtilmdStammdaten, MaloZaehlwerk, MesslokationStammdaten, Netznutzungsdaten,
-        ZaehlerStammdaten,
+        MaloUtilmdStammdaten, MaloZaehlwerk, MesslokationStammdaten, NetznutzungZahler,
+        Netznutzungsdaten, Netznutzungsvertrag, ZaehlerStammdaten,
     },
 };
 use rust_decimal::Decimal;
@@ -56,8 +56,9 @@ impl PgUtilmdStammdatenRepository {
             r"INSERT INTO malo_netznutzungsdaten
                   (tenant, malo_id, valid_from, valid_to, haushaltskunde, betriebszustand,
                    abrechnungstermin, naechste_abrechnung_jahr, abrechnungsintervall_monate,
-                   abrechnungsvariante, gemeinderabatt_prozent)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                   abrechnungsvariante, gemeinderabatt_prozent, turnusablesung,
+                   netznutzungsvertrag, netznutzung_zahler)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
               ON CONFLICT (tenant, malo_id, valid_from) DO UPDATE
               SET valid_to = EXCLUDED.valid_to,
                   haushaltskunde = EXCLUDED.haushaltskunde,
@@ -67,6 +68,9 @@ impl PgUtilmdStammdatenRepository {
                   abrechnungsintervall_monate = EXCLUDED.abrechnungsintervall_monate,
                   abrechnungsvariante = EXCLUDED.abrechnungsvariante,
                   gemeinderabatt_prozent = EXCLUDED.gemeinderabatt_prozent,
+                  turnusablesung = EXCLUDED.turnusablesung,
+                  netznutzungsvertrag = EXCLUDED.netznutzungsvertrag,
+                  netznutzung_zahler = EXCLUDED.netznutzung_zahler,
                   updated_at = now()",
         )
         .bind(tenant)
@@ -80,6 +84,9 @@ impl PgUtilmdStammdatenRepository {
         .bind(row.abrechnungsintervall_monate)
         .bind(row.abrechnungsvariante.map(Abrechnungsvariante::as_str))
         .bind(row.gemeinderabatt_prozent)
+        .bind(row.turnusablesung.as_deref())
+        .bind(row.netznutzungsvertrag.map(Netznutzungsvertrag::as_str))
+        .bind(row.netznutzung_zahler.map(NetznutzungZahler::as_str))
         .execute(&self.pool)
         .await
         .map_err(super::write_error)?;
@@ -96,7 +103,8 @@ impl PgUtilmdStammdatenRepository {
         let row = sqlx::query(
             r"SELECT valid_from, valid_to, haushaltskunde, betriebszustand, abrechnungstermin,
                      naechste_abrechnung_jahr, abrechnungsintervall_monate, abrechnungsvariante,
-                     gemeinderabatt_prozent
+                     gemeinderabatt_prozent, turnusablesung, netznutzungsvertrag,
+                     netznutzung_zahler
               FROM malo_netznutzungsdaten
               WHERE tenant = $1 AND malo_id = $2
                 AND valid_from <= $3 AND (valid_to IS NULL OR valid_to > $3)",
@@ -112,6 +120,8 @@ impl PgUtilmdStammdatenRepository {
         };
         let betriebszustand: Option<String> = row.try_get("betriebszustand").map_err(internal)?;
         let variante: Option<String> = row.try_get("abrechnungsvariante").map_err(internal)?;
+        let vertrag: Option<String> = row.try_get("netznutzungsvertrag").map_err(internal)?;
+        let zahler: Option<String> = row.try_get("netznutzung_zahler").map_err(internal)?;
         Ok(Some(Netznutzungsdaten {
             valid_from: row.try_get("valid_from").map_err(internal)?,
             valid_to: row.try_get("valid_to").map_err(internal)?,
@@ -128,6 +138,9 @@ impl PgUtilmdStammdatenRepository {
             gemeinderabatt_prozent: row
                 .try_get::<Option<Decimal>, _>("gemeinderabatt_prozent")
                 .map_err(internal)?,
+            turnusablesung: row.try_get("turnusablesung").map_err(internal)?,
+            netznutzungsvertrag: vertrag.as_deref().and_then(Netznutzungsvertrag::from_wire),
+            netznutzung_zahler: zahler.as_deref().and_then(NetznutzungZahler::from_wire),
         }))
     }
 

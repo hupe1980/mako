@@ -23,6 +23,8 @@ impl EdifactIngestDispatcher {
     /// `gpke-messwerte`
     /// `gpke-utilts`
     /// `gpke-datenabruf`
+    /// `gpke-datenabruf-msb`
+    /// `gpke-sperrung-msb`
     /// `gpke-geschaeftsdatenanfrage`
     /// `gpke-konfiguration-aenderung`
     pub(super) async fn dispatch_gpke(
@@ -425,10 +427,12 @@ impl EdifactIngestDispatcher {
             //   Note: PID 13013 (Gas Allokationsliste, Gas-only) is registered by
             //   GaBiGasModule → "gabi-gas-mmma" and handled in that arm below.
             //
-            // Note: PIDs 17110/17114 (LF → NB ORDERS request) are spawned by the
-            // ERP (via CommandAPI), not by inbound EDIFACT at the LF. They are
-            // registered in the PID router for completeness but have no inbound
-            // dispatch handler here (LF is the sender, not the receiver).
+            // Note: ORDERS 17110 (LF → NB) and 17114 (NB → ÜNB, published by
+            // ORDERS fv20260401 and dropped by fv20261001) are this side's own
+            // Anforderungen. They are registered in the PID router for
+            // completeness but have no inbound dispatch handler here — the
+            // receivers (NB for 17110, ÜNB for 17114) are listed in
+            // `SEND_ONLY_PIDS`.
             "gpke-allokationsliste" => match pid {
                 19110 | 19115 => {
                     let cmd =
@@ -831,16 +835,18 @@ impl EdifactIngestDispatcher {
                 }
             }
             // ── GPKE Datenabruf ORDRSP/Ablehnung ──────────────────────────────
-            // The outbound ORDERS is sent by LF; the only inbound message is a
-            // rejection ORDRSP from NB/MSB (PIDs 19101, 19102, 19114).
+            // This side sent the ORDERS 17004/17102/17113; the only inbound
+            // message is the MSB's rejection ORDRSP 19007/19102/19114. It
+            // carries no LOC and names the ORDERS by its `BGM` DE 1004 in
+            // `SG1 RFF+ON` (ORDRSP AHB 1.1b, Hinweis [519] / [529]) — the key
+            // the requesting process runs under. Resume only; never spawn.
             "gpke-datenabruf" => {
                 if mako_gpke::datenabruf::ORDRSP_ABLEHNUNG_PIDS.contains(&pid) {
                     let cmd = adapters::gpke_datenabruf_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_malo_from_msg(msg);
-                    // Resume existing process; no spawn — LF initiates.
+                    let order_ref = extract_order_ref_from_msg(msg);
                     self.resume_by_key::<GpkeDatenabrufWorkflow>(
                         inbound,
-                        malo_id.as_str(),
+                        &order_ref,
                         "gpke-datenabruf",
                         cmd,
                     )
@@ -852,6 +858,83 @@ impl EdifactIngestDispatcher {
                     })
                 }
             }
+            // ── GPKE Datenabruf — MSB side (ORDERS 17004 / 17102 / 17113) ────
+            // The MSB receives the Anfrage and owes the values or an Ablehnung.
+            // Each Anfrage is its own process, keyed by the sender and the
+            // ORDERS' Dokumentennummer the Ablehnung will echo; indexed under the
+            // Lokation too, so a lookup by it finds the process. Each opens the
+            // window its row of `mako_fristen::antwort` publishes: 17102 the
+            // answer (GPKE Teil 4 Kap. 3.2 Nr. 4), 17004 / 17113 the Ablehnung
+            // (WiM Strom Teil 2 Kap. 2.6.3 / 2.7.3 Nr. 2).
+            "gpke-datenabruf-msb" => {
+                if mako_gpke::datenabruf_msb::ORDERS_PIDS.contains(&pid) {
+                    let cmd = adapters::gpke_datenabruf_msb_registry().dispatch(raw, &fv)?;
+                    let mako_gpke::DatenabrufMsbCommand::ReceiveAnfrage { anfrage, .. } = &cmd
+                    else {
+                        unreachable!("the adapter builds ReceiveAnfrage");
+                    };
+                    let key = mako_gpke::datenabruf_msb::anfrage_key(
+                        anfrage.anfragender.as_str(),
+                        &anfrage.dokumentennummer,
+                    );
+                    let lokation = anfrage.lokation_id.clone();
+                    let frist: Vec<(&'static str, time::OffsetDateTime)> =
+                        mako_gpke::datenabruf_msb::antwortfrist(pid, received_at)
+                            .into_iter()
+                            .collect();
+                    let extra: Vec<&str> = [lokation.as_str()]
+                        .into_iter()
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    self.spawn_or_resume_keyed::<GpkeDatenabrufMsbWorkflow>(
+                        inbound,
+                        &key,
+                        "gpke-datenabruf-msb",
+                        cmd,
+                        &fv,
+                        &frist,
+                        &extra,
+                        Some(|s| !s.is_terminal()),
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gpke-datenabruf-msb",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+            // ── GPKE Sperrung — MSB side (ORDERS 17116) ──────────────────────
+            // The NB's Anfrage Sperrung. „spätester ÜT ist der 3. WT nach dem ÜT
+            // von Nr. 3", and a lapse counts as Zustimmung (GPKE Teil 2 Kap.
+            // 3.5.1.2 Nr. 4) — the 17116 row of `mako_fristen::antwort`. Its own
+            // workflow name, so a deployment that is NB as well never resumes
+            // its own Sperrauftrag on the same MaLo.
+            "gpke-sperrung-msb" => match pid {
+                mako_gpke::sperrung_msb::ANFRAGE_PID => {
+                    let cmd = adapters::gpke_sperrung_msb_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    let frist: Vec<(&'static str, time::OffsetDateTime)> =
+                        mako_gpke::sperrung_msb::antwortfrist(received_at)
+                            .map(|due| (mako_gpke::sperrung_msb::ANTWORT_WINDOW_LABEL, due))
+                            .into_iter()
+                            .collect();
+                    self.spawn_or_resume_guarded::<GpkeSperrungMsbWorkflow>(
+                        inbound,
+                        malo_id.as_str(),
+                        "gpke-sperrung-msb",
+                        cmd,
+                        &fv,
+                        &frist,
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-sperrung-msb",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
             // ── GPKE Geschäftsdatenanfrage (GPKE Teil 4 Kap. 3) ───────────────
             // ORDERS 17132 opens the NB's side; the UTILMD 55035/55095/55060 and
             // the ORDRSP 19101 resume the Anfragender's. Every message names the

@@ -117,8 +117,8 @@ pub mod markt {
     pub const PARTNER_UPDATED: &str = "de.markt.partner.updated";
     /// Netzbetreiber contract (Lieferanten-Rahmenvertrag) changed.
     pub const NB_CONTRACT_UPDATED: &str = "de.markt.nb-contract.updated";
-    /// MSB-Rahmenvertrag Gas changed.
-    pub const MSB_RAHMENVERTRAG_GAS_UPDATED: &str = "de.markt.msb-rahmenvertrag-gas.updated";
+    /// MSB-Rahmenvertrag (NB ↔ MSB, either Sparte) changed.
+    pub const MSB_RAHMENVERTRAG_UPDATED: &str = "de.markt.msb-rahmenvertrag.updated";
     /// Device (Gerät) configuration changed.
     pub const GERAET_KONFIGURATION_UPDATED: &str = "de.markt.geraet.konfiguration.updated";
     /// Steuerbare-Ressource Konfigurationsprodukt changed (§14a).
@@ -664,7 +664,7 @@ pub fn all() -> &'static [&'static str] {
         markt::MELO_UPDATED,
         markt::PARTNER_UPDATED,
         markt::NB_CONTRACT_UPDATED,
-        markt::MSB_RAHMENVERTRAG_GAS_UPDATED,
+        markt::MSB_RAHMENVERTRAG_UPDATED,
         markt::GERAET_KONFIGURATION_UPDATED,
         markt::SR_KONFIGURATIONSPRODUKT_UPDATED,
         markt::NETZZUGANG_ANTRAG_UPDATED,

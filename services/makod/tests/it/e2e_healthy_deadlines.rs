@@ -337,12 +337,14 @@ async fn a_healthy_gas_beginn_msb_waits_for_the_gesamtvorgang() {
 
 // ── The dispatcher refuses what no workflow owns ─────────────────────────────
 
-/// The MaBiS Clearingfenster closes on its own label and on nothing else.
+/// The MaBiS Clearingfenster closes on its own labels and on nothing else.
 ///
-/// The close is the one deadline `mabis-billing` owns
-/// ([`mako_mabis::CLEARING_ENDE_LABEL`]); a label it does not own reaches no
-/// workflow, closes nothing and is reported as unowned — it is never mapped onto
-/// a default Abrechnungslauf.
+/// `mabis-billing` owns two closes, one per Abrechnungslauf: the BKA close
+/// ([`mako_mabis::CLEARING_ENDE_LABEL`]) moves the settlement into the KBKA
+/// Clearingphase (BK6-24-174 Anlage 3 Kap. 9.7.1, S. 112), the KBKA close
+/// ([`mako_mabis::KBKA_CLEARING_ENDE_LABEL`]) ends it (Kap. 3.10 Tabelle 2,
+/// S. 22). A label it does not own reaches no workflow, closes nothing and is
+/// reported as unowned — it is never mapped onto a default Abrechnungslauf.
 #[tokio::test]
 async fn an_unowned_label_closes_no_clearing_window() {
     use mako_mabis::{
@@ -370,6 +372,7 @@ async fn an_unowned_label_closes_no_clearing_window() {
                 version: SzrVersion::new("20260101120001+00").expect("17 chars"),
                 im_erstaufschlag: true,
                 clearing_ende: None,
+                kbka_clearing_ende: None,
                 absender: MarktpartnerCode::new(NB_ID),
                 biko_id: mako_engine::types::BikoId::new("10YDE-VE-------2"),
                 message_ref: MessageRef::new("MSCONS-1"),
@@ -392,7 +395,7 @@ async fn an_unowned_label_closes_no_clearing_window() {
 
     let fired = dispatch_deadline(
         production_drivers(),
-        deadline("mabis-kbka-clearingfenster-ende"),
+        deadline("mabis-clearingfenster-ende-dzue"),
         Arc::clone(&store),
         store.as_snapshot_store(),
         0,
@@ -418,8 +421,29 @@ async fn an_unowned_label_closes_no_clearing_window() {
     .await
     .expect("dispatch");
     assert_eq!(fired, Fired::Acted);
-    assert!(matches!(
-        process.state().await.expect("replay"),
-        BillingState::Geschlossen(_)
-    ));
+    assert!(
+        matches!(
+            process.state().await.expect("replay"),
+            BillingState::KbkaOffen(_)
+        ),
+        "the BKA close opens the KBKA Clearingphase"
+    );
+
+    let fired = dispatch_deadline(
+        production_drivers(),
+        deadline(mako_mabis::KBKA_CLEARING_ENDE_LABEL),
+        Arc::clone(&store),
+        store.as_snapshot_store(),
+        0,
+    )
+    .await
+    .expect("dispatch");
+    assert_eq!(fired, Fired::Acted);
+    assert!(
+        matches!(
+            process.state().await.expect("replay"),
+            BillingState::Geschlossen(_)
+        ),
+        "the KBKA window's deadline closes KBKA"
+    );
 }

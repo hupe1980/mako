@@ -68,6 +68,7 @@ fn receive(version: u32, im_erstaufschlag: bool) -> BillingCommand {
         version: v(version),
         im_erstaufschlag,
         clearing_ende: None,
+        kbka_clearing_ende: None,
         absender: MarktpartnerCode::new("9900357000004"),
         biko_id: BikoId::new("10YDE-VE-------2"),
         message_ref: MessageRef::new(format!("MSCONS-BG-2026-01-V{version}")),
@@ -342,8 +343,8 @@ async fn an_abgewiesene_pruefmitteilung_no_longer_stands() {
 
 // ── Clearing window ──────────────────────────────────────────────────────────
 
-/// Kap. 3.10 — after the clearing window closes, nothing can change the
-/// settlement.
+/// Kap. 3.10 — after the BKA window a version enters the KBKA Clearingphase
+/// (Kap. 9.7.1); after the KBKA window nothing can change the settlement.
 #[tokio::test]
 async fn a_closed_settlement_takes_no_version_and_no_check() {
     let process = make_process();
@@ -351,15 +352,19 @@ async fn a_closed_settlement_takes_no_version_and_no_check() {
         .run(receive(1, true), RunOptions::new())
         .await
         .expect("V1");
+    let close = |lauf| BillingCommand::CloseClearing { lauf };
     process
-        .run(
-            BillingCommand::CloseClearing {
-                lauf: Abrechnungslauf::Bka,
-            },
-            RunOptions::new(),
-        )
+        .run(close(Abrechnungslauf::Bka), RunOptions::new())
         .await
-        .expect("window closed");
+        .expect("BKA window closed");
+    assert!(matches!(
+        process.state().await.expect("state loads"),
+        BillingState::KbkaOffen(_)
+    ));
+    process
+        .run(close(Abrechnungslauf::Kbka), RunOptions::new())
+        .await
+        .expect("KBKA window closed");
 
     let state = process.state().await.expect("state loads");
     assert!(matches!(state, BillingState::Geschlossen(_)));
@@ -393,6 +398,7 @@ async fn a_kategorie_c_series_is_refused() {
         version: v(1),
         im_erstaufschlag: true,
         clearing_ende: None,
+        kbka_clearing_ende: None,
         absender: MarktpartnerCode::new("9900357000004"),
         biko_id: BikoId::new("10YDE-VE-------2"),
         message_ref: MessageRef::new("MSCONS-C"),
@@ -418,6 +424,7 @@ async fn a_second_zeitreihe_is_refused_in_the_same_stream() {
         version: v(2),
         im_erstaufschlag: false,
         clearing_ende: None,
+        kbka_clearing_ende: None,
         absender: MarktpartnerCode::new("9900357000004"),
         biko_id: BikoId::new("10YDE-VE-------2"),
         message_ref: MessageRef::new("MSCONS-BK"),

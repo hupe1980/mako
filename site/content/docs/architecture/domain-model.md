@@ -94,7 +94,7 @@ whichever the profile declares, and demands a *plausible* code in each, since
 The PID is what everything else is keyed on: `mako_engine::PidRouter` routes it
 to a workflow, `mako_fristen::antwort` resolves its answer Frist, and
 `mako-pruefung` picks the decision tree the answer must come from. `makod`
-routes **472** PIDs across **71** workflows
+routes **473** PIDs across **73** workflows
 (`services/makod/tests/it/published_counts.rs` holds this page to the count).
 
 ### AHB and MIG

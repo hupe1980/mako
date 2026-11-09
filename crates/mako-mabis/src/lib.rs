@@ -119,7 +119,7 @@ pub use clearingliste::{
 };
 pub use fristen::{
     Abrechnungslauf, BIKO_DATENSTATUS_WERKTAGE, BIKO_WEITERLEITUNG_WERKTAGE, Bilanzierungsmonat,
-    CLEARING_ENDE_LABEL, Fenster, Phase, Stichtag,
+    CLEARING_ENDE_LABEL, Fenster, KBKA_CLEARING_ENDE_LABEL, Phase, Stichtag,
 };
 pub use listenabgleich::{
     LISTEN_FAMILIEN, ListenFamilie, ListenTyp, ListenabgleichCommand, ListenabgleichData,

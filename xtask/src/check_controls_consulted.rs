@@ -9,7 +9,7 @@
 //! | Kind | Discovered from | Consulted when |
 //! |---|---|---|
 //! | Frist constant | `pub const` named `*_FRIST*`, `*_WERKTAGE`, `*_MONATE` in `crates/*/src` | its name appears in production code beyond its definition |
-//! | Meldepflicht row | `pid:` rows of `mako_fristen::meldung` | production code outside `mako-fristen` calls `meldepflichten_for(`, `meldung::all(` or `meldepflicht(<pid>` |
+//! | Meldepflicht row | `pid:` rows of `mako_fristen::meldung` | production code outside `mako-fristen` calls `meldepflichten_for(` or `meldung::all(` |
 //! | Credential field | `pub` `String`/`SecretString` fields named for a secret, key or token in `services/*/src/config.rs` and `mako-service` | `.field` appears in the owning crate's production code |
 //! | Role column | a `rolle`/`role`/`roles`/`marktrolle`/`marktrole`/`*_rolle`/`*_role` column in `services/*/migrations` | the declared site in [`ROLE_COLUMNS`] still contains its needle |
 //! | Feature-gated security module | `#[cfg(feature …)]` on a module named for auth, Cedar, OIDC, signing, TLS or crypto | the declared `Cargo.toml` in [`FEATURE_GATES`] still enables the feature |
@@ -415,18 +415,14 @@ fn meldung_rows(root: &Path, corpus: &Corpus) -> Vec<Finding> {
     let outside = |p: &str| !p.starts_with("crates/mako-fristen/");
     let whole = Regex::new(r"meldepflichten_for\(|meldung::all\(").expect("pattern");
     let reads_all = corpus.count(&whole, outside) > 0;
-    let unread: BTreeSet<String> = all
-        .iter()
-        .filter(|pid| {
-            if reads_all {
-                return false;
-            }
-            let spelled = format!("{}_{}", &pid[..2], &pid[2..]);
-            let re = Regex::new(&format!(r"meldepflicht\(\s*({pid}|{spelled})\b")).expect("pid");
-            corpus.count(&re, outside) == 0
-        })
-        .cloned()
-        .collect();
+    // `meldepflichten_for` is the one lookup — a PID recurs in several
+    // Sequenzdiagramme with a different window each, so no per-PID reader
+    // exists to count.
+    let unread: BTreeSet<String> = if reads_all {
+        BTreeSet::new()
+    } else {
+        all.clone()
+    };
     reconcile("Meldepflicht row", &unread, &all, MELDUNG_UNREAD)
 }
 
@@ -606,9 +602,12 @@ mod tests {
         pub struct Dir(pub std::path::PathBuf);
         impl Dir {
             pub fn new(files: &[(&str, &str)]) -> Self {
-                let n = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_nanos());
+                // A counter, not the clock: two tests running in parallel can
+                // read the same nanosecond, share one directory and delete it
+                // under each other.
+                static NEXT: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let root = std::env::temp_dir().join(format!("ccc-{}-{n}", std::process::id()));
                 for (p, s) in files {
                     let f = root.join(p);

@@ -231,14 +231,10 @@ async fn e2e_lieferende_gas_positive_aperak() {
         .payload
         .as_object()
         .expect("UTILMD answer payload must be a JSON object");
-    assert!(
-        payload["accepted"].as_bool().unwrap(),
-        "accepted flag must be true for acceptance"
-    );
     assert_eq!(
-        payload["anfrage_pid"].as_u64().unwrap(),
-        44004_u64,
-        "outbox payload must carry anfrage_pid 44004"
+        payload["pid"].as_u64().unwrap(),
+        44005_u64,
+        "the Bestätigung of the 44004 is the 44005"
     );
     assert_eq!(payload["malo"].as_str().unwrap(), MALO_GAS_ID);
 
@@ -303,12 +299,9 @@ async fn e2e_lieferende_gas_negative_aperak() {
         .payload
         .as_object()
         .expect("UTILMD answer payload must be a JSON object");
+    assert_eq!(payload["pid"].as_u64().unwrap(), 44006, "the Ablehnung PID");
     assert!(
-        !payload["accepted"].as_bool().unwrap(),
-        "accepted flag must be false for rejection"
-    );
-    assert!(
-        payload["reason"]
+        payload["bemerkung"]
             .as_str()
             .unwrap()
             .contains("Marktlokation"),

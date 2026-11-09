@@ -506,6 +506,16 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(44015),
         dispatch: cmd_geli_eog_ablehnen,
     },
+    CommandDescriptor {
+        // Antwort auf Anfrage zur Stammdatenänderung (UTILMD AHB Gas 1.2 Kap.
+        // 5.12): the GNB's 44142 / 44157 / 44181 / 44182 from marktd's record on
+        // the Änderungsdatum, the LF's 44138 / 44151 / 44152 from its own facts.
+        // The code picks the PID; 44142 is the primary one.
+        name: "geli.stammdaten.anfrage.beantworten",
+        permitted_roles: &[Marktrolle::Gnb, Marktrolle::Lfg],
+        primary_pid: pid(44142),
+        dispatch: cmd_geli_stammdaten_anfrage_beantworten,
+    },
     // ── GeLi Gas LF Stornierung (ERP-initiated, LF sends 44022 to GNB) ────────
     // LFN/LFA initiates a supply-change cancellation; ERP supplies `malo_id`
     // and optional `bgm_qualifier` (E01=Kündigung, E02=Rücktritt, E35=Sperrung).
@@ -534,7 +544,8 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     // ── GeLi Gas Datenabruf (ORDERS 17103 — LF requests Brennwert/Zustandszahl) ─
     // LF sends ORDERS 17103 outbound to NB/MSB requesting Gas quality data.
-    // Spawns a GeliGasDatenabrufWorkflow that tracks the 10-Werktage response.
+    // Spawns a GeliGasDatenabrufWorkflow that tracks the GNB's answer window
+    // (GeLi Gas 3.0 Kap. 4.2, `antwort::brennwert_zustandszahl_due`).
     CommandDescriptor {
         name: "geli.datenabruf.anfragen",
         permitted_roles: &[Marktrolle::Lfg],

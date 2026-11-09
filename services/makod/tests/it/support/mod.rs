@@ -149,7 +149,9 @@ fn kunde() -> mako_markt::utilmd_stammdaten::Kunde {
 }
 
 fn netznutzung() -> mako_markt::utilmd_stammdaten::Netznutzungsdaten {
-    use mako_markt::utilmd_stammdaten::{Abrechnungsvariante, Betriebszustand};
+    use mako_markt::utilmd_stammdaten::{
+        Abrechnungsvariante, Betriebszustand, NetznutzungZahler, Netznutzungsvertrag,
+    };
     mako_markt::utilmd_stammdaten::Netznutzungsdaten {
         valid_from: time::macros::date!(2026 - 01 - 01),
         valid_to: None,
@@ -160,6 +162,9 @@ fn netznutzung() -> mako_markt::utilmd_stammdaten::Netznutzungsdaten {
         abrechnungsintervall_monate: Some(12),
         abrechnungsvariante: Some(Abrechnungsvariante::ArbeitspreisLeistungspreis),
         gemeinderabatt_prozent: Some(rust_decimal::Decimal::ZERO),
+        turnusablesung: Some("05040504".to_owned()),
+        netznutzungsvertrag: Some(Netznutzungsvertrag::KundeNb),
+        netznutzung_zahler: Some(NetznutzungZahler::Kunde),
     }
 }
 

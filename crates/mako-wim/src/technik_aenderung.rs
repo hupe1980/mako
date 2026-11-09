@@ -6,9 +6,21 @@
 //! | PID   | Direction  | Description |
 //! |-------|------------|-------------|
 //! | 17011 | NB / LF → MSB | Beauftragung resp. Bestellung zur Änderung der Technik |
-//! | 17118 | MSB → MSB  | Bestellung einer Konfigurationsänderung |
+//! | 17118 | MSB → MSB  | Bestellung einer Konfigurationsänderung (see below) |
 //! | 19005 | MSB → NB/LF | Bestätigung Auftrag Änderung Technik |
 //! | 19006 | MSB → NB/LF | Ablehnung Auftrag Änderung Technik |
+//!
+//! # Both sides
+//!
+//! mako sends the Auftrag as NB or LF ([`TechnikAenderungCommand::SendAuftrag`])
+//! and receives it as the MSB ([`TechnikAenderungCommand::ReceiveAuftrag`]).
+//! The received Auftrag runs under [`auftrag_key`] — the sender and the
+//! ORDERS' Dokumentennummer — so a deployment that is NB and MSB at once holds
+//! its own sent Auftrag and the received copy as two processes. Only 17011 is
+//! received here: the Anwendungsübersicht 4.0 (lfd. Nr. 22600–23180) files
+//! 17118 under GPKE Teil 3 „Bestellung einer Konfiguration" / „Bestellung
+//! Beendigung einer Konfiguration", answered by ORDRSP 19127 out of
+//! `E_0527` / `E_0539`, not by 19005/19006.
 //!
 //! **17121 is not here.** „Bestellung Änderung (NB an MSB)" belongs to GPKE
 //! Teil 3 and is answered with ORDRSP 19120 out of `E_0526`; `mako-gpke` owns
@@ -94,8 +106,42 @@ pub const ORDRSP_PIDS: &[u32] = &[19005, 19006];
 /// Positive ORDRSP PIDs (confirmation).
 const ORDRSP_BESTAETIGUNG_PIDS: &[u32] = &[19005];
 
+/// The ORDERS the MSB receives here: the Beauftragung Änderung der Technik
+/// 17011, „NB, LF an MSB" (ORDERS AHB 1.1b Kap. 4.12, S. 83).
+pub const RECEIVE_ORDERS_PIDS: &[u32] = &[17_011];
+
 /// Deadline label for the response window (10 Werktage, WiM Strom).
 pub const ANTWORT_WINDOW_LABEL: &str = "wim-technik-aenderung-antwort";
+
+/// Deadline label for the MSB's own answer window on a received Auftrag —
+/// „Unverzüglich, jedoch spätester ÜT ist der 10. WT nach dem ÜT von Nr. 1"
+/// (BK6-24-174 WiM Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2, S. 53), the 17011 row
+/// of [`mako_fristen::antwort`].
+pub const EINGANG_WINDOW_LABEL: &str = "wim-technik-aenderung-eingang";
+
+/// The key a received Auftrag runs under: the sender's MP-ID and the ORDERS'
+/// Dokumentennummer (`BGM` DE 1004).
+///
+/// Not the Messlokation: the answer leg is not built, so a process keyed on
+/// the Lokation would stay open and refuse the next Auftrag for it. The number
+/// is unique only per sender, hence the MP-ID.
+#[must_use]
+pub fn auftrag_key(sender: &str, dokumentennummer: &str) -> String {
+    format!("technik-auftrag:{sender}:{dokumentennummer}")
+}
+
+/// When the MSB's answer to the received ORDERS `pid` is due, from its row in
+/// [`mako_fristen::antwort`].
+#[must_use]
+pub fn eingang_antwortfrist(
+    pid: u32,
+    eingang: time::OffsetDateTime,
+) -> Option<time::OffsetDateTime> {
+    RECEIVE_ORDERS_PIDS
+        .contains(&pid)
+        .then(|| mako_fristen::antwort::antwort_deadline(pid, eingang))
+        .flatten()
+}
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -113,6 +159,22 @@ pub enum TechnikAenderungEvent {
         location_id: Option<String>,
         /// Message reference.
         message_ref: MessageRef,
+    },
+    /// MSB side: an ORDERS Auftrag arrived.
+    AuftragEingegangen {
+        /// ORDERS Prüfidentifikator.
+        orders_pid: Pruefidentifikator,
+        /// The NB or LF that sent it — `NAD+MS`.
+        sender: MarktpartnerCode,
+        /// The Messlokation — `SG2 LOC+172`.
+        location_id: Option<String>,
+        /// Interchange reference of the inbound ORDERS.
+        message_ref: MessageRef,
+    },
+    /// MSB side: the received ORDERS failed its AHB check.
+    AuftragUngueltig {
+        /// The findings.
+        reason: String,
     },
     /// ORDRSP received — confirmation.
     AuftragBestaetigt {
@@ -143,6 +205,8 @@ impl EventPayload for TechnikAenderungEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::AuftragGesendet { .. } => "TechnikAenderungAuftragGesendet",
+            Self::AuftragEingegangen { .. } => "TechnikAenderungAuftragEingegangen",
+            Self::AuftragUngueltig { .. } => "TechnikAenderungAuftragUngueltig",
             Self::AuftragBestaetigt { .. } => "TechnikAenderungAuftragBestaetigt",
             Self::AuftragAbgelehnt { .. } => "TechnikAenderungAuftragAbgelehnt",
             Self::DeadlineExpired { .. } => "TechnikAenderungDeadlineExpired",
@@ -156,6 +220,11 @@ impl EventPayload for TechnikAenderungEvent {
                 message_ref,
                 ..
             } => (Richtung::Ausgang, orders_pid, message_ref),
+            Self::AuftragEingegangen {
+                orders_pid,
+                message_ref,
+                ..
+            } => (Richtung::Eingang, orders_pid, message_ref),
             Self::AuftragBestaetigt {
                 ordrsp_pid,
                 message_ref,
@@ -165,7 +234,7 @@ impl EventPayload for TechnikAenderungEvent {
                 message_ref,
                 ..
             } => (Richtung::Eingang, ordrsp_pid, message_ref),
-            Self::DeadlineExpired { .. } => return None,
+            Self::DeadlineExpired { .. } | Self::AuftragUngueltig { .. } => return None,
         };
         Some(Verlauf {
             richtung,
@@ -190,12 +259,27 @@ pub struct AuftragData {
     pub message_ref: MessageRef,
 }
 
+/// A received Auftrag (MSB side).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EingangData {
+    /// ORDERS PID.
+    pub orders_pid: Pruefidentifikator,
+    /// The NB or LF that sent it.
+    pub sender: MarktpartnerCode,
+    /// The Messlokation.
+    pub location_id: Option<String>,
+    /// Interchange reference of the inbound ORDERS.
+    pub message_ref: MessageRef,
+}
+
 /// Current state of a WiM Technikänderung process.
 ///
 /// ```text
 /// New → AuftragGesendet → Bestaetigt
 ///                      ↘ Abgelehnt
-///                      ↘ DeadlineExpired
+///                      ↘ FristAbgelaufen
+/// New → AuftragEingegangen → FristAbgelaufen   (MSB side)
+///     ↘ Ungueltig
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
@@ -206,6 +290,13 @@ pub enum TechnikAenderungState {
     New,
     /// ORDERS sent; awaiting ORDRSP.
     AuftragGesendet(AuftragData),
+    /// MSB side: an Auftrag arrived; the MSB owes the ORDRSP 19005/19006.
+    AuftragEingegangen(EingangData),
+    /// MSB side: the received Auftrag failed its AHB check.
+    Ungueltig {
+        /// The findings.
+        reason: String,
+    },
     /// MSB/NB confirmed the change.
     Bestaetigt {
         /// Original request data.
@@ -244,6 +335,8 @@ impl TechnikAenderungState {
         match self {
             Self::New => "New",
             Self::AuftragGesendet(_) => "AuftragGesendet",
+            Self::AuftragEingegangen(_) => "AuftragEingegangen",
+            Self::Ungueltig { .. } => "Ungueltig",
             Self::Bestaetigt { .. } => "Bestaetigt",
             Self::Abgelehnt { .. } => "Abgelehnt",
             Self::FristAbgelaufen { .. } => "FristAbgelaufen",
@@ -262,7 +355,10 @@ impl TechnikAenderungState {
     /// Whether terminal.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Bestaetigt { .. } | Self::Abgelehnt { .. })
+        matches!(
+            self,
+            Self::Bestaetigt { .. } | Self::Abgelehnt { .. } | Self::Ungueltig { .. }
+        )
     }
 }
 
@@ -286,6 +382,21 @@ pub enum TechnikAenderungCommand {
         /// When the ORDERS leaves — the Übertragungstag the counterparty's
         /// Antwortfrist counts from ([`mako_fristen::antwort::antwort_deadline`]).
         gesendet_am: time::OffsetDateTime,
+    },
+    /// MSB side: an inbound ORDERS Auftrag (17011).
+    ReceiveAuftrag {
+        /// ORDERS PID read from `SG1 RFF+Z13`.
+        orders_pid: Pruefidentifikator,
+        /// The NB or LF that sent it — `NAD+MS`.
+        sender: MarktpartnerCode,
+        /// The Messlokation — `SG2 LOC+172`.
+        location_id: Option<String>,
+        /// Interchange reference of the inbound ORDERS.
+        message_ref: MessageRef,
+        /// `true` when the AHB check passed.
+        validation_passed: bool,
+        /// The findings when it did not.
+        validation_errors: Vec<String>,
     },
     /// Inbound ORDRSP received.
     ReceiveOrdrsp {
@@ -315,10 +426,15 @@ pub struct WimTechnikAenderungWorkflow;
 /// The one guard a fired deadline passes: is the window `label` names still
 /// open in `state`?
 ///
-/// The answer window is open while the Auftrag waits for its ORDRSP
-/// (`AuftragGesendet`).
+/// The counterparty's answer window is open while the sent Auftrag waits for
+/// its ORDRSP (`AuftragGesendet`); the MSB's own while a received one waits
+/// for the MSB's (`AuftragEingegangen`).
 fn window_open(label: &str, state: &TechnikAenderungState) -> bool {
-    label == ANTWORT_WINDOW_LABEL && matches!(state, TechnikAenderungState::AuftragGesendet(_))
+    match label {
+        ANTWORT_WINDOW_LABEL => matches!(state, TechnikAenderungState::AuftragGesendet(_)),
+        EINGANG_WINDOW_LABEL => matches!(state, TechnikAenderungState::AuftragEingegangen(_)),
+        _ => false,
+    }
 }
 
 impl Workflow for WimTechnikAenderungWorkflow {
@@ -326,7 +442,7 @@ impl Workflow for WimTechnikAenderungWorkflow {
     type Event = TechnikAenderungEvent;
     type Command = TechnikAenderungCommand;
 
-    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL, EINGANG_WINDOW_LABEL];
 
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
@@ -357,6 +473,22 @@ impl Workflow for WimTechnikAenderungWorkflow {
                 location_id: location_id.clone(),
                 message_ref: message_ref.clone(),
             }),
+            TechnikAenderungEvent::AuftragEingegangen {
+                orders_pid,
+                sender,
+                location_id,
+                message_ref,
+            } => TechnikAenderungState::AuftragEingegangen(EingangData {
+                orders_pid: *orders_pid,
+                sender: sender.clone(),
+                location_id: location_id.clone(),
+                message_ref: message_ref.clone(),
+            }),
+            TechnikAenderungEvent::AuftragUngueltig { reason } => {
+                TechnikAenderungState::Ungueltig {
+                    reason: reason.clone(),
+                }
+            }
             TechnikAenderungEvent::AuftragBestaetigt { ordrsp_pid, .. } => match state {
                 TechnikAenderungState::AuftragGesendet(auftrag) => {
                     TechnikAenderungState::Bestaetigt {
@@ -379,7 +511,8 @@ impl Workflow for WimTechnikAenderungWorkflow {
                 other => other,
             },
             TechnikAenderungEvent::DeadlineExpired { label, .. } => match state {
-                TechnikAenderungState::AuftragGesendet(_) => {
+                TechnikAenderungState::AuftragGesendet(_)
+                | TechnikAenderungState::AuftragEingegangen(_) => {
                     TechnikAenderungState::FristAbgelaufen {
                         label: label.to_string(),
                         offen: Box::new(state),
@@ -443,6 +576,36 @@ impl Workflow for WimTechnikAenderungWorkflow {
                     outbox,
                     frist,
                 ))
+            }
+
+            TechnikAenderungCommand::ReceiveAuftrag {
+                orders_pid,
+                sender,
+                location_id,
+                message_ref,
+                validation_passed,
+                validation_errors,
+            } => {
+                if !matches!(state, TechnikAenderungState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.label()));
+                }
+                if !RECEIVE_ORDERS_PIDS.contains(&orders_pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "not an ORDERS the MSB receives in the Technikänderung: {orders_pid}",
+                    )));
+                }
+                let mut events = vec![TechnikAenderungEvent::AuftragEingegangen {
+                    orders_pid,
+                    sender,
+                    location_id,
+                    message_ref,
+                }];
+                if !validation_passed {
+                    events.push(TechnikAenderungEvent::AuftragUngueltig {
+                        reason: validation_errors.join("; "),
+                    });
+                }
+                Ok(events.into())
             }
 
             TechnikAenderungCommand::ReceiveOrdrsp {
@@ -527,6 +690,93 @@ mod tests {
         )
         .expect("accepted");
         assert!(out.deadlines.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod eingang_tests {
+    use super::*;
+
+    fn receive(pid: u32) -> TechnikAenderungCommand {
+        TechnikAenderungCommand::ReceiveAuftrag {
+            orders_pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            sender: MarktpartnerCode::new("9900000000003"),
+            location_id: Some("DE00056266802AO6G56M11SN51G21M24S".to_owned()),
+            message_ref: MessageRef::new("ORD-17011"),
+            validation_passed: true,
+            validation_errors: vec![],
+        }
+    }
+
+    fn fold(
+        state: TechnikAenderungState,
+        out: &WorkflowOutput<TechnikAenderungEvent>,
+    ) -> TechnikAenderungState {
+        out.events
+            .iter()
+            .fold(state, WimTechnikAenderungWorkflow::apply)
+    }
+
+    /// The MSB's 10-WT window runs from the received Auftrag, and a lapse
+    /// leaves the answer owed — no Festlegung gives it an outcome.
+    #[test]
+    fn a_received_auftrag_owes_its_answer_within_ten_werktage() {
+        let eingang = time::macros::datetime!(2026-10-07 10:00 UTC);
+        assert_eq!(
+            eingang_antwortfrist(17_011, eingang),
+            mako_fristen::antwort::antwort_deadline(17_011, eingang)
+        );
+        assert!(eingang_antwortfrist(17_011, eingang).is_some());
+        assert_eq!(eingang_antwortfrist(17_118, eingang), None);
+
+        let out = WimTechnikAenderungWorkflow::handle(&TechnikAenderungState::New, receive(17_011))
+            .expect("accepted");
+        assert_eq!(
+            out.events[0].verlauf().map(|v| (v.richtung, v.pid)),
+            Some((Richtung::Eingang, Some(17_011)))
+        );
+        let offen = fold(TechnikAenderungState::New, &out);
+        assert!(matches!(
+            offen,
+            TechnikAenderungState::AuftragEingegangen(_)
+        ));
+
+        // The requester's label does not touch the MSB's process.
+        let out = WimTechnikAenderungWorkflow::handle(
+            &offen,
+            TechnikAenderungCommand::TimeoutExpired {
+                deadline_id: DeadlineId::new(),
+                label: ANTWORT_WINDOW_LABEL.into(),
+            },
+        )
+        .expect("accepted");
+        assert!(out.events.is_empty());
+
+        let out = WimTechnikAenderungWorkflow::handle(
+            &offen,
+            TechnikAenderungCommand::TimeoutExpired {
+                deadline_id: DeadlineId::new(),
+                label: EINGANG_WINDOW_LABEL.into(),
+            },
+        )
+        .expect("accepted");
+        let lapsed = fold(offen, &out);
+        assert!(
+            matches!(&lapsed, TechnikAenderungState::FristAbgelaufen { offen, .. }
+                if matches!(**offen, TechnikAenderungState::AuftragEingegangen(_))),
+            "{lapsed:?}"
+        );
+        assert!(!lapsed.is_terminal());
+    }
+
+    /// 17118 is GPKE Teil 3's, answered by ORDRSP 19127: the MSB does not
+    /// receive it as a Technikänderung.
+    #[test]
+    fn only_17011_is_received() {
+        assert!(
+            WimTechnikAenderungWorkflow::handle(&TechnikAenderungState::New, receive(17_118))
+                .is_err()
+        );
     }
 }
 

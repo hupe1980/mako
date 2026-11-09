@@ -18,7 +18,7 @@ use utoipa::OpenApi;
         (name = "versorgung", description = "VersorgungsStatus per MaLo"),
         (name = "pricat", description = "PRICAT 27003 version history and dispatch"),
         (name = "netzzugang", description = "§20b EnWG Netzzugangsplattform request registry"),
-        (name = "msb-rahmenvertraege-gas", description = "Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0, KoV XV Anlage 8)"),
+        (name = "msb-rahmenvertraege", description = "MSB-Rahmenvertrag registry, both Sparten (§ 9 Abs. 1 Nr. 3 MsbG; Gas: GeLi Gas 3.0, KoV XV Anlage 8)"),
         (name = "health", description = "Health endpoints"),
     ),
     paths(
@@ -35,9 +35,10 @@ use utoipa::OpenApi;
         crate::handlers::netzzugang::list_antraege,
         crate::handlers::netzzugang::get_antrag,
         crate::handlers::netzzugang::set_antrag_status,
-        crate::handlers::msb_rahmenvertrag_gas::upsert_msb_rv_gas,
-        crate::handlers::msb_rahmenvertrag_gas::list_msb_rv_gas,
-        crate::handlers::msb_rahmenvertrag_gas::get_msb_rv_gas,
+        crate::handlers::msb_rahmenvertrag::upsert_msb_rv,
+        crate::handlers::msb_rahmenvertrag::list_msb_rv,
+        crate::handlers::msb_rahmenvertrag::check_msb_rv,
+        crate::handlers::msb_rahmenvertrag::get_msb_rv,
     ),
     components(schemas(
         crate::handlers::malo::MaloUpsertRequest,
@@ -49,9 +50,11 @@ use utoipa::OpenApi;
         crate::handlers::pricat::PriCatVersionSummary,
         crate::handlers::pricat::DispatchLogEntry,
         crate::handlers::netzzugang::StatusBody,
-        crate::pg::msb_rahmenvertrag_gas::MsbRahmenvertragGas,
-        crate::pg::msb_rahmenvertrag_gas::MsbRvGasUpsertRequest,
-        crate::pg::msb_rahmenvertrag_gas::MsbRvGasStatus,
+        crate::pg::msb_rahmenvertrag::MsbRahmenvertrag,
+        crate::pg::msb_rahmenvertrag::MsbRvUpsertRequest,
+        crate::pg::msb_rahmenvertrag::MsbRvStatus,
+        crate::pg::msb_rahmenvertrag::MsbRvBefund,
+        crate::pg::msb_rahmenvertrag::MsbRvPruefung,
     )),
 )]
 pub struct ApiDoc;

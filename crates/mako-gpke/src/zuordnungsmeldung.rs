@@ -708,7 +708,6 @@ fn meldung_payload(
     referenz_vorgangsnummer: Option<&str>,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
-        "direction":         "outbound",
         "pid":               meldung.pid(),
         "sender":            sender.as_str(),
         "receiver":          receiver.as_str(),
@@ -1048,12 +1047,16 @@ mod tests {
     /// One workflow renders both, so both have to be covered.
     #[test]
     fn the_workflow_covers_the_catalogued_strom_meldepflichten() {
+        // A PID recurs in several Sequenzdiagramme (55037, 55038): the
+        // workflow sends each once, whichever window it is sent under.
         let mut catalogued: Vec<u32> = mako_fristen::meldung::GPKE
             .iter()
+            .chain(mako_fristen::meldung::GPKE_EEG_KWKG)
             .chain(mako_fristen::meldung::GPKE_LIEFERENDE)
             .map(|m| m.pid)
             .collect();
         catalogued.sort_unstable();
+        catalogued.dedup();
         let mut routed = ZUORDNUNGSMELDUNG_PIDS.to_vec();
         routed.sort_unstable();
         assert_eq!(catalogued, routed);
@@ -1162,7 +1165,9 @@ mod msb_beendigung_tests {
     /// against nothing.
     #[test]
     fn the_catalogue_agrees_and_anchors_on_the_nbs_own_message() {
-        let m = mako_fristen::meldung::meldepflicht(MSB_BEENDIGUNG_PID).expect("catalogued");
+        let m = mako_fristen::meldung::meldepflichten_for(55_007)
+            .find(|m| m.pid == MSB_BEENDIGUNG_PID)
+            .expect("catalogued");
         assert_eq!(m.sent_by, "NB");
         assert_eq!(m.triggered_by, &[55_007]);
         assert_eq!(

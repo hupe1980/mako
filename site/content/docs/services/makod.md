@@ -344,7 +344,7 @@ consolidated by BK6-23-241).
 
 Every build links every domain crate; the declaration selects registrations,
 and `--marktrollen` additionally refuses commands at runtime. Declaring every
-role registers the full **71 workflows over 472 Prüfidentifikatoren**, and the
+role registers the full **73 workflows over 473 Prüfidentifikatoren**, and the
 startup log records the counts a declaration registers. Which principal may
 read which role's processes is the Cedar policy's decision
 ([Authorization](#authorization)).
@@ -1062,7 +1062,7 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `wim.steuerungsauftrag.ablehnen` | `MSB` | WiM | — | MSB sends final negative control-measure response |
 | `mabis.abrechnung.einleiten` | `BKV` | MaBiS | 13003 · 13020 · 13023 | Record a version of a Summenzeitreihe; opens the settlement on the first one. Requires `zeitreihe` (`SG10 CAV` code) and `version` (Erstellungszeitpunkt) |
 | `mabis.abrechnung.daten-einreichen` | `BKV` | MaBiS | 21000 · 21001 · 21005 | Send a Prüfmitteilung for one version. Requires `antwortcode` from the Entscheidungsbaum of this Summenzeitreihe, plus `grund` except for its Zustimmung. **No Frist** — bounded by the § 3.10 clearing window |
-| `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MaBiS | — | Close the clearing window. Sets no Datenstatus: that is the BIKO's (§ 3.8.3), via IFTSTA 21003/21004 |
+| `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MaBiS | — | Close a clearing window ahead of its deadline (`lauf`: `bka`, the default, or `kbka`). Sets no Datenstatus: that is the BIKO's (§ 3.8.3), via IFTSTA 21003/21004 |
 | `mabis.liste.korrigieren` | `LFN`/`NB`/`ÜNB` | MaBiS | 55066 · 55196 · 55202 · 55224 | Answer a Clearingliste with a Korrekturliste, `{ malo, grund }` per disputed MaLo; an empty list is still sent. `sender_rolle` selects the Entscheidungsbaum (`E_0047` NB / `E_0004` ÜNB) |
 | `mabis.liste.ablehnen` | `LFN`/`NB`/`ÜNB` | MaBiS | 55066 · 55196 · 55202 · 55224 | Refuse a Clearingliste entire. Whole-list facts (`abonnement_bestellt`, `zeitraum_plausibel`, `mabis_zp_passt`, `version_zugelassen`, `innerhalb_clearingphase`) are tri-state; absent escalates. A list whose whole-list checks all pass is owed a Korrekturliste instead |
 | `mabis.summenzeitreihe.uebermitteln` | `NB` or `ÜNB` | MaBiS | 13003 | File a Summenzeitreihe for one Bilanzierungsgebiet with the BIKO |
@@ -1097,12 +1097,13 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `geli.stornierung.initiieren` | `LFG` | GeLi Gas | 44022 | LF cancels a running Gas Zuordnungsprozess; the GNB answers within the cancelled message's own Antwortfrist; refused with none running (GeLi Gas 3.0 Kap. 2.7) |
 | `geli.stornierung.bestaetigen` | `GNB` | GeLi Gas | 44023 | GNB confirms an inbound Stornierungsanfrage (`E15`, `G_0004`) |
 | `geli.stornierung.ablehnen` | `GNB` | GeLi Gas | 44024 | GNB refuses it — `E14` with `bemerkung`, `Z14` or `ZE1` (`G_0003`) |
+| `geli.stammdaten.anfrage.beantworten` | `GNB` · `LFG` | GeLi Gas | 44142 · 44157 · 44181 · 44182 · 44138 · 44151 · 44152 | the Verantwortlicher answers an Anfrage zur Stammdatenänderung (UTILMD AHB Gas 1.2 Kap. 5.12) from the column the code selects — the GNB with what marktd holds, the LF with its own facts⁶ |
 | `gpke.stornierung.bestaetigen` | `NB` | GPKE | 55023 | NB confirms an inbound Stornierungsanfrage (`E15`, `S_0086`) |
 | `gpke.stornierung.ablehnen` | `NB` | GPKE | 55024 | NB refuses it — `E14` with `bemerkung`, `Z14` or `ZE1` (`S_0087`) |
 | `gpke.geschaeftsdatenanfrage.anfragen` | `LF` · `MSB` | GPKE | 17132 | LF or MSB asks the NB for a Lokation's Stammdaten (ORDERS, `BGM+Z14` with the Anfrage-Nummer); answer due 1 WT after the Anfrage (GPKE Teil 4 Kap. 3.2 Nr. 2) |
-| `gpke.geschaeftsdatenanfrage.beantworten` | `NB` | GPKE | 55035 · 55095 · 55060 | NB answers with the Stammdaten (UTILMD, `RFF+AAV` = the Anfrage-Nummer) |
+| `gpke.geschaeftsdatenanfrage.beantworten` | `NB` | GPKE | 55035 · 55095 · 55060 | NB answers with the Stammdaten and the Lokationsbündel marktd holds on the Stichtag (UTILMD, `RFF+AAV` = the Anfrage-Nummer); `503 marktd_unavailable` / `422 stammdaten_unvollstaendig` naming each fact, nothing sent |
 | `gpke.geschaeftsdatenanfrage.ablehnen` | `NB` | GPKE | 19101 | NB refuses the Anfrage (ORDRSP, `RFF+ON`; `E_0441` for an LF, `E_0443` for an MSB) |
-| `geli.datenabruf.anfragen` | `LFG` | GeLi Gas | 17103 | LF requests Abrechnungsbrennwert and Zustandszahl (ORDERS); `zeitspanne_bis` required — answer due 10 WT after the Anfrage, not before the 10. WT of the following month (GeLi Gas 3.0 Kap. 4.2) |
+| `geli.datenabruf.anfragen` | `LFG` | GeLi Gas | 17103 | LF requests Abrechnungsbrennwert and Zustandszahl (ORDERS); `melo_id`, `zeitspanne_von` and `zeitspanne_bis` required, the Zeitspanne past and ended at most 12 months ago — answer due 10 WT after the Anfrage, not before the 10. WT of the following month (GeLi Gas 3.0 Kap. 4.2) |
 | `wim.geraetewechsel.ablehnen` | `NB` or `MSB` | WiM | 55041/55044/55053/55170 | Business Ablehnung — requires an `antwortcode` from the process's EBD |
 | `wim.geraetewechsel.aperak` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Technical APERAK (45 min, APERAK AHB 1.1 §2.4.1) — not the business answer |
 | `wim.gesamtvorgang.melden` | `MSB` or `nMSB` | WiM | 21010/21009 | MSBN reports the Gesamtvorgang outcome; its date becomes the Zuordnungsbeginn |
@@ -1211,9 +1212,9 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `gpke.sperrung.fehlgeschlagen` | `malo_id`, **`reason`** (or `note`) |
 | `gpke.abrechnung.annehmen` | `rechnung` (BO4E `RECHNUNG`) |
 | `gpke.abrechnung.ablehnen` | `rechnung`, `ablehnungsgrund` |
-| `geli.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum`, `bilanzkreis` |
-| `geli.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
-| `geli.kuendigung.anmelden` | `malo_id`, `zaehlpunkt`, `process_date` |
+| `geli.lieferbeginn.anmelden` | `malo_id`, `process_date` (YYYYMMDD), `transaktionsgrund`, `bilanzkreis`, `abrechnungsintervall_monate` (1, 3, 6 or 12), `haushaltskunde`, `netznutzungsvertrag` (`LIEFERANT_NB`/`KUNDE_NB`), `netznutzung_zahler` (`LIEFERANT`/`KUNDE`), `gemeinderabatt_prozent`, `kunde`, `ablesekarte` — no other key⁷ |
+| `geli.lieferende.anmelden` | `malo_id`, `process_date` (YYYYMMDD) |
+| `geli.kuendigung.anmelden` | `malo_id`, `process_date` |
 | `wim.geraetewechsel.beauftragen` | `melo_id`², `process_date` (YYYYMMDD), `receiver_mp_id`, optional `pid` (default 55042) |
 | `wim.geraetewechsel.bestaetigen` | `melo_id`², optional `antwortcode` (default: the tree's unconditional Zustimmung), `bemerkung`, `abweichender_termin` (required with `Z01`) |
 | `wim.geraetewechsel.ablehnen` | `melo_id`², **`antwortcode`** (`E_0200`/`E_0201`/`E_0202`/`E_0240`), optional `bemerkung`, `abweichender_termin` (required with `Z12`) |
@@ -1222,8 +1223,9 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `wim.zuordnung.bestaetigen` / `.ablehnen` | `melo_id`² |
 | `gpke.stornierung.bestaetigen` · `geli.stornierung.bestaetigen` | `vorgang_id` (the Anfrage's `IDE+24` Vorgangsnummer) |
 | `gpke.stornierung.ablehnen` · `geli.stornierung.ablehnen` | `vorgang_id`, `antwortcode` (`E14`/`Z14`/`ZE1`), `bemerkung` (with `E14` only) |
+| `geli.stammdaten.anfrage.beantworten` | `malo_id`, `antwort_code` (a code of the column's Codeliste, table in ⁶); on a 44138 the LF's `abrechnungsintervall_monate` (1/3/6/12), `haushaltskunde`, `kunde` (`vorname`/`nachname` or `organisationsname`, `anschrift`), on a 44151 its `bilanzkreis` — each only where the Anfrage filled its group⁶ |
 | `gpke.geschaeftsdatenanfrage.anfragen` | `lokation_id`, `nb_mp_id`, `anfrage_nummer` (optional, an..35) |
-| `gpke.geschaeftsdatenanfrage.beantworten` | `anfragender_mp_id`, `anfrage_nummer`, `antwort_pid`, `stammdaten` (`lokationen`, `sg6`, `bloecke`, `sg12`), `transaktionsgrund_ergaenzung` (optional) |
+| `gpke.geschaeftsdatenanfrage.beantworten` | `anfragender_mp_id`, `anfrage_nummer`, `antwort_pid`, `stichtag` (optional, `YYYY-MM-DD`; absent = the Berlin day of sending) — the Stammdaten are read from marktd⁸ |
 | `gpke.geschaeftsdatenanfrage.ablehnen` | `anfragender_mp_id`, `anfrage_nummer`, `anfragender` (`LF`/`MSB`), `antwortcode` |
 | `wim.ersteinbau.vorabinformation-senden` | `melo_id`, `wmsb_mp_id`, `umstellungszeitpunkt` (YYYY-MM-DD) |
 | `wim.ersteinbau.beantworten` | `melo_id`, `antwortcode` (`E_0233`) |
@@ -1258,6 +1260,68 @@ key it does not declare is refused; a missing fact is refused naming it, and the
 55602/55603 is refused there today: its Ergänzung (`ZW6`/`ZW7`, `ZW0`/`ZW2`),
 `RFF+Z60` geplantes Produktpaket and, on `ZW7`, the Messlokationen with their
 MSB are facts no command or process yet carries.
+⁶ An inbound Anfrage zur Stammdatenänderung opens the NB's
+`geli-gas-stammdatenaenderung` process and sends nothing: the NB checks it and
+answers within 10 WT (AWH GeLi Gas V1.2 Kap. 4.4.2 Nr. 2), and an unanswered
+Anfrage lapses into `FristAbgelaufen`. On `ZG2` the 44142 carries „die zum
+Änderungsdatum gültigen Stammdaten" (EBD 4.3 Codeliste `G_0031`), which makod
+reads from marktd on the Anfrage's `DTM+157` for each group the Anfrage filled
+(UTILMD AHB Gas 1.2 Kap. 5.12.1, `[336]`): Termine (`RFF+Z18`), the
+Turnusablesung des NB (`RFF+Z19 DTM+752`, stated for each Messlokation),
+Marktgebiet, Druckebene, Netznutzung (`CCI+++Z88` with `CAV+Z74`/`Z73`/`ZB1`),
+OBIS-Daten, Konzessionsabgabe, Gemeinderabatt, Zugeordnete Marktpartner,
+Gasqualität and Marktlokationsanschrift. Both `SG4 DTM`, the Transaktionsgrund
+and the `RFF+TN` come from the Anfrage. The code selects the Antwort column —
+its PID and the Codeliste its `STS+E01` names
+(`mako_geli_gas::stammdatenaenderung::ANFRAGE_ANTWORTEN`):
+
+| Anfrage | Code → Antwort (Codeliste) | Carries |
+|---|---|---|
+| 44139 / 44140 | `ZG2`/`ZG0` → 44142 (`G_0031` / `G_0069`) | the groups above, from marktd |
+| 44156 | `ZG2`/`ZG4` → 44157 (`G_0034`) | marktd's Prognosegrundlage (`CCI+++ZC0`, `CCI+++Z17`) — on both codes |
+| 44180 | `ZG2` → 44181 (`G_0035`), `ZJ5` → 44182 (`G_0036`) | marktd's Messlokationen in `SG5 LOC+172` (`[590]`) |
+| 44137 | `ZG2`/`ZG0` → 44138 (`G_0040`) | the LF's `DTM+Z20`, `CCI+++Z15`/`Z18`, `NAD+Z09`, `NAD+Z04`, stated by the command |
+| 44150 | `ZG2`/`ZG4` → 44151 (`G_0038`), `ZG0` → 44152 (`G_0039`) | the LF's `CCI+Z19` Bilanzkreis, stated by the command |
+
+A fact marktd does not hold answers `422 stammdaten_unvollstaendig`; no marktd
+answers `503 marktd_unavailable`; a fact of the LF's own the command does not
+state, or an LF field on a GNB Antwort, is `invalid_payload` naming it; in each
+case nothing is written and the process keeps waiting. A refusal code reads
+nothing. A Prognose auf Basis von Profilen is refused on the 44157: its
+`SEQ+Z35` Lastprofildaten are not held. The NB's 44163/44164 as Verteiler of a
+44162 (Kap. 5.12.7) follow the MSB's 44167 to the 44165 the NB forwards; they
+are not assembled and answer `501`.
+⁷ The Anmeldung NN 44001 carries the Lieferant's contract facts UTILMD AHB Gas
+1.2 Kap. 5.6 makes Muss: `SG6 RFF+Z18 DTM+Z20` Abrechnungsintervall des LF
+(S. 48), `SG8 SEQ+Z01` with `CCI+Z19` Bilanzkreis, `CCI+++Z15`/`Z18`
+Gruppenzuordnung and `CCI+++Z88` with `CAV+Z74`/`CAV+Z73` Netznutzung (S. 50–52),
+`SEQ+Z12 QTY+Z16` Gemeinderabatt (S. 55), `SG12 NAD+Z09` Kunde des LF, `NAD+Z04`
+Korrespondenzanschrift and `NAD+Z05` Ablesekarte (S. 63–65). `IMD++Z36+Z12`
+(S. 44) is written because the Vorgang names its Marktlokation by ID in
+`SG5 LOC+172`; there is no second Lokation, so no Zählpunkt is taken. The body
+is `mako_markt::commands::GeliLieferbeginnAnmelden`; a missing or malformed fact
+is `invalid_payload` naming it, and the 44001 passes the pre-send gate before
+anything is written. `processd` `POST /api/v1/start-supply-gas` builds it from
+the supply contract `vertragd` holds.
+⁸ The answer to a Geschäftsdatenanfrage is the Lokationsbündel (UTILMD AHB
+Strom 2.2 Kap. 9.5, S. 599–665). makod reads the Marktlokation the Anfrage
+names from marktd twice for the Stichtag — its UTILMD Stammdaten and its
+Lokationsbündel (`GET /api/v1/malos/{id}/lokationsbuendel`) — and sets down
+`SG5 LOC+Z16`/`Z17`, `SEQ+ZD5` (`RFF+Z31` Lokationsbündelstruktur), one
+`SEQ+ZD6` per object (`RFF+Z33` Objektcode), `SEQ+Z98` (Jahresmenge, ÜNB and
+MSB, Spannungsebene, messtechnische Einordnung, Prognosegrundlage), one
+`SEQ+ZE1` per Netznutzungsabrechnungsposition, one `SEQ+ZE3` per OBIS-Kennzahl
+with its Verwendungszwecke for NB/LF/ÜNB, `SEQ+ZH9`, `SEQ+ZF3`, `SEQ+ZF5` and
+`SEQ+ZF6` per Messlokation and Zähler, `SEQ+ZG1` for an SLP Marktlokation and
+`SG12 NAD+Z63`. The Ergänzung `ZW4` follows from the Energierichtung `AUSSP`,
+which also decides 55035 over 55095. Not assembled, and refused by name:
+Netzlokationen, Technische and Steuerbare Ressourcen, further Marktlokationen
+of the bündel, a flexible object's references, an intelligentes Messsystem's
+Smartmeter-Gateway, a TLP Marktlokation, more than one Energiemenge-OBIS, an
+Anfrage naming a Messlokation (`501`), and the groups only 55095 and 55060
+carry — so those two answers are refused today. The answer passes the
+pre-send gate before anything is written; a refusal leaves the process `Offen`
+and its 1-WT window running.
 
 ### Integrated operators (NB + MSB, same MP-ID)
 
@@ -1274,7 +1338,7 @@ and no `[[as4.partner]]` entry. Self-addressed by design:
 
 | Message | Workflow | Sender → Recipient |
 |---|---|---|
-| ORDERS 17116 (Anfrage Sperrung Strom) | `gpke-sperrung` | NB → MSB |
+| ORDERS 17116 (Anfrage Sperrung Strom) | `gpke-sperrung-msb` | NB → MSB |
 | ORDERS 17116 (Anfrage Gas-Sperrung) | `geli-gas-sperrung-nb` | GNB → gMSB |
 | ORDERS 17134/17135 (Konfiguration) | `gpke-konfiguration` | NB → MSB |
 | ORDERS 17001/17009 (Geräteübernahme) | `wim-geraeteubernahme` | NB → MSBA |
@@ -1285,6 +1349,7 @@ and no `[[as4.partner]]` entry. Self-addressed by design:
 | 19118, 19119 (ORDRSP) | resume by MaLo | `gpke-sperrung` — `ReceiveMsbAntwort` |
 | 19116, 19117 (ORDRSP Strom / Gas) | resume by MaLo | `gpke-sperrung-lf` / `geli-gas-sperrung-lf` — `ReceiveOrdrsp` |
 | 55001, 55004, 55077 | spawn by MaLo | `gpke-supplier-change` — `ReceiveUtilmd` |
+| 17116 (MSB role only) | spawn by MaLo | `gpke-sperrung-msb` — `ReceiveAnfrage`; 3 WT, a lapse counts as Zustimmung |
 | 55016 | spawn by MaLo | `gpke-kuendigung` — `ReceiveKuendigung` |
 | 55013 | spawn by MaLo | `gpke-eog` — `ReceiveAnmeldung` |
 | 55014/55015 | resume by `nb-anfrage:{MaLo}` | `gpke-eog` — `ReceiveAntwort` |
@@ -1310,8 +1375,8 @@ the ESA Wertebestellung) follow the same pattern. **Runaway guard:** loopback
 hops are counted per `conversation_id` and the delivery is dead-lettered past
 **32** (in-memory, reset on restart).
 
-A self-addressed PID with no handler on this side — e.g. ORDERS 17116 with no
-gMSB workflow running — is acknowledged with a `warn!`; the waiting NB workflow
+A self-addressed PID with no handler on this side — e.g. the Gas ORDERS 17116
+with no gMSB workflow running — is acknowledged with a `warn!`; the waiting NB workflow
 continues until its deadline or until the ERP reports the outcome:
 
 ```bash
@@ -1603,6 +1668,35 @@ flowchart LR
     b --> as4["AS4 / ebMS3"]
     d --> as4
 ```
+
+The UTILMD renderer reads the typed `UtilmdPayload`, which refuses a key it
+does not declare: a payload that spells one (`pruefung` instead of
+`antwort_code`) is a render error naming it, not a message with the segment
+missing. Where the payload leaves a value open and the Prüfidentifikator's
+column fixes exactly one, the column's value is written — `BGM` DE 1001, the
+`STS+E01` Codeliste, and the `STS+7` Transaktionsgrund where that segment is
+unconditionally Muss (`ZE7` on a GeLi Gas 44115). `SG4 DTM+92` and the process
+date ride only where the column lists their place: every GeLi Gas Änderung
+column makes both Muss, and of the Antworten only the 44176 restates them
+(UTILMD AHB Gas 1.2 Kap. 5.10–5.11).
+
+A GeLi Gas **Antwort auf Änderung** draws its `STS+E01` code from the
+Codeliste its column names, one per column (EBD 4.3 Kap. 13.10–13.12):
+
+| Antwort | Answers | Codeliste | Codes |
+|---|---|---|---|
+| 44115 | 44112 / 44113 | `G_0016` | `E15` |
+| 44124 | 44123 | `G_0019` | `E15`, `E17`, `ZI4`, `ZI6`, `ZI7` |
+| 44176 | 44175 | `G_0022` | `E15`, `ZJ5` |
+| 44111 | 44109 | `G_0023` | `E15` |
+| 44121 | 44120 | `G_0025` | `E13`, `E15`, `E17`, `ZE2` |
+| 44119 | 44116 (NB answers) / 44117 (LF answers) | `G_0026` / `G_0027` | `E15` |
+| 44161 | 44159 (NB answers) / 44160 (LF answers) | `G_0026` / `G_0030` | `E15` |
+
+A code the list does not publish is refused before anything is queued; a
+Zustimmung to a bilanzierungsrelevante Änderung dated other than a Monatserster
+goes out as `E17`. The Antwort restates the Änderung's `BGM` and names its
+`IDE+24` in `SG6 RFF+TN`. No ERP command sends it yet.
 
 **IFTSTA 21042** carries WiM Strom Teil 2 UC 4.4 „Beendigung durch MSB"
 (MSB → ESA): `BGM+Z09`, SG14 `CNI`, SG15 `STS` 9015=Z21 / 4405=105, `RFF+Z13`,
@@ -1938,6 +2032,13 @@ spawn and on a resume (APERAK AHB 1.1 §2.4.1, §2.3.1):
 
 `FristAbgelaufen` is a breach to act on, not an outcome: the process keeps
 waiting, and a late answer still goes out or still lands.
+
+A MaBiS settlement (`mabis-billing`) registers both of its clearing closes with
+its first version, each dated by the Zeitreihe's row of BK6-24-174 Anlage 3
+Kap. 3.10 Tabelle 2: `mabis-clearingfenster-ende` closes the BKA (ohne KBKA)
+and moves the settlement into the KBKA Clearingphase, where later versions and
+Prüfmitteilungen are still accepted (Kap. 9.7.1);
+`mabis-kbka-clearingfenster-ende` closes the KBKA and ends the settlement.
 
 ### The door's answers
 {: #door-answers }

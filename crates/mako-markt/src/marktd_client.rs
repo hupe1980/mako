@@ -327,6 +327,17 @@ pub struct PartnerEdi {
     pub edi_extrahierbar: Option<bool>,
 }
 
+/// `marktd`'s answer to [`MarktdClient::msb_rahmenvertrag_check`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct MsbRahmenvertragPruefung {
+    /// `true` only when a contract with status `abgeschlossen` is valid on the
+    /// day asked about.
+    pub abgeschlossen: bool,
+    /// Why, in `marktd`'s words: `abgeschlossen`, `kein_vertrag`,
+    /// `angeboten`, `anpassung_erforderlich` or `beendet`.
+    pub befund: String,
+}
+
 impl MarktdClient {
     /// Construct a new client.
     ///
@@ -1171,6 +1182,43 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
+    /// `GET /api/v1/malos/{malo_id}/lokationsbuendel?stichtag=YYYY-MM-DD` —
+    /// the Lokationsbündel of a Marktlokation on `stichtag` and the NB's
+    /// Angaben of it, as marktd holds them.
+    ///
+    /// `None` on 404: marktd holds no Marktlokation of that ID.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on network or non-404 HTTP errors,
+    /// [`MarktdClientError::Deserialization`] on a body that is not the bündel.
+    pub async fn get_lokationsbuendel(
+        &self,
+        malo_id: &str,
+        stichtag: time::Date,
+    ) -> Result<Option<crate::lokationsbuendel::MaloLokationsbuendel>, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/malos/{}/lokationsbuendel",
+            self.base_url, malo_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("stichtag", stichtag.to_string())])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
     /// `PUT /api/v1/malos/{malo_id}/grid` — upsert the NB grid topology record for a `MaLo`.
     ///
     /// NB-role provisioning of NIS/GIS grid data (manual or ERP integration).  Idempotent.
@@ -1211,6 +1259,50 @@ impl MarktdClient {
             )));
         }
         Ok(())
+    }
+
+    /// `GET /api/v1/msb-rahmenvertraege/check` — is a Messstellenbetreiber-
+    /// rahmenvertrag of `sparte` between `nb_mp_id` and `msb_mp_id`
+    /// `abgeschlossen` and valid on `datum`?
+    ///
+    /// The question the NB's check of an Anmeldung MSB asks: the Vertrag nach
+    /// § 9 Abs. 1 Nr. 3 `MsbG` with the MSBN (`WiM` Teil 1 Kap. 2.3.2 Nr. 2
+    /// Ziff. 3; AWH `WiM` Gas 2.0 Kap. 3.5.2 Nr. 2 Ziff. 3). Unlike
+    /// [`Self::partner_known`], which says only that the Marktpartner is in the
+    /// directory, this answers for the contract itself, per Sparte and day.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on a network error or any non-2xx status —
+    /// an outage, never „no contract": the caller would otherwise escalate or
+    /// answer on a lookup that did not happen.
+    /// [`MarktdClientError::Deserialization`] on a body that does not decode.
+    pub async fn msb_rahmenvertrag_check(
+        &self,
+        sparte: crate::domain::Sparte,
+        nb_mp_id: &str,
+        msb_mp_id: &str,
+        datum: time::Date,
+    ) -> Result<MsbRahmenvertragPruefung, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/msb-rahmenvertraege/check?sparte={sparte}&nb_mp_id={nb_mp_id}\
+             &msb_mp_id={msb_mp_id}&datum={datum}",
+            self.base_url
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            warn!(nb_mp_id, msb_mp_id, %status, "msb_rahmenvertrag_check: HTTP error");
+            return Err(MarktdClientError::Http(format!("HTTP {}", status.as_u16())));
+        }
+        resp.json::<MsbRahmenvertragPruefung>()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
     /// `GET /api/v1/partners/{mp_id}` — returns `true` if the partner is registered.

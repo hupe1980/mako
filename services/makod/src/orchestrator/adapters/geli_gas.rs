@@ -10,8 +10,10 @@ use super::*;
 /// Extracts ORDERS fields from an inbound Gas-Sperrauftrag / Gas-Entsperrauftrag
 /// (PIDs 17115/17116/17117) to construct a [`GasSperrungNbCommand::ReceiveSperrung`].
 ///
-/// **Message format**: ORDERS (AWH Sperrprozesse Gas, BK7-24-01-009).
-/// **APERAK Frist:** 10 Werktage.
+/// **Message format**: ORDERS (AWH Sperrprozesse Gas; GeLi Gas 3.0
+/// BK7-24-01-009 holds no Sperrprozess). The GNB's answer window is the
+/// 17115 / 17117 row of `mako_fristen::antwort`; the APERAK is the Gas
+/// Verarbeitbarkeitsfehlermeldung of APERAK AHB 1.1 § 2.3.1.
 #[must_use]
 pub fn geli_gas_sperrung_nb_registry() -> AdapterRegistry<GeliGasSperrungNbWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -789,13 +791,14 @@ pub fn geli_gas_sperrprozesse_invoic_registry()
                 ));
             };
 
-            let pid = inv
-                .bgm()
-                .and_then(|b| b.pruefidentifikator())
-                .ok_or_else(|| {
-                    EngineError::Deserialization(
-                        "GeLi Gas Sperrprozesse INVOIC adapter: PID not found in BGM".into(),
-                    )
+            // The Prüfidentifikator is `SG1 RFF+Z13`; `BGM` DE 1004 is the
+            // Rechnungsnummer.
+            let pid = edi_energy::EdiEnergyMessage::detect_pruefidentifikator(inv)
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Sperrprozesse INVOIC adapter: no Prüfidentifikator in the \
+                         INVOIC ({e})"
+                    ))
                 })
                 .and_then(convert_pid)?;
             let (validation_passed, validation_errors) = super::ahb_verdict(msg);
@@ -1000,6 +1003,66 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
     registry
 }
 
+/// The master-data groups an Anfrage zur Stammdatenänderung filled, read off
+/// its Vorgang by the qualifiers UTILMD AHB Gas 1.2 Kap. 5.12 gives each
+/// group: in the 44139/44140 columns (Kap. 5.12.1) `SG6 DTM+Z21`/`Z22`/`752`,
+/// the `SG10 CCI` of `SEQ+Z01` and `SEQ+Z18`, the `SEQ+Z02`/`Z07`/`Z12`
+/// groups, `SG12 NAD+DP`; in the 44137 (Kap. 5.12.4) `SG6 DTM+Z20`, `SG10
+/// CCI+++Z15`/`Z18`, `SG12 NAD+Z09`/`Z04`; in the 44150 (Kap. 5.12.5) `SG10
+/// CCI+Z19`. The Antwort carries exactly these (Bedingung `[336]`).
+fn angefragte_gruppen(
+    tx: &edi_energy::messages::utilmd::UtilmdTransaction,
+) -> Vec<mako_geli_gas::AngefragteGruppe> {
+    use mako_geli_gas::AngefragteGruppe as G;
+    let mut out = Vec::new();
+    let mut push = |g: G| {
+        if !out.contains(&g) {
+            out.push(g);
+        }
+    };
+    for d in &tx.dtm {
+        match d.qualifier.as_str() {
+            "Z21" => push(G::TerminNetznutzungsabrechnung),
+            "Z22" => push(G::Netznutzungsabrechnungsintervall),
+            "752" => push(G::Turnusablesung),
+            "Z20" => push(G::AbrechnungsintervallLf),
+            _ => {}
+        }
+    }
+    for seq in &tx.sequences {
+        match seq.seq.action.as_deref().unwrap_or_default() {
+            "Z02" => push(G::ObisDaten),
+            "Z07" => push(G::Konzessionsabgabe),
+            "Z12" => push(G::Gemeinderabatt),
+            _ => {}
+        }
+        for m in &seq.characteristics {
+            match m.cci.category.as_deref() {
+                Some("Z21") => push(G::Marktgebiet),
+                Some("Z19") => push(G::Bilanzkreis),
+                _ => {}
+            }
+            match m.cci.characteristic_id.as_deref() {
+                Some("Y01") => push(G::Druckebene),
+                Some("Z15" | "Z18") => push(G::Gruppenzuordnung),
+                Some("Z88") => push(G::Netznutzung),
+                Some("ZB3") => push(G::ZugeordneteMarktpartner),
+                Some("Y02") => push(G::Gasqualitaet),
+                _ => {}
+            }
+        }
+    }
+    for p in &tx.parties {
+        match p.nad.qualifier.as_str() {
+            "DP" => push(G::Marktlokationsanschrift),
+            "Z09" => push(G::KundeDesLf),
+            "Z04" => push(G::KorrespondenzanschriftKundeLf),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Build an [`AdapterRegistry`] for [`mako_geli_gas::GeliGasStammdatenaenderungWorkflow`].
 ///
 /// Adapts inbound UTILMD G GeLi Gas Stammdatenänderung: an **Änderung** PID →
@@ -1058,24 +1121,20 @@ pub fn geli_gas_stammdaten_registry(
             if mako_geli_gas::stammdatenaenderung::is_antwort_pid(pid_u32)
                 && !mako_geli_gas::stammdatenaenderung::is_aenderung_pid(pid_u32)
             {
-                let antwort = match u
-                    .transactions()
-                    .first()
-                    .and_then(|t| {
-                        t.sts
-                            .iter()
-                            .find(|s| s.category.as_deref() == Some("E01"))
-                            .and_then(|s| s.status_code.clone())
-                    })
-                    .as_deref()
-                {
-                    Some("E13") => mako_geli_gas::GasAntwort::AblehnungBilanzierung,
-                    Some("E17") => mako_geli_gas::GasAntwort::AblehnungFrist,
-                    _ => mako_geli_gas::GasAntwort::Zustimmung,
-                };
+                // `SG4 STS+E01` — the code and the Codeliste the Antwort column
+                // names, as they arrived. An Antwort without one is not read as
+                // a Zustimmung: the code is what the counterparty said.
+                let antwort = first_tx.and_then(|t| t.antwort()).ok_or_else(|| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Stammdaten adapter: Antwort {} carries no SG4 STS+E01 \
+                         (UTILMD AHB Gas 1.2 Kap. 5.10–5.11, Muss)",
+                        pid.as_u32()
+                    ))
+                })?;
                 return Ok(mako_geli_gas::GasStammdatenCommand::ReceiveAntwort {
                     response_pid: pid,
-                    antwort,
+                    antwort_code: antwort.code.clone(),
+                    antwort_codeliste: antwort.codeliste.clone(),
                 });
             }
 
@@ -1094,14 +1153,28 @@ pub fn geli_gas_stammdaten_registry(
                 )));
             }
 
-            // Stammdatenanfrage (G8–G10): we are the data owner — answer with the
-            // requested master data (auto data-return).
+            // Anfrage zur Stammdatenänderung (G8–G10): we are the
+            // Verantwortlicher. The process keeps what the Antwort restates —
+            // both SG4 dates, the Grund, the Vorgangsnummer — and which groups
+            // the Anfrage filled (UTILMD AHB Gas 1.2 Kap. 5.12.1, `[528]`,
+            // `[336]`).
             if mako_geli_gas::stammdatenaenderung::is_anfrage_request_pid(pid_u32) {
+                let vertragsbeginn = super::prozesstag(
+                    super::sg4_dtm(first_tx, edi_energy::utilmd_codes::dtm::BEGINN_ZUM),
+                    super::utilmd_sparte(u),
+                )?;
                 return Ok(mako_geli_gas::GasStammdatenCommand::ReceiveAnfrage {
                     pid,
                     sender,
                     receiver,
                     location_id,
+                    aenderungsdatum,
+                    vertragsbeginn,
+                    transaktionsgrund: first_tx
+                        .and_then(|t| t.transaktionsgrund())
+                        .map(|g| g.grund),
+                    vorgangsnummer: first_tx.and_then(|t| t.vorgangsnummer()).map(str::to_owned),
+                    angefragt: first_tx.map(angefragte_gruppen).unwrap_or_default(),
                     message_ref: MessageRef::new(msg.message_ref()),
                     validation_passed,
                     validation_errors,
@@ -1127,6 +1200,13 @@ pub fn geli_gas_stammdaten_registry(
                 patch.insert("bilanzierungsgebiet".into(), bg.into());
             }
 
+            // `SG4 DTM+92` Datum Vertragsbeginn, Muss beside the `157` on every
+            // Änderung column, and the `IDE+24` the Antwort names in `SG6
+            // RFF+TN` (UTILMD AHB Gas 1.2 Kap. 5.10–5.11).
+            let vertragsbeginn = super::prozesstag(
+                super::sg4_dtm(first_tx, edi_energy::utilmd_codes::dtm::BEGINN_ZUM),
+                super::utilmd_sparte(u),
+            )?;
             Ok(mako_geli_gas::GasStammdatenCommand::ReceiveAenderung {
                 pid,
                 sender,
@@ -1134,6 +1214,9 @@ pub fn geli_gas_stammdaten_registry(
                 location_id,
                 aenderungsdatum,
                 patch: serde_json::Value::Object(patch),
+                vertragsbeginn,
+                vorgangsnummer: first_tx.and_then(|t| t.vorgangsnummer()).map(str::to_owned),
+                dokumentenart: u.bgm().map(|b| b.document_code.clone()),
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,

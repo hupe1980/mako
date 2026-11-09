@@ -265,7 +265,7 @@ All **14** daemons share one operational model:
 
 Ports, market roles and per-daemon design live in the
 [Services section](@/docs/services/_index.md). `makod` is the protocol gateway
-the rest sits behind: EDIFACT ↔ BO4E, 71 workflows over 472 Prüfidentifikatoren,
+the rest sits behind: EDIFACT ↔ BO4E, 73 workflows over 473 Prüfidentifikatoren,
 AS4 ingest and the deadline scheduler.
 
 | Daemon | Port | Role in the mesh |

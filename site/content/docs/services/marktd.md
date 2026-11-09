@@ -174,7 +174,7 @@ statements over 51 actions**, each starting from tenant equality:
 | Group | Actions | Extra condition |
 |---|---|---|
 | Tenant-wide reads | every `read-*` action except the ESA pair, plus `use-mcp` | none |
-| Ordinary writes | `write-malo`, `write-melo`, `write-nb-contract`, `write-partner`, `write-versorgungsstatus`, `write-device`, `write-sr`, `write-netzzugang`, `write-msb-rv-gas`, `write-melo-msb`, `write-bilanzierung`, `write-mabis-zp`, `write-lokationszuordnung` | none |
+| Ordinary writes | `write-malo`, `write-melo`, `write-nb-contract`, `write-partner`, `write-versorgungsstatus`, `write-device`, `write-sr`, `write-netzzugang`, `write-msb-rv`, `write-melo-msb`, `write-bilanzierung`, `write-mabis-zp`, `write-lokationszuordnung` | none |
 | Grid-operator writes | `write-preisblatt`, `write-nelo`, `write-tranche`, `write-malo-grid`, `write-grundversorger`, `write-energiemix`, `write-mmma-preis`, `write-netznutzungsdaten`, `dispatch-pricat` | `mako_roles` contains `NB` |
 | ESA consent | `read-einwilligung`, `write-einwilligung` | `MSB` **or** `ESA` |
 | Operations | `manage-subscription`, `manage-fanout` | `ADMIN` |
@@ -301,8 +301,9 @@ is a `422` naming the stage in `code`:
 | `PUT` | `/api/v1/netzzugang/antraege` | `write-netzzugang` | Upsert a §20b EnWG request; emits `de.markt.netzzugang.antrag.updated` |
 | `GET` | `/api/v1/netzzugang/antraege` · `/{id}` | `read-netzzugang` | List (`?status=&netzanschluss_id=`); one |
 | `PATCH` | `/api/v1/netzzugang/antraege/{id}/status` | `write-netzzugang` | `erfasst → uebermittelt → bestaetigt/abgelehnt`; optional `platform_ref`, `expected_version` (→ `412`) |
-| `PUT` | `/api/v1/msb-rahmenvertraege-gas` | `write-msb-rv-gas` | Gas MSB-Rahmenvertrag (GeLi Gas 3.0 Tenor 13–16); idempotent on `(tenant, gnb_mp_id, msb_mp_id, valid_from)`; `version` → `412` |
-| `GET` | `/api/v1/msb-rahmenvertraege-gas` · `/{id}` | `read-msb-rv-gas` | List (`?msb_mp_id=&status=`); one |
+| `PUT` | `/api/v1/msb-rahmenvertraege` | `write-msb-rv` | MSB-Rahmenvertrag NB ↔ MSB, `sparte` `STROM` or `GAS`; idempotent on `(tenant, sparte, nb_mp_id, msb_mp_id, valid_from)`; `version` → `412`; an overlapping window → `422` |
+| `GET` | `/api/v1/msb-rahmenvertraege` · `/{id}` | `read-msb-rv` | List (`?sparte=&nb_mp_id=&msb_mp_id=&status=`); one |
+| `GET` | `/api/v1/msb-rahmenvertraege/check` | `read-msb-rv` | `?sparte=&nb_mp_id=&msb_mp_id=&datum=` → `abgeschlossen`, `befund`, `vertrag`; read by `processd` for the Anmeldung MSB |
 | `GET` | `/api/v1/nelos` · `/{id}` | `read-nelo` | List (`?nb_mp_id=`); one by EIC or BDEW-Codenummer |
 | `PUT` | `/api/v1/nelos/{id}` | `write-nelo` | Upsert through the gate; `sparte` from the payload, `STROM` or `GAS` only |
 | `GET` | `/api/v1/tranchen` · `/{id}` | `read-tranche` | List (`?malo_id=`); one |
@@ -310,6 +311,8 @@ is a `422` naming the stage in `code`:
 | `GET/PUT` | `/api/v1/malos/{malo_id}/grid` | `read-malo-grid` / `write-malo-grid` | Grid topology from NIS/GIS |
 | `GET` | `/api/v1/malos/{malo_id}/utilmd-stammdaten?stichtag=` | `read-utilmd-stammdaten` | The Marktlokation's [UTILMD Stammdaten](#utilmd-stammdaten) on the Stichtag; `404` for an unknown MaLo |
 | `PUT` | `/api/v1/malos/{malo_id}/netznutzungsdaten` | `write-netznutzungsdaten` (NB) | One dated row of the NB's Netznutzungsdaten; an overlapping row is `422` |
+| `GET` | `/api/v1/malos/{malo_id}/lokationsbuendel?stichtag=` | `read-utilmd-stammdaten` | The Marktlokation's [Lokationsbündel](#lokationsbuendel) on the Stichtag and the NB's Angaben of it; `404` for an unknown MaLo |
+| `PUT` | `/api/v1/malos/{malo_id}/lokationsbuendel-angaben` | `write-netznutzungsdaten` (NB) | One dated row of the NB's Lokationsbündel-Angaben; an overlapping row is `422` |
 | `GET/PUT` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattMessung`; GET includes `auf_abschlaege` |
 | `GET/PUT` | `/api/v1/preisblaetter-ka/{nb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattKonzessionsabgabe` |
 | `GET/PUT` | `/api/v1/preisblaetter-dienstleistung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattDienstleistung` |
@@ -361,10 +364,25 @@ is a `422` naming the stage in `code`:
   the catalogue holds (BNetzA Mitteilung Nr. 3, § 34 Abs. 2 S. 2 Nr. 10 MsbG).
 - **A NeLo is Strom or Gas.** A `WASSER` or `FERNWAERME` Netzlokation is a
   payload error.
-- **The Gas MSB-Rahmenvertrag** follows KoV XV Anlage 8 from 01.10.2026;
-  `status=anpassung_erforderlich` lists the contracts still to migrate. Every
-  upsert emits `de.markt.msb-rahmenvertrag-gas.updated` with `version`,
-  `valid_from`, `valid_to`, `signed_at`.
+- **The MSB-Rahmenvertrag is per Sparte.** The NB checks the Vertrag nach § 9
+  Abs. 1 Nr. 3 MsbG with the MSBN before it confirms an Anmeldung MSB (WiM
+  Teil 1 Kap. 2.3.2 Nr. 2 Ziff. 3; AWH WiM Gas 2.0 Kap. 3.5.2 Nr. 2 Ziff. 3),
+  and the NB has one MP-ID per Sparte, so a Gas contract never answers a Strom
+  lookup. `check` is `abgeschlossen: true` only for a contract with status
+  `abgeschlossen` whose `[valid_from, valid_to)` covers `datum`; otherwise
+  `befund` names why — `kein_vertrag`, `angeboten`, `anpassung_erforderlich`
+  or `beendet` — and `processd` escalates. Two contracts of the same parties
+  and Sparte cannot claim the same day.
+- **Two columns are Gas-only.** GeLi Gas 3.0 (BK7-24-01-009, S. 6–7) revokes
+  BK7-17-026 with effect from 01.10.2026 (Tenor 13) and requires the
+  Messstellenbetreiberrahmenvertrag in the jeweils gültige Fassung, adapting
+  those already concluded (Tenor 15). A Gas row's `fassung` defaults to
+  `KoV XV Anlage 8` (KoV Gas XV Haupttext § 2 Ziff. 2 lit. h); a Strom row gets
+  none it did not name. `anpassung_erforderlich` is refused on a Strom row, and
+  a Gas contract still in Fassung `BK7-17-026` answers `anpassung_erforderlich`
+  for any day from 01.10.2026. Every upsert emits
+  `de.markt.msb-rahmenvertrag.updated` (`sparte`, `version`, `valid_from`,
+  `valid_to`, `signed_at`) in the write's transaction.
 - **Partner role `LFG` is refused** (`422`): a gas supplier is `LF` +
   Rollencodetyp `DVGW`.
 
@@ -717,11 +735,35 @@ source is resolved for it.
 | Messlokationen | the `MELO → MALO` edges of the location graph covering the Stichtag |
 | MSB, its Rolle and Grundlage, the gMSB | `melo_msb_zuordnungen` on the Stichtag |
 | Zähler (Nummer, Typ, Größe, fernauslesbar) and their OBIS | `zaehler` (BO4E `Zaehler`) and the `zaehler_register` rows active on the Stichtag |
-| Haushaltskunde, Betriebszustand, Termin / nächstes Jahr / Intervall der Netznutzungsabrechnung, Abrechnungsvariante, Gemeinderabatt | `malo_netznutzungsdaten`, written by `PUT /api/v1/malos/{malo_id}/netznutzungsdaten` (NB) |
+| Haushaltskunde, Betriebszustand, Termin / nächstes Jahr / Intervall der Netznutzungsabrechnung, Abrechnungsvariante, Gemeinderabatt, Turnusablesung des NB (`MMDD` or `MMWWMMWW`, never `0229`), Netznutzungsvertrag (`KUNDE_NB`/`LIEFERANT_NB`) and its Zahler (`KUNDE` only under `KUNDE_NB`) | `malo_netznutzungsdaten`, written by `PUT /api/v1/malos/{malo_id}/netznutzungsdaten` (NB) |
 
 A fact no row holds is `null` (or an empty list), never a default: the message
 that needs it is refused by makod, naming it. The type is
 `mako_markt::utilmd_stammdaten::MaloUtilmdStammdaten`.
+
+## Lokationsbündel {#lokationsbuendel}
+
+`GET /api/v1/malos/{malo_id}/lokationsbuendel?stichtag=YYYY-MM-DD` is the
+Lokationsbündel the Marktlokation belongs to on a date: what the NB's answer to
+a Geschäftsdatenanfrage Stammdaten Strom (UTILMD 55035 / 55095 / 55060,
+UTILMD AHB Strom 2.2 Kap. 9.5, S. 599–665) transmits beside the UTILMD
+Stammdaten, and what makod reads at its boundary for it. The Stichtag is
+required.
+
+| Fact | Source |
+|---|---|
+| Energierichtung (`AUSSP` verbrauchend, `EINSP` erzeugend) | `malo.energierichtung` |
+| Objects — Markt-, Mess-, Netzlokationen, Technische and Steuerbare Ressourcen — and the edges joining them | every `lokationszuordnungen` edge valid on the Stichtag (half-open `[valid_from, valid_to)`) reachable from the Marktlokation, followed in **both** directions: the MeLo PUT writes `MELO → MALO`, the graph API either way |
+| Lokationsbündelstruktur | the distinct `lokationsbuendelcode`s of those edges — one is a bündel with a structure, more than one a graph that disagrees with itself |
+| Each object's position in it | the object's `lokationsbuendelObjektcode` (typed column of `malo`/`melo`, BO4E document of `nelo`, `technische_ressourcen`, `steuerbare_ressourcen`) |
+| Zählertyp-Spezifikation (EDL40/EDL21/sonstiger EHZ, mME Standard/MeDa) | `zaehler.data` (BO4E `Zaehler.zaehlertypSpezifikation`) |
+| ÜNB, technische Einrichtungen, normiertes Profil and Verfahren, Netznutzungsabrechnungspositionen (Artikel-ID with Zu-/Abschlag), the Marktlokation's OBIS-Kennzahlen with their Verwendungszwecke for NB/LF/ÜNB, each Zähler register's Wertegranularität | `malo_lokationsbuendel_angaben`, written by `PUT /api/v1/malos/{malo_id}/lokationsbuendel-angaben` (NB) |
+
+The `PUT` refuses a Verwendungszweck the Codeliste der Verwendungszwecke 1.0
+(Kap. 2, S. 5–7) does not admit for a Marktlokation and that Marktrolle, a
+Zu-/Abschlag with more than two decimals, and an OBIS-Kennzahl listed twice.
+A fact no row holds is `null` (or an empty list), never a default. The type is
+`mako_markt::lokationsbuendel::MaloLokationsbuendel`.
 
 ---
 
@@ -784,8 +826,9 @@ before deciding an Anmeldung.
 | `rollenzuordnungen` | Dated NB/LF/MSB roles per MaLo |
 | `melo_msb_zuordnungen` | Dated MSB per MeLo, from IFTSTA 21012 — never from the vorläufige Anmeldebestätigung 55043 |
 | `bilanzierungen` | BO4E `Bilanzierung` per MaLo; a currently effective one derives `malo.fallgruppe` |
-| `malo_netznutzungsdaten` | The NB's facts of a MaLo's UTILMD record no BO4E object carries — Gruppenzuordnung, Betriebszustand, Termine and Intervall der Netznutzungsabrechnung, Abrechnungsvariante, Gemeinderabatt; dated, half-open, non-overlapping |
+| `malo_netznutzungsdaten` | The NB's facts of a MaLo's UTILMD record no BO4E object carries — Gruppenzuordnung, Betriebszustand, Termine and Intervall der Netznutzungsabrechnung, Abrechnungsvariante, Gemeinderabatt, Turnusablesung, Netznutzungsvertrag and Zahler; dated, half-open, non-overlapping |
 | `lokationszuordnungen` | Location graph edges, typed `Lokationstyp` (`MALO`/`MELO`/`NELO`/`SR`/`TR`) |
+| `malo_lokationsbuendel_angaben` | The NB's Angaben of a MaLo's Lokationsbündel a Geschäftsdatenanfrage answer carries and no BO4E object holds — ÜNB, technische Einrichtungen, normiertes Profil, NNA-Positionen, OBIS Verwendungszwecke, register Wertegranularität; dated, half-open, non-overlapping |
 | `partners` · `subscriptions` | Marktpartner; webhook subscribers |
 | `process_correlation` · `processed_events` | Process tracking per MaLo; inbound idempotency |
 | `preisblaetter` · `preisblaetter_messung` · `preisblaetter_konzessionsabgabe` · `preisblaetter_dienstleistung` · `preisblaetter_hardware` | Price sheets |
@@ -801,7 +844,7 @@ before deciding an Anmeldung.
 | `zaehler` · `geraete` · `zaehler_register` · `zaehler_saisons` | Device registry and TOU definitions |
 | `event_log` · `event_delivery` | Fan-out outbox and per-subscriber delivery queue |
 | `esa_einwilligungen` · `esa_framework_agreements` · `esa_messprodukt_preise` · `esa_messprodukt_katalog` | ESA consents, agreements, accepted prices, product catalogue |
-| `netzzugang_antraege` · `msb_rahmenvertraege_gas` | §20b requests; Gas MSB-Rahmenverträge |
+| `netzzugang_antraege` · `msb_rahmenvertraege` | §20b requests; MSB-Rahmenverträge, both Sparten |
 
 ### Temporal integrity
 
@@ -1346,7 +1389,7 @@ Source: `urn:mako:marktd:tenant:{tenant}`.
 | `de.markt.pricat.published` | `nb_mp_id` | Preisblatt `PUT` | `netzbilanzd`, `invoicd`, ERP |
 | `de.markt.sr.konfigurationsprodukt.updated` | `sr_id` | Konfigurationsprodukte replaced | `processd`, ERP |
 | `de.markt.geraet.konfiguration.updated` | `geraet_id` | Konfigurationen `PUT` (`geraet_id`, `zaehler_id`, `count`) | `agentd`, ERP |
-| `de.markt.msb-rahmenvertrag-gas.updated` | contract id | Gas MSB-Rahmenvertrag upsert | ERP |
+| `de.markt.msb-rahmenvertrag.updated` | contract id | MSB-Rahmenvertrag upsert (`sparte` in `data`) | ERP |
 | `de.markt.netzzugang.antrag.updated` | request id | §20b request upserted or advanced | `makod`, ERP |
 | `de.markt.einwilligung.erteilt` | consent id | Consent granted | `makod`, ERP |
 | `de.markt.einwilligung.widerrufen` | consent id | Revoked or expired (`grund`) | `makod` (17008), ERP |

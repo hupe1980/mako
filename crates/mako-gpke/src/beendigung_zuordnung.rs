@@ -848,7 +848,6 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                 // a MaLo-ID, so the qualifier is the only thing that says which
                 // object the LFA is being asked to release.
                 let mut payload = serde_json::json!({
-                    "direction":         "outbound",
                     "pid":               ANFRAGE_PID,
                     "sender":            sender.as_str(),
                     "receiver":          receiver.as_str(),

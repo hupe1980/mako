@@ -649,10 +649,10 @@ pub enum SupplierChangeCommand {
         /// `YYYYMMDD`.
         ///
         /// Not a segment of the 55002: it is a fact about the days between the
-        /// two dates, which no supplier covers. § 38 Abs. 1 EnWG attaches to
-        /// that interval, so it rides the completion payload to the supply
-        /// projection the same way `eog_art` does — the projection is the only
-        /// place that can see the interval, because it holds both ends.
+        /// two dates, which no supplier covers, and § 38 Abs. 1 EnWG attaches
+        /// to that interval. marktd's supply projection reads it from a
+        /// `ProcessCompleted` payload; this workflow queues none for the 55002,
+        /// so the date is accepted here and reaches no consumer.
         ///
         /// `None` on every other answer, which is the ordinary case: the LFA
         /// releases the Marktlokation exactly at the Zuordnungsbeginn and there
@@ -1075,10 +1075,12 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 Ok(WorkflowOutput::with_outbox(events, outbox))
             }
 
+            // Fall b (`lfa_lieferende`) is not a segment of the 55002 and has
+            // no place in the UTILMD payload — see the command.
             SupplierChangeCommand::SendAntwort {
                 antwort,
                 obligations,
-                lfa_lieferende,
+                lfa_lieferende: _,
             } => {
                 let accepted = antwort.zustimmung;
                 let data = match state {
@@ -1188,11 +1190,6 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         // Messlokationen and the Messstellenbetreiber of each.
                         payload["messlokationen"] = serde_json::json!(antwort.messlokationen);
                         payload["malo_msb"] = serde_json::json!(antwort.malo_msb);
-                    }
-                    // Fall b, and only on a Bestätigung: an Ablehnung leaves the
-                    // Altlieferant where it was, so no interval opens.
-                    if accepted && let Some(ende) = lfa_lieferende.as_deref() {
-                        payload["lfa_lieferende"] = serde_json::json!(ende);
                     }
                     outbox.push(PendingOutbox::new(
                         "UTILMD",

@@ -14,7 +14,7 @@
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
-    types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
+    types::{MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
@@ -41,16 +41,21 @@ pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19103, 19104];
 
 /// Deadline label for the Gas data-request response window.
 ///
-/// **10 Werktage** — and here the number is genuinely ten: „Die Übermittlung
-/// erfolgt spätestens 10 Werktage nach Eingang der Anfrage des Lieferanten"
-/// (GeLi Gas 3.0 Kap. 4.2, Anforderung von Brennwert und Zustandszahl). The
-/// same sentence also sets a **floor** the NB must respect — „aber nicht vor
-/// dem 10. Werktag des Monats, der auf den Monat folgt, in den das Ende der
-/// … Zeitspanne fällt" — which no deadline can express and which only binds
-/// the sender, so this window carries the ceiling alone.
+/// On a 17103 it is due at [`mako_fristen::antwort::brennwert_zustandszahl_due`]:
+/// „Die Übermittlung erfolgt spätestens 10 Werktage nach Eingang der Anfrage
+/// des Lieferanten, aber nicht vor dem 10. Werktag des Monats der auf den
+/// Monat folgt, in den das Ende der durch den Lieferanten zuvor mitgeteilten
+/// Zeitspanne fällt" (BK7-24-01-009 GeLi Gas 3.0 Kap. 4.2, S. 13) — the later
+/// of the two bounds, so a request about the running or the previous month is
+/// due on the 10. Werktag of the month after the Zeitspanne. Both sides
+/// register it: the LF from the instant it sends, the NB from the instant the
+/// Anfrage arrives.
 ///
-/// Unrelated to the LFN's 10-Werktage Vorlauffrist before Lieferbeginn, which
-/// happens to be the same number for a different reason.
+/// On a 17104 (Anfrage des MSB Gas an den NB Strom) it is the Geschäfts­
+/// datenanfrage window of GPKE Teil 4 Kap. 3.2 Nr. 2 (S. 30) — „spätester ÜZ
+/// ist 1 WT nach dem ÜZ von Nr. 1"
+/// ([`mako_fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE`]); the PID
+/// overview 4.0 files 17104 under that Use-Case.
 pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-datenabruf-antwort";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -155,8 +160,8 @@ pub enum GeliGasDatenabrufState {
     /// No events yet.
     #[default]
     New,
-    /// ORDERS received; waiting for the NB's answer (10 Werktage,
-    /// GeLi Gas 3.0 Kap. 4.2).
+    /// ORDERS sent or received; waiting for the NB's answer
+    /// ([`ANTWORT_WINDOW_LABEL`]).
     AnfrageGesendet {
         /// PID of the initial ORDERS.
         pid: Pruefidentifikator,
@@ -239,8 +244,15 @@ pub enum GeliGasDatenabrufCommand {
         receiver: MarktpartnerCode,
         /// EDIFACT message reference (generated at dispatch time).
         message_ref: MessageRef,
-        /// Last day of the Zeitspanne the Brennwert is asked for — it sets the
-        /// earliest day the NB may answer (GeLi Gas 3.0 Kap. 4.2).
+        /// Messlokation the Brennwert is asked for — the ORDERS `LOC+172`
+        /// carries „die ID der Messlokation" (ORDERS AHB 1.1b Kap. 4.1.3).
+        messlokation: MeLo,
+        /// First Gastag of the Zeitspanne the Brennwert is asked for
+        /// (`SG29 DTM+163`).
+        zeitspanne_von: time::Date,
+        /// Last Gastag of the Zeitspanne (`SG29 DTM+164` is the beginning of
+        /// the Gastag after it) — it sets the earliest day the NB may answer
+        /// (GeLi Gas 3.0 Kap. 4.2).
         zeitspanne_bis: time::Date,
     },
     /// Inbound ORDERS data request received.
@@ -354,8 +366,15 @@ impl Workflow for GeliGasDatenabrufWorkflow {
                 sender,
                 receiver,
                 message_ref,
+                messlokation,
+                zeitspanne_von,
                 zeitspanne_bis,
             } => {
+                if zeitspanne_von > zeitspanne_bis {
+                    return Err(WorkflowError::rejected(format!(
+                        "the Zeitspanne begins {zeitspanne_von} after it ends {zeitspanne_bis}",
+                    )));
+                }
                 if !ORDERS_ANFRAGE_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "expected a Gas Datenabruf ORDERS PID ({ORDERS_ANFRAGE_PIDS:?}), got {pid}",
@@ -379,6 +398,8 @@ impl Workflow for GeliGasDatenabrufWorkflow {
                         "sender":     sender.as_str(),
                         "receiver":   receiver.as_str(),
                         "message_ref": message_ref.as_str(),
+                        "location":   messlokation.as_str(),
+                        "zeitspanne_von": zeitspanne_von.to_string(),
                         "zeitspanne_bis": zeitspanne_bis.to_string(),
                     }),
                 );
@@ -456,6 +477,27 @@ mod tests {
         Pruefidentifikator::new(n).unwrap()
     }
 
+    /// A Zeitspanne that ends before it begins names no period the GNB could
+    /// answer for.
+    #[test]
+    fn a_zeitspanne_ending_before_it_begins_is_refused() {
+        let refused = GeliGasDatenabrufWorkflow::handle(
+            &GeliGasDatenabrufState::New,
+            GeliGasDatenabrufCommand::InitiateAnfrage {
+                pid: pid(17_103),
+                sender: MarktpartnerCode::new("9800000000004"),
+                receiver: MarktpartnerCode::new("9800000000011"),
+                message_ref: MessageRef::new("ORD-1"),
+                messlokation: MeLo::new("DE00056266802AO6G56M11SN51G21M24S"),
+                zeitspanne_von: time::Date::from_calendar_date(2026, time::Month::October, 31)
+                    .unwrap(),
+                zeitspanne_bis: time::Date::from_calendar_date(2026, time::Month::October, 1)
+                    .unwrap(),
+            },
+        );
+        assert!(refused.is_err(), "{:?}", refused.map(|o| o.events.len()));
+    }
+
     #[test]
     fn verlauf_states_the_orders_sent_and_the_ordrsp_received() {
         let out = GeliGasDatenabrufWorkflow::handle(
@@ -465,6 +507,9 @@ mod tests {
                 sender: MarktpartnerCode::new("9800000000004"),
                 receiver: MarktpartnerCode::new("9800000000011"),
                 message_ref: MessageRef::new("ORD-1"),
+                messlokation: MeLo::new("DE00056266802AO6G56M11SN51G21M24S"),
+                zeitspanne_von: time::Date::from_calendar_date(2026, time::Month::October, 1)
+                    .unwrap(),
                 zeitspanne_bis: time::Date::from_calendar_date(2026, time::Month::October, 31)
                     .unwrap(),
             },

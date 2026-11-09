@@ -66,12 +66,12 @@ use mako_geli_gas::{
 };
 use mako_gpke::{
     GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
-    GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatenabrufWorkflow,
-    GpkeGeschaeftsdatenanfrageWorkflow, GpkeKonfigurationAenderungWorkflow,
-    GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
-    GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow, GpkePartinWorkflow,
-    GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungWorkflow,
-    GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow,
+    GpkeDatenabrufMsbWorkflow, GpkeDatenabrufWorkflow, GpkeGeschaeftsdatenanfrageWorkflow,
+    GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
+    GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
+    GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungMsbWorkflow, GpkeSperrungWorkflow,
+    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow,
 };
 use mako_mabis::{MabisBillingWorkflow, MabisClearinglisteWorkflow};
 use mako_wim::{
@@ -233,8 +233,8 @@ impl IngestOutcome {
 /// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
 ///
 /// A parameter rather than a `W::State: OccupiesBusinessKey` bound because only
-/// 46 of the 63 workflow names dispatched here supply a verdict at all — 35
-/// through that trait, 11 through an inherent terminal-state closure — and the
+/// 50 of the 65 workflow names dispatched here supply a verdict at all — 37
+/// through that trait, 13 through an inherent terminal-state closure — and the
 /// verdict is domain knowledge that belongs in the workflow's own crate — makod
 /// only *consumes* what a crate has already published (that trait, or an
 /// inherent `is_terminal()`). The four INVOIC families and the Redispatch
@@ -671,6 +671,7 @@ impl EdifactIngestDispatcher {
         "gpke-ankuendigung-zuordnung-lf",
         "gpke-beendigung-zuordnung",
         "gpke-datenabruf",
+        "gpke-datenabruf-msb",
         "gpke-eog",
         "gpke-geschaeftsdatenanfrage",
         "gpke-konfiguration",
@@ -683,6 +684,7 @@ impl EdifactIngestDispatcher {
         "gpke-partin",
         "gpke-sperrung",
         "gpke-sperrung-lf",
+        "gpke-sperrung-msb",
         "gpke-stammdatenaenderung",
         "gpke-stornierung",
         "gpke-supplier-change",
@@ -2060,6 +2062,26 @@ pub(crate) fn faelligkeitsdatum_from_invoic(msg: &AnyMessage) -> Option<time::Of
             )
         })
         .max()
+}
+
+/// The settlement window of an inbound INVOIC whose Anwendungsfall makes the
+/// Fälligkeitsdatum `SG8 DTM+265` Muss: the Zahlungsziel the invoice states.
+///
+/// INVOIC AHB 1.0b places `DTM+265` as Muss on the MMM-Rechnungen 31005–31008
+/// (Kap. 3.1.3, S. 39), the Kapazitätsrechnung 31010 (Kap. 3.1.4, S. 45) and the
+/// Rechnung sonstige Leistung 31011 (Kap. 3.1.5, S. 53). The payer answers by
+/// that date, so it is the deadline; an invoice without one is refused rather
+/// than given a window nobody stated.
+pub(crate) fn zahlungsziel_due(
+    msg: &AnyMessage,
+    pid: u32,
+) -> Result<time::OffsetDateTime, EngineError> {
+    faelligkeitsdatum_from_invoic(msg).ok_or_else(|| {
+        EngineError::Deserialization(format!(
+            "INVOIC {pid} carries no readable SG8 DTM+265 (Fälligkeitsdatum, INVOIC AHB 1.0b \
+             Kap. 3.1) — its settlement window is the Zahlungsziel and cannot be set without it"
+        ))
+    })
 }
 
 /// Extract the Marktlokations-ID from the first LOC segment (component 1, index 0).

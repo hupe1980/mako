@@ -208,10 +208,13 @@ pub const MODULE_TABLE: &[ModuleRow] = &[
     //   INVOIC 31001/31002/31005/31006 + ORDERS Sperrung 17115–17117 +
     //   ORDERS/ORDRSP Konfiguration 17134/17135/19001/19002 + PARTIN
     //   37000–37006. Both sides of GPKE live here; the PidRouter separates
-    //   them by Marktrolle.
+    //   them by Marktrolle. The MSB Strom receives four GPKE ORDERS — the
+    //   Anfrage Sperrung 17116 and the Anfrage/Anforderung/Reklamation von
+    //   Werten 17102/17004/17113 — and registers only those
+    //   (`GpkeModule::register_pids_with_roles`).
     ModuleRow {
         name: "gpke",
-        rollen: &[Rolle::LfStrom, Rolle::NbStrom],
+        rollen: &[Rolle::LfStrom, Rolle::NbStrom, Rolle::MsbStrom],
         build: || Box::new(mako_gpke::GpkeModule),
     },
     // WimModule — Messstellenbetrieb in **beiden Sparten**: 55039/55042/

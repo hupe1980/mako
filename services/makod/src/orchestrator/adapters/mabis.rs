@@ -522,13 +522,20 @@ pub fn mabis_listenabgleich_registry() -> AdapterRegistry<MabisListenabgleichWor
 /// - **Whether the arrival is inside the Erstaufschlag window** — a calendar
 ///   fact about the Bilanzierungsmonat (Kap. 3.10 Tabelle 2), not something the
 ///   message states, and the thing that decides whether the BIKO will assign
-///   „Abrechnungsdaten" or „Prüfdaten".
+///   „Abrechnungsdaten" or „Prüfdaten". It is judged on `received_at`, the
+///   instant the door confirmed, as a Europe/Berlin date: the Fristen of
+///   Tabelle 2 „beziehen sich auf den Zeitpunkt des Eingangs einer Meldung …
+///   beim BIKO", so a version received on the last Erstaufschlag Werktag and
+///   dispatched after midnight keeps its Erstaufschlag.
 #[must_use]
-pub fn mabis_summenzeitreihe_registry() -> AdapterRegistry<MabisBillingWorkflow> {
+pub fn mabis_summenzeitreihe_registry(
+    received_at: time::OffsetDateTime,
+) -> AdapterRegistry<MabisBillingWorkflow> {
+    let eingang = mako_fristen::berlin_date(received_at);
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
                     "expected AnyMessage for MaBiS Summenzeitreihe adapter".into(),
@@ -603,15 +610,15 @@ pub fn mabis_summenzeitreihe_registry() -> AdapterRegistry<MabisBillingWorkflow>
             let bilanzierungsmonat = billing_period_head(&document_date);
 
             // Which phase the arrival falls in — the calendar decides, not the
-            // message (Kap. 3.10 Tabelle 2).
+            // message (Kap. 3.10 Tabelle 2), on the day of receipt.
             let monat = bilanzierungsmonat_aus(&document_date);
-            let im_erstaufschlag = monat.is_some_and(|monat| {
-                monat
-                    .phase(zeitreihe, mako_fristen::heute())
-                    .ist_erstaufschlag()
-            });
+            let im_erstaufschlag =
+                monat.is_some_and(|monat| monat.phase(zeitreihe, eingang).ist_erstaufschlag());
             let clearing_ende = monat.and_then(|monat| {
                 monat.clearing_ende(zeitreihe, mako_mabis::fristen::Abrechnungslauf::Bka)
+            });
+            let kbka_clearing_ende = monat.and_then(|monat| {
+                monat.clearing_ende(zeitreihe, mako_mabis::fristen::Abrechnungslauf::Kbka)
             });
 
             Ok(BillingCommand::ReceiveSummenzeitreihe {
@@ -622,6 +629,7 @@ pub fn mabis_summenzeitreihe_registry() -> AdapterRegistry<MabisBillingWorkflow>
                 version,
                 im_erstaufschlag,
                 clearing_ende,
+                kbka_clearing_ende,
                 absender: MarktpartnerCode::new(
                     m.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                 ),
@@ -865,4 +873,64 @@ fn utilmd_merkmal_of_class(
     klassentyp: &str,
 ) -> Option<String> {
     super::cci_merkmal_of_class(u.segments(), klassentyp).map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 13003 version of the Bilanzkreissummenzeitreihe for September 2026.
+    fn summenzeitreihe() -> AnyMessage {
+        edi_energy::parse(
+            b"UNA:+.? 'UNB+UNOC:3+9900357000004:500+9900357000011:500+261016:2130+1'\
+              UNH+1+MSCONS:D:04B:UN:2.4c'BGM+BK+DOK13003+9'\
+              DTM+137:202609301200?+00:303'RFF+Z13:13003'\
+              NAD+MS+9900357000004::293'NAD+MR+9900357000011::293'UNS+D'NAD+DP'\
+              LOC+172+DE0004030099000000000000000012345'\
+              DTM+293:20261016213000?+00:304'CCI+++ZB4'CAV+Z97'\
+              LIN+1'QTY+220:100'UNT+16+1'UNZ+1+1'",
+        )
+        .expect("the Summenzeitreihe parses")
+    }
+
+    fn im_erstaufschlag(received_at: time::OffsetDateTime) -> bool {
+        let fv = FormatVersion::parse("FV2026-04-01").expect("known");
+        let raw: &dyn Any = &summenzeitreihe();
+        match mabis_summenzeitreihe_registry(received_at)
+            .dispatch(raw, &fv)
+            .expect("dispatched")
+        {
+            BillingCommand::ReceiveSummenzeitreihe {
+                im_erstaufschlag, ..
+            } => im_erstaufschlag,
+            _ => panic!("the adapter builds ReceiveSummenzeitreihe"),
+        }
+    }
+
+    /// The Erstaufschlag is judged on the day the version arrived, in
+    /// gesetzlicher deutscher Zeit — „Zeitpunkt des Eingangs einer Meldung …
+    /// beim BIKO" (MaBiS Kap. 3.10, S. 21) — never on the day it is dispatched,
+    /// and never on its UTC date.
+    #[test]
+    fn the_erstaufschlag_is_judged_on_the_receipt_day() {
+        let (zeitreihe, _) = mako_mabis::zeitreihe_aus_cav("Z97").expect("Z97");
+        let letzter = mako_mabis::Bilanzierungsmonat::new(time::macros::date!(2026 - 09 - 30))
+            .erstaufschlag(zeitreihe, mako_mabis::fristen::Abrechnungslauf::Bka)
+            .expect("the BK-SZR has an Erstaufschlag")
+            .bis;
+        let berlin = |date: time::Date, h: u8, m: u8| {
+            mako_fristen::berlin_at(date, time::Time::from_hms(h, m, 0).expect("valid"))
+        };
+        assert!(
+            im_erstaufschlag(berlin(letzter, 23, 30)),
+            "received 23:30 MESZ on the last Erstaufschlag day {letzter}"
+        );
+        let danach = letzter.next_day().expect("a next day");
+        let spaeter = berlin(danach, 0, 30);
+        assert_eq!(spaeter.to_offset(time::UtcOffset::UTC).date(), letzter);
+        assert!(
+            !im_erstaufschlag(spaeter),
+            "00:30 MESZ the next day is past it, although its UTC date is not"
+        );
+    }
 }

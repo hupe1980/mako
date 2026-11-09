@@ -19,8 +19,9 @@
 
 use std::path::PathBuf;
 
+use mako_markt::utilmd_stammdaten::{NetznutzungZahler, Netznutzungsvertrag};
 use mako_service::schema_check::check_values;
-use vertragd::domain::{Kuendigungsgrund, Vertragsart};
+use vertragd::domain::{Kuendigungsgrund, Lieferbeginnanlass, Vertragsart};
 use vertragd::outbound::TaskKind;
 
 fn migration_sql() -> String {
@@ -109,6 +110,43 @@ fn task_kind_matches_its_check_list() {
     assert_pinned("kind", TaskKind::ALL, TaskKind::as_db, |s| {
         TaskKind::ALL.iter().copied().find(|k| k.as_db() == s)
     });
+}
+
+/// The Anlass is the GeLi Gas Anmeldung's Transaktionsgrund; an unlisted one
+/// cannot be stored, an unknown stored one would be no Anmeldung at all.
+#[test]
+fn lieferbeginnanlass_matches_its_check_list() {
+    assert_pinned(
+        "lieferbeginn_anlass",
+        Lieferbeginnanlass::ALL,
+        Lieferbeginnanlass::as_db,
+        Lieferbeginnanlass::from_db,
+    );
+}
+
+/// The Netznutzung pair is `mako_markt`'s wire vocabulary, which the 44001 body
+/// carries as it is stored.
+#[test]
+fn netznutzung_matches_its_check_lists() {
+    const VERTRAEGE: &[Netznutzungsvertrag] = &[
+        Netznutzungsvertrag::KundeNb,
+        Netznutzungsvertrag::LieferantNb,
+    ];
+    const ZAHLER: &[NetznutzungZahler] = &[NetznutzungZahler::Kunde, NetznutzungZahler::Lieferant];
+    assert_pinned(
+        "netznutzungsvertrag",
+        VERTRAEGE,
+        Netznutzungsvertrag::as_str,
+        Netznutzungsvertrag::from_wire,
+    );
+    assert_pinned(
+        "netznutzung_zahler",
+        ZAHLER,
+        NetznutzungZahler::as_str,
+        NetznutzungZahler::from_wire,
+    );
+    assert_eq!(Netznutzungsvertrag::VARIANTS.len(), VERTRAEGE.len());
+    assert_eq!(NetznutzungZahler::VARIANTS.len(), ZAHLER.len());
 }
 
 /// The three lists are the ones this file believes it is reading.

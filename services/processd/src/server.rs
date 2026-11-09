@@ -735,7 +735,10 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
 /// The supply request bodies another service sends: `vertragd` builds its
 /// Lieferbeginn and Lieferende tasks to these, and its contract test reads each
 /// body through them as the handler's [`mako_service::Json`] does.
-pub use rest::{EndSupplyGasRequest, EndSupplyRequest, StartSupplyGasRequest, StartSupplyRequest};
+pub use rest::{
+    EndSupplyGasRequest, EndSupplyRequest, StartSupplyGasRequest, StartSupplyRequest,
+    transaktionsgruende_44001,
+};
 
 mod rest {
     use std::sync::Arc;
@@ -788,22 +791,49 @@ mod rest {
     }
 
     /// `POST /api/v1/start-supply-gas` — GeLi Gas Lieferbeginn (44001).
+    ///
+    /// The Lieferant's contract facts the Anmeldung NN carries (UTILMD AHB Gas
+    /// 1.2 Kap. 5.6), each Muss there. They are `Option` so that the handler
+    /// names every missing one in one `422` (`ANMELDEDATEN_UNVOLLSTAENDIG`)
+    /// instead of serde naming the first; only the Bilanzkreis has a source
+    /// beside the request.
     #[derive(Debug, serde::Deserialize)]
     pub struct StartSupplyGasRequest {
-        /// Gas-MaLo-ID — `SG5 LOC+Z16`.
+        /// Gas-MaLo-ID — `SG5 LOC+172`.
         pub malo_id: String,
-        /// Zählpunktbezeichnung — `RFF+Z13`.
-        pub zaehlpunkt: String,
         /// Lieferbeginn, `YYYYMMDD` (gesetzliche deutsche Zeit).
         pub process_date: String,
-        /// SG4 STS Transaktionsgrund: `E03` Wechsel when absent, `E01`/`E02`
-        /// Einzug.
+        /// `SG4 STS+7` DE 9013 — a code the 44001 column admits (`E01`
+        /// Ein-/Auszug, `E02` Einzug in Neuanlage, `E03` Wechsel, `ZD2`
+        /// Lieferbeginn und Abmeldung aus der Ersatzversorgung).
         #[serde(default)]
         pub transaktionsgrund: Option<String>,
         /// `SG10 CCI+Z19` Bilanzkreis; falls back to the single `standard`
         /// entry of the Gas fallback row of `[[lf.bilanzkreise]]`.
         #[serde(default)]
         pub bilanzkreis: Option<String>,
+        /// `SG6 DTM+Z20` Abrechnungsintervall des LF in Monaten (1, 3, 6, 12).
+        #[serde(default)]
+        pub abrechnungsintervall_monate: Option<u8>,
+        /// `SG10 CCI+++Z15`/`Z18` — Haushaltskunde gem. EnWG.
+        #[serde(default)]
+        pub haushaltskunde: Option<bool>,
+        /// `SG10 CAV+Z74` Netznutzungsvertrag.
+        #[serde(default)]
+        pub netznutzungsvertrag: Option<mako_markt::utilmd_stammdaten::Netznutzungsvertrag>,
+        /// `SG10 CAV+Z73` Zahlung der Netznutzung.
+        #[serde(default)]
+        pub netznutzung_zahler: Option<mako_markt::utilmd_stammdaten::NetznutzungZahler>,
+        /// `SG9 QTY+Z16` Gemeinderabatt in Prozent.
+        #[serde(default)]
+        pub gemeinderabatt_prozent: Option<rust_decimal::Decimal>,
+        /// `SG12 NAD+Z09` Kunde des LF with his `NAD+Z04`
+        /// Korrespondenzanschrift.
+        #[serde(default)]
+        pub kunde: Option<mako_markt::utilmd_stammdaten::Kunde>,
+        /// `SG12 NAD+Z05` Name und Adresse für die Ablesekarte.
+        #[serde(default)]
+        pub ablesekarte: Option<mako_markt::utilmd_stammdaten::Kunde>,
     }
 
     /// `POST /api/v1/end-supply` — GPKE Lieferende (Strom, 55004).
@@ -817,14 +847,12 @@ mod rest {
 
     /// `POST /api/v1/end-supply-gas` — GeLi Gas Lieferende (44004).
     ///
-    /// The fields `makod`'s `geli.lieferende.anmelden` reads: the same
-    /// `zaehlpunkt` and `YYYYMMDD` `process_date` as the Gas Lieferbeginn.
+    /// The fields `makod`'s `geli.lieferende.anmelden` reads: the Marktlokation
+    /// and the `YYYYMMDD` `process_date`.
     #[derive(Debug, serde::Deserialize)]
     pub struct EndSupplyGasRequest {
-        /// Gas-MaLo-ID — `SG5 LOC+Z16`.
+        /// Gas-MaLo-ID — `SG5 LOC+172`.
         pub malo_id: String,
-        /// Zählpunktbezeichnung — `RFF+Z13`.
-        pub zaehlpunkt: String,
         /// Lieferende, `YYYYMMDD` (gesetzliche deutsche Zeit).
         pub process_date: String,
     }
@@ -1533,28 +1561,74 @@ mod rest {
     /// with the *GNB's* answer window, which is the Ablauf des 4. WT.
     const GELI_GAS_VORLAUF_WT: u32 = 10;
 
+    /// The `SG4 STS+7` DE 9013 codes the 44001 column admits, read from the
+    /// UTILMD Gas profile in force today — the profile the pre-send gate holds
+    /// the message against.
+    ///
+    /// Read, never typed here: a code list beside the profile is a second
+    /// authority that drifts from it with the next format version.
+    pub fn transaktionsgruende_44001() -> Vec<String> {
+        use edi_energy::{MessageType, ReleaseRegistry, ReleaseTrack};
+        let Some(profile) = ReleaseRegistry::global().profile_for_date_and_track(
+            MessageType::Utilmd,
+            mako_fristen::heute(),
+            ReleaseTrack::Gas,
+        ) else {
+            return Vec::new();
+        };
+        let Some(af) = profile.anwendungsfall(44_001) else {
+            return Vec::new();
+        };
+        let mut codes: Vec<String> = profile
+            .structure
+            .layouts
+            .iter()
+            .filter(|l| {
+                l.tag == "STS"
+                    && l.leaves()
+                        .next()
+                        .is_some_and(|(_, _, e)| e.codes.iter().any(|c| c.code == "7"))
+            })
+            .flat_map(|l| af.element_rules(&l.nr))
+            .filter(|r| r.de == "9013" && r.occurrence == 0)
+            .flat_map(|r| r.operands.iter().filter_map(|o| o.code.clone()))
+            .collect();
+        codes.sort();
+        codes.dedup();
+        codes
+    }
+
     /// `POST /api/v1/start-supply-gas` — ERP initiates a GeLi Gas Lieferbeginn (Gas 44001).
     ///
-    /// Dispatches `geli.lieferbeginn.anmelden` to `makod`.
+    /// Dispatches `geli.lieferbeginn.anmelden` to `makod` with the body
+    /// [`mako_markt::commands::GeliLieferbeginnAnmelden`].
     ///
-    /// ## Request body (JSON)
+    /// ## Request body (JSON) — [`StartSupplyGasRequest`]
     ///
-    /// | Field          | Type   | Required | Notes |
-    /// |----------------|--------|----------|-------|
-    /// | `malo_id`      | string | ✓        | Gas-MaLo-ID — rendered into `SG5 LOC+Z16` |
-    /// | `zaehlpunkt`   | string | ✓        | Zählpunktbezeichnung (RFF+Z13) — **mandatory** per AHB |
-    /// | `process_date` | string | ✓        | Lieferbeginn date (YYYYMMDD in CET/CEST) |
-    /// | `transaktionsgrund` | string | —   | `E03` Wechsel (default), `E01`/`E02` Einzug — selects which Vorlauffrist rule applies |
+    /// | Field | Required | Segment (UTILMD AHB Gas 1.2 Kap. 5.6) |
+    /// |---|---|---|
+    /// | `malo_id` | ✓ | `SG5 LOC+172` under `IMD++Z36+Z12` |
+    /// | `process_date` | ✓ | `SG4 DTM+92`, `YYYYMMDD` |
+    /// | `transaktionsgrund` | ✓ | `SG4 STS+7` — a code the column admits, else `TRANSAKTIONSGRUND_UNZULAESSIG` |
+    /// | `bilanzkreis` | config | `SG10 CCI+Z19`; else the single `standard` `[[lf.bilanzkreise]]` entry |
+    /// | `abrechnungsintervall_monate` | ✓ | `SG6 DTM+Z20` |
+    /// | `haushaltskunde` | ✓ | `SG10 CCI+++Z15`/`Z18` |
+    /// | `netznutzungsvertrag`, `netznutzung_zahler` | ✓ | `CCI+++Z88` `CAV+Z74`/`CAV+Z73` |
+    /// | `gemeinderabatt_prozent` | ✓ | `SG8 SEQ+Z12 QTY+Z16` |
+    /// | `kunde` | ✓ | `SG12 NAD+Z09`, `NAD+Z04` |
+    /// | `ablesekarte` | ✓ | `SG12 NAD+Z05` |
+    ///
+    /// Every missing fact is named in one `422` `ANMELDEDATEN_UNVOLLSTAENDIG`
+    /// (`fehlend`), every malformed one in `ANMELDEDATEN_UNGUELTIG`
+    /// (`maengel`). There is no Gas equivalent of API-Webdienste Strom — the
+    /// ERP must supply the Gas-MaLo-ID upfront.
     ///
     /// ## Mindestvorlauffrist
     ///
-    /// **10 Werktage** for a Lieferantenwechsel (AWH GeLi Gas 2.0 Kap. 2.5.2 SD
-    /// „Lieferbeginn" Nr. 1), enforced here. For an Einzug the NB corrects the
-    /// date instead of rejecting, so those pass with a `vorlauffrist_hinweis`.
-    ///
-    /// **Both `malo_id` and `zaehlpunkt` are mandatory** (BK7-24-01-009 AHB rules
-    /// `AHB-44001-IDE-M` and `AHB-44001-RFF-M`). There is no Gas equivalent of
-    /// API-Webdienste Strom — the ERP must supply the Gas-MaLo-ID upfront.
+    /// **10 Werktage** for a Lieferantenwechsel (`E03`, AWH GeLi Gas 2.0 Kap.
+    /// 2.5.2 SD „Lieferbeginn" Nr. 1), enforced here. For an Einzug the NB
+    /// corrects the date instead of rejecting, so those pass with a
+    /// `vorlauffrist_hinweis`.
     pub async fn start_supply_gas(
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1564,22 +1638,22 @@ mod rest {
         authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
         let StartSupplyGasRequest {
             malo_id,
-            zaehlpunkt,
             process_date,
             transaktionsgrund,
             bilanzkreis,
+            abrechnungsintervall_monate,
+            haushaltskunde,
+            netznutzungsvertrag,
+            netznutzung_zahler,
+            gemeinderabatt_prozent,
+            kunde,
+            ablesekarte,
         } = body;
         // Validate mandatory Gas fields before forwarding.
         if malo_id.is_empty() {
             return Err(refuse(
                 "MISSING_MALO_ID",
                 "\"malo_id\" is required (11-digit Gas-MaLo-ID)",
-            ));
-        }
-        if zaehlpunkt.is_empty() {
-            return Err(refuse(
-                "MISSING_ZAEHLPUNKT",
-                "\"zaehlpunkt\" is required (Zählpunktbezeichnung, RFF+Z13) — mandatory per BK7-24-01-009 AHB",
             ));
         }
         if process_date.is_empty() {
@@ -1600,6 +1674,84 @@ mod rest {
             ));
         };
 
+        // Every fact the 44001 column makes Muss and only the contract states.
+        // A missing one is named, never filled in.
+        let mut fehlend = Vec::new();
+        let mut need = |v: bool, name: &str| {
+            if !v {
+                fehlend.push(name.to_owned());
+            }
+        };
+        need(transaktionsgrund.is_some(), "transaktionsgrund (SG4 STS+7)");
+        need(
+            abrechnungsintervall_monate.is_some(),
+            "abrechnungsintervall_monate (SG6 DTM+Z20)",
+        );
+        need(
+            haushaltskunde.is_some(),
+            "haushaltskunde (SG10 CCI+++Z15/Z18)",
+        );
+        need(
+            netznutzungsvertrag.is_some(),
+            "netznutzungsvertrag (SG10 CAV+Z74)",
+        );
+        need(
+            netznutzung_zahler.is_some(),
+            "netznutzung_zahler (SG10 CAV+Z73)",
+        );
+        need(
+            gemeinderabatt_prozent.is_some(),
+            "gemeinderabatt_prozent (SG9 QTY+Z16)",
+        );
+        need(kunde.is_some(), "kunde (SG12 NAD+Z09/Z04)");
+        need(ablesekarte.is_some(), "ablesekarte (SG12 NAD+Z05)");
+        let (
+            Some(transaktionsgrund),
+            Some(abrechnungsintervall_monate),
+            Some(haushaltskunde),
+            Some(netznutzungsvertrag),
+            Some(netznutzung_zahler),
+            Some(gemeinderabatt_prozent),
+            Some(kunde),
+            Some(ablesekarte),
+        ) = (
+            transaktionsgrund,
+            abrechnungsintervall_monate,
+            haushaltskunde,
+            netznutzungsvertrag,
+            netznutzung_zahler,
+            gemeinderabatt_prozent,
+            kunde,
+            ablesekarte,
+        )
+        else {
+            return Err(refuse_with(
+                "ANMELDEDATEN_UNVOLLSTAENDIG",
+                format!(
+                    "the Anmeldung NN 44001 makes these Muss (UTILMD AHB Gas 1.2 Kap. 5.6) and \
+                     the request does not state them: {}",
+                    fehlend.join("; ")
+                ),
+                serde_json::json!({ "fehlend": fehlend }),
+            ));
+        };
+
+        // `SG4 STS+7` DE 9013 — a code the column admits, case and all: `e03`
+        // is no code, and reading it as an Einzug would skip the binding
+        // Vorlauffrist below.
+        let zulaessig = transaktionsgruende_44001();
+        if !zulaessig.contains(&transaktionsgrund) {
+            return Err(refuse_with(
+                "TRANSAKTIONSGRUND_UNZULAESSIG",
+                format!(
+                    "\"transaktionsgrund\" {transaktionsgrund:?} is not a code the 44001 column \
+                     admits in SG4 STS+7 (UTILMD AHB Gas 1.2 Kap. 5.6, S. 45): {}",
+                    zulaessig.join(", ")
+                ),
+                serde_json::json!({ "zulaessig": zulaessig }),
+            ));
+        }
+
         // `SG10 CCI+Z19` DE 7037 — **Muss** on a 44001 (UTILMD AHB Gas 1.2).
         // GeLi Gas states the Bilanzkreis in one segment; the Strom `SG8
         // SEQ+Z79` Produktpaket does not exist here. `makod` refuses an
@@ -1612,6 +1764,32 @@ mod rest {
                 "\"bilanzkreis\" is required: UTILMD AHB Gas 1.2 marks SG10 CCI+Z19 (Bilanzkreis) a Muss on PID 44001, and without it the GNB has no balancing circle to assign the Marktlokation to. Configure [[lf.bilanzkreise]] with a single `standard` entry to have it filled in automatically.",
             ));
         };
+
+        let anmeldung = mako_markt::commands::GeliLieferbeginnAnmelden {
+            malo_id: malo_id.clone(),
+            process_date: process_date.clone(),
+            transaktionsgrund: transaktionsgrund.clone(),
+            bilanzkreis,
+            abrechnungsintervall_monate,
+            haushaltskunde,
+            netznutzungsvertrag,
+            netznutzung_zahler,
+            gemeinderabatt_prozent,
+            kunde,
+            ablesekarte,
+        };
+        let maengel = anmeldung.maengel();
+        if !maengel.is_empty() {
+            return Err(refuse_with(
+                "ANMELDEDATEN_UNGUELTIG",
+                format!(
+                    "the Anmeldung NN 44001 cannot carry these values (UTILMD AHB Gas 1.2 \
+                     Kap. 5.6): {}",
+                    maengel.join("; ")
+                ),
+                serde_json::json!({ "maengel": maengel }),
+            ));
+        }
 
         // ── GeLi Gas Mindestvorlauffrist ──────────────────────────────────
         //
@@ -1629,10 +1807,9 @@ mod rest {
         //   instead. Refusing those would block an Anmeldung the market
         //   accepts, so they pass with the correction flagged.
         //
-        // An absent Transaktionsgrund reads as `E03`, the documented default:
-        // it is the reading that holds the request to the binding lead time,
-        // so leaving it out can only refuse more, never send short.
-        let ist_wechsel = transaktionsgrund.as_deref().unwrap_or("E03") == "E03";
+        // The Transaktionsgrund is stated and is a code of the column (above),
+        // so no spelling of `E03` can pass as an Einzug.
+        let ist_wechsel = transaktionsgrund == "E03";
 
         let mut vorlauf_hinweis = None;
         {
@@ -1655,7 +1832,7 @@ mod rest {
                         ),
                         serde_json::json!({ "earliest_lieferbeginn": fruehestens.to_string(),
                             "berlin_date": today_berlin.to_string(),
-                            "transaktionsgrund": transaktionsgrund.as_deref().unwrap_or("E03") }),
+                            "transaktionsgrund": transaktionsgrund }),
                     ));
                 }
                 vorlauf_hinweis = Some(format!(
@@ -1682,14 +1859,8 @@ mod rest {
             command: mako_markt::commands::GELI_LIEFERBEGINN_ANMELDEN.to_owned(),
             malo_id: Some(malo_id.clone()),
             melo_id: None,
-            // The fields `dispatch_geli_lf_anmeldung` reads, and no others.
-            payload: serde_json::json!({
-                "malo_id": malo_id,
-                "zaehlpunkt": zaehlpunkt,
-                "process_date": process_date,
-                "transaktionsgrund": transaktionsgrund,
-                "bilanzkreis": bilanzkreis,
-            }),
+            // The body `dispatch_geli_lf_anmeldung` reads, typed on both sides.
+            payload: serde_json::to_value(&anmeldung).map_err(|e| ApiError::Internal(e.into()))?,
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
             Ok(accepted) => Ok((
@@ -1763,8 +1934,8 @@ mod rest {
     /// `POST /api/v1/end-supply-gas` — ERP initiates a GeLi Gas Lieferende (44004).
     ///
     /// Forwards to makod `geli.lieferende.anmelden`, which is licensed to the
-    /// **Gas** supplier (`LFG`) and reads the same `zaehlpunkt` and `YYYYMMDD`
-    /// `process_date` as the Gas Lieferbeginn.
+    /// **Gas** supplier (`LFG`) and reads the Marktlokation and the `YYYYMMDD`
+    /// `process_date`.
     pub async fn end_supply_gas(
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1774,17 +1945,10 @@ mod rest {
         authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
         let EndSupplyGasRequest {
             malo_id,
-            zaehlpunkt,
             process_date,
         } = body;
         if malo_id.is_empty() {
             return Err(refuse("MISSING_MALO_ID", "\"malo_id\" is required"));
-        }
-        if zaehlpunkt.is_empty() {
-            return Err(refuse(
-                "MISSING_ZAEHLPUNKT",
-                "\"zaehlpunkt\" is required (Zählpunktbezeichnung, RFF+Z13)",
-            ));
         }
         if process_date.is_empty() {
             return Err(refuse(
@@ -1806,7 +1970,6 @@ mod rest {
         // The fields `dispatch_geli_lf_anmeldung` reads, and no others.
         let payload = serde_json::json!({
             "malo_id": malo_id,
-            "zaehlpunkt": zaehlpunkt,
             "process_date": process_date,
         });
         end_supply_inner(

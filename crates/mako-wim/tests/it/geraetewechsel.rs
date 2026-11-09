@@ -505,7 +505,8 @@ async fn initiate_device_change_spawns_outbound_order() {
     assert_eq!(p_json["receiver"], "4012345000023");
     assert_eq!(p_json["melo"], "DE00123456789012345678901234567890");
     assert_eq!(p_json["process_date"], "20260801");
-    assert_eq!(p_json["direction"], "outbound");
+    // Every key is one the UTILMD payload declares.
+    assert!(p_json.get("direction").is_none());
 
     assert_eq!(
         p.state().await.unwrap().status_str(),

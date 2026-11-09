@@ -1531,7 +1531,6 @@ impl Workflow for WimDeviceChangeWorkflow {
                     "UTILMD",
                     receiver.as_str(),
                     serde_json::json!({
-                        "direction":    "outbound",
                         "pid":          pid.as_u32(),
                         "sender":       sender.as_str(),
                         "receiver":     receiver.as_str(),
@@ -1941,7 +1940,6 @@ impl Workflow for WimDeviceChangeWorkflow {
                     "transaktionsgrund": grund,
                     "antwort_code":      code.code,
                     "antwort_codeliste": codeliste,
-                    "antwort_tree":       ebd,
                 });
                 // `SG6 RFF+TN` „Referenz Vorgangsnummer (aus Anfragenachricht)",
                 // Muss on every answer column (UTILMD AHB Strom 2.2 Kap. 10, Gas
@@ -2634,7 +2632,9 @@ mod tests {
         assert_eq!(&*wire.message_type, "UTILMD");
         assert_eq!(wire.payload["pid"], 55_043);
         assert_eq!(wire.payload["antwort_code"], "E15");
-        assert_eq!(wire.payload["antwort_tree"], "E_0201");
+        // The tree is the event's (`antwort_ebd`); the wire names the
+        // Codeliste only.
+        assert!(wire.payload.get("antwort_tree").is_none());
         assert_eq!(wire.payload["referenz_vorgangsnummer"], "VG-WIM-001");
         assert!(
             wire.payload.get("vorgangsnummer").is_none(),

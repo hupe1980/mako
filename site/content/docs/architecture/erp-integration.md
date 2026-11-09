@@ -258,7 +258,7 @@ feed.
 
 An EDIFACT outbox entry carries a typed payload from `mako_engine::payload`
 (`AperakPayload`, `UtilmdPayload`, …), so producer and renderer share one
-struct. An **ERP notification** entry is still a `message_type` string plus
+struct, and the struct refuses a key it does not declare. An **ERP notification** entry is still a `message_type` string plus
 JSON: a workflow writes
 `PendingOutbox::new("GabiFinalAllocationOverdue", recipient, json!({…}))` and
 `map_message_type_to_erp_event` (`services/makod/src/core/erp_adapter.rs`) reads

@@ -140,22 +140,42 @@ async fn start_supply_body_is_typed() {
     assert_eq!(sent[0]["payload"]["bilanzkreis"], "11XBK-STD------Y");
 }
 
+/// A 44001 body as a Lieferant's full contract states it.
+fn gas_anmeldung() -> Value {
+    let partei = json!({
+        "vorname": "Erika",
+        "nachname": "Mustermann",
+        "anschrift": {
+            "strasse": "Hauptstraße", "hausnummer": "1",
+            "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+        }
+    });
+    json!({
+        "malo_id": "51238696012",
+        "process_date": "20990101",
+        "transaktionsgrund": "E03",
+        "bilanzkreis": "9870000000006",
+        "abrechnungsintervall_monate": 12,
+        "haushaltskunde": true,
+        "netznutzungsvertrag": "LIEFERANT_NB",
+        "netznutzung_zahler": "LIEFERANT",
+        "gemeinderabatt_prozent": "0",
+        "kunde": partei,
+        "ablesekarte": partei,
+    })
+}
+
 #[tokio::test]
 async fn start_supply_gas_body_is_typed() {
     let received = Arc::new(Mutex::new(Vec::new()));
     let base = processd(Arc::clone(&received)).await;
     let url = format!("{base}/api/v1/start-supply-gas");
-    let valid = json!({
-        "malo_id": "51238696012",
-        "zaehlpunkt": "DE00123456789012345678901234567890",
-        "process_date": "20990101",
-        "bilanzkreis": "9870000000006",
-    });
+    let valid = gas_anmeldung();
     assert_refusals(
         reqwest::Method::POST,
         &url,
         &valid,
-        &["malo_id", "zaehlpunkt", "process_date"],
+        &["malo_id", "process_date"],
     )
     .await;
 
@@ -165,6 +185,38 @@ async fn start_supply_gas_body_is_typed() {
     let (status, body) = send(reqwest::Method::POST, url.clone(), &bad_date).await;
     assert_eq!(status, 422, "{body}");
     assert_eq!(body["code"], "INVALID_DATE", "{body}");
+
+    // Every contract fact the 44001 column makes Muss is named when left out.
+    for key in [
+        "transaktionsgrund",
+        "abrechnungsintervall_monate",
+        "haushaltskunde",
+        "netznutzungsvertrag",
+        "netznutzung_zahler",
+        "gemeinderabatt_prozent",
+        "kunde",
+        "ablesekarte",
+    ] {
+        let (status, body) =
+            send(reqwest::Method::POST, url.clone(), &with(&valid, key, None)).await;
+        assert_eq!(status, 422, "without {key}: {body}");
+        assert_eq!(body["code"], "ANMELDEDATEN_UNVOLLSTAENDIG", "{body}");
+        assert!(
+            body["fehlend"].as_array().is_some_and(|f| f
+                .iter()
+                .any(|x| x.as_str().is_some_and(|x| x.starts_with(key)))),
+            "without {key}: {body}"
+        );
+    }
+    // A value the column cannot carry is named too.
+    let (status, body) = send(
+        reqwest::Method::POST,
+        url.clone(),
+        &with(&valid, "abrechnungsintervall_monate", Some(json!(2))),
+    )
+    .await;
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], "ANMELDEDATEN_UNGUELTIG", "{body}");
     assert!(
         received.lock().unwrap().is_empty(),
         "a refusal reached makod"
@@ -175,15 +227,62 @@ async fn start_supply_gas_body_is_typed() {
     let sent = received.lock().unwrap();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["marktrolle"], "LFG");
+    // makod's own body type, field for field: it refuses any other key.
+    let forwarded: mako_markt::commands::GeliLieferbeginnAnmelden =
+        mako_service::json_from_value(sent[0]["payload"].clone())
+            .expect("the body makod's geli.lieferbeginn.anmelden reads");
+    assert_eq!(forwarded.malo_id, "51238696012");
+    assert_eq!(forwarded.transaktionsgrund, "E03");
+    assert_eq!(forwarded.bilanzkreis, "9870000000006");
+    assert!(forwarded.maengel().is_empty());
+}
+
+/// The Transaktionsgrund is a code the 44001 column admits, read from
+/// the profile. A misspelt `e03` is no Einzug that skips the binding
+/// Vorlauffrist, and a code of another column is no Transaktionsgrund here.
+#[tokio::test]
+async fn start_supply_gas_refuses_a_transaktionsgrund_outside_the_column() {
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let base = processd(Arc::clone(&received)).await;
+    let url = format!("{base}/api/v1/start-supply-gas");
+    let admitted = processd::server::transaktionsgruende_44001();
     assert_eq!(
-        sent[0]["payload"],
-        json!({
-            "malo_id": "51238696012",
-            "zaehlpunkt": "DE00123456789012345678901234567890",
-            "process_date": "20990101",
-            "transaktionsgrund": null,
-            "bilanzkreis": "9870000000006",
-        })
+        admitted,
+        ["E01", "E02", "E03", "ZD2"],
+        "UTILMD AHB Gas 1.2 S. 45"
+    );
+    for code in ["e03", "Z36", ""] {
+        let (status, body) = send(
+            reqwest::Method::POST,
+            url.clone(),
+            &with(&gas_anmeldung(), "transaktionsgrund", Some(json!(code))),
+        )
+        .await;
+        assert_eq!(status, 422, "{code:?}: {body}");
+        assert_eq!(
+            body["code"], "TRANSAKTIONSGRUND_UNZULAESSIG",
+            "{code:?}: {body}"
+        );
+    }
+    // `E03` keeps the binding 10-WT Mindestvorlauffrist.
+    let tomorrow = mako_fristen::heute() + time::Duration::days(1);
+    let kurz = format!(
+        "{:04}{:02}{:02}",
+        tomorrow.year(),
+        u8::from(tomorrow.month()),
+        tomorrow.day()
+    );
+    let (status, body) = send(
+        reqwest::Method::POST,
+        url.clone(),
+        &with(&gas_anmeldung(), "process_date", Some(json!(kurz))),
+    )
+    .await;
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], "VORLAUFFRIST_VIOLATION", "{body}");
+    assert!(
+        received.lock().unwrap().is_empty(),
+        "a refusal reached makod"
     );
 }
 
@@ -214,8 +313,8 @@ async fn end_supply_body_is_typed() {
     assert_eq!(sent[0]["payload"], valid);
 }
 
-/// `geli.lieferende.anmelden` is licensed to `LFG` alone and reads
-/// `zaehlpunkt` and `process_date`, so that is what reaches `makod`.
+/// `geli.lieferende.anmelden` is licensed to `LFG` alone and reads the
+/// Marktlokation and `process_date`, so that is what reaches `makod`.
 #[tokio::test]
 async fn end_supply_gas_body_is_typed() {
     let received = Arc::new(Mutex::new(Vec::new()));
@@ -223,14 +322,13 @@ async fn end_supply_gas_body_is_typed() {
     let url = format!("{base}/api/v1/end-supply-gas");
     let valid = json!({
         "malo_id": "51238696012",
-        "zaehlpunkt": "DE00123456789012345678901234567890",
         "process_date": "20990101",
     });
     assert_refusals(
         reqwest::Method::POST,
         &url,
         &valid,
-        &["malo_id", "zaehlpunkt", "process_date"],
+        &["malo_id", "process_date"],
     )
     .await;
     assert!(

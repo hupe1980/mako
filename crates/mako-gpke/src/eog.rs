@@ -80,6 +80,11 @@
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::payload::{Stammdaten, UtilmdPayload};
 use mako_engine::types::Pruefidentifikator;
+use mako_pruefung::codes::EBD_ANMELDUNG_EOG;
+
+/// `A09` „Zustimmung" — the one Zustimmungscode of `E_0615` „Anmeldung E/G
+/// prüfen", the E/G's answer to a 55013 (`mako_pruefung::codes::E_0615_CODES`).
+const EOG_ZUSTIMMUNG: &str = "A09";
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
@@ -1080,20 +1085,39 @@ impl Workflow for GpkeEogWorkflow {
                 let response_pid = Pruefidentifikator::new(eog_response_pid(accepted))
                     .map_err(|e| WorkflowError::rejected(e.clone()))?;
 
-                // Outbound UTILMD 55014/55015 to the NB.
+                // `SG4 STS+E01` — Muss on both answers, DE 1131 `E_0615` (UTILMD
+                // AHB Strom 2.2, 55014/55015): `A09` Zustimmung on the
+                // Bestätigung, the Ablehnungscode the E/G states on the
+                // Ablehnung, which must be one `E_0615` publishes.
+                let antwort_code = if accepted {
+                    EOG_ZUSTIMMUNG.to_owned()
+                } else {
+                    let code = reason.clone().unwrap_or_default();
+                    let ablehnung = mako_pruefung::codes::lookup(EBD_ANMELDUNG_EOG, &code)
+                        .is_some_and(|c| c.ist_zustimmung() == Some(false));
+                    if !ablehnung {
+                        return Err(WorkflowError::validation(format!(
+                            "Ablehnung EOG carries an Ablehnungscode of {EBD_ANMELDUNG_EOG} \
+                             (A02/A03/A04/A05/A99), got {code:?}"
+                        )));
+                    }
+                    code
+                };
+                // Outbound UTILMD 55014/55015 to the NB. The Versorgungsart
+                // (`SG10 CCI+Z36`) has no field in the UTILMD payload and is
+                // recorded on the event only.
                 let mut outbox = vec![PendingOutbox::new(
                     "UTILMD",
                     data.sender.as_str(),
                     serde_json::json!({
-                        "direction":      "outbound",
-                        "pid":            response_pid.as_u32(),
-                        "sender":         data.receiver.as_str(),
-                        "receiver":       data.sender.as_str(),
-                        "malo":           data.location_id.as_str(),
-                        "process_date":   data.process_date,
-                        "versorgungsart": versorgungsart.map(Versorgungsart::code),
-                        "bilanzkreis":    bilanzkreis,
-                        "reason":         reason,
+                        "pid":               response_pid.as_u32(),
+                        "sender":            data.receiver.as_str(),
+                        "receiver":          data.sender.as_str(),
+                        "malo":              data.location_id.as_str(),
+                        "process_date":      data.process_date,
+                        "bilanzkreis":       bilanzkreis,
+                        "antwort_code":      antwort_code,
+                        "antwort_codeliste": EBD_ANMELDUNG_EOG,
                     }),
                 )];
                 if accepted {
@@ -1505,7 +1529,8 @@ mod tests {
         assert_eq!(out.outbox.len(), 2);
         assert_eq!(out.outbox[0].message_type.as_ref(), "UTILMD");
         assert_eq!(out.outbox[0].payload["pid"], 55014);
-        assert_eq!(out.outbox[0].payload["versorgungsart"], "ZD0");
+        assert_eq!(out.outbox[0].payload["antwort_code"], "A09");
+        assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0615");
         assert_eq!(out.outbox[1].message_type.as_ref(), "ProcessCompleted");
         assert_eq!(out.outbox[1].payload["eog_art"], "GRUNDVERSORGUNG");
         let state = apply_all(state, &out.events);
@@ -1563,6 +1588,9 @@ mod tests {
         .unwrap();
         assert_eq!(out.outbox.len(), 1); // UTILMD 55015 only — no ProcessCompleted
         assert_eq!(out.outbox[0].payload["pid"], 55015);
+        // The Ablehnungscode rides `SG4 STS+E01`, not a key no renderer reads.
+        assert_eq!(out.outbox[0].payload["antwort_code"], "A05");
+        assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0615");
         let state = apply_all(state, &out.events);
         assert!(
             matches!(state, EogState::AntwortGesendet { response_pid, accepted: false, .. }

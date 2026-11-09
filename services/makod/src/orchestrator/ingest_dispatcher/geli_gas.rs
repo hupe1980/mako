@@ -35,9 +35,13 @@ impl EdifactIngestDispatcher {
                 17115 | 17117 => {
                     let cmd = adapters::geli_gas_sperrung_nb_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // Antwortfrist: 10 Werktage (BK7-24-01-009 §5).
-                    let due_at =
-                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
+                    // The GNB's answer: „spätester ÜT ist der 1. WT nach dem ÜT
+                    // von Nr. 1". GeLi Gas 3.0 holds no Sperrprozess, so the
+                    // Sparte-neutral 17115 / 17117 rows of
+                    // `mako_fristen::antwort` (GPKE Teil 2 Kap. 3.5.1.2 /
+                    // 3.5.2.2 Nr. 2) are the window — the one the LF side
+                    // registers for the same Auftrag.
+                    let due_at = antwort_due_at(pid, received_at);
                     // Index under the Sperrauftrag's Belegnummer so a later ORDCHG
                     // 39000 Stornierung (LOC-less) resumes it by RFF+ON order ref.
                     self.spawn_or_resume_keyed::<GeliGasSperrungNbWorkflow>(
@@ -210,9 +214,9 @@ impl EdifactIngestDispatcher {
             // ── GeLi Gas Stammdatenänderung (44109–44182) ─────────────────────
             // Änderung PIDs spawn a Berechtigter process; Antwort PIDs resume a
             // change we initiated. The workflow registers the 10-WT Antwort
-            // deadline. Stammdatenanfrage PIDs (G8–G10) spawn the data
-            // owner's `ReceiveAnfrage` process, which auto-answers with the
-            // requested master data (data-return).
+            // deadline. An Anfrage zur Stammdatenänderung (G8–G10) spawns
+            // the Verantwortlicher's `ReceiveAnfrage` process, which waits for
+            // `geli.stammdaten.anfrage.beantworten` inside the same window.
             "geli-gas-stammdatenaenderung" => {
                 let malo_id = extract_malo_from_msg(msg);
                 if mako_geli_gas::stammdatenaenderung::is_antwort_pid(pid)
@@ -276,9 +280,11 @@ impl EdifactIngestDispatcher {
                 44022..=44024 => {
                     let cmd = adapters::geli_gas_stornierung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // Antwortfrist: 10 Werktage (BK7-24-01-009).
-                    let due_at =
-                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
+                    // No Festlegung quantifies the answer to a Stornierung
+                    // (GeLi Gas 3.0 Kap. 2.7, AWH GeLi Gas V1.2 Kap. 1.8), so
+                    // `mako_fristen::antwort` has no row and the window is the
+                    // operating convention `antwort_due_at` logs as such.
+                    let due_at = antwort_due_at(pid, received_at);
                     self.spawn_or_resume_guarded::<GeliGasStornierungWorkflow>(
                         inbound,
                         malo_id.as_str(),
@@ -302,9 +308,9 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::geli_gas_sperrprozesse_invoic_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_invoice_ref_from_invoic(msg);
-                    // Settlement deadline: 10 Werktage (BK7-24-01-009).
-                    let due_at =
-                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
+                    // The Zahlungsziel the invoice states (`SG8 DTM+265`, Muss
+                    // on 31011 — INVOIC AHB 1.0b Kap. 3.1.5).
+                    let due_at = zahlungsziel_due(msg, pid)?;
                     self.spawn_or_resume_guarded::<GeliGasSperrprozesseInvoicWorkflow>(
                         inbound,
                         malo_id.as_str(),
@@ -398,16 +404,42 @@ impl EdifactIngestDispatcher {
             // Adding one: an `AdapterRegistry<WorkflowType>` in adapters.rs plus
             // a `spawn_or_resume` arm above.
             // ── GeLi Gas Datenabruf (PIDs 17103/17104 inbound, 19103/19104 ORDRSP) ─
-            // 17103/17104: NB/MSB receives ORDERS Anfrage from LF — spawn.
+            // 17103: the GNB receives the LF's Anfrage Brennwert / Zustandszahl;
+            // 17104: the NB Strom receives the MSB Gas's Anfrage — spawn.
             // 19103/19104: LF receives ORDRSP rejection from NB — resume.
             // ERP-initiated outbound (LF sends 17103) uses geli.datenabruf.anfragen command.
             "geli-gas-datenabruf" => match pid {
-                17103 | 17104 => {
+                // 17104 is keyed by the Anfrage itself: its `LOC+172` is
+                // conditional ([64], ORDERS AHB 1.1b Kap. 4.1.4, S. 20) and a
+                // conformant one may name the Messlokation by address alone.
+                // The Messlokation it does name is indexed beside the key.
+                17104 => {
+                    let cmd =
+                        adapters::geli_gas_datenabruf_receive_registry().dispatch(raw, &fv)?;
+                    let key = msb_gas_anfrage_key(msg);
+                    let melo_id = extract_malo_from_msg(msg);
+                    let due_at = datenabruf_antwort_due(msg, pid, received_at)?;
+                    let extra: Vec<&str> = [melo_id.as_str()]
+                        .into_iter()
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    self.spawn_or_resume_keyed::<GeliGasDatenabrufWorkflow>(
+                        inbound,
+                        &key,
+                        mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
+                        cmd,
+                        &fv,
+                        &[(mako_geli_gas::datenabruf::ANTWORT_WINDOW_LABEL, due_at)],
+                        &extra,
+                        Some(mako_engine::workflow::OccupiesBusinessKey::occupies_business_key),
+                    )
+                    .await
+                }
+                17103 => {
                     let cmd =
                         adapters::geli_gas_datenabruf_receive_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    let due_at =
-                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
+                    let due_at = datenabruf_antwort_due(msg, pid, received_at)?;
                     self.spawn_or_resume_guarded::<GeliGasDatenabrufWorkflow>(
                         inbound,
                         malo_id.as_str(),
@@ -438,5 +470,116 @@ impl EdifactIngestDispatcher {
             },
             wf_name => unknown_workflow_skip(wf_name, pid),
         }
+    }
+}
+
+/// The NB's answer window on an inbound Datenabruf ORDERS, from the instant it
+/// arrived.
+///
+/// - **17103** (Anfrage Brennwert / Zustandszahl, LF → NB): „spätestens 10
+///   Werktage nach Eingang der Anfrage des Lieferanten, aber nicht vor dem 10.
+///   Werktag des Monats der auf den Monat folgt, in den das Ende der … Zeitspanne
+///   fällt" (BK7-24-01-009 GeLi Gas 3.0 Kap. 4.2, S. 13) —
+///   [`fristen::antwort::brennwert_zustandszahl_due`]. The Zeitspanne's end is
+///   the `SG29 DTM+164` the ORDERS AHB 1.1b Kap. 4.1.3 makes Muss; an Anfrage
+///   without one cannot be given its window and is refused, never given the
+///   ten Werktage alone, which would report every Anfrage about the running or
+///   the previous month late.
+/// - **17104** (Anfrage des MSB Gas an den NB Strom): a Geschäftsdatenanfrage
+///   of GPKE Teil 4 (PID overview 4.0, lfd. Nr. 25560), „spätester ÜZ ist 1 WT
+///   nach dem ÜZ von Nr. 1" (Kap. 3.2 Nr. 2, S. 30).
+fn datenabruf_antwort_due(
+    msg: &AnyMessage,
+    pid: u32,
+    received_at: OffsetDateTime,
+) -> Result<OffsetDateTime, EngineError> {
+    if pid == 17104 {
+        return Ok(fristen::antwort::FristShape::EndOfWerktag(
+            fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE,
+        )
+        .due_at(received_at, HolidayCalendar::BdewMaKo));
+    }
+    let zeitspanne_bis = brennwert_zeitspanne_bis(msg).ok_or_else(|| {
+        EngineError::Deserialization(
+            "ORDERS 17103 carries no readable SG29 DTM+164 (Ende Zeitraum für Wertanfrage, \
+             ORDERS AHB 1.1b Kap. 4.1.3) — the GNB's answer window (GeLi Gas 3.0 Kap. 4.2) \
+             cannot be computed without it"
+                .into(),
+        )
+    })?;
+    Ok(fristen::antwort::brennwert_zustandszahl_due(
+        received_at,
+        zeitspanne_bis,
+        HolidayCalendar::BdewMaKo,
+    ))
+}
+
+/// The key an Anfrage des MSB Gas an den NB Strom (ORDERS 17104) runs under:
+/// the sending MSB's MP-ID (`NAD+MS`) and the ORDERS' Dokumentennummer (`BGM`
+/// DE 1004), both Muss (ORDERS AHB 1.1b Kap. 4.1.4, S. 19). The number is
+/// unique only per sender, hence the MP-ID; the ORDRSP answering it echoes the
+/// number.
+///
+/// Empty when either is missing, which the spawn reports as
+/// `no_correlation_key`.
+fn msb_gas_anfrage_key(msg: &AnyMessage) -> String {
+    let AnyMessage::Orders(o) = msg else {
+        return String::new();
+    };
+    let sender = o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or("");
+    let nummer = o
+        .segments()
+        .iter()
+        .find(|s| s.tag == "BGM")
+        .and_then(|s| s.component_str(1, 0))
+        .unwrap_or("");
+    if sender.is_empty() || nummer.is_empty() {
+        return String::new();
+    }
+    format!("geli-gas-datenabruf:{sender}:{nummer}")
+}
+
+/// The last Gastag of a 17103's Zeitspanne, from its `DTM+164`.
+///
+/// The Ende is the instant the Zeitspanne ends — the beginning of the Gastag
+/// after its last one, 06:00 gesetzliche deutsche Zeit (Allgemeine Festlegungen
+/// V6.1d Kap. 3.1). The last Gastag is the one holding the instant just before
+/// it. Only its month enters the window, so an Ende stamped on the Strom day
+/// boundary (00:00) names the same Gastag and is read, not refused: the
+/// message is inbound and must stay representable.
+fn brennwert_zeitspanne_bis(msg: &AnyMessage) -> Option<time::Date> {
+    let AnyMessage::Orders(o) = msg else {
+        return None;
+    };
+    let dtm = o.dtm().iter().find(|d| d.qualifier == "164")?;
+    let ende = crate::adapters::parse_dtm_datetime(dtm.value.as_deref()?, dtm.format.as_deref())?;
+    let davor = fristen::in_berlin(ende - time::Duration::NANOSECOND);
+    if davor.time() < fristen::Sparte::Gas.tagesbeginn() {
+        davor.date().previous_day()
+    } else {
+        Some(davor.date())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::datetime;
+
+    /// The MSB Gas asks the NB Strom (17104): a Geschäftsdatenanfrage, due one
+    /// Werktag after it arrived (GPKE Teil 4 Kap. 3.2 Nr. 2) — here across the
+    /// end of summer time, Friday 23.10.2026 to Monday 26.10.2026 MEZ.
+    #[test]
+    fn an_anfrage_vom_msb_gas_is_due_the_next_werktag() {
+        let msg = edi_energy::parse(
+            b"UNA:+.? 'UNB+UNOC:3+9800555000006:502+9900357000004:500+261023:1000+1++TL'\
+              UNH+1+ORDERS:D:09B:UN:1.4c'BGM+Z14+1'DTM+137:202610231000?+00:303'\
+              RFF+Z13:17104'NAD+MS+9800555000006::332'NAD+MR+9900357000004::293'\
+              UNS+S'UNT+8+1'UNZ+1+1'",
+        )
+        .expect("parses");
+        let due = datenabruf_antwort_due(&msg, 17104, datetime!(2026-10-23 10:00 UTC))
+            .expect("17104 needs no Zeitspanne");
+        assert_eq!(due, datetime!(2026-10-26 23:59:59.999_999_999 +01:00));
     }
 }

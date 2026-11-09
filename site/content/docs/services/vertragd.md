@@ -191,12 +191,30 @@ lists none or several — the UTILMD AHB Strom 2.2 Kap. 5.3 makes the Bilanzkrei
 Muss on a 55001, so the refusal is dead-lettered for the operator rather than
 sent.
 
+**A gas component states what its Anmeldung NN 44001 carries.** UTILMD AHB
+Gas 1.2 Kap. 5.6 makes the Lieferant's contract facts Muss, so a GAS component
+registered at the NB (it names `malo_id` and `nb_mp_id`) is refused on
+creation — `422 anmeldedaten_unvollstaendig`, each fact in `fehlend` — unless
+the contract states every one:
+
+| Fact | Where vertragd holds it | Segment |
+|---|---|---|
+| Transaktionsgrund | component `lieferbeginn_anlass`: `WECHSEL` (`E03`), `UMZUG` (`E01`), `NEUANLAGE` (`E02`), `ENDE_ERSATZVERSORGUNG` (`ZD2`) | `SG4 STS+7` (S. 45) |
+| Abrechnungsintervall des LF | contract `abrechnungszyklus` → 1, 3, 6 or 12 Monate | `SG6 DTM+Z20` (S. 48) |
+| Gruppenzuordnung | the Kunde's `haushaltskunde` | `SG10 CCI+++Z15`/`Z18` (S. 51) |
+| Netznutzungsvertrag, Zahler | component `netznutzungsvertrag` (`LIEFERANT_NB`/`KUNDE_NB`), `netznutzung_zahler` (`LIEFERANT`/`KUNDE`, the latter beside `KUNDE_NB` only) | `CAV+Z74`, `CAV+Z73` (S. 52) |
+| Gemeinderabatt | component `gemeinderabatt_prozent`, 0 to 10 | `SEQ+Z12 QTY+Z16` (S. 55) |
+| Kunde, Korrespondenzanschrift, Ablesekarte | the Kunde's BO4E `Geschaeftspartner` (or `Person`) name and address; without an address of his own the contract's `standort_adresse`, as Bedingung `[556]` has the Marktlokation's address stand in | `SG12 NAD+Z09`/`Z04`/`Z05` (S. 63–65) |
+
+The Ablesekarte goes to the contract's Kunde: the contract names no other
+addressee. No Messlokation is asked for — the 44001 names the Marktlokation
+alone in `SG5 LOC+172`.
+
 The Lieferbeginn and Lieferende bodies are processd's request types field
-for field, pinned by `tests/it/processd_supply_contract.rs`; a gas component's
-Lieferende carries its Messlokation as the Zählpunktbezeichnung, as its
-Lieferbeginn does. `vertragsart`, `kuendigung_grund` and the outbound task `kind` are
-`CHECK`-constrained and held to their Rust enums in both directions by
-`tests/it/schema_enum_guard.rs`.
+for field, pinned by `tests/it/processd_supply_contract.rs`. `vertragsart`,
+`kuendigung_grund`, `lieferbeginn_anlass`, `netznutzungsvertrag`,
+`netznutzung_zahler` and the outbound task `kind` are `CHECK`-constrained and
+held to their Rust enums in both directions by `tests/it/schema_enum_guard.rs`.
 
 ### Contract status
 
@@ -607,7 +625,7 @@ has no MP-ID, so it lives here, not in `marktd`. `GET`/`PUT
 ## Which contracts live here
 
 A contract between two Marktpartner with MP-IDs (Netznutzungsvertrag
-`nb_contracts`, MSB-Rahmenvertrag Gas `msb_rahmenvertraege_gas`) lives in
+`nb_contracts`, MSB-Rahmenvertrag `msb_rahmenvertraege`) lives in
 `marktd`; a contract with a Kunde on one side lives here. There is no
 Einspeisevertrag: § 7 Abs. 1 EEG 2023 forbids making the EEG obligations
 conditional on a contract, so the party record lives in

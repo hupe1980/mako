@@ -668,13 +668,11 @@ impl Workflow for MabisListenabgleichWorkflow {
                         "zeitreihen_version": data.zeitreihen_version,
                         "listennummer": format!("{}-K", data.listennummer),
                         "referenz_listennummer": data.listennummer,
-                        "korrekturen": korrekturen,
                         "positionen": eintraege
                             .iter()
                             .map(|(malo, code)| serde_json::json!({
                                 "malo": malo,
                                 "antwort_code": code.code,
-                                "bedeutung": code.bedeutung,
                             }))
                             .collect::<Vec<_>>(),
                         "billing_period": data.billing_period.as_str(),
@@ -753,11 +751,9 @@ impl Workflow for MabisListenabgleichWorkflow {
                         "zeitreihen_version": data.zeitreihen_version,
                         "listennummer": format!("{}-A", data.listennummer),
                         "referenz_listennummer": data.listennummer,
-                        // No positions, and the count says so: an
-                        // AblehnungDerGesamtenListe names no Marktlokation.
-                        "korrekturen": 0,
+                        // No positions: an AblehnungDerGesamtenListe names
+                        // no Marktlokation.
                         "positionen": [],
-                        "bedeutung": antwort.bedeutung,
                         "billing_period": data.billing_period.as_str(),
                     }),
                 );
@@ -963,7 +959,10 @@ mod tests {
             .expect("clean reply");
         assert_eq!(out.outbox.len(), 1, "a clean list still owes a reply");
         assert_eq!(out.outbox[0].payload["pid"], 55224);
-        assert_eq!(out.outbox[0].payload["korrekturen"], 0);
+        assert_eq!(
+            out.outbox[0].payload["positionen"].as_array().map(Vec::len),
+            Some(0)
+        );
     }
 
     #[test]
@@ -1115,7 +1114,6 @@ mod tests {
         .expect("an unordered Abonnement refuses the list");
 
         let payload = &out.outbox[0].payload;
-        assert_eq!(payload["korrekturen"], 0);
         assert_eq!(payload["positionen"].as_array().map(Vec::len), Some(0));
         // The code must come out of the whole-list cluster. A Korrekturgrund
         // code carried on a message with no positions would name a
@@ -1218,7 +1216,10 @@ mod tests {
         )
         .expect("an inadmissible version refuses the list");
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0047");
-        assert_eq!(out.outbox[0].payload["korrekturen"], 0);
+        assert_eq!(
+            out.outbox[0].payload["positionen"].as_array().map(Vec::len),
+            Some(0)
+        );
     }
 
     /// **The refusal names the tree its code is defined in**, so the Verlauf

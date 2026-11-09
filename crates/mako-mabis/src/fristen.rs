@@ -100,9 +100,19 @@ pub const BIKO_DATENSTATUS_WERKTAGE: u32 = 1;
 // and that is worth knowing — but registering a deadline for an obligation this
 // participant does not hold would fire into a workflow with no arm to answer it.
 
-/// Deadline label for the close of a clearing window — the point after which a
-/// Summenzeitreihe version can no longer change the settlement.
+/// Deadline label for the close of the **BKA (ohne KBKA)** clearing window —
+/// the point after which a Summenzeitreihe version enters the KBKA
+/// Clearingphase instead (BK6-24-174 Anlage 3 Kap. 3.10 Tabelle 2, S. 22;
+/// Kap. 9.7.1, S. 112). Due at
+/// [`Bilanzierungsmonat::clearing_ende`]`(zeitreihe, Abrechnungslauf::Bka)`.
 pub const CLEARING_ENDE_LABEL: &str = "mabis-clearingfenster-ende";
+
+/// Deadline label for the close of the **KBKA** clearing window — „31. WT –
+/// Ende 7. Monat" for BG-SZR and BK-SZR, „1. WT des 8. Monats – 8. WT des 8.
+/// Monats" for the DZÜ (Tabelle 2, S. 22) — after which no version can change
+/// the settlement. Due at
+/// [`Bilanzierungsmonat::clearing_ende`]`(zeitreihe, Abrechnungslauf::Kbka)`.
+pub const KBKA_CLEARING_ENDE_LABEL: &str = "mabis-kbka-clearingfenster-ende";
 
 // ── Abrechnungslauf ─────────────────────────────────────────────────────────
 
@@ -436,7 +446,9 @@ impl Bilanzierungsmonat {
 fn ab_dem_vortag(fenster: Fenster, vorheriges_ende: Option<Date>) -> Fenster {
     match vorheriges_ende {
         Some(ende)
-            if fenster.von == mako_fristen::add_werktage(ende, 1, KALENDER)
+            if ende
+                .next_day()
+                .is_some_and(|tag| fenster.von == mako_fristen::next_werktag(tag, KALENDER))
                 && ende < fenster.von =>
         {
             Fenster {

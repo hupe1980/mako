@@ -4,16 +4,21 @@
 //! defined in **GPKE Teil 4** (BK6-22-024 Anlage 1d, Kap. 3
 //! „Geschäftsdatenanfrage"):
 //!
-//! | PID   | Direction   | Description |
+//! | PID   | Direction (Strom) | Description |
 //! |-------|-------------|-------------|
-//! | 17004 | LF → NB/MSB | Anforderung von Werten |
-//! | 17102 | LF → NB/MSB | Anfrage von Werten (data value request) |
-//! | 17113 | LF → NB/MSB | Reklamation von Werten/Lastgängen |
-//! | 19102 | NB/MSB → LF | Ablehnung Anfrage Werte |
-//! | 19114 | NB/MSB → LF | Ablehnung der Reklamation von Werten |
+//! | 17004 | LF · NB · MSB → MSB | Anforderung von Werten (ORDERS AHB 1.1b Kap. 4.13) |
+//! | 17102 | LF → MSB | Anfrage von Werten (Kap. 4.1.2.2) |
+//! | 17113 | LF · NB · ÜNB · MSB → MSB | Reklamation von Werten/Lastgängen (Kap. 4.8) |
+//! | 19007 | MSB → LF · NB · MSB | Ablehnung Anforderung von Werten (ORDRSP AHB 1.1b Kap. 4.13) |
+//! | 19102 | MSB → LF | Ablehnung Anfrage Werte |
+//! | 19114 | MSB → LF · NB · ÜNB · MSB | Ablehnung der Reklamation von Werten |
 //!
-//! Positive responses to data requests arrive via **MSCONS** (handled by
-//! [`crate::messwerte`]); only rejections (ORDRSP 19102/19114) are handled here.
+//! This is the requesting side; the MSB that receives the ORDERS runs
+//! [`crate::datenabruf_msb`]. Positive responses arrive via **MSCONS**
+//! (handled by [`crate::messwerte`]); only rejections (ORDRSP 19007/19102/19114)
+//! are handled here. Each echoes the ORDERS' Dokumentennummer in `SG1 RFF+ON`
+//! (ORDRSP AHB 1.1b, Hinweis \[519\] / \[529\]), which is the key the
+//! requesting process runs under.
 //!
 //! The Anfrage von **Stammdaten** (ORDERS 17132) is a different exchange — its
 //! answer is a UTILMD and its refusal the ORDRSP 19101 — and lives in
@@ -39,22 +44,28 @@ use mako_engine::{
 /// Workflow name for the GPKE Datenabruf process.
 pub const WORKFLOW_NAME: &str = "gpke-datenabruf";
 
-/// ORDERS PIDs sent by LF to request or reclaim data.
+/// ORDERS PIDs this side sends to the MSB to request or reclaim values.
 ///
 /// | PID   | Description |
 /// |-------|-------------|
-/// | 17004 | Anforderung von Werten (LF → NB/MSB) |
-/// | 17102 | Anfrage von Werten (LF → NB/MSB) |
-/// | 17113 | Reklamation von Werten/Lastgängen (LF → NB/MSB) |
+/// | 17004 | Anforderung von Werten |
+/// | 17102 | Anfrage von Werten |
+/// | 17113 | Reklamation von Werten/Lastgängen |
 pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[17004, 17102, 17113];
 
-/// ORDRSP rejection PIDs received by LF from NB or MSB.
+/// ORDRSP rejection PIDs received from the MSB, one per ORDERS.
 ///
-/// | PID   | Description |
-/// |-------|-------------|
-/// | 19102 | Ablehnung Anfrage Werte (NB/MSB → LF) |
-/// | 19114 | Ablehnung der Reklamation von Werten (NB/MSB → LF) |
-pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19102, 19114];
+/// | PID   | Answers | Description |
+/// |-------|---------|-------------|
+/// | 19007 | 17004 | Ablehnung Anforderung von Werten (ORDRSP AHB 1.1b Kap. 4.13, S. 56) |
+/// | 19102 | 17102 | Ablehnung Anfrage Werte |
+/// | 19114 | 17113 | Ablehnung der Reklamation von Werten |
+///
+/// 19007's Gas column (MSB an NB, Anwendungsübersicht 4.0 lfd. Nr. 37410,
+/// GeLi Gas 2.0 „Anforderung und Bereitstellung") answers the Gas 17004,
+/// which no GeLi Gas workflow sends: a Gas NB deployment does not load this
+/// module.
+pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19007, 19102, 19114];
 
 /// Deadline label for the answer window on an inbound Geschäftsdatenanfrage.
 ///
@@ -82,7 +93,7 @@ pub enum DatenabrufEvent {
         /// Message reference of the sent ORDERS.
         message_ref: MessageRef,
     },
-    /// NB or MSB rejected the data request (ORDRSP 19102/19114).
+    /// The MSB rejected the data request (ORDRSP 19007/19102/19114).
     AnfrageAbgelehnt {
         /// ORDRSP Prüfidentifikator.
         ordrsp_pid: Pruefidentifikator,
@@ -177,7 +188,7 @@ pub enum DatenabrufState {
     New,
     /// LF sent the ORDERS; awaiting ORDRSP or MSCONS delivery.
     AnfrageGesendet(AnfrageData),
-    /// NB/MSB rejected the request (ORDRSP 19102/19114).
+    /// The MSB rejected the request (ORDRSP 19007/19102/19114).
     Abgelehnt {
         /// Original request.
         anfrage: AnfrageData,
@@ -257,7 +268,7 @@ pub enum DatenabrufCommand {
     },
     /// Inbound ORDRSP rejection received.
     ReceiveAblehnung {
-        /// ORDRSP Prüfidentifikator (19102/19114).
+        /// ORDRSP Prüfidentifikator (19007/19102/19114).
         ordrsp_pid: Pruefidentifikator,
         /// Rejection reason.
         reason: Option<String>,
@@ -509,6 +520,34 @@ mod tests {
             GpkeDatenabrufWorkflow::handle(&DatenabrufState::default(), anfrage(17_004, sent))
                 .expect("accepted");
         assert!(out.deadlines.is_empty());
+    }
+
+    /// The MSB's Ablehnung of an Anforderung von Werten (ORDRSP 19007, ORDRSP
+    /// AHB 1.1b Kap. 4.13) closes the 17004 process this side sent.
+    #[test]
+    fn a_19007_closes_the_anforderung_von_werten() {
+        let sent = time::macros::datetime!(2026-10-07 10:00 UTC);
+        let out =
+            GpkeDatenabrufWorkflow::handle(&DatenabrufState::default(), anfrage(17_004, sent))
+                .expect("accepted");
+        let state = out
+            .events
+            .iter()
+            .fold(DatenabrufState::default(), GpkeDatenabrufWorkflow::apply);
+        let out = GpkeDatenabrufWorkflow::handle(
+            &state,
+            DatenabrufCommand::ReceiveAblehnung {
+                ordrsp_pid: Pruefidentifikator::new(19_007).expect("valid PID"),
+                reason: None,
+                message_ref: MessageRef::new("ORDRSP-19007"),
+            },
+        )
+        .expect("19007 answers a 17004");
+        let state = out.events.iter().fold(state, GpkeDatenabrufWorkflow::apply);
+        assert!(
+            matches!(state, DatenabrufState::Abgelehnt { ordrsp_pid, .. } if ordrsp_pid.as_u32() == 19_007),
+            "{state:?}"
+        );
     }
 
     #[test]

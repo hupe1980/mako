@@ -34,7 +34,9 @@ use axum::{
     response::IntoResponse,
 };
 use mako_markt::domain::MaloId;
-use mako_markt::utilmd_stammdaten::{Abrechnungsvariante, Betriebszustand, Netznutzungsdaten};
+use mako_markt::utilmd_stammdaten::{
+    Abrechnungsvariante, Betriebszustand, NetznutzungZahler, Netznutzungsdaten, Netznutzungsvertrag,
+};
 use mako_service::cedar::CedarEnforcer;
 use mako_service::{ApiError, ApiResult, Json};
 use rust_decimal::Decimal;
@@ -86,6 +88,17 @@ pub struct PutNetznutzungsdatenBody {
     /// Gemeinderabatt in Prozent, 0 – 10 with at most two decimals.
     #[serde(default)]
     pub gemeinderabatt_prozent: Option<Decimal>,
+    /// Turnusablesung des NB (`DTM+752`): `MMDD`, never `0229`, or
+    /// `MMWWMMWW` with Woche `01`–`04` (UTILMD MIG Gas G1.2 S. 60–61).
+    #[serde(default)]
+    pub turnusablesung: Option<String>,
+    /// `KUNDE_NB` or `LIEFERANT_NB` (`CAV+Z74` `Z08`/`Z09`).
+    #[serde(default)]
+    pub netznutzungsvertrag: Option<Netznutzungsvertrag>,
+    /// `KUNDE` or `LIEFERANT` (`CAV+Z73` `Z10`/`Z11`); `KUNDE` only under
+    /// `KUNDE_NB` (UTILMD AHB Gas 1.2 Bedingung `[216]`).
+    #[serde(default)]
+    pub netznutzung_zahler: Option<NetznutzungZahler>,
 }
 
 fn malo_id(raw: &str) -> ApiResult<MaloId> {
@@ -144,6 +157,22 @@ pub async fn put_netznutzungsdaten(
             "gemeinderabatt_prozent {p} has more than two decimals (UTILMD QTY+Z16, Bedingung [930])"
         )));
     }
+    if let Some(t) = body.turnusablesung.as_deref()
+        && !turnusablesung_wohlgeformt(t)
+    {
+        return Err(ApiError::unprocessable(format!(
+            "turnusablesung {t:?} is neither MMDD (DE 2379 106, never 0229) nor MMWWMMWW with \
+             Woche 01–04 (DE 2379 104) — UTILMD MIG Gas G1.2 DTM+752, S. 60–61"
+        )));
+    }
+    if body.netznutzung_zahler == Some(NetznutzungZahler::Kunde)
+        && body.netznutzungsvertrag != Some(Netznutzungsvertrag::KundeNb)
+    {
+        return Err(ApiError::unprocessable(
+            "netznutzung_zahler KUNDE requires netznutzungsvertrag KUNDE_NB — CAV+Z73:::Z10 only \
+             „Wenn CCI+++Z88 CAV+Z74:::Z08 vorhanden\" (UTILMD AHB Gas 1.2, Bedingung [216])",
+        ));
+    }
     let row = Netznutzungsdaten {
         valid_from,
         valid_to,
@@ -154,10 +183,43 @@ pub async fn put_netznutzungsdaten(
         abrechnungsintervall_monate: body.abrechnungsintervall_monate,
         abrechnungsvariante: body.abrechnungsvariante,
         gemeinderabatt_prozent: body.gemeinderabatt_prozent,
+        turnusablesung: body.turnusablesung,
+        netznutzungsvertrag: body.netznutzungsvertrag,
+        netznutzung_zahler: body.netznutzung_zahler,
     };
     info!(malo_id = %malo, %valid_from, "marktd: storing Netznutzungsdaten");
     repo.upsert_netznutzung(&tenant, malo.as_ref(), &row)
         .await
         .map_err(mdm_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DTM+752` DE 2380: `MMDD` (`106`) or `MMWWMMWW` (`104`). The column's
+/// `CHECK` holds the same shape; this names it in the refusal.
+fn turnusablesung_wohlgeformt(t: &str) -> bool {
+    let monat = |s: &str| matches!(s.parse::<u8>(), Ok(1..=12));
+    let ziffern = t.bytes().all(|b| b.is_ascii_digit());
+    match t.len() {
+        4 => ziffern && monat(&t[..2]) && matches!(t[2..].parse::<u8>(), Ok(1..=31)) && t != "0229",
+        8 => {
+            let woche = |s: &str| matches!(s.parse::<u8>(), Ok(1..=4));
+            ziffern && monat(&t[..2]) && woche(&t[2..4]) && monat(&t[4..6]) && woche(&t[6..])
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::turnusablesung_wohlgeformt;
+
+    #[test]
+    fn turnusablesung_takes_the_two_mig_formats() {
+        for ok in ["0501", "1231", "0228", "05040504", "06030604", "08010804"] {
+            assert!(turnusablesung_wohlgeformt(ok), "{ok}");
+        }
+        for bad in ["0229", "1301", "0500", "05050505", "0504050", "MMDD", ""] {
+            assert!(!turnusablesung_wohlgeformt(bad), "{bad}");
+        }
+    }
 }

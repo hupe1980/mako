@@ -430,10 +430,119 @@ pub struct GeliEogAnmelden {
     pub transaktionsgrund: String,
 }
 
-/// The Abrechnungsintervalle des LF a 44014 may state in `SG6 DTM+Z20` DE
-/// 2380, in Monaten: monatlich, vierteljährlich, halbjährlich, jährlich — the
-/// four entries UTILMD MIG Gas G1.2 S. 55 admits.
+/// The Abrechnungsintervalle des LF a 44001 or 44014 may state in `SG6
+/// DTM+Z20` DE 2380, in Monaten: monatlich, vierteljährlich, halbjährlich,
+/// jährlich — the four entries UTILMD MIG Gas G1.2 S. 55 admits.
 pub const ABRECHNUNGSINTERVALLE_MONATE: [u8; 4] = [1, 3, 6, 12];
+
+/// The `payload` of [`GELI_LIEFERBEGINN_ANMELDEN`] — the LF's Anmeldung NN
+/// **44001** (UTILMD AHB Gas 1.2 Kap. 5.6, S. 43–66). See [`GpkeEogAnmelden`]
+/// for why it is shared.
+///
+/// Every field is a fact of the Lieferant's contract with its Kunde, which is
+/// why `vertragd` states them and `processd` forwards them: the column makes
+/// each one Muss, and none is a record of the Netzbetreiber's.
+///
+/// | Field | Segment | AHB S. |
+/// |---|---|---|
+/// | `transaktionsgrund` | `SG4 STS+7` DE 9013 | 45 |
+/// | `abrechnungsintervall_monate` | `SG6 RFF+Z18` `DTM+Z20` | 48 |
+/// | `bilanzkreis` | `SG10 CCI+Z19` | 50 |
+/// | `haushaltskunde` | `SG10 CCI+++Z15`/`Z18` Gruppenzuordnung (nach EnWG) | 51 |
+/// | `netznutzungsvertrag`, `netznutzung_zahler` | `SG10 CCI+++Z88`, `CAV+Z74`, `CAV+Z73` | 52 |
+/// | `gemeinderabatt_prozent` | `SG8 SEQ+Z12` `QTY+Z16` | 55 |
+/// | `kunde` | `SG12 NAD+Z09` Kunde des LF, `NAD+Z04` Korrespondenzanschrift | 63–64 |
+/// | `ablesekarte` | `SG12 NAD+Z05` Name und Adresse für die Ablesekarte | 65 |
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeliLieferbeginnAnmelden {
+    /// The Marktlokation — `SG5 LOC+172` under `IMD++Z36+Z12`.
+    pub malo_id: String,
+    /// Lieferbeginn `SG4 DTM+92`, `YYYYMMDD` (gesetzliche deutsche Zeit).
+    pub process_date: String,
+    /// `SG4 STS+7` DE 9013 — one of the codes the 44001 column admits.
+    pub transaktionsgrund: String,
+    /// `SG10 CCI+Z19` DE 7037.
+    pub bilanzkreis: String,
+    /// `SG6 DTM+Z20` „Abrechnungsintervall des LF", one of
+    /// [`ABRECHNUNGSINTERVALLE_MONATE`].
+    pub abrechnungsintervall_monate: u8,
+    /// `true` for `CCI+++Z15`, a Haushaltskunde; `false` for `Z18`.
+    pub haushaltskunde: bool,
+    /// `CAV+Z74` — the Netznutzungsvertrag with the NB.
+    pub netznutzungsvertrag: crate::utilmd_stammdaten::Netznutzungsvertrag,
+    /// `CAV+Z73` — who pays the Netznutzung. The Kunde only under a
+    /// direkter Vertrag zwischen Kunden und NB (Bedingung `[216]`).
+    pub netznutzung_zahler: crate::utilmd_stammdaten::NetznutzungZahler,
+    /// `QTY+Z16` in Prozent: `≥ 0` (`[902]`), at most two Nachkommastellen
+    /// (`[930]`), `≤ 10` (`[938]`).
+    pub gemeinderabatt_prozent: rust_decimal::Decimal,
+    /// The Kunde des Lieferanten, with his Korrespondenzanschrift — or, where
+    /// he has none, the Anschrift der Marktlokation (Bedingung `[556]`).
+    pub kunde: crate::utilmd_stammdaten::Kunde,
+    /// Name und Adresse für die Ablesekarte.
+    pub ablesekarte: crate::utilmd_stammdaten::Kunde,
+}
+
+impl GeliLieferbeginnAnmelden {
+    /// Every value the 44001 column cannot carry, each naming its segment —
+    /// empty when the body is sendable.
+    ///
+    /// The Transaktionsgrund is not checked here: the codes the column admits
+    /// are the profile's to say, and the door that holds the profile checks
+    /// them.
+    #[must_use]
+    pub fn maengel(&self) -> Vec<String> {
+        let mut m = Vec::new();
+        for (field, value) in [
+            ("malo_id (SG5 LOC+172)", &self.malo_id),
+            ("process_date (SG4 DTM+92)", &self.process_date),
+            ("transaktionsgrund (SG4 STS+7)", &self.transaktionsgrund),
+            ("bilanzkreis (SG10 CCI+Z19)", &self.bilanzkreis),
+        ] {
+            if value.trim().is_empty() {
+                m.push(format!("{field} is empty"));
+            }
+        }
+        if !ABRECHNUNGSINTERVALLE_MONATE.contains(&self.abrechnungsintervall_monate) {
+            m.push(format!(
+                "abrechnungsintervall_monate {} (SG6 DTM+Z20): UTILMD MIG Gas G1.2 admits {:?}",
+                self.abrechnungsintervall_monate, ABRECHNUNGSINTERVALLE_MONATE
+            ));
+        }
+        if self.netznutzung_zahler == crate::utilmd_stammdaten::NetznutzungZahler::Kunde
+            && self.netznutzungsvertrag != crate::utilmd_stammdaten::Netznutzungsvertrag::KundeNb
+        {
+            m.push(
+                "netznutzung_zahler KUNDE (CAV+Z73:::Z10) only beside a direkter Vertrag \
+                 zwischen Kunden und NB (CAV+Z74:::Z08, Bedingung [216])"
+                    .to_owned(),
+            );
+        }
+        let rabatt = self.gemeinderabatt_prozent;
+        if rabatt < rust_decimal::Decimal::ZERO
+            || rabatt > rust_decimal::Decimal::TEN
+            || rabatt.normalize().scale() > 2
+        {
+            m.push(format!(
+                "gemeinderabatt_prozent {rabatt} (SG9 QTY+Z16): ≥ 0, ≤ 10, at most two \
+                 Nachkommastellen (Bedingungen [902], [938], [930])"
+            ));
+        }
+        for (rolle, partei) in [
+            ("kunde (SG12 NAD+Z09/Z04)", &self.kunde),
+            ("ablesekarte (SG12 NAD+Z05)", &self.ablesekarte),
+        ] {
+            m.extend(
+                partei
+                    .anmeldung_maengel()
+                    .into_iter()
+                    .map(|f| format!("{rolle}: {f}")),
+            );
+        }
+        m
+    }
+}
 
 /// The `payload` of [`GELI_EOG_BESTAETIGEN`] carrying a Zustimmung — the E/G
 /// Lieferant's Bestätigung `EoG` 44014. See [`GpkeEogAnmelden`] for why it is

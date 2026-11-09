@@ -385,6 +385,8 @@ fn finish_interchange_with_app_ref(
 mod aperak;
 mod contrl;
 mod dvgw;
+#[cfg(test)]
+mod gas_aenderung_antwort_tests;
 mod iftsta;
 mod insrpt;
 mod invoic;
@@ -1689,6 +1691,93 @@ mod tests {
 
         // Three line items: one work entry plus two maxima.
         assert_eq!(wire.matches("LIN+").count(), 3, "{wire}");
+    }
+
+    /// The Datenabruf ORDERS 17103 as the workflow queues it: the GNB's answer
+    /// window is computed from the Zeitspanne's end (GeLi Gas 3.0 Kap. 4.2), so
+    /// the ORDERS carries the Zeitspanne in `SG29 DTM+163/164`, with the rest of
+    /// its Prüfschablone (ORDERS AHB 1.1b Kap. 4.1.3). The Zeitspanne crosses the
+    /// end of summer time: its Beginn is 06:00 MESZ (04:00 UTC), its Ende 06:00
+    /// MEZ (05:00 UTC).
+    #[test]
+    fn a_rendered_datenabruf_orders_carries_its_zeitspanne() {
+        use mako_engine::workflow::Workflow as _;
+        use mako_geli_gas::datenabruf::{GeliGasDatenabrufCommand, GeliGasDatenabrufWorkflow};
+        const LF: &str = "9800555000006";
+        const GNB: &str = "9800357000005";
+        const MELO: &str = "DE00056266802AO6G56M11SN51G21M24S";
+        let out = GeliGasDatenabrufWorkflow::handle(
+            &mako_geli_gas::datenabruf::GeliGasDatenabrufState::New,
+            GeliGasDatenabrufCommand::InitiateAnfrage {
+                pid: mako_engine::types::Pruefidentifikator::new(17103).expect("PID"),
+                sender: mako_engine::types::MarktpartnerCode::new(LF),
+                receiver: mako_engine::types::MarktpartnerCode::new(GNB),
+                message_ref: mako_engine::types::MessageRef::new("DATENABRUF-1"),
+                messlokation: mako_engine::types::MeLo::new(MELO),
+                zeitspanne_von: time::macros::date!(2026 - 09 - 01),
+                zeitspanne_bis: time::macros::date!(2026 - 10 - 31),
+            },
+        )
+        .expect("the Anfrage is accepted");
+        let msg = fake_msg("ORDERS", GNB, out.outbox[0].payload.clone());
+        let wire = render_to_wire_bytes(&msg, &test_registry(LF)).expect("17103 renders");
+        let wire = String::from_utf8(wire.bytes).expect("utf-8");
+        assert!(wire.contains("BGM+7+"), "BGM 1001 = 7: {wire}");
+        assert!(wire.contains("IMD++Z10'"), "IMD 7081 = Z10: {wire}");
+        assert!(wire.contains(&format!("LOC+172+{MELO}'")), "{wire}");
+        assert!(wire.contains("LIN+1'"), "{wire}");
+        assert!(
+            wire.contains("DTM+163:202609010400?+00:303'"),
+            "Beginn 01.09.2026 06:00 MESZ: {wire}"
+        );
+        assert!(
+            wire.contains("DTM+164:202611010500?+00:303'"),
+            "Ende 01.11.2026 06:00 MEZ: {wire}"
+        );
+        let errors = |wire: &str| -> Vec<String> {
+            edi_energy::EdiEnergyMessage::validate_on_date(
+                &edi_energy::parse(wire.as_bytes()).expect("parse"),
+                time::macros::date!(2026 - 11 - 09),
+            )
+            .expect("validate")
+            .iter_issues()
+            .filter(|e| e.severity == edifact_rs::ValidationSeverity::Error)
+            .map(|e| format!("{:?}: {}", e.rule_id(), e.message))
+            .collect()
+        };
+        let found = errors(&wire);
+        assert!(
+            found.is_empty(),
+            "ORDERS 17103 must fit its Prüfschablone: {found:#?}\n{wire}"
+        );
+        // The Prüfschablone holds the SG29: without it the same message fails.
+        let ohne_sg29 = wire
+            .replace("LIN+1'", "")
+            .replace("DTM+163:202609010400?+00:303'", "")
+            .replace("DTM+164:202611010500?+00:303'", "")
+            .replace("UNT+14+", "UNT+11+");
+        assert!(!errors(&ohne_sg29).is_empty(), "{ohne_sg29}");
+    }
+
+    /// A Datenabruf payload without its Zeitspanne is not rendered: the GNB
+    /// could not compute the window it owes.
+    #[test]
+    fn a_datenabruf_orders_without_its_zeitspanne_is_refused() {
+        let msg = fake_msg(
+            "ORDERS",
+            "9800357000005",
+            serde_json::json!({
+                "pid": 17103_u32,
+                "sender": "9800555000006",
+                "location": "DE00056266802AO6G56M11SN51G21M24S",
+                "zeitspanne_von": "2026-09-01",
+            }),
+        );
+        let result = render_to_wire_bytes(&msg, &test_registry("9800555000006"));
+        assert!(
+            matches!(result, Err(RenderError::MissingField { ref field, .. }) if &**field == "zeitspanne_bis"),
+            "{result:?}"
+        );
     }
 
     #[test]

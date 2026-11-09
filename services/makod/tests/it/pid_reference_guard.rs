@@ -39,12 +39,6 @@ const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
     // not implemented, so these never arrive inbound.
     (19_003, "outbound-only: MSBA response to ORDERS 17002"),
     (19_004, "outbound-only: MSBA response to ORDERS 17002"),
-    // „Ablehnung Anforderung von Werten" answers a Werteanforderung
-    // (ORDRSP AHB 1.1b § 4.13); no workflow covers that leg.
-    (
-        19_007,
-        "Werteanforderung answer; no workflow covers that leg",
-    ),
     // The NB's ORDERS opening a Konfigurationseinrichtung. mako holds the NB
     // side and sends these (`konfiguration::ORDERS_PIDS`); what it receives is
     // the MSB's ORDRSP 19001/19002, which `gpke-konfiguration` registers. The
@@ -297,7 +291,7 @@ fn the_reference_names_the_workflow_that_actually_routes_each_pid() {
 const UNCLAIMED_WITHOUT_A_REASON: &[u32] = &[
     55_008, 55_009, 55_074, 55_075, 55_076, 55_126, 55_218, 55_602, 55_603, 55_604, 55_605, 55_608,
     55_609, 55_613, 55_614, 55_672, 55_674, 55_675, 44_035, 44_060, 44_101, 44_102, 44_103, 44_104,
-    44_105, 44_183, 17_101, 17_126, 17_301, 19_007, 21_040, 13_028, 29_002,
+    44_105, 44_183, 17_101, 17_126, 17_301, 21_040, 13_028, 29_002,
 ];
 
 /// A row that names no workflow must say why — or be a known one that does not.

@@ -18,7 +18,6 @@ impl EdifactIngestDispatcher {
         pid: u32,
         inbound: Inbound<'_>,
     ) -> Result<IngestOutcome, EngineError> {
-        let received_at = inbound.received_at;
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
 
@@ -29,14 +28,14 @@ impl EdifactIngestDispatcher {
             // PID 29001 (COMDIS): payment rejection by invoicer — resume.
             //
             // Regulatory basis: BK7-24-01-008 (GaBi Gas 2.1).
-            // Settlement window: no statutory deadline in BK7-24-01-008;
-            // 10 Werktage applied by analogy with Gas process norms.
+            // Settlement window: the Zahlungsziel the invoice states
+            // (`SG8 DTM+265`, Muss on 31007/31008 and 31010 — INVOIC AHB 1.0b
+            // Kap. 3.1.3 / 3.1.4).
             "gabi-gas-invoic" => match pid {
                 31010 | 31007 | 31008 => {
                     let cmd = adapters::gabi_gas_invoic_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_invoic(msg);
-                    let due_at =
-                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
+                    let due_at = zahlungsziel_due(msg, pid)?;
                     self.spawn_or_resume_guarded::<GaBiGasInvoicWorkflow>(
                         inbound,
                         &invoice_ref,

@@ -100,6 +100,7 @@ impl MockBkv {
                     version: version(n),
                     im_erstaufschlag: phase.ist_erstaufschlag(),
                     clearing_ende: None,
+                    kbka_clearing_ende: None,
                     absender: MarktpartnerCode::new(UENB_ID),
                     biko_id: BikoId::new(BIKO_ID),
                     message_ref: MessageRef::new(format!("MSCONS-BK-2026-01-V{n}")),
@@ -225,6 +226,13 @@ async fn full_settlement_lifecycle() {
     bkv.close(Abrechnungslauf::Bka)
         .await
         .expect("window closes");
+    assert!(
+        matches!(bkv.state().await, BillingState::KbkaOffen(_)),
+        "a later version enters the KBKA Clearingphase (Kap. 9.7.1)"
+    );
+    bkv.close(Abrechnungslauf::Kbka)
+        .await
+        .expect("the KBKA window closes");
     assert!(matches!(bkv.state().await, BillingState::Geschlossen(_)));
 }
 
@@ -327,15 +335,20 @@ async fn an_abgewiesene_pruefmitteilung_no_longer_stands() {
     assert!(rec.pruefmitteilung_abgewiesen.is_some());
 }
 
-/// After the clearing window closes nothing can change the settlement
-/// (Kap. 3.10 Tabelle 2).
+/// After the BKA window a later version enters the KBKA Clearingphase
+/// (Kap. 9.7.1, S. 112); after the KBKA window nothing can change the
+/// settlement (Kap. 3.10 Tabelle 2).
 #[tokio::test]
 async fn a_closed_settlement_refuses_versions_and_checks() {
     let bkv = MockBkv::new();
     bkv.receive(1, monat().werktag(4)).await.expect("V1");
-    bkv.close(Abrechnungslauf::Bka).await.expect("closed");
+    bkv.close(Abrechnungslauf::Bka).await.expect("BKA closed");
+    bkv.receive(2, monat().werktag(31))
+        .await
+        .expect("a version in the KBKA Clearingphase");
+    bkv.close(Abrechnungslauf::Kbka).await.expect("KBKA closed");
 
-    assert!(bkv.receive(2, monat().werktag(20)).await.is_err());
+    assert!(bkv.receive(3, monat().werktag(40)).await.is_err());
     assert!(bkv.pruefmitteilung(1, "A03", None).await.is_err());
 }
 

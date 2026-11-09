@@ -283,17 +283,11 @@ async fn e2e_lieferbeginn_gas_positive_aperak() {
         .payload
         .as_object()
         .expect("UTILMD answer payload must be a JSON object");
-    assert_eq!(payload["anfrage_pid"].as_u64().unwrap(), 44001);
+    // The Bestätigung of the 44001 is the 44002, and its code rides
+    // `SG4 STS+E01`.
+    assert_eq!(payload["pid"].as_u64().unwrap(), 44002);
     assert_eq!(payload["malo"].as_str().unwrap(), MALO_GAS_ID);
-    assert!(
-        payload["accepted"].as_bool().unwrap(),
-        "accepted flag must be true"
-    );
-    assert_eq!(
-        payload["orig_message_ref"].as_str().unwrap(),
-        "MSG-001",
-        "outbox must reference the original UTILMD G message"
-    );
+    assert!(payload["antwort_code"].is_string(), "{payload:?}");
     let state_after_aperak = gnb.state().await;
     assert!(
         matches!(
@@ -362,12 +356,9 @@ async fn e2e_lieferbeginn_gas_negative_aperak() {
         .payload
         .as_object()
         .expect("UTILMD answer payload must be a JSON object");
+    assert_eq!(payload["pid"].as_u64().unwrap(), 44003, "the Ablehnung PID");
     assert!(
-        !payload["accepted"].as_bool().unwrap(),
-        "accepted flag must be false for rejection"
-    );
-    assert!(
-        payload["reason"]
+        payload["bemerkung"]
             .as_str()
             .unwrap()
             .contains("Marktlokation"),

@@ -267,8 +267,9 @@ CREATE INDEX biz_data_gin ON bilanzierungen USING GIN (data jsonb_path_ops);
 -- The facts a Netzbetreiber transmits with a Marktlokation's UTILMD record
 -- (Anmeldung EoG 55013/44013, Stammdaten answers) that no BO4E object carries:
 -- the Gruppenzuordnung nach EnWG, the Betriebszustand, the Termine and the
--- Intervall der Netznutzungsabrechnung, the Abrechnungsvariante and the
--- Gemeinderabatt. Everything else of that record is read from the BO4E
+-- Intervall der Netznutzungsabrechnung, the Abrechnungsvariante, the
+-- Gemeinderabatt, the Turnusablesung des NB, and the Netznutzungsvertrag with
+-- who pays the Netznutzung. Everything else of that record is read from the BO4E
 -- objects marktd already holds (Marktlokation, Bilanzierung, Messlokation,
 -- Zähler). A NULL column is a fact nobody has stated, and a message that
 -- needs it is refused naming it.
@@ -290,7 +291,25 @@ CREATE TABLE malo_netznutzungsdaten (
                                      'ARBEITSPREIS_GRUNDPREIS', 'ARBEITSPREIS_LEISTUNGSPREIS')),
     -- UTILMD `QTY+Z16` Bedingungen [930] (two decimals) and [938] (≤ 10).
     gemeinderabatt_prozent       NUMERIC(4, 2) CHECK (gemeinderabatt_prozent BETWEEN 0 AND 10),
+    -- UTILMD MIG Gas G1.2 `DTM+752` Turnusablesung des NB (S. 60–61): `MMDD`
+    -- (DE 2379 `106`; „Der in Schaltjahren vorkommende Tag 29.02. ist nicht
+    -- zu übermitteln") or `MMWWMMWW` (`104`, Woche `01`–`04`). „Der Termin
+    -- der Turnusablesung wird an der Marktlokation vorgegeben".
+    turnusablesung               TEXT CHECK (
+                                     turnusablesung ~ '^(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])$'
+                                     AND turnusablesung <> '0229'
+                                     OR turnusablesung ~ '^(0[1-9]|1[0-2])0[1-4](0[1-9]|1[0-2])0[1-4]$'),
+    -- `mako_markt::utilmd_stammdaten::Netznutzungsvertrag::VARIANTS` —
+    -- `CAV+Z74` `Z08` / `Z09`.
+    netznutzungsvertrag          TEXT CHECK (netznutzungsvertrag IN ('KUNDE_NB', 'LIEFERANT_NB')),
+    -- `mako_markt::utilmd_stammdaten::NetznutzungZahler::VARIANTS` —
+    -- `CAV+Z73` `Z10` / `Z11`.
+    netznutzung_zahler           TEXT CHECK (netznutzung_zahler IN ('KUNDE', 'LIEFERANT')),
     updated_at                   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- The Kunde pays the Netznutzung only under a direct Vertrag zwischen
+    -- Kunden und NB: `CAV+Z73:::Z10` „Wenn CCI+++Z88 CAV+Z74:::Z08
+    -- vorhanden" (UTILMD AHB Gas 1.2 Kap. 5.12.1, Bedingung [216]).
+    CHECK (netznutzung_zahler IS DISTINCT FROM 'KUNDE' OR netznutzungsvertrag = 'KUNDE_NB'),
     PRIMARY KEY (tenant, malo_id, valid_from),
     CHECK (valid_to IS NULL OR valid_to > valid_from),
     -- One row covers a date at most, so the UTILMD record of a Stichtag is
@@ -1092,6 +1111,46 @@ CREATE INDEX lz_nach ON lokationszuordnungen (tenant, nach_id);
 CREATE INDEX lz_active ON lokationszuordnungen (tenant, von_id) WHERE valid_to IS NULL;
 
 
+-- ── Angaben des Lokationsbündels (GPKE Geschäftsdatenanfrage) ─────────────────
+--
+-- What the NB's answer to a Geschäftsdatenanfrage Stammdaten Strom (UTILMD
+-- 55035 / 55095 / 55060, UTILMD AHB Strom 2.2 Kap. 9.5) states of a
+-- Marktlokation's bündel and no BO4E object holds. The bündel itself — its
+-- objects, its structure and each object's position — is the
+-- `lokationszuordnungen` graph and the objects' `lokationsbuendel_objektcode`;
+-- read together by `GET /api/v1/malos/{id}/lokationsbuendel`.
+CREATE TABLE malo_lokationsbuendel_angaben (
+    tenant                    TEXT        NOT NULL,
+    malo_id                   TEXT        NOT NULL REFERENCES malo (malo_id) ON DELETE CASCADE,
+    valid_from                DATE        NOT NULL,
+    valid_to                  DATE,                   -- NULL = open; half-open [from, to)
+    -- `SG10 CAV+Z90` ÜNB of the Marktlokation: a 13-digit MP-ID.
+    uenb_mp_id                TEXT CHECK (uenb_mp_id ~ '^[0-9]{13}$'),
+    -- `SG10 CCI+Z63` `CAV+ZH7` (true) / `ZH8` (false).
+    technische_einrichtungen  BOOLEAN,
+    -- `SG10 CCI+Z02` Standardlastprofil: the Code des normierten Profils and
+    -- `mako_markt::lokationsbuendel::Profilverfahren::VARIANTS`.
+    standardlastprofil        TEXT CHECK (standardlastprofil ~ '^[A-Za-z0-9]{1,35}$'),
+    profilverfahren           TEXT CHECK (profilverfahren IN ('SYNTHETISCH', 'ANALYTISCH')),
+    -- `[{artikel_id, zu_abschlag_prozent}]` — one `SG8 SEQ+ZE1` each.
+    nna_positionen            JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(nna_positionen) = 'array'),
+    -- `[{obis_kennzahl, verwendungszweck_nb, verwendungszweck_lf,
+    -- verwendungszweck_uenb, wertegranularitaet}]` — one `SG8 SEQ+ZE3` each.
+    obis                      JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(obis) = 'array'),
+    -- `[{zaehler_id, obis_kennzahl, wertegranularitaet}]` — `SEQ+ZF6` `CCI+++ZE4`.
+    register                  JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(register) = 'array'),
+    updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, malo_id, valid_from),
+    CHECK (valid_to IS NULL OR valid_to > valid_from),
+    -- One row covers a date at most, so the answer of a Stichtag states one
+    -- record and not whichever row a query read first.
+    CONSTRAINT malo_lokationsbuendel_angaben_no_overlap EXCLUDE USING gist (
+        tenant  WITH =,
+        malo_id WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
+);
+
 -- ── MaLo grid topology (N7) ─────────────────────────────────────────────────────
 -- (merged from 0003_malo_grid.sql)
 
@@ -1795,24 +1854,34 @@ CREATE INDEX nz_antraege_anschluss
 COMMENT ON TABLE netzzugang_antraege IS
     '§20b EnWG Netzzugangsplattform requests (Zählpunktanordnung / Verrechnungskonzept / §42c-Registrierung) and their lifecycle state.';
 
--- ── Messstellenbetreiberrahmenvertrag Gas (GeLi Gas 3.0) ──────────────────────
+-- ── Messstellenbetreiberrahmenvertrag (both Sparten) ─────────────────────────
 --
--- GeLi Gas 3.0 (BK7-24-01-009, Tenor Ziff. 13–16): the old BNetzA-imposed Gas
--- MSB-Rahmenvertrag (BK7-17-026) is revoked effective 01.10.2026; GNB and MSB
--- must conclude the market-developed replacement (KoV XV Anlage 8, versioned
--- with the KoV) in its jeweils gültige Fassung. GNB duties: publish the
--- contract on their website, enable conclusion for any MSB
--- non-discriminatorily, and migrate existing BK7-17-026 contracts by the
--- deadline. One row per (GNB, MSB) conclusion; legal basis §9 Abs. 1 Nr. 3
--- i.V.m. Abs. 4 MsbG.
-CREATE TABLE msb_rahmenvertraege_gas (
+-- The contract the NB checks before it confirms an Anmeldung MSB: „Vorliegen
+-- eines Vertrages nach §9 Abs.1 Nr. 3 MsbG mit dem MSBN" (WiM Teil 1, BK6-24-174
+-- Anlage 2a, Kap. 2.3.2 Nr. 2 Ziff. 3, S. 24) and „Vorliegen eines Vertrages
+-- zwischen dem MSBN und dem NB" (AWH WiM Gas 2.0 Kap. 3.5.2 Nr. 2 Ziff. 3,
+-- S. 20). One row per (Sparte, NB, MSB) conclusion and validity window; the
+-- NB's MP-ID differs per Sparte, so a Gas row can never answer a Strom lookup.
+--
+-- Gas only: GeLi Gas 3.0 (BK7-24-01-009, S. 6–7) revokes BK7-17-026 with effect
+-- from 01.10.2026 (Tenor 13), obliges GNB and MSB to conclude the new
+-- Messstellenbetreiberrahmenvertrag „in der jeweils gültigen Fassung" and
+-- „Bereits abgeschlossene Messstellenbetreiberrahmenverträge sind entsprechend
+-- anzupassen" (Tenor 15). That Fassung is KoV XV Anlage 8 (KoV Gas XV
+-- Haupttext, Stand 27.03.2026, § 2 Ziff. 2 lit. h; BDEW/VKU Energie-Info KoV XV
+-- Kap. 3.8, S. 6: „ist zum 01.10.2026 zu verwenden"), hence the Gas default,
+-- and `anpassung_erforderlich` is the Tenor 15 Satz 2 contract concluded before
+-- and still to be adapted. Neither has a Strom counterpart.
+CREATE TABLE msb_rahmenvertraege (
     id            UUID        PRIMARY KEY,
     tenant        TEXT        NOT NULL,
-    gnb_mp_id     TEXT        NOT NULL,
+    sparte        TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
+    nb_mp_id      TEXT        NOT NULL,
     msb_mp_id     TEXT        NOT NULL,
-    -- Contract text edition, e.g. 'KoV XV Anlage 8' (pre-01.10.2026 legacy:
-    -- 'BK7-17-026').
-    fassung       TEXT        NOT NULL DEFAULT 'KoV XV Anlage 8',
+    -- Contract text edition. Gas: 'KoV XV Anlage 8' unless the caller names
+    -- another (pre-01.10.2026 legacy: 'BK7-17-026'). Strom: whatever the
+    -- parties name, or NULL — no Strom Fassung is defaulted.
+    fassung       TEXT,
     status        TEXT        NOT NULL DEFAULT 'angeboten'
         CHECK (status IN ('angeboten', 'abgeschlossen',
                           'anpassung_erforderlich', 'beendet')),
@@ -1823,16 +1892,30 @@ CREATE TABLE msb_rahmenvertraege_gas (
     vertrag       JSONB       NOT NULL DEFAULT '{}'::jsonb,
     version       BIGINT      NOT NULL DEFAULT 1,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT msb_rv_gas_fassung
+        CHECK (sparte <> 'GAS' OR fassung IS NOT NULL),
+    CONSTRAINT msb_rv_anpassung_is_gas
+        CHECK (status <> 'anpassung_erforderlich' OR sparte = 'GAS'),
+    -- The lookup must resolve to at most one contract for a day: two rows
+    -- claiming the same day would make the answer depend on row order.
+    CONSTRAINT msb_rv_no_overlap EXCLUDE USING gist (
+        tenant    WITH =,
+        sparte    WITH =,
+        nb_mp_id  WITH =,
+        msb_mp_id WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
 );
 
-CREATE UNIQUE INDEX msb_rv_gas_parties
-    ON msb_rahmenvertraege_gas (tenant, gnb_mp_id, msb_mp_id, valid_from);
-CREATE INDEX msb_rv_gas_status
-    ON msb_rahmenvertraege_gas (tenant, status);
+CREATE UNIQUE INDEX msb_rv_parties
+    ON msb_rahmenvertraege (tenant, sparte, nb_mp_id, msb_mp_id, valid_from);
+CREATE INDEX msb_rv_status
+    ON msb_rahmenvertraege (tenant, status);
 
-COMMENT ON TABLE msb_rahmenvertraege_gas IS
-    'Gas MSB framework contracts (GeLi Gas 3.0 Tenor 13–16, KoV XV Anlage 8): per-(GNB,MSB) conclusion state incl. the BK7-17-026 migration duty by 01.10.2026.';
+COMMENT ON TABLE msb_rahmenvertraege IS
+    'MSB framework contracts NB <-> MSB per Sparte (§ 9 Abs. 1 Nr. 3 MsbG; Gas: GeLi Gas 3.0 Tenor 13-15, KoV XV Anlage 8), read by the NB''s check of an Anmeldung MSB.';
 
 -- ── MaBiS-Zählpunkt assignments ──────────────────────────────────────────────
 --

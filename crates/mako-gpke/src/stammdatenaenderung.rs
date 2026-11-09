@@ -789,13 +789,15 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                     "UTILMD",
                     data.sender.as_str(),
                     serde_json::json!({
-                        "direction":    "outbound",
                         "pid":          response_pid.as_u32(),
                         "sender":       data.receiver.as_str(),
                         "receiver":     data.sender.as_str(),
                         "malo":         data.location_id.as_str(),
                         "process_date": data.aenderungsdatum,
-                        "qualitaet":    qualitaet.code(),
+                        // `SG4 STS+E01` — the Qualitätsrückmeldung's code
+                        // (`A01`/`A02`, EBD 4.3 Kap. 6.19.1 `E_0408` …); the
+                        // renderer writes the tree the column names in DE 1131.
+                        "antwort_code": qualitaet.code(),
                     }),
                 )];
                 Ok(WorkflowOutput::with_outbox(
@@ -827,7 +829,6 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                     "UTILMD",
                     receiver.as_str(),
                     serde_json::json!({
-                        "direction":    "outbound",
                         "pid":          pid.as_u32(),
                         "sender":       sender.as_str(),
                         "receiver":     receiver.as_str(),
@@ -1057,7 +1058,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.outbox[0].payload["pid"], 55622);
-        assert_eq!(out.outbox[0].payload["qualitaet"], "A01");
+        assert_eq!(out.outbox[0].payload["antwort_code"], "A01");
         let state = apply_all(state, &out.events);
         assert!(matches!(
             state,
@@ -1129,7 +1130,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(out.outbox[0].payload["qualitaet"], "A02");
+        assert_eq!(out.outbox[0].payload["antwort_code"], "A02");
     }
 
     #[test]

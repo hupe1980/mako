@@ -31,9 +31,14 @@ struct OrdersBuilderInner {
     references: Vec<(String, String)>,
     /// `DTM+203` Ausführungsdatum — **Muss** on 17007/17008.
     ausfuehrungsdatum: Option<String>,
-    /// `IMD+7081` — `Z01` Start Abo / `Z02` Ende Abo / `Z03` ohne Abo.
-    abonnement: Option<String>,
+    /// `IMD++<7081>` — the coded Produkt-/Leistungsbeschreibung: `Z01` Start
+    /// Abo / `Z02` Ende Abo / `Z03` ohne Abo on 17007/17008, `Z10`
+    /// Abrechnungsbrennwert und Zustandszahl on 17103.
+    merkmal: Option<String>,
     item_description: Option<String>,
+    /// `SG29 LIN` with `DTM+163` / `DTM+164` — the Zeitraum a Wertanfrage asks
+    /// for, as two `303` instants `(beginn, ende)`.
+    positionszeitraum: Option<(String, String)>,
 }
 
 /// Fluent builder for `ORDERS` (Purchase Order) messages.
@@ -86,8 +91,9 @@ impl OrdersBuilder<Unset, Unset> {
                 location: None,
                 references: Vec::new(),
                 ausfuehrungsdatum: None,
-                abonnement: None,
+                merkmal: None,
                 item_description: None,
+                positionszeitraum: None,
             },
         }
     }
@@ -200,7 +206,29 @@ impl<S, R> OrdersBuilder<S, R> {
     /// **Muss** on ORDERS 17007/17008. It is also what decides which EBD the
     /// MSB's ORDRSP must cite (`E_0256` for Z01/Z03, `E_0254` for Z02).
     pub fn abonnement(mut self, code: impl Into<String>) -> Self {
-        self.inner.abonnement = Some(code.into());
+        self.inner.merkmal = Some(code.into());
+        self
+    }
+
+    /// Set the coded `IMD++<7081>` Produkt-/Leistungsbeschreibung — `Z10`
+    /// (Abrechnungsbrennwert und Zustandszahl) on ORDERS 17103 (ORDERS AHB
+    /// 1.1b Kap. 4.1.3). The same place [`abonnement`](Self::abonnement)
+    /// fills on the ESA order PIDs.
+    pub fn leistung(mut self, code: impl Into<String>) -> Self {
+        self.inner.merkmal = Some(code.into());
+        self
+    }
+
+    /// Set the Zeitraum of a Wertanfrage — one `SG29 LIN+1` carrying
+    /// `DTM+163` (Beginn) and `DTM+164` (Ende), each a UTC instant
+    /// `CCYYMMDDHHMM` (format 303, optionally `+00`).
+    ///
+    /// **Muss** on ORDERS 17103 (ORDERS AHB 1.1b Kap. 4.1.3, „Pro Nachricht ist
+    /// die SG29 genau einmal anzugeben"). The Ende is the instant the Zeitraum
+    /// ends, i.e. the beginning of the day after its last day (Allgemeine
+    /// Festlegungen V6.1d Kap. 3.1).
+    pub fn positionszeitraum(mut self, beginn: impl Into<String>, ende: impl Into<String>) -> Self {
+        self.inner.positionszeitraum = Some((beginn.into(), ende.into()));
         self
     }
 
@@ -257,11 +285,11 @@ impl<S, R> OrdersBuilder<S, R> {
         }
         // Abonnement — `IMD++<7081>`. DE 7081 sits in C272 (element 2), which
         // is why DE 7077 (element 1) stays empty.
-        if let Some(code) = &self.inner.abonnement {
+        if let Some(code) = &self.inner.merkmal {
             emit_comp!(w, "IMD", [""], [code]);
         }
         // Free-form item description (7077 = A), for the non-ESA order PIDs.
-        if self.inner.abonnement.is_none() && self.inner.item_description.is_some() {
+        if self.inner.merkmal.is_none() && self.inner.item_description.is_some() {
             emit_comp!(w, "IMD", ["A"]);
         }
         // ── SG1: references (RFF+AAG / RFF+ACW / RFF+Z13) ────────────────────
@@ -295,6 +323,20 @@ impl<S, R> OrdersBuilder<S, R> {
             // belongs to (ORDERS MIG Nr 00028/00029).
             emit_seg!(w, "NAD", "DP");
             emit_seg!(w, "LOC", "172", loc);
+        }
+        // ── SG29: Positionsdaten — the Zeitraum of a Wertanfrage ─────────────
+        if let Some((beginn, ende)) = &self.inner.positionszeitraum {
+            emit_seg!(w, "LIN", "1");
+            emit_comp!(
+                w,
+                "DTM",
+                ["163", &super::ccyymmddhhmm_utc("163", beginn)?, "303"]
+            );
+            emit_comp!(
+                w,
+                "DTM",
+                ["164", &super::ccyymmddhhmm_utc("164", ende)?, "303"]
+            );
         }
         // Section control — ORDERS requires UNS between header and summary.
         emit_seg!(w, "UNS", "S");

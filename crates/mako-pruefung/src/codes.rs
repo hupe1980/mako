@@ -147,6 +147,11 @@ pub struct AntwortCode {
     /// through separately numbered **Codelisten** (`S_00xx` Strom, `G_00xx`
     /// Gas), and it is the Codeliste that DE 1131 / DE 1082 must name. Ask
     /// [`AntwortCode::wire_codeliste`] for the wire value.
+    ///
+    /// Where the **answer PID** rather than the cluster picks the Codeliste —
+    /// the GeLi Gas Antwort auf Änderung, whose tree `E_3010` publishes
+    /// `G_0016`, `G_0019` and `G_0022` for three different Antworten — the
+    /// Codeliste is the identity, and this field names it.
     pub ebd: Option<&'static str>,
     /// Zustimmung or Ablehnung.
     pub cluster: Cluster,
@@ -254,6 +259,12 @@ pub const WIRE_CODELISTEN: &[(&str, &str, &str)] = &[
     (EBD_GERAETEWECHSELABSICHT, "S_0065", "S_0066"),
     (EBD_BESTELLUNG_GERAETEUEBERNAHME, "S_0067", "S_0068"),
     (EBD_GESAMTVORGANG, "S_0057", "S_0057"),
+    // ── GeLi Gas Anfrage zur Stammdatenänderung (EBD 4.3 Kap. 13.13–13.14) ──
+    // The list each tree's 44142 column names (UTILMD AHB Gas 1.2 Kap.
+    // 5.12.1, `[4]` / `[241]`); `E_3013`'s other lists answer other Antworten
+    // and are catalogued under their own numbers (`G_0034`–`G_0036`).
+    (EBD_ANFRAGE_STAMMDATEN_LF_GAS, "G_0031", "G_0031"),
+    (EBD_ANFRAGE_STAMMDATEN_MSB_GAS, "G_0069", "G_0069"),
     // ── WiM Gas (EBD 4.3 Kap. 14) ─────────────────────────────────────────────
     (EBD_KUENDIGUNG_MSB_GAS, "G_0052", "G_0051"),
     (EBD_ANMELDUNG_MSB_GAS, "G_0054", "G_0053"),
@@ -740,6 +751,343 @@ pub const E_3008_CODES: &[AntwortCode] = &[
         "Ablehnung wegen Fristüberschreitung"
     ),
 ];
+
+// ── E_3013 / E_3026 — Anfrage zur Stammdatenänderung prüfen (44139 / 44140 → 44142) ─
+
+/// `E_3013` — „Anfrage zur Stammdatenänderung prüfen", the NB's check of a
+/// Lieferant's Anfrage (EBD 4.3 Kap. 13.13.1, S. 741, „AD: Anfrage zur
+/// Stammdatenänderung vom LF an NB (verantwortlich)").
+pub const EBD_ANFRAGE_STAMMDATEN_LF_GAS: &str = "E_3013";
+const E_3013: Option<&'static str> = Some(EBD_ANFRAGE_STAMMDATEN_LF_GAS);
+
+/// The codes of `E_3013`'s Codeliste **`G_0031`** „Antwort auf Anfrage" — what
+/// the NB's Antwort 44142 to a Lieferant carries in `SG4 STS+E01` (UTILMD AHB
+/// Gas 1.2 Kap. 5.12.1: DE 1131 `G_0031` „Wenn MP-ID in SG2 NAD+MR
+/// (Nachrichtenempfänger) in der Rolle LF", Bedingung `[4]`).
+///
+/// The tree publishes three further lists, each catalogued under its own
+/// number below: `G_0034` (`ZG2`, `ZG4`) and `G_0035`/`G_0036` (`ZG2`, `ZJ5`).
+/// The EBD prints no „Cluster:" beside a Codelisten table; `ZG0` opens with
+/// „Ablehnung" and is one, and `ZG2` is the exit that transmits the master
+/// data — „sendet der Verantwortliche … die zum Änderungsdatum gültigen
+/// Stammdaten an den Anfragenden. Hierbei ist es unerheblich, ob die aus der
+/// Anfrage enthaltenen Stammdaten vom Verantwortlichen übernommen wurden oder
+/// nicht." (S. 742).
+pub const E_3013_CODES: &[AntwortCode] = &[
+    code!(
+        "ZG0",
+        E_3013,
+        Ablehnung,
+        "Ablehnung Stammdaten an der Markt- bzw. Messlokation nicht vorhanden"
+    ),
+    code!(
+        "ZG2",
+        E_3013,
+        Zustimmung,
+        "Gültiges Ergebnis nach der Datenprüfung"
+    ),
+];
+
+/// `E_3026` — „Anfrage zur Stammdatenänderung prüfen", the NB's check of a
+/// Messstellenbetreiber's Anfrage (EBD 4.3 Kap. 13.14.1, S. 745, „AD: Anfrage
+/// zur Stammdatenänderung vom MSB an NB (verantwortlich)").
+pub const EBD_ANFRAGE_STAMMDATEN_MSB_GAS: &str = "E_3026";
+const E_3026: Option<&'static str> = Some(EBD_ANFRAGE_STAMMDATEN_MSB_GAS);
+
+/// The codes of `E_3026`'s Codeliste **`G_0069`** „Antwort auf Anfrage" — the
+/// 44142 to a Messstellenbetreiber (UTILMD AHB Gas 1.2 Kap. 5.12.1: DE 1131
+/// `G_0069` „Wenn MP-ID in SG2 NAD+MR (Nachrichtenempfänger) in der Rolle
+/// MSB", Bedingung `[241]`). The same two codes and wording as
+/// [`E_3013_CODES`].
+pub const E_3026_CODES: &[AntwortCode] = &[
+    code!(
+        "ZG0",
+        E_3026,
+        Ablehnung,
+        "Ablehnung Stammdaten an der Markt- bzw. Messlokation nicht vorhanden"
+    ),
+    code!(
+        "ZG2",
+        E_3026,
+        Zustimmung,
+        "Gültiges Ergebnis nach der Datenprüfung"
+    ),
+];
+
+// ── GeLi Gas Anfrage zur Stammdatenänderung — Antwort auf Anfrage (EBD 4.3 Kap. 13.13–13.15) ─
+//
+// Like the Änderung answers below, `E_3013` (Anfrage vom LF an NB) and `E_3028`
+// (Anfrage vom NB an LF) publish **one Codeliste per Antwort column**, so the
+// Codeliste is the identity: UTILMD AHB Gas 1.2 Kap. 5.12 names it in each
+// column's `SG4 STS+E01` DE 1131. The 44142's `G_0031`/`G_0069` resolve
+// through their trees (`E_3013_CODES`, `E_3026_CODES`, [`WIRE_CODELISTEN`]).
+// The EBD prints no „Cluster:" beside a Codelisten table: `ZG0`, `ZJ5` and
+// `ZG4` refuse the change — `ZG4` „Berechtigter hat Frist für
+// bilanzierungsrelevante Stammdatenänderung nicht eingehalten …
+// Verantwortlicher übermittelt die zum angefragten Datum gültigen Stammdaten"
+// (S. 743) still transmits them —, and `ZG2` is the exit that transmits the
+// master data.
+
+/// `G_0034` „Antwort auf Anfrage" — the NB's Antwort **44157** to the LF's
+/// bila.rel. Anfrage mit Abhängigkeiten 44156 (UTILMD AHB Gas 1.2 Kap. 5.12.2,
+/// S. 163; EBD 4.3 Kap. 13.13.1.4 under `E_3013`, S. 743).
+pub const CODELISTE_ANTWORT_ANFRAGE_BILA_NB_GAS: &str = "G_0034";
+const G_0034: Option<&'static str> = Some(CODELISTE_ANTWORT_ANFRAGE_BILA_NB_GAS);
+
+/// The codes of `G_0034`.
+pub const G_0034_CODES: &[AntwortCode] = &[
+    code!(
+        "ZG2",
+        G_0034,
+        Zustimmung,
+        "Gültiges Ergebnis nach der Datenprüfung"
+    ),
+    code!(
+        "ZG4",
+        G_0034,
+        Ablehnung,
+        "Frist nicht eingehalten, Übermittlung Datenstand"
+    ),
+];
+
+/// `G_0035` „Antwort auf Anfrage der Marktlokationsstruktur" — the NB's
+/// Antwort **44181** to the LF's 44180 (UTILMD AHB Gas 1.2 Kap. 5.12.3, S. 168;
+/// EBD 4.3 Kap. 13.13.1.1, S. 742).
+pub const CODELISTE_ANTWORT_ANFRAGE_MALO_STRUKTUR_GAS: &str = "G_0035";
+const G_0035: Option<&'static str> = Some(CODELISTE_ANTWORT_ANFRAGE_MALO_STRUKTUR_GAS);
+
+/// The codes of `G_0035`.
+pub const G_0035_CODES: &[AntwortCode] = &[code!(
+    "ZG2",
+    G_0035,
+    Zustimmung,
+    "Gültiges Ergebnis nach der Datenprüfung"
+)];
+
+/// `G_0036` „Ablehnung der Anfrage der Marktlokationsstruktur" — the NB's
+/// Ablehnung **44182** of the LF's 44180 (UTILMD AHB Gas 1.2 Kap. 5.12.3,
+/// S. 168; EBD 4.3 Kap. 13.13.1.2, S. 742).
+pub const CODELISTE_ABLEHNUNG_ANFRAGE_MALO_STRUKTUR_GAS: &str = "G_0036";
+const G_0036: Option<&'static str> = Some(CODELISTE_ABLEHNUNG_ANFRAGE_MALO_STRUKTUR_GAS);
+
+/// The codes of `G_0036`.
+pub const G_0036_CODES: &[AntwortCode] = &[code!(
+    "ZJ5",
+    G_0036,
+    Ablehnung,
+    "Lieferrichtung steht im Widerspruch zur gemeldeten Marktlokation"
+)];
+
+/// `G_0038` „Antwort auf Anfrage" — the LF's Antwort **44151** to the NB's
+/// bila.rel. Anfrage an LF 44150 (UTILMD AHB Gas 1.2 Kap. 5.12.5, S. 176; EBD
+/// 4.3 Kap. 13.15.1.1 under `E_3028`, S. 748).
+pub const CODELISTE_ANTWORT_ANFRAGE_BILA_LF_GAS: &str = "G_0038";
+const G_0038: Option<&'static str> = Some(CODELISTE_ANTWORT_ANFRAGE_BILA_LF_GAS);
+
+/// The codes of `G_0038`.
+pub const G_0038_CODES: &[AntwortCode] = &[
+    code!(
+        "ZG2",
+        G_0038,
+        Zustimmung,
+        "Gültiges Ergebnis nach der Datenprüfung"
+    ),
+    code!(
+        "ZG4",
+        G_0038,
+        Ablehnung,
+        "Frist nicht eingehalten, Übermittlung Datenstand"
+    ),
+];
+
+/// `G_0039` „Ablehnung der Anfrage" — the LF's Ablehnung **44152** of the NB's
+/// 44150 (UTILMD AHB Gas 1.2 Kap. 5.12.5, S. 176; EBD 4.3 Kap. 13.15.1.2,
+/// S. 748).
+pub const CODELISTE_ABLEHNUNG_ANFRAGE_BILA_LF_GAS: &str = "G_0039";
+const G_0039: Option<&'static str> = Some(CODELISTE_ABLEHNUNG_ANFRAGE_BILA_LF_GAS);
+
+/// The codes of `G_0039`.
+pub const G_0039_CODES: &[AntwortCode] = &[code!(
+    "ZG0",
+    G_0039,
+    Ablehnung,
+    "Ablehnung Stammdaten an der Markt- bzw. Messlokation nicht vorhanden"
+)];
+
+/// `G_0040` „Antwort auf Anfrage" — the LF's Antwort **44138** to the NB's
+/// nicht bila.rel. Anfrage an LF 44137 (UTILMD AHB Gas 1.2 Kap. 5.12.4,
+/// S. 171; EBD 4.3 Kap. 13.15.1.3, S. 749).
+pub const CODELISTE_ANTWORT_ANFRAGE_LF_GAS: &str = "G_0040";
+const G_0040: Option<&'static str> = Some(CODELISTE_ANTWORT_ANFRAGE_LF_GAS);
+
+/// The codes of `G_0040`.
+pub const G_0040_CODES: &[AntwortCode] = &[
+    code!(
+        "ZG0",
+        G_0040,
+        Ablehnung,
+        "Ablehnung Stammdaten an der Markt- bzw. Messlokation nicht vorhanden"
+    ),
+    code!(
+        "ZG2",
+        G_0040,
+        Zustimmung,
+        "Gültiges Ergebnis nach der Datenprüfung"
+    ),
+];
+
+// ── GeLi Gas Stammdatenänderung — Antwort auf Änderung (EBD 4.3 Kap. 13.10–13.12) ─
+//
+// The five „Änderung prüfen" trees publish their codes through **Codelisten
+// the answer PID picks, not the cluster**: `E_3010` alone publishes `G_0016`
+// for the Antwort 44115, `G_0019` for the 44124 and `G_0022` for the 44176, and
+// `G_0016` is shared by `E_3010` and `E_3021`. So the Codeliste is the identity
+// these codes resolve against — it is what UTILMD AHB Gas 1.2 Kap. 5.10–5.11
+// names in each Antwort column's `SG4 STS+E01` DE 1131, and what the wire
+// carries. Each table is one Codeliste, its rows in the EBD's order.
+
+/// `G_0016` „Antwort auf Änderung vom NB" — the Antwort **44115** of the LF or
+/// MSB to a nicht bilanzierungsrelevante Änderung vom NB 44112/44113 (UTILMD
+/// AHB Gas 1.2 Kap. 5.10.1; EBD 4.3 Kap. 13.10.1.1 under `E_3010` and
+/// 13.10.2.1 under `E_3021`). It publishes `E15` alone.
+pub const CODELISTE_ANTWORT_AENDERUNG_NB_GAS: &str = "G_0016";
+const G_0016: Option<&'static str> = Some(CODELISTE_ANTWORT_AENDERUNG_NB_GAS);
+
+/// The codes of `G_0016`.
+pub const G_0016_CODES: &[AntwortCode] = &[code!(
+    "E15",
+    G_0016,
+    Zustimmung,
+    "Zustimmung ohne Korrekturen"
+)];
+
+/// `G_0019` „Antwort auf Änderung vom NB" — the Antwort **44124** of the LF to
+/// a bilanzierungsrelevante Änderung vom NB 44123 (UTILMD AHB Gas 1.2 Kap.
+/// 5.11.1; EBD 4.3 Kap. 13.10.1.2, S. 733–734).
+pub const CODELISTE_ANTWORT_BILA_AENDERUNG_NB_GAS: &str = "G_0019";
+const G_0019: Option<&'static str> = Some(CODELISTE_ANTWORT_BILA_AENDERUNG_NB_GAS);
+
+/// The codes of `G_0019`.
+pub const G_0019_CODES: &[AntwortCode] = &[
+    code!("E15", G_0019, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "E17",
+        G_0019,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung"
+    ),
+    code!(
+        "ZI4",
+        G_0019,
+        Ablehnung,
+        "Ablehnung Die Energiemenge für eine Gas SLP Marktlokation wurde > 2.250.000 kWh angegeben"
+    ),
+    code!(
+        "ZI6",
+        G_0019,
+        Ablehnung,
+        "Ablehnung Der Kundenwert nach TUM wurde > 6.200 kWh angegeben"
+    ),
+    code!(
+        "ZI7",
+        G_0019,
+        Ablehnung,
+        "Ablehnung Die Energiemenge für eine Pauschalanlage wurde > 200.000 kWh angegeben"
+    ),
+];
+
+/// `G_0022` „Antwort auf Änderung der Marktlokationsstruktur" — the Antwort
+/// **44176** of the LF to the Änderung der Marktlokationsstruktur 44175 (UTILMD
+/// AHB Gas 1.2 Kap. 5.11.2; EBD 4.3 Kap. 13.10.1.3, S. 734).
+pub const CODELISTE_ANTWORT_MALO_STRUKTUR_GAS: &str = "G_0022";
+const G_0022: Option<&'static str> = Some(CODELISTE_ANTWORT_MALO_STRUKTUR_GAS);
+
+/// The codes of `G_0022`.
+pub const G_0022_CODES: &[AntwortCode] = &[
+    code!("E15", G_0022, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "ZJ5",
+        G_0022,
+        Ablehnung,
+        "Lieferrichtung steht im Widerspruch zur gemeldeten Marktlokation"
+    ),
+];
+
+/// `G_0023` „Antwort auf Änderung vom LF" — the Antwort **44111** of the NB to
+/// a nicht bilanzierungsrelevante Änderung vom LF 44109 (UTILMD AHB Gas 1.2
+/// Kap. 5.11.3; EBD 4.3 Kap. 13.11.1.1, S. 736). It publishes `E15` alone.
+pub const CODELISTE_ANTWORT_AENDERUNG_LF_GAS: &str = "G_0023";
+const G_0023: Option<&'static str> = Some(CODELISTE_ANTWORT_AENDERUNG_LF_GAS);
+
+/// The codes of `G_0023`.
+pub const G_0023_CODES: &[AntwortCode] = &[code!(
+    "E15",
+    G_0023,
+    Zustimmung,
+    "Zustimmung ohne Korrekturen"
+)];
+
+/// `G_0025` „Antwort auf Änderung vom LF" — the Antwort **44121** of the NB to
+/// a bilanzierungsrelevante Änderung vom LF 44120 (UTILMD AHB Gas 1.2 Kap.
+/// 5.11.4; EBD 4.3 Kap. 13.11.1.2, S. 736–737).
+pub const CODELISTE_ANTWORT_BILA_AENDERUNG_LF_GAS: &str = "G_0025";
+const G_0025: Option<&'static str> = Some(CODELISTE_ANTWORT_BILA_AENDERUNG_LF_GAS);
+
+/// The codes of `G_0025`.
+pub const G_0025_CODES: &[AntwortCode] = &[
+    code!("E13", G_0025, Ablehnung, "Ablehnung (Bilanzierungsproblem)"),
+    code!("E15", G_0025, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "E17",
+        G_0025,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung"
+    ),
+    code!("ZE2", G_0025, Ablehnung, "Ablehnung Kapazitätsproblem"),
+];
+
+/// `G_0026` „Antwort auf Änderung vom MSB" — the NB's Antwort **44119** /
+/// **44161** to the MSB's Änderung 44116 / 44159 (UTILMD AHB Gas 1.2 Kap.
+/// 5.11.5 / 5.11.6, DE 1131 `G_0026` „Wenn MP-ID in SG2 NAD+MS … in der Rolle
+/// NB", Bedingung `[98]`; EBD 4.3 Kap. 13.12.1.1, S. 738). `E15` alone.
+pub const CODELISTE_ANTWORT_AENDERUNG_MSB_NB_GAS: &str = "G_0026";
+const G_0026: Option<&'static str> = Some(CODELISTE_ANTWORT_AENDERUNG_MSB_NB_GAS);
+
+/// The codes of `G_0026`.
+pub const G_0026_CODES: &[AntwortCode] = &[code!(
+    "E15",
+    G_0026,
+    Zustimmung,
+    "Zustimmung ohne Korrekturen"
+)];
+
+/// `G_0027` „Antwort auf Änderung vom MSB" — the LF's Antwort **44119** to the
+/// NB's forwarded 44117 (UTILMD AHB Gas 1.2 Kap. 5.11.5, DE 1131 `G_0027`
+/// „… in der Rolle LF", Bedingung `[5]`; EBD 4.3 Kap. 13.12.2.1, S. 739).
+pub const CODELISTE_ANTWORT_AENDERUNG_MSB_LF_GAS: &str = "G_0027";
+const G_0027: Option<&'static str> = Some(CODELISTE_ANTWORT_AENDERUNG_MSB_LF_GAS);
+
+/// The codes of `G_0027`.
+pub const G_0027_CODES: &[AntwortCode] = &[code!(
+    "E15",
+    G_0027,
+    Zustimmung,
+    "Zustimmung ohne Korrekturen"
+)];
+
+/// `G_0030` „Antwort auf Änderung vom MSB" — the LF's Antwort **44161** to the
+/// NB's forwarded 44160 (UTILMD AHB Gas 1.2 Kap. 5.11.6, Bedingung `[5]`; EBD
+/// 4.3 Kap. 13.12.2.2, S. 740).
+pub const CODELISTE_ANTWORT_AENDERUNG_MSB_OHNE_LF_GAS: &str = "G_0030";
+const G_0030: Option<&'static str> = Some(CODELISTE_ANTWORT_AENDERUNG_MSB_OHNE_LF_GAS);
+
+/// The codes of `G_0030`.
+pub const G_0030_CODES: &[AntwortCode] = &[code!(
+    "E15",
+    G_0030,
+    Zustimmung,
+    "Zustimmung ohne Korrekturen"
+)];
 
 // ── E_0603…E_0606 — Zuordnung prüfen (55607 → 55608 / 55609) ─────────────────
 
@@ -5417,6 +5765,23 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_ABMELDUNGSANFRAGE_GAS, E_3020_CODES),
     (EBD_ANMELDUNG_EOG, E_0615_CODES),
     (EBD_ANMELDUNG_EOG_GAS, E_3008_CODES),
+    (EBD_ANFRAGE_STAMMDATEN_LF_GAS, E_3013_CODES),
+    (EBD_ANFRAGE_STAMMDATEN_MSB_GAS, E_3026_CODES),
+    (CODELISTE_ANTWORT_ANFRAGE_BILA_NB_GAS, G_0034_CODES),
+    (CODELISTE_ANTWORT_ANFRAGE_MALO_STRUKTUR_GAS, G_0035_CODES),
+    (CODELISTE_ABLEHNUNG_ANFRAGE_MALO_STRUKTUR_GAS, G_0036_CODES),
+    (CODELISTE_ANTWORT_ANFRAGE_BILA_LF_GAS, G_0038_CODES),
+    (CODELISTE_ABLEHNUNG_ANFRAGE_BILA_LF_GAS, G_0039_CODES),
+    (CODELISTE_ANTWORT_ANFRAGE_LF_GAS, G_0040_CODES),
+    // GeLi Gas Antwort auf Änderung — keyed by the Codeliste the column names.
+    (CODELISTE_ANTWORT_AENDERUNG_NB_GAS, G_0016_CODES),
+    (CODELISTE_ANTWORT_BILA_AENDERUNG_NB_GAS, G_0019_CODES),
+    (CODELISTE_ANTWORT_MALO_STRUKTUR_GAS, G_0022_CODES),
+    (CODELISTE_ANTWORT_AENDERUNG_LF_GAS, G_0023_CODES),
+    (CODELISTE_ANTWORT_BILA_AENDERUNG_LF_GAS, G_0025_CODES),
+    (CODELISTE_ANTWORT_AENDERUNG_MSB_NB_GAS, G_0026_CODES),
+    (CODELISTE_ANTWORT_AENDERUNG_MSB_LF_GAS, G_0027_CODES),
+    (CODELISTE_ANTWORT_AENDERUNG_MSB_OHNE_LF_GAS, G_0030_CODES),
     ("E_0603", E_0603_CODES),
     ("E_0604", E_0604_CODES),
     ("E_0605", E_0605_CODES),
@@ -5516,6 +5881,16 @@ pub const VORPRUEFUNG_TREES: &[(&str, &str)] = &[
 /// Adding a tree here is a claim about an AHB column. The test below holds it
 /// to the consequence: such a tree must publish no Zustimmungscode.
 pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
+    (
+        CODELISTE_ABLEHNUNG_ANFRAGE_MALO_STRUKTUR_GAS,
+        "UTILMD: G_0036 is the Ablehnung 44182's list; the Antwort 44181 draws its ZG2 \
+         from G_0035 (UTILMD AHB Gas 1.2 Kap. 5.12.3, EBD 4.3 Kap. 13.13.1.1–2)",
+    ),
+    (
+        CODELISTE_ABLEHNUNG_ANFRAGE_BILA_LF_GAS,
+        "UTILMD: G_0039 is the Ablehnung 44152's list; the Antwort 44151 draws its ZG2 \
+         from G_0038 (UTILMD AHB Gas 1.2 Kap. 5.12.5, EBD 4.3 Kap. 13.15.1.1–2)",
+    ),
     (
         EBD_GDA_STAMMDATEN_LF,
         "UTILMD: the Zustimmung is „Stammdaten versenden\u{201c} — the UTILMD \
@@ -5697,6 +6072,52 @@ pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
          carries no AJT — and Prüfschritt 80 sends no answer at all",
     ),
 ];
+
+/// Codelisten that publish **no Ablehnungscode**, with the reason: the column
+/// that names one cannot refuse, or refuses under a sibling list and PID.
+///
+/// Adding a list here is a claim about an AHB column. The test below holds it
+/// to the consequence: such a list must publish no Ablehnungscode.
+pub const ZUSTIMMUNG_ONLY_CODELISTEN: &[(&str, &str)] = &[
+    (
+        CODELISTE_ANTWORT_ANFRAGE_MALO_STRUKTUR_GAS,
+        "UTILMD: G_0035 is the Antwort 44181's list; the refusal is the Ablehnung 44182 \
+         under G_0036 (UTILMD AHB Gas 1.2 Kap. 5.12.3, EBD 4.3 Kap. 13.13.1.1–2)",
+    ),
+    (
+        CODELISTE_ANTWORT_AENDERUNG_NB_GAS,
+        "UTILMD: the Antwort 44115 to a nicht bilanzierungsrelevante Änderung vom NB has \
+         no Ablehnung — G_0016 publishes E15 alone (EBD 4.3 Kap. 13.10.1.1, 13.10.2.1)",
+    ),
+    (
+        CODELISTE_ANTWORT_AENDERUNG_LF_GAS,
+        "UTILMD: the Antwort 44111 to a nicht bilanzierungsrelevante Änderung vom LF — \
+         G_0023 publishes E15 alone (EBD 4.3 Kap. 13.11.1.1)",
+    ),
+    (
+        CODELISTE_ANTWORT_AENDERUNG_MSB_NB_GAS,
+        "UTILMD: the NB's Antwort 44119/44161 to the MSB's Änderung — G_0026 publishes \
+         E15 alone (EBD 4.3 Kap. 13.12.1.1)",
+    ),
+    (
+        CODELISTE_ANTWORT_AENDERUNG_MSB_LF_GAS,
+        "UTILMD: the LF's Antwort 44119 to the forwarded 44117 — G_0027 publishes E15 \
+         alone (EBD 4.3 Kap. 13.12.2.1)",
+    ),
+    (
+        CODELISTE_ANTWORT_AENDERUNG_MSB_OHNE_LF_GAS,
+        "UTILMD: the LF's Antwort 44161 to the forwarded 44160 — G_0030 publishes E15 \
+         alone (EBD 4.3 Kap. 13.12.2.2)",
+    ),
+];
+
+/// `true` when `codeliste` is declared [`ZUSTIMMUNG_ONLY_CODELISTEN`].
+#[must_use]
+pub fn ist_zustimmung_only(codeliste: &str) -> bool {
+    ZUSTIMMUNG_ONLY_CODELISTEN
+        .iter()
+        .any(|(id, _)| *id == codeliste)
+}
 
 // ── Which tree checks which invoice ──────────────────────────────────────────
 
@@ -6332,6 +6753,13 @@ mod tests {
                 codes.iter().any(|c| c.ist_zustimmung() == Some(true)),
                 "{ebd} has no Zustimmungscode"
             );
+            if ist_zustimmung_only(ebd) {
+                assert!(
+                    codes.iter().all(|c| c.ist_zustimmung() != Some(false)),
+                    "{ebd} is declared Zustimmung-only but publishes an Ablehnungscode"
+                );
+                continue;
+            }
             assert!(
                 codes.iter().any(|c| c.ist_zustimmung() == Some(false)),
                 "{ebd} has no Ablehnungscode"

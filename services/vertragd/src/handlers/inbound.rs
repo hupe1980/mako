@@ -517,6 +517,10 @@ fn collect_sites(
                     // The offer priced the year; the contract is agreed on the
                     // same figure, and it is what selects a Preisstaffel.
                     jahresverbrauch_kwh: sp.jahresverbrauch_kwh,
+                    lieferbeginn_anlass: None,
+                    netznutzungsvertrag: None,
+                    netznutzung_zahler: None,
+                    gemeinderabatt_prozent: None,
                     fulfillment_data: None,
                 });
         }
@@ -556,6 +560,10 @@ fn collect_sites(
                     .get("jahresverbrauch_kwh")
                     .and_then(serde_json::Value::as_str)
                     .and_then(|v| v.parse().ok()),
+                lieferbeginn_anlass: None,
+                netznutzungsvertrag: None,
+                netznutzung_zahler: None,
+                gemeinderabatt_prozent: None,
                 fulfillment_data: None,
             });
     }

@@ -45,20 +45,6 @@ pub struct Bgm {
     pub function: Option<String>,
 }
 
-impl Bgm {
-    /// Parse `document_id` as a [`crate::Pruefidentifikator`].
-    ///
-    /// Returns `None` when the field is absent or the value is not a valid
-    /// 5-digit Pruefidentifikator.
-    #[must_use]
-    pub fn pruefidentifikator(&self) -> Option<crate::Pruefidentifikator> {
-        self.document_id
-            .as_deref()
-            .and_then(|s| s.parse::<u32>().ok())
-            .and_then(|code| crate::Pruefidentifikator::new(code).ok())
-    }
-}
-
 // ── DTM ───────────────────────────────────────────────────────────────────────
 
 /// `DTM` — Date/Time/Period.

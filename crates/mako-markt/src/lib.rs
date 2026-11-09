@@ -21,6 +21,7 @@
 //! | [`commands`] | ERP command-name constants shared between `makod`'s registry and dispatching services (`processd`, …) |
 //! | [`makod_client`] | Typed HTTP client for `makod` admin + command APIs (reqwest-backed); requires `makod-client` feature |
 //! | [`error`] | `MdmError` — all domain-level error variants |
+//! | [`lokationsbuendel`] | `MaloLokationsbuendel` — the Lokationsbündel of a Marktlokation on a Stichtag and the NB's Angaben a Geschäftsdatenanfrage answer carries |
 //! | [`utilmd_stammdaten`] | `MaloUtilmdStammdaten` — the UTILMD Stammdaten of a Marktlokation on a Stichtag, as marktd serves them |
 
 #![deny(unsafe_code)]
@@ -39,6 +40,7 @@ pub mod cloudevents;
 pub mod commands;
 pub mod domain;
 pub mod error;
+pub mod lokationsbuendel;
 #[cfg(feature = "makod-client")]
 pub mod makod_client;
 #[cfg(feature = "marktd-client")]

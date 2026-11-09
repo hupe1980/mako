@@ -587,8 +587,9 @@ pub enum BillingEvent {
         /// Message reference of the inbound IFTSTA.
         message_ref: MessageRef,
     },
-    /// The clearing window for this stream closed; no further version can
-    /// change the settlement (Kap. 3.10 Tabelle 2).
+    /// A clearing window for this stream closed (Kap. 3.10 Tabelle 2). The
+    /// BKA close opens the KBKA Clearingphase; the KBKA close ends the stream,
+    /// and no further version can change the settlement.
     ClearingGeschlossen {
         /// Which run closed.
         lauf: crate::fristen::Abrechnungslauf,
@@ -719,9 +720,17 @@ pub enum BillingState {
     /// No version received yet.
     #[default]
     New,
-    /// At least one version received; versions may still arrive and be checked.
+    /// At least one version received; versions may still arrive and be checked
+    /// in the BKA (ohne KBKA) clearing window.
     Offen(BillingData),
-    /// The clearing window closed: the Abrechnungsstichtag of MaBiS Kap. 3.10
+    /// The BKA clearing window closed and the KBKA Clearingphase is running:
+    /// „Summenzeitreihen, die nach Ablauf der Clearingfrist der BKA (ohne KBKA)
+    /// vom BIKO empfangen werden und deren Version von der höchsten Version mit
+    /// ‚Abrechnungsdaten' abweicht, gehen in die Clearingphase zur KBKA ein"
+    /// (BK6-24-174 Anlage 3 Kap. 9.7.1, S. 112). Versions and Prüfmitteilungen
+    /// are still accepted until the KBKA window of Tabelle 2 closes.
+    KbkaOffen(BillingData),
+    /// Both clearing windows closed: the Abrechnungsstichtag of MaBiS Kap. 3.10
     /// Tabelle 2 (S. 23) has passed, and the settling versions „erhalten nun den
     /// Datenstatus ‚abgerechnete Daten' bzw. ‚abgerechnete Daten KBKA'".
     Geschlossen(BillingData),
@@ -744,6 +753,7 @@ impl BillingState {
         match self {
             Self::New => "New",
             Self::Offen(_) => "Offen",
+            Self::KbkaOffen(_) => "KbkaOffen",
             Self::Geschlossen(_) => "Geschlossen",
         }
     }
@@ -753,7 +763,7 @@ impl BillingState {
     pub fn data(&self) -> Option<&BillingData> {
         match self {
             Self::New => None,
-            Self::Offen(d) | Self::Geschlossen(d) => Some(d),
+            Self::Offen(d) | Self::KbkaOffen(d) | Self::Geschlossen(d) => Some(d),
         }
     }
 }
@@ -790,6 +800,11 @@ pub enum BillingCommand {
         /// registers it as the [`crate::fristen::CLEARING_ENDE_LABEL`]
         /// deadline; `None` where Tabelle 2 defines no window.
         clearing_ende: Option<time::OffsetDateTime>,
+        /// When the KBKA clearing window for this Zeitreihe closes — the same
+        /// calendar fact for [`crate::fristen::Abrechnungslauf::Kbka`]. The
+        /// version that opens the settlement registers it as the
+        /// [`crate::fristen::KBKA_CLEARING_ENDE_LABEL`] deadline.
+        kbka_clearing_ende: Option<time::OffsetDateTime>,
         /// Party that sent it.
         absender: MarktpartnerCode,
         /// Bilanzkoordinator of this settlement.
@@ -839,9 +854,9 @@ pub enum BillingCommand {
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
-    /// The clearing window closed (Kap. 3.10 Tabelle 2). Emitted by the caller
-    /// from [`crate::fristen::Phase`], typically off a
-    /// [`crate::fristen::CLEARING_ENDE_LABEL`] deadline.
+    /// A clearing window closed (Kap. 3.10 Tabelle 2) — off the
+    /// [`crate::fristen::CLEARING_ENDE_LABEL`] (BKA) or
+    /// [`crate::fristen::KBKA_CLEARING_ENDE_LABEL`] (KBKA) deadline, or by hand.
     CloseClearing {
         /// Which run closed.
         lauf: crate::fristen::Abrechnungslauf,
@@ -860,25 +875,33 @@ impl Workflow for MabisBillingWorkflow {
     type Event = BillingEvent;
     type Command = BillingCommand;
 
-    const DEADLINE_LABELS: &'static [&'static str] = &[crate::fristen::CLEARING_ENDE_LABEL];
+    const DEADLINE_LABELS: &'static [&'static str] = &[
+        crate::fristen::CLEARING_ENDE_LABEL,
+        crate::fristen::KBKA_CLEARING_ENDE_LABEL,
+    ];
 
-    /// Close the settlement when the clearing window lapses.
+    /// Close a clearing window when it lapses — each label its own run.
     ///
-    /// This is the only deadline the workflow owns. It is not a response
-    /// window: nothing is owed *by* this participant when it fires, the
-    /// settlement simply stops accepting versions.
+    /// Neither is a response window: nothing is owed *by* this participant
+    /// when one fires. The BKA close moves the settlement into the KBKA
+    /// Clearingphase; the KBKA close ends it. A KBKA close that fires while the
+    /// BKA window is somehow still open closes both, since nothing can be filed
+    /// after the KBKA window.
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
+        let lauf = match (deadline.label(), state) {
             (crate::fristen::CLEARING_ENDE_LABEL, BillingState::Offen(_)) => {
-                Some(BillingCommand::CloseClearing {
-                    lauf: crate::fristen::Abrechnungslauf::Bka,
-                })
+                crate::fristen::Abrechnungslauf::Bka
             }
-            _ => None,
-        }
+            (
+                crate::fristen::KBKA_CLEARING_ENDE_LABEL,
+                BillingState::Offen(_) | BillingState::KbkaOffen(_),
+            ) => crate::fristen::Abrechnungslauf::Kbka,
+            _ => return None,
+        };
+        Some(BillingCommand::CloseClearing { lauf })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
@@ -905,6 +928,10 @@ impl Workflow for MabisBillingWorkflow {
                     BillingState::Offen(mut d) => {
                         d.versionen.push(record);
                         BillingState::Offen(d)
+                    }
+                    BillingState::KbkaOffen(mut d) => {
+                        d.versionen.push(record);
+                        BillingState::KbkaOffen(d)
                     }
                     BillingState::New => BillingState::Offen(BillingData {
                         zeitreihe: *zeitreihe,
@@ -939,9 +966,15 @@ impl Workflow for MabisBillingWorkflow {
                 ..
             } => mutate_version(state, version, |v| v.datenstatus = Some(*datenstatus)),
 
-            BillingEvent::ClearingGeschlossen { .. } => match state {
-                BillingState::Offen(d) => BillingState::Geschlossen(d),
-                other => other,
+            BillingEvent::ClearingGeschlossen { lauf } => match (lauf, state) {
+                (crate::fristen::Abrechnungslauf::Bka, BillingState::Offen(d)) => {
+                    BillingState::KbkaOffen(d)
+                }
+                (
+                    crate::fristen::Abrechnungslauf::Kbka,
+                    BillingState::Offen(d) | BillingState::KbkaOffen(d),
+                ) => BillingState::Geschlossen(d),
+                (_, other) => other,
             },
         }
     }
@@ -959,6 +992,7 @@ impl Workflow for MabisBillingWorkflow {
                 version,
                 im_erstaufschlag,
                 clearing_ende,
+                kbka_clearing_ende,
                 absender,
                 biko_id,
                 message_ref,
@@ -978,7 +1012,7 @@ impl Workflow for MabisBillingWorkflow {
                     BillingState::Geschlossen(_) => {
                         return Err(WorkflowError::invalid_state("Offen", "Geschlossen"));
                     }
-                    BillingState::Offen(d) => {
+                    BillingState::Offen(d) | BillingState::KbkaOffen(d) => {
                         // Kap. 3.8.2: versions ascend across the whole BKA.
                         if let Some(h) = d.hoechste_version()
                             && &version <= h
@@ -997,13 +1031,19 @@ impl Workflow for MabisBillingWorkflow {
                     }
                     BillingState::New => {}
                 }
-                // The version that opens the settlement starts its clearing
-                // window; later versions arrive inside the one already running.
-                let fenster: Vec<PendingDeadline> = clearing_ende
-                    .filter(|_| matches!(state, BillingState::New))
-                    .map(|due| PendingDeadline::new(crate::fristen::CLEARING_ENDE_LABEL, due))
+                // The version that opens the settlement starts both clearing
+                // windows; later versions arrive inside the ones already running.
+                let fenster: Vec<PendingDeadline> = if matches!(state, BillingState::New) {
+                    [
+                        (crate::fristen::CLEARING_ENDE_LABEL, clearing_ende),
+                        (crate::fristen::KBKA_CLEARING_ENDE_LABEL, kbka_clearing_ende),
+                    ]
                     .into_iter()
-                    .collect();
+                    .filter_map(|(label, due)| due.map(|due| PendingDeadline::new(label, due)))
+                    .collect()
+                } else {
+                    Vec::new()
+                };
                 let events = vec![BillingEvent::SummenzeitreiheReceived {
                     pid,
                     zeitreihe,
@@ -1129,7 +1169,13 @@ impl Workflow for MabisBillingWorkflow {
             }
 
             BillingCommand::CloseClearing { lauf } => {
-                if !matches!(state, BillingState::Offen(_)) {
+                let offen = match lauf {
+                    crate::fristen::Abrechnungslauf::Bka => matches!(state, BillingState::Offen(_)),
+                    crate::fristen::Abrechnungslauf::Kbka => {
+                        matches!(state, BillingState::Offen(_) | BillingState::KbkaOffen(_))
+                    }
+                };
+                if !offen {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![BillingEvent::ClearingGeschlossen { lauf }].into())
@@ -1151,6 +1197,12 @@ fn mutate_version(
             }
             BillingState::Offen(d)
         }
+        BillingState::KbkaOffen(mut d) => {
+            if let Some(v) = d.versionen.iter_mut().find(|v| &v.version == version) {
+                f(v);
+            }
+            BillingState::KbkaOffen(d)
+        }
         BillingState::Geschlossen(mut d) => {
             // A Datenstatus („abgerechnete Daten") still lands after the window
             // closes — it is the BIKO recording what settled.
@@ -1167,7 +1219,7 @@ fn mutate_version(
 /// state that blocked.
 fn open_data(state: &BillingState) -> Result<&BillingData, WorkflowError> {
     match state {
-        BillingState::Offen(d) => Ok(d),
+        BillingState::Offen(d) | BillingState::KbkaOffen(d) => Ok(d),
         other => Err(WorkflowError::invalid_state("Offen", other.status_str())),
     }
 }
@@ -1262,8 +1314,12 @@ impl Projection for BillingProjection {
                     record.datenstatus = Some(datenstatus);
                 }
             }
-            BillingEvent::ClearingGeschlossen { .. } => {
-                record.status = "Geschlossen";
+            BillingEvent::ClearingGeschlossen { lauf } => {
+                record.status = match lauf {
+                    crate::fristen::Abrechnungslauf::Bka if record.status == "Offen" => "KbkaOffen",
+                    crate::fristen::Abrechnungslauf::Bka => record.status,
+                    crate::fristen::Abrechnungslauf::Kbka => "Geschlossen",
+                };
             }
         }
     }
@@ -1365,6 +1421,7 @@ mod tests {
             version: v(version),
             im_erstaufschlag,
             clearing_ende: Some(time::OffsetDateTime::UNIX_EPOCH),
+            kbka_clearing_ende: Some(time::OffsetDateTime::UNIX_EPOCH),
             absender: MarktpartnerCode::new("9900357000004"),
             biko_id: BikoId::new("10YDE-VE-------2"),
             message_ref: MessageRef::new(format!("MSCONS-{version}")),
@@ -1376,21 +1433,31 @@ mod tests {
     }
 
     fn run(cmds: Vec<BillingCommand>) -> BillingState {
-        cmds.into_iter().fold(BillingState::default(), |s, c| {
+        run_from(BillingState::default(), cmds)
+    }
+
+    fn run_from(state: BillingState, cmds: Vec<BillingCommand>) -> BillingState {
+        cmds.into_iter().fold(state, |s, c| {
             let out = MabisBillingWorkflow::handle(&s, c).expect("command accepted");
             apply_all(s, &out.events)
         })
     }
 
-    /// The version that opens the settlement registers the close of its
-    /// clearing window; a later version registers nothing, because the window
-    /// is already running.
+    /// The version that opens the settlement registers the close of both its
+    /// clearing windows, BKA and KBKA; a later version registers nothing,
+    /// because the windows are already running.
     #[test]
     fn the_first_version_registers_the_clearing_close() {
         let first = MabisBillingWorkflow::handle(&BillingState::default(), receive(1, true))
             .expect("accepted");
         let labels: Vec<&str> = first.deadlines.iter().map(|d| d.label.as_str()).collect();
-        assert_eq!(labels, [crate::fristen::CLEARING_ENDE_LABEL]);
+        assert_eq!(
+            labels,
+            [
+                crate::fristen::CLEARING_ENDE_LABEL,
+                crate::fristen::KBKA_CLEARING_ENDE_LABEL
+            ]
+        );
 
         let state = apply_all(BillingState::default(), &first.events);
         let second = MabisBillingWorkflow::handle(&state, receive(2, false)).expect("accepted");
@@ -1643,6 +1710,8 @@ mod tests {
         );
     }
 
+    /// After the BKA window a version enters the KBKA Clearingphase
+    /// (Kap. 9.7.1, S. 112); after the KBKA window nothing is filed.
     #[test]
     fn a_closed_window_takes_no_further_version() {
         let state = run(vec![
@@ -1651,8 +1720,75 @@ mod tests {
                 lauf: crate::fristen::Abrechnungslauf::Bka,
             },
         ]);
+        assert_eq!(state.status_str(), "KbkaOffen");
+        let out = MabisBillingWorkflow::handle(&state, receive(2, false))
+            .expect("a KBKA version is accepted");
+        assert!(out.deadlines.is_empty(), "the windows are already running");
+        let state = apply_all(state, &out.events);
+        assert_eq!(state.data().map(|d| d.versionen.len()), Some(2));
+
+        let state = run_from(
+            state,
+            vec![BillingCommand::CloseClearing {
+                lauf: crate::fristen::Abrechnungslauf::Kbka,
+            }],
+        );
         assert_eq!(state.status_str(), "Geschlossen");
-        assert!(MabisBillingWorkflow::handle(&state, receive(2, false)).is_err());
+        assert!(MabisBillingWorkflow::handle(&state, receive(3, false)).is_err());
+    }
+
+    /// Each label closes its own run, and only from the state it closes.
+    #[test]
+    fn each_clearing_label_closes_its_own_run() {
+        let deadline = |label: &str| {
+            mako_engine::deadline::Deadline::new(
+                mako_engine::ids::StreamId::new("process/t/p"),
+                mako_engine::ids::ProcessId::new(),
+                mako_engine::ids::TenantId::new(),
+                mako_engine::version::WorkflowId::new(
+                    WORKFLOW_NAME,
+                    mako_engine::version::FormatVersion::new("FV2026-10-01"),
+                ),
+                label,
+                time::OffsetDateTime::UNIX_EPOCH,
+            )
+        };
+        let bka = deadline(crate::fristen::CLEARING_ENDE_LABEL);
+        let kbka = deadline(crate::fristen::KBKA_CLEARING_ENDE_LABEL);
+        let lauf = |d: &mako_engine::deadline::Deadline, s: &BillingState| {
+            match MabisBillingWorkflow::on_deadline(d, s) {
+                Some(BillingCommand::CloseClearing { lauf }) => Some(lauf),
+                _ => None,
+            }
+        };
+        let offen = run(vec![receive(1, true)]);
+        assert_eq!(
+            lauf(&bka, &offen),
+            Some(crate::fristen::Abrechnungslauf::Bka)
+        );
+        assert_eq!(
+            lauf(&kbka, &offen),
+            Some(crate::fristen::Abrechnungslauf::Kbka)
+        );
+        let kbka_offen = run_from(
+            offen,
+            vec![BillingCommand::CloseClearing {
+                lauf: crate::fristen::Abrechnungslauf::Bka,
+            }],
+        );
+        assert_eq!(lauf(&bka, &kbka_offen), None, "the BKA window is closed");
+        assert_eq!(
+            lauf(&kbka, &kbka_offen),
+            Some(crate::fristen::Abrechnungslauf::Kbka)
+        );
+        let geschlossen = run_from(
+            kbka_offen,
+            vec![BillingCommand::CloseClearing {
+                lauf: crate::fristen::Abrechnungslauf::Kbka,
+            }],
+        );
+        assert_eq!(lauf(&bka, &geschlossen), None);
+        assert_eq!(lauf(&kbka, &geschlossen), None);
     }
 
     #[test]
@@ -1686,19 +1822,18 @@ mod tests {
 
     #[test]
     fn closing_twice_is_a_no_op() {
+        let close = |lauf| BillingCommand::CloseClearing { lauf };
         let state = run(vec![
             receive(1, true),
-            BillingCommand::CloseClearing {
-                lauf: crate::fristen::Abrechnungslauf::Bka,
-            },
+            close(crate::fristen::Abrechnungslauf::Bka),
         ]);
-        let out = MabisBillingWorkflow::handle(
-            &state,
-            BillingCommand::CloseClearing {
-                lauf: crate::fristen::Abrechnungslauf::Kbka,
-            },
-        )
-        .expect("idempotent");
+        let out = MabisBillingWorkflow::handle(&state, close(crate::fristen::Abrechnungslauf::Bka))
+            .expect("idempotent");
+        assert!(out.events.is_empty());
+        let state = run_from(state, vec![close(crate::fristen::Abrechnungslauf::Kbka)]);
+        let out =
+            MabisBillingWorkflow::handle(&state, close(crate::fristen::Abrechnungslauf::Kbka))
+                .expect("idempotent");
         assert!(out.events.is_empty());
     }
 

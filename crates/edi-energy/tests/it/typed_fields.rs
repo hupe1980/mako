@@ -691,35 +691,7 @@ fn qty_is_metered() {
 }
 
 #[cfg(feature = "utilmd")]
-#[test]
-fn bgm_pruefidentifikator_from_document_id() {
-    use edi_energy::messages::segments::Bgm;
-    let bgm_valid = Bgm {
-        document_code: "E01".into(),
-        document_id: Some("11001".into()),
-        function: None,
-    };
-    let bgm_invalid = Bgm {
-        document_code: "E01".into(),
-        document_id: Some("123".into()),
-        function: None,
-    };
-    let bgm_none = Bgm {
-        document_code: "E01".into(),
-        document_id: None,
-        function: None,
-    };
-    assert!(bgm_valid.pruefidentifikator().is_some());
-    assert_eq!(bgm_valid.pruefidentifikator().unwrap().as_u32(), 11001);
-    assert!(
-        bgm_invalid.pruefidentifikator().is_none(),
-        "out-of-range code should return None"
-    );
-    assert!(bgm_none.pruefidentifikator().is_none());
-}
-
 // ── INVOIC typed fields ───────────────────────────────────────────────────────
-
 #[cfg(feature = "invoic")]
 const INVOIC_TYPED: &[u8] = b"\
 UNH+INV001+INVOIC:D:07A:UN:2.8e'\

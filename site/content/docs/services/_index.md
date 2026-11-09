@@ -28,7 +28,7 @@ graph TB
     ext["BDEW Counterparty<br/>(NB · LF · MSB · BKV)"]
 
     subgraph protocol ["Protocol & Market Data"]
-        makod[":8080 makod<br/>EDIFACT runtime · 71 workflows<br/>AS4 · SlateDB · MCP"]
+        makod[":8080 makod<br/>EDIFACT runtime · 73 workflows<br/>AS4 · SlateDB · MCP"]
         marktd[":8180 marktd<br/>MaLo/MeLo/NeLo · contracts<br/>VersorgungsStatus · fan-out"]
         processd[":8580 processd<br/>Anmeldung STP, target ≥95%<br/>LF answers · §14a<br/>process projections · KPI · §7a parity<br/>Sperrauftrag queue · IFTSTA 21039"]
     end
@@ -74,7 +74,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 472 Prüfidentifikatoren, AS4/REST/iMS |
+| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 73 workflows over 473 Prüfidentifikatoren, AS4/REST/iMS |
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, durable fan-out, MMMA monthly import worker |
 | [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP (target ≥95%), LF answers to NB-initiated GPKE processes, MSB REQOTE answers, §14a check; per-PID KPIs and § 7a Abs. 5 EnWG parity; the NB Sperrauftrag queue (IFTSTA 21039); role-gated builds |
 

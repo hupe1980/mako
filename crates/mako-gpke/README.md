@@ -45,7 +45,8 @@ command through `Process::run`; `makod` is that host.
 | `stammdatenaenderung`       | `gpke-stammdatenaenderung`       | GPKE Teil 4 Stammdatenänderung 55615–55694, 55109/55110 — inbound MaLo change → apply to marktd + Rückmeldung A01/A02 (quality feedback, tacit acceptance after 2 WT) |
 | `neuanlage`                 | `gpke-neuanlage`                 | PIDs 55600/55601 (Neuanlage MaLo, LF → NB) + 55602–55605 derived   |
 | `messwerte`                 | `gpke-messwerte`                 | MSCONS PIDs 13005/13006/13015–13019/13025/13027 (Messwerte NB/MSB → LF) |
-| `datenabruf`                | `gpke-datenabruf`                | ORDERS 17004/17102/17113 (Anfrage) + ORDRSP 19102/19114 (Ablehnung) |
+| `datenabruf`                | `gpke-datenabruf`                | Requesting side: ORDERS 17004/17102/17113 out, ORDRSP 19007/19102/19114 (Ablehnung) in, resumed by `SG1 RFF+ON` |
+| `datenabruf_msb`            | `gpke-datenabruf-msb`            | MSB role: ORDERS 17004/17102/17113 in, one process per Anfrage (sender + `BGM` DE 1004); 1 WT on 17102 (GPKE Teil 4 Kap. 3.2 Nr. 4), the Ablehnung window 2 WT on 17004 and 3 WT on 17113 (WiM Teil 2 Kap. 2.6.3 / 2.7.3 Nr. 2) |
 | `geschaeftsdatenanfrage`    | `gpke-geschaeftsdatenanfrage`    | ORDERS 17132 (Anfrage Stammdaten, LF · MSB → NB) → UTILMD 55035/55095/55060 or ORDRSP 19101; both sides, 1 WT |
 | `allokationsliste`          | `gpke-allokationsliste`          | ORDERS 17110/17114 + ORDRSP 19110/19115 + MSCONS 13014 (Allokationsliste Strom) |
 | `anfrage_bestellung`        | `gpke-anfrage-bestellung`        | PID 55555 (Anfrage Daten der individuellen Bestellung, GPKE Teil 4)  |
@@ -53,7 +54,8 @@ command through `Process::run`; `makod` is that host.
 | `abrechnungsdaten`          | `gpke-abrechnungsdaten`          | PIDs 55156/55220/55673 (Rückmeldung/Bestellung Abrechnungsdaten, LF → NB) → IFTSTA 21047 Bearbeitungsstand, `E_0595` |
 | `konfiguration`             | `gpke-konfiguration`             | PIDs 17134/17135 (ORDERS outbound) + 19001/19002 (ORDRSP inbound) — GPKE Teil 4 |
 | `konfiguration_aenderung`   | `gpke-konfiguration-aenderung`   | ORDERS/ORDRSP for configuration changes (NB role)                   |
-| `sperrung`                  | `gpke-sperrung`                  | NB role: ORDERS 17115–17117 + ORDCHG 39000/39001 + ORDRSP 19118/19119 (the MSB's answer to a 17116) |
+| `sperrung`                  | `gpke-sperrung`                  | NB role: ORDERS 17115/17117 + ORDCHG 39000/39001 + ORDRSP 19118/19119 (the MSB's answer to a 17116) |
+| `sperrung_msb`              | `gpke-sperrung-msb`              | MSB role: ORDERS 17116 Anfrage Sperrung (NB → MSB), 3 WT; a lapse counts as Zustimmung (GPKE Teil 2 Kap. 3.5.1.2 Nr. 4) |
 | `sperrung_lf`               | `gpke-sperrung-lf`               | LF-side Sperrung: ORDERS 17115/17117 + ORDCHG 39000 outbound, ORDRSP 19116/19117 · 19128/19129 + IFTSTA 21039 inbound |
 | `ankuendigung_zuordnung_lf` | `gpke-ankuendigung-zuordnung-lf` | PIDs 55607–55609 (UTILMD Ankündigung Zuordnung LF)                 |
 | `partin`                    | `gpke-partin`                    | PIDs 37000–37006 (PARTIN Strom Kommunikationsdaten)                |

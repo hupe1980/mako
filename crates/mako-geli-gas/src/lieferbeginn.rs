@@ -1199,64 +1199,38 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 // kept for correlation and audit.
                 let wire_pid = response_pid.map_or(anfrage_pid, |p| p.as_u32());
 
-                // Keys follow the `render_utilmd` contract — `pid`, `sender`,
-                // `malo`, `process_date` — because this entry is dispatched as a
-                // real UTILMD interchange. A key the renderer does not know is
-                // not a hard error: the AS4 sender falls back to putting the
-                // raw domain JSON on the wire, which the peer cannot parse.
-                let mut outbox_payload = serde_json::json!({
-                    "pid":           wire_pid,
-                    "anfrage_pid":   anfrage_pid,
-                    "accepted":      accepted,
-                    "malo":          data.malo_id.as_str(),
-                    // The answer flows back the way the request came.
-                    "sender":        data.receiver.as_str(),
-                    "receiver":      data.sender.as_str(),
-                    "document_date": data.document_date,
-                    "process_date":  data.process_date,
-                    "variant":       format!("{:?}", data.variant),
-                    // `SG4 STS+E01` — Muss on every Antwortnachricht. The Gas
-                    // Codelisten carry no DE 1131, so there is no `antwort_codeliste`.
-                    "antwort_code":  &antwort_code,
-                });
-                if let Some(ref r) = bemerkung {
-                    outbox_payload["bemerkung"] = serde_json::Value::String(r.clone());
-                    outbox_payload["reason"] = serde_json::Value::String(r.clone());
-                }
-                if let Some(rpid) = response_pid {
-                    outbox_payload["response_pid"] =
-                        serde_json::Value::Number(rpid.as_u32().into());
-                }
-                outbox_payload["orig_message_ref"] =
-                    serde_json::Value::String(data.message_ref.as_str().to_owned());
-                // Every Gas Antwort restates the Anfrage's `SG4 STS+7`
-                // Transaktionsgrund and references its `IDE+24` in `SG6
-                // RFF+TN` (UTILMD AHB Gas 1.2, every Antwort column).
+                // The typed payload the UTILMD renderer reads; the answer
+                // flows back the way the request came.
                 let v = &data.vorgang;
-                if let Some(grund) = v.transaktionsgrund.as_deref() {
-                    outbox_payload["transaktionsgrund"] = grund.into();
-                }
-                if let Some(nr) = v.vorgangsnummer.as_deref() {
-                    outbox_payload["referenz_vorgangsnummer"] = nr.into();
-                }
-                // A Bestätigung EoG restates the Bilanzierungsbeginn (`DTM+158`,
-                // Bedingung `[18]`) and carries the Marktlokation's Stammdaten.
-                if accepted
-                    && data.variant == GasProcessVariant::EogAnmeldung
-                    && let Some(beginn) = v.bilanzierungsbeginn.as_deref()
-                {
-                    outbox_payload["bilanzierungsbeginn"] = beginn.into();
-                }
-                if !stammdaten.is_empty() {
-                    outbox_payload["stammdaten"] = serde_json::to_value(&stammdaten)
-                        .map_err(|e| WorkflowError::validation(e.to_string()))?;
-                }
+                let outbox_payload = UtilmdPayload {
+                    pid: wire_pid,
+                    sender: data.receiver.as_str().to_owned(),
+                    receiver: Some(data.sender.as_str().to_owned()),
+                    malo: Some(data.malo_id.as_str().to_owned()),
+                    document_date: Some(data.document_date.clone()),
+                    process_date: Some(data.process_date.clone()),
+                    // `SG4 STS+E01` — Muss on every Antwortnachricht; the
+                    // renderer writes the one Codeliste the column names.
+                    antwort_code: Some(antwort_code.clone()),
+                    bemerkung: bemerkung.clone(),
+                    // Every Gas Antwort restates the Anfrage's `SG4 STS+7`
+                    // Transaktionsgrund and references its `IDE+24` in `SG6
+                    // RFF+TN` (UTILMD AHB Gas 1.2, every Antwort column).
+                    transaktionsgrund: v.transaktionsgrund.clone(),
+                    referenz_vorgangsnummer: v.vorgangsnummer.clone(),
+                    // A Bestätigung EoG restates the Bilanzierungsbeginn
+                    // (`DTM+158`, Bedingung `[18]`) and carries the
+                    // Marktlokation's Stammdaten.
+                    bilanzierungsbeginn: v
+                        .bilanzierungsbeginn
+                        .clone()
+                        .filter(|_| accepted && data.variant == GasProcessVariant::EogAnmeldung),
+                    stammdaten,
+                    ..UtilmdPayload::default()
+                };
 
-                let mut all_outbox = vec![PendingOutbox::new(
-                    "UTILMD",
-                    data.sender.as_str(),
-                    outbox_payload,
-                )];
+                let mut all_outbox =
+                    vec![PendingOutbox::typed(data.sender.as_str(), &outbox_payload)];
                 if accepted {
                     all_outbox.extend(obligations);
                 }

@@ -587,18 +587,59 @@ impl EdifactIngestDispatcher {
                     })
                 }
             }
-            // ── WiM Technikänderung (requester role) ─────────────────────────
-            // mako initiates: ORDERS 17011 (Änderung der Technik, LF/NB → MSB)
-            // and 17118 (Konfigurationsänderung, MSB → MSB) are rendered
-            // outbound by the workflow's `SendAuftrag` command. The MSB-side
-            // receiver for those two is not implemented — they are listed in
-            // `SEND_ONLY_PIDS`.
+            // ── WiM Technikänderung ──────────────────────────────────────────
+            // MSB side: an inbound ORDERS 17011 (NB, LF an MSB) opens the MSB's
+            // process under the sender and the Dokumentennummer
+            // (`technik_aenderung::auftrag_key`), indexed under the
+            // Messlokation too, with the 10-WT window of WiM Teil 1 Kap.
+            // 3.3.1.2 / 3.3.2.2 Nr. 2 from `mako_fristen::antwort`. 17118 has no
+            // MSB-side receiver here (it is GPKE Teil 3's, answered by 19127)
+            // and stays in `SEND_ONLY_PIDS`.
             //
-            // ORDRSP 19003–19007 close an order **we** sent — resume, never
-            // spawn. An answer with no open order is Skipped rather than
-            // creating an orphan stream.
+            // Requester side: ORDRSP 19005/19006 close an order **we** sent —
+            // resume, never spawn. An answer with no open order is Skipped
+            // rather than creating an orphan stream.
             "wim-technik-aenderung" => {
-                if mako_wim::TECHNIK_AENDERUNG_ORDRSP_PIDS.contains(&pid) {
+                if mako_wim::technik_aenderung::RECEIVE_ORDERS_PIDS.contains(&pid) {
+                    let cmd = adapters::wim_technik_aenderung_registry().dispatch(raw, &fv)?;
+                    let sender = extract_sender_mp_id(msg);
+                    let nummer = match msg {
+                        AnyMessage::Orders(o) => o
+                            .segments()
+                            .iter()
+                            .find(|s| s.tag == "BGM")
+                            .and_then(|s| s.component_str(1, 0))
+                            .unwrap_or("")
+                            .to_owned(),
+                        _ => String::new(),
+                    };
+                    let key = if nummer.is_empty() {
+                        String::new()
+                    } else {
+                        mako_wim::technik_aenderung::auftrag_key(sender.as_str(), &nummer)
+                    };
+                    let lokation = extract_malo_from_msg(msg);
+                    let extra: Vec<&str> = [lokation.as_str()]
+                        .into_iter()
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    let frist: Vec<(&'static str, time::OffsetDateTime)> =
+                        mako_wim::technik_aenderung::eingang_antwortfrist(pid, received_at)
+                            .map(|due| (mako_wim::technik_aenderung::EINGANG_WINDOW_LABEL, due))
+                            .into_iter()
+                            .collect();
+                    self.spawn_or_resume_keyed::<WimTechnikAenderungWorkflow>(
+                        inbound,
+                        &key,
+                        "wim-technik-aenderung",
+                        cmd,
+                        &fv,
+                        &frist,
+                        &extra,
+                        Some(|s| !s.is_terminal()),
+                    )
+                    .await
+                } else if mako_wim::TECHNIK_AENDERUNG_ORDRSP_PIDS.contains(&pid) {
                     let cmd = adapters::wim_technik_aenderung_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
                     self.resume_by_key::<WimTechnikAenderungWorkflow>(
@@ -627,10 +668,7 @@ impl EdifactIngestDispatcher {
                     let melo_id = extract_melo_from_orders(msg);
                     // One Werktag, from the same table `processd` sizes its
                     // operator queue by and raises the breach against.
-                    let process_due_at = mako_fristen::antwort::antwort_deadline(pid, received_at)
-                        .unwrap_or_else(|| {
-                            fristen::deadline_at_werktage(received_at, 1, HolidayCalendar::BdewMaKo)
-                        });
+                    let process_due_at = antwort_due_at(pid, received_at);
                     self.spawn_or_resume_guarded::<WimWeiterverpflichtungWorkflow>(
                         inbound,
                         &melo_id,

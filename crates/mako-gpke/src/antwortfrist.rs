@@ -85,6 +85,8 @@ mod tests {
                 crate::geschaeftsdatenanfrage::ANFRAGE_PID.as_u32(),
             ))
             .chain(crate::sperrung::SPERRUNG_PIDS.iter().copied())
+            .chain(std::iter::once(crate::sperrung_msb::ANFRAGE_PID))
+            .chain(crate::datenabruf_msb::ORDERS_PIDS.iter().copied())
             .chain(crate::sperrung::ORDCHG_STORNIERUNG_PIDS.iter().copied())
             .chain(
                 crate::stammdatenaenderung::STAMMDATEN_PAIRS

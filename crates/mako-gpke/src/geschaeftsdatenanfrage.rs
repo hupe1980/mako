@@ -62,11 +62,13 @@
 //! (`BGM+Z14`, the Anfrage-Nummer in DE 1004, `SG2 LOC+172` the Lokation —
 //! ORDERS AHB 1.1b Kap. 4.1.1.1, S. 8), the UTILMD answer (`BGM+E44`,
 //! `SG4 STS+7` with the PID's Transaktionsgrund, `SG6 RFF+AAV` the
-//! Anfrage-Nummer — UTILMD AHB Strom 2.2 Kap. 9.5, S. 671) and the ORDRSP
+//! Anfrage-Nummer — UTILMD AHB Strom 2.2,
+//! konsolidierte Lesefassung 29.06.2026, Kap. 9.5, S. 599) and the ORDRSP
 //! 19101 (`BGM+Z14`, `SG1 RFF+ON` the Anfrage-Nummer, `SG2 AJT` the code with
 //! its EBD — ORDRSP AHB 1.1b Kap. 4.1.2). The Stammdaten of the answer are
-//! the NB's record and travel whole ([`Stammdaten`]); the AHB profile checks
-//! what renders.
+//! the NB's record of the Lokationsbündel, which the NB's boundary reads
+//! from its master data and sets down segment by segment; they travel whole
+//! ([`Stammdaten`]) and the AHB profile checks what renders.
 //!
 //! # Regulatory basis
 //!

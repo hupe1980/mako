@@ -93,6 +93,39 @@ pub struct Kunde {
     pub anschrift: Option<Anschrift>,
 }
 
+impl Kunde {
+    /// What a UTILMD `SG12 NAD` naming this party with its address lacks —
+    /// empty when it can be sent: a Nachname or Organisationsname for `C080`,
+    /// and Straße, Ort, Postleitzahl and Ländercode for `C059`, `3164`, `3251`
+    /// and `3207` (UTILMD AHB Gas 1.2 Kap. 5.6, S. 64–65).
+    #[must_use]
+    pub fn anmeldung_maengel(&self) -> Vec<String> {
+        fn leer(s: Option<&String>) -> bool {
+            s.is_none_or(|s| s.trim().is_empty())
+        }
+        let mut m = Vec::new();
+        if leer(self.nachname.as_ref()) && leer(self.organisationsname.as_ref()) {
+            m.push("the name — nachname or organisationsname (NAD C080)".to_owned());
+        }
+        match &self.anschrift {
+            None => m.push("the anschrift".to_owned()),
+            Some(a) => {
+                for (field, value) in [
+                    ("strasse (NAD C059)", a.strasse.as_ref()),
+                    ("ort (NAD 3164)", a.ort.as_ref()),
+                    ("postleitzahl (NAD 3251)", a.postleitzahl.as_ref()),
+                    ("landescode (NAD 3207)", a.landescode.as_ref()),
+                ] {
+                    if leer(value) {
+                        m.push(format!("anschrift.{field}"));
+                    }
+                }
+            }
+        }
+        m
+    }
+}
+
 /// One Zählwerk of the Marktlokation — BO4E `Zaehlwerk` on the
 /// `Marktlokation`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -145,6 +178,108 @@ pub struct Netznutzungsdaten {
     pub abrechnungsvariante: Option<Abrechnungsvariante>,
     /// Gemeinderabatt in Prozent (0 – 10, two decimals).
     pub gemeinderabatt_prozent: Option<Decimal>,
+    /// Turnusablesung des NB — UTILMD `SG6 DTM+752`: `MMDD` (DE 2379 `106`)
+    /// or `MMWWMMWW` (`104`, Woche `01`–`04` of the month). „Der Termin der
+    /// Turnusablesung wird an der Marktlokation vorgegeben und muss an den
+    /// zugordneten Messlokationen eingehalten werden" (UTILMD MIG Gas G1.2,
+    /// S. 60), so it is held here and stated for each Messlokation.
+    pub turnusablesung: Option<String>,
+    /// Netznutzungsvertrag — UTILMD `SG10 CAV+Z74`.
+    pub netznutzungsvertrag: Option<Netznutzungsvertrag>,
+    /// Zahlung der Netznutzung — UTILMD `SG10 CAV+Z73`.
+    pub netznutzung_zahler: Option<NetznutzungZahler>,
+}
+
+/// Netznutzungsvertrag der Marktlokation (UTILMD `CAV+Z74`, UTILMD AHB Gas 1.2
+/// Kap. 5.12.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Netznutzungsvertrag {
+    /// `Z08` — Direkter Vertrag zwischen Kunden und NB.
+    KundeNb,
+    /// `Z09` — Vertrag zwischen Lieferanten und NB.
+    LieferantNb,
+}
+
+impl Netznutzungsvertrag {
+    /// Every wire value — the `CHECK` list of
+    /// `malo_netznutzungsdaten.netznutzungsvertrag`.
+    pub const VARIANTS: &'static [&'static str] = &["KUNDE_NB", "LIEFERANT_NB"];
+
+    /// The wire value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::KundeNb => "KUNDE_NB",
+            Self::LieferantNb => "LIEFERANT_NB",
+        }
+    }
+
+    /// Parse a wire value.
+    #[must_use]
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "KUNDE_NB" => Some(Self::KundeNb),
+            "LIEFERANT_NB" => Some(Self::LieferantNb),
+            _ => None,
+        }
+    }
+
+    /// The UTILMD `CAV+Z74` DE 7110 code.
+    #[must_use]
+    pub const fn utilmd_code(self) -> &'static str {
+        match self {
+            Self::KundeNb => "Z08",
+            Self::LieferantNb => "Z09",
+        }
+    }
+}
+
+/// Who pays the Netznutzung (UTILMD `CAV+Z73`). `Kunde` is admitted only under
+/// a [`Netznutzungsvertrag::KundeNb`]: `Z10` „Wenn `CCI+++Z88`
+/// `CAV+Z74:::Z08` vorhanden" (UTILMD AHB Gas 1.2 Kap. 5.12.1, Bedingung
+/// `[216]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NetznutzungZahler {
+    /// `Z10` — Kunde.
+    Kunde,
+    /// `Z11` — Lieferant.
+    Lieferant,
+}
+
+impl NetznutzungZahler {
+    /// Every wire value — the `CHECK` list of
+    /// `malo_netznutzungsdaten.netznutzung_zahler`.
+    pub const VARIANTS: &'static [&'static str] = &["KUNDE", "LIEFERANT"];
+
+    /// The wire value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Kunde => "KUNDE",
+            Self::Lieferant => "LIEFERANT",
+        }
+    }
+
+    /// Parse a wire value.
+    #[must_use]
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "KUNDE" => Some(Self::Kunde),
+            "LIEFERANT" => Some(Self::Lieferant),
+            _ => None,
+        }
+    }
+
+    /// The UTILMD `CAV+Z73` DE 7110 code.
+    #[must_use]
+    pub const fn utilmd_code(self) -> &'static str {
+        match self {
+            Self::Kunde => "Z10",
+            Self::Lieferant => "Z11",
+        }
+    }
 }
 
 /// Betriebszustand der Marktlokation.

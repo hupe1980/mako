@@ -108,7 +108,7 @@ async fn a_full_batch_lands_whole<S: Inspect>(store: &S) {
         process_id: process,
         identity: ProcessIdentity::new(process, tenant, wid()),
     };
-    let outbox = PendingOutbox::new("APERAK", "9900000000001", serde_json::json!({"ok": true}));
+    let outbox = PendingOutbox::aperak_anerkennung("9900000000002", "9900000000001", "UNH1");
 
     let result = store
         .append(

@@ -162,7 +162,7 @@ test-marktd-db:
         fanout_durable_integration:: mabis_zp_integration:: \
         temporal_constraints_integration:: tenant_isolation_integration:: \
         overlap_is_a_client_error:: konfigurationsprodukte_body:: \
-        utilmd_stammdaten_integration::
+        utilmd_stammdaten_integration:: lokationsbuendel_integration::
 
 # invoicd's receipt store — the § 147 AO / GoBD audit trail, its per-tenant
 # uniqueness and the ERP re-dispatch lease.

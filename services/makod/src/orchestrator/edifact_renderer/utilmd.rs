@@ -238,6 +238,47 @@ pub(super) fn render_utilmd(
     let vorgangsnummer = u.vorgangsnummer.as_deref().unwrap_or(message_ref.as_str());
 
     let mut tx = builder.transaction(vorgangsnummer);
+    // `SG4 IMD++Z36+Z12` „Identifikationslogik: Marktlokations-ID" — Muss on the
+    // Gas Anmeldung NN 44001 and the Kündigung 44016 (UTILMD AHB Gas 1.2 Kap.
+    // 5.6, S. 44). A Vorgang that names its Marktlokation by ID is identified by
+    // it, and `SG5 LOC+172` carries that ID (Bedingung `[328]`); `Z13` „Alle
+    // Identifikationsdaten" is the identification without one, which no mako
+    // Vorgang sends.
+    if track == ReleaseTrack::Gas
+        && !names_messlokation
+        && u.malo.as_deref().is_some_and(|m| !m.is_empty())
+        && column_admits_code(
+            &release,
+            pid,
+            "IMD",
+            "7009",
+            edi_energy::utilmd_codes::imd::MARKTLOKATIONS_ID,
+        )
+    {
+        tx = tx.imd(
+            edi_energy::utilmd_codes::imd::IDENTIFIKATIONSLOGIK,
+            edi_energy::utilmd_codes::imd::MARKTLOKATIONS_ID,
+        );
+    }
+    // `vertragsbeginn` — a `DTM+92` beside a `157` process date — precedes it:
+    // the MIG places „Beginn zum" (Nr 00014) before „Änderung zum" (00017).
+    // Like the process date it rides only where the column lists the place:
+    // every GeLi Gas Änderung column makes both Muss, of the Antworten only
+    // the 44176 lists them (UTILMD AHB Gas 1.2 Kap. 5.10–5.11), so a workflow
+    // states the Änderung's dates and the column decides.
+    if let Some(date) = u
+        .vertragsbeginn
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .filter(|_| {
+            utilmd_carries_sg4_date(&release, pid, edi_energy::utilmd_codes::dtm::BEGINN_ZUM)
+        })
+    {
+        tx = tx.date(
+            edi_energy::utilmd_codes::dtm::BEGINN_ZUM,
+            prozessdatum_303(mt, "vertragsbeginn", date, sparte)?,
+        );
+    }
     if let Some(date) = process_date_wire.as_deref() {
         tx = tx.date(dtm_qualifier, date);
     }
@@ -250,6 +291,11 @@ pub(super) fn render_utilmd(
     // |---|---|---|
     // | `bilanzierungsbeginn` | `158` | UTILMD 55238/55239 — AHB Strom 2.2 Kap. 11, Bedingung `[317]` makes it carry the same value as `DTM+92` |
     // | `bilanzierungsende` | `159` | Gas 44037/44038 „wenn eine Bilanzierung stattfindet" (AHB Gas Kap. 5.8 Bedingung `[29]`); UTILMD 55240–55243 beside `DTM+93` |
+    //
+    // The third, `vertragsbeginn` (`92`), is written above, before the process
+    // date: the GeLi Gas Antwort auf Anfrage 44142 restates both `DTM+92` and
+    // `DTM+157` of the Anfrage — „Es ist das Datum/ Daten aus der Anfrage zu
+    // verwenden" (AHB Gas 1.2 Kap. 5.12.1 Bedingung `[528]`).
     for (name, field, qualifier) in [
         (
             "bilanzierungsbeginn",
@@ -312,7 +358,14 @@ pub(super) fn render_utilmd(
     // nowhere in UTILMD AHB Gas G1.1/G1.2 — every Gas Anwendungsfall lists a
     // single `SG4 STS 9013` row. Defaulting `ZW4` onto a Gas Vorgang writes a
     // code the receiving AHB does not define into an element it does not use.
-    if let Some(grund) = u.transaktionsgrund.as_deref() {
+    //
+    // Where the payload states none and the column makes `STS+7` Muss with
+    // exactly one code, that one is written — the GeLi Gas Antwort auf
+    // Änderung restates its column's Grund (`ZE7` on a 44115, `ZI9` on a
+    // 44176; UTILMD AHB Gas 1.2 Kap. 5.10–5.11): the column states it, nobody
+    // guesses it.
+    let fixed_grund = column_fixed_transaktionsgrund(&release, pid);
+    if let Some(grund) = u.transaktionsgrund.as_deref().or(fixed_grund.as_deref()) {
         let t = if names_messlokation
             || track == ReleaseTrack::Gas
             || !column_lists_ergaenzung(&release, pid)
@@ -909,10 +962,62 @@ fn utilmd_carries_sg4_date(release: &edi_energy::Release, pid: u32, qualifier: &
         .any(|(_, nr)| af.segment_status(nr).is_some())
 }
 
+/// The `SG4 STS+7` Transaktionsgrund (DE 9013) the column of `pid` fixes:
+/// the segment is unconditionally Muss there and admits exactly one code.
+fn column_fixed_transaktionsgrund(release: &edi_energy::Release, pid: u32) -> Option<String> {
+    let (profile, af) = utilmd_column(release, pid)?;
+    let unconditional = |s: &String| s == "Muss" || s == "Muss [2061]";
+    let mut codes: Vec<String> = profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| {
+            l.tag == "STS"
+                && l.leaves()
+                    .next()
+                    .is_some_and(|(_, _, e)| e.codes.iter().any(|c| c.code == "7"))
+                && af
+                    .segment_status(&l.nr)
+                    .is_some_and(|st| st.iter().any(unconditional))
+        })
+        .flat_map(|l| af.element_rules(&l.nr))
+        .filter(|r| r.de == "9013")
+        .flat_map(|r| r.operands.iter().filter_map(|o| o.code.clone()))
+        .collect();
+    codes.sort();
+    codes.dedup();
+    match codes.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
 /// The `STS+E01` DE 1131 Codeliste the column of `pid` fixes, when it lists
 /// exactly one.
 fn column_fixed_codeliste(release: &edi_energy::Release, pid: u32) -> Option<String> {
     column_fixed_code(release, pid, "STS", Some("E01"), "1131")
+}
+
+/// `true` when the column of `pid` lists `code` for data element `de` of
+/// segment `tag`.
+fn column_admits_code(
+    release: &edi_energy::Release,
+    pid: u32,
+    tag: &str,
+    de: &str,
+    code: &str,
+) -> bool {
+    let Some((profile, af)) = utilmd_column(release, pid) else {
+        return false;
+    };
+    profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| l.tag == tag)
+        .flat_map(|l| af.element_rules(&l.nr))
+        .filter(|r| r.de == de)
+        .any(|r| r.operands.iter().any(|o| o.code.as_deref() == Some(code)))
 }
 
 /// The one code the column of `pid` admits for data element `de` of segment

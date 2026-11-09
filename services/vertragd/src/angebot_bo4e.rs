@@ -19,9 +19,7 @@ use rubo4e::current::{Angebot, Angebotsteil, Angebotsvariante};
 pub struct AcceptedSupplyPoint {
     /// Validated Marktlokations-ID, when the quotation named one.
     pub malo_id: Option<String>,
-    /// Messlokation, from `mako.angebot.teil.messlokationsId`. A gas supply
-    /// point cannot be registered without it: `start-supply-gas` carries it as
-    /// the Zählpunktbezeichnung (RFF+Z13).
+    /// Messlokation, from `mako.angebot.teil.messlokationsId`.
     pub melo_id: Option<String>,
     /// Netzbetreiber the supply point sits behind, from the quoted
     /// Marktlokation's `netzbetreibercodenr` — the UTILMD's recipient.

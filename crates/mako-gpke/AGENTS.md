@@ -5,7 +5,7 @@
 
 - Governed by **BK6-24-174** (Teil 1–3, eff. 2025-06-06) and **BK6-22-024** (Teil 4 Konfiguration).
 - `GpkeModule::drivers()` (`src/lib.rs`) is the authoritative list of the
-  workflows this crate registers — 23 of them, each a `WorkflowDriver::of::<W>`
+  workflows this crate registers — 26 of them, each a `WorkflowDriver::of::<W>`
   under the owning module's own `WORKFLOW_NAME` constant. Read it there; a list
   restated here drifts. `EngineBuilder::build` refuses a name
   `register_pids_with_roles` routes to without a driver, and makod decides

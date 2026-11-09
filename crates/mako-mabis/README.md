@@ -81,6 +81,17 @@ Bilanzierungsmonat and measured at arrival at the BIKO:
 A version inside the Erstaufschlag window is assigned „Abrechnungsdaten"
 automatically; after it, „Prüfdaten" until a positive Prüfmitteilung
 (Kap. 3.8.3).
+Which window a version is in is decided on the day it was received, in
+gesetzlicher deutscher Zeit — the command carries `im_erstaufschlag`, and the
+receiver resolves it from the receipt instant, never from the day the message
+happens to be processed (Kap. 3.10).
+
+`mabis-billing` closes each clearing window on its own deadline, both registered
+by the version that opens the settlement: `CLEARING_ENDE_LABEL` ends the BKA
+window and moves the settlement into the KBKA Clearingphase — Summenzeitreihen
+the BIKO receives after it „gehen in die Clearingphase zur KBKA ein" (Kap.
+9.7.1) — and
+`KBKA_CLEARING_ENDE_LABEL` ends the KBKA window and the settlement.
 
 API documentation: <https://docs.rs/mako-mabis>. The PID-to-workflow map for the
 whole platform is the [PID reference](https://hupe1980.github.io/mako/docs/regulatory/pid-reference/).

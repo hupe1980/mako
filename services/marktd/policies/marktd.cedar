@@ -50,7 +50,7 @@ permit(
         Action::"read-sr",
         Action::"read-sharing-eligibility",
         Action::"read-netzzugang",
-        Action::"read-msb-rv-gas",
+        Action::"read-msb-rv",
         Action::"read-melo-msb",
         Action::"read-bilanzierung",
         Action::"read-mabis-zp",
@@ -81,7 +81,7 @@ permit(
         Action::"write-device",
         Action::"write-sr",
         Action::"write-netzzugang",
-        Action::"write-msb-rv-gas",
+        Action::"write-msb-rv",
         Action::"write-melo-msb",
         Action::"write-bilanzierung",
         Action::"write-mabis-zp",
@@ -113,7 +113,9 @@ permit(
 //   write-netznutzungsdaten  the NB's Netznutzungsdaten of a Marktlokation —
 //                        what an Anmeldung EoG 55013/44013 transmits as the
 //                        Gruppenzuordnung, Betriebszustand, Termine and
-//                        Gemeinderabatt of the Marktlokation.
+//                        Gemeinderabatt of the Marktlokation, and its
+//                        Lokationsbündel-Angaben — what a Geschäftsdatenanfrage
+//                        answer 55035/55095/55060 states beside the bündel.
 //   write-mmma-preis     MMMA Gas / MMM Strom settlement prices used by
 //                        netzbilanzd's MMM billing and invoicd's check 6.
 //   dispatch-pricat      (Re-)sends PRICAT 27003 to every active LF partner.

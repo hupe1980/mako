@@ -1261,10 +1261,10 @@ mod tests {
     /// a message of its type itself.
     #[tokio::test]
     async fn an_acknowledgement_yields_to_the_workflows_own() {
-        let ack = crate::outbox::PendingOutbox::new(
-            "APERAK",
+        let ack = crate::outbox::PendingOutbox::aperak_anerkennung(
+            "9900000000002",
             "9900000000001",
-            serde_json::json!({"ack": true}),
+            "ACK-UNH",
         );
         for (command, aperaks, ours) in [
             (FullCommand::Spawn, 1, true),

@@ -20,7 +20,8 @@
 //! ```text
 //! Event arrives → parse MsbWechselPayload
 //!   → GET /api/v1/melos/{melo_id}                 ← marktd (does the MeLo exist?)
-//!   → GET /api/v1/partners/{msbn_mp_id}           ← marktd (Rahmenvertrag § 9 MsbG?)
+//!   → GET /api/v1/msb-rahmenvertraege/check       ← marktd (Rahmenvertrag § 9 MsbG,
+//!                                                    per Sparte, NB, MSBN, Zuordnungsbeginn)
 //!   → mako_pruefung::msb::pruefe_{anmeldung,kuendigung,abmeldung}
 //!       Accept   → wim.geraetewechsel.bestaetigen [if auto_accept]
 //!                  else approval_queue with the WiM Frist
@@ -441,19 +442,18 @@ async fn evaluate(
             // `?` propagates a *transport* failure so the caller answers 5xx
             // and the fan-out redelivers; only a genuine 404 becomes `false`.
             let melo_bekannt = marktd.melo_known(&payload.melo_id).await?;
-            // Kap. 2.3.2 Nr. 2 Ziff. 3 asks for a Vertrag nach § 9 Abs. 1
-            // Nr. 3 MsbG with the MSBN. `marktd`'s partner directory stands in
-            // for it: this deployment records a Marktpartner because it does
-            // business with one, so an entry is taken as evidence of the
-            // Rahmenvertrag and its absence as evidence against.
-            //
-            // The stand-in is stated rather than hidden because it is not the
-            // same question — a Marktpartner can sit in the Verzeichnisdienst
-            // with no Rahmenvertrag. `marktd` holds the precise record for Gas
-            // (`msb_rahmenvertraege_gas`, GNB ↔ MSB) and has no Strom twin yet.
-            // Both directions escalate rather than rejecting, because `E_0201`
-            // publishes no code for a missing Rahmenvertrag.
-            let rahmenvertrag = marktd.partner_known(&payload.msb_mp_id).await?;
+            // Kap. 2.3.2 Nr. 2 Ziff. 3 asks for „Vorliegen eines Vertrages
+            // nach §9 Abs.1 Nr. 3 MsbG mit dem MSBN" (Gas: AWH WiM Gas 2.0
+            // Kap. 3.5.2 Nr. 2 Ziff. 3, „zwischen dem MSBN und dem NB"). It is
+            // the contract, not the partner directory: a Marktpartner can be
+            // known with no Rahmenvertrag, or with one only offered, ended or
+            // — in Gas — still to be adapted to the Fassung GeLi Gas 3.0
+            // Tenor 15 requires. So `marktd`'s registry is asked for this
+            // Sparte, this NB and this MSBN on the Zuordnungsbeginn, and only
+            // an `abgeschlossen` contract valid that day passes. Anything else
+            // escalates rather than rejecting, because `E_0201`/`E_2002`
+            // publish no code for a missing Rahmenvertrag.
+            let rahmenvertrag = rahmenvertrag_liegt_vor(payload, prozessdatum, marktd).await?;
             let anfrage = msb::AnmeldungMsb {
                 sparte: sparte_of(payload.pid),
                 melo_id: payload.melo_id.clone(),
@@ -462,7 +462,7 @@ async fn evaluate(
                 einrichtungsart: einrichtungsart(payload.transaktionsgrund.as_deref()),
                 versicherung_liegt_vor: payload.versicherung,
                 melo_bekannt: Some(melo_bekannt),
-                msb_rahmenvertrag: Some(rahmenvertrag),
+                msb_rahmenvertrag: rahmenvertrag,
             };
             Ok(msb::pruefe_anmeldung(&anfrage, uet, cal).into())
         }
@@ -515,6 +515,61 @@ async fn evaluate(
             ),
         }),
     }
+}
+
+/// The Sparte `marktd`'s Rahmenvertrag registry is keyed by.
+fn markt_sparte(pid: u32) -> mako_markt::domain::Sparte {
+    use mako_pruefung::msb::types::Sparte as S;
+    match sparte_of(pid) {
+        S::Strom => mako_markt::domain::Sparte::Strom,
+        S::Gas => mako_markt::domain::Sparte::Gas,
+    }
+}
+
+/// Whether a Messstellenbetreiberrahmenvertrag of the order's Sparte between
+/// its NB and its MSBN is `abgeschlossen` and valid on the Zuordnungsbeginn.
+///
+/// `Ok(None)` — the Vertragslage is unknown and the Anmeldung escalates — when
+/// the order names no NB or MSBN that is a 13-digit MP-ID: there is no
+/// contract to look up, and asking `marktd` with a malformed key would answer
+/// `400` on every redelivery. `Ok(Some(false))` is `marktd` saying no
+/// concluded contract covers the day.
+///
+/// # Errors
+///
+/// A `marktd` failure propagates: an outage is not evidence that no contract
+/// exists, so the caller answers 5xx and the fan-out redelivers.
+async fn rahmenvertrag_liegt_vor(
+    payload: &MsbWechselPayload,
+    zuordnungsbeginn: time::Date,
+    marktd: &mako_markt::marktd_client::MarktdClient,
+) -> anyhow::Result<Option<bool>> {
+    let mp_id = |s: &str| s.len() == 13 && s.bytes().all(|b| b.is_ascii_digit());
+    if !mp_id(&payload.nb_mp_id) || !mp_id(&payload.msb_mp_id) {
+        warn!(
+            process_id = %payload.process_id,
+            nb_mp_id = %payload.nb_mp_id,
+            msb_mp_id = %payload.msb_mp_id,
+            "processd MSB: no NB/MSBN MP-ID to look the Rahmenvertrag up by — the Anmeldung escalates"
+        );
+        return Ok(None);
+    }
+    let pruefung = marktd
+        .msb_rahmenvertrag_check(
+            markt_sparte(payload.pid),
+            &payload.nb_mp_id,
+            &payload.msb_mp_id,
+            zuordnungsbeginn,
+        )
+        .await?;
+    info!(
+        process_id = %payload.process_id,
+        pid = payload.pid,
+        befund = %pruefung.befund,
+        abgeschlossen = pruefung.abgeschlossen,
+        "processd MSB: Rahmenvertrag nach § 9 Abs. 1 Nr. 3 MsbG"
+    );
+    Ok(Some(pruefung.abgeschlossen))
 }
 
 /// `SG4 DTM+93` („Ende zum") versus `DTM+471` („Ende zum nächstmöglichen
@@ -1461,5 +1516,152 @@ mod tests {
                 "PID {pid}"
             );
         }
+    }
+
+    // ── The Rahmenvertrag check on the Anmeldung MSB ──────────────────────
+
+    /// What a stub `marktd` answers and what it was asked.
+    #[derive(Clone, Default)]
+    struct Stub {
+        /// The `abgeschlossen` the `check` endpoint answers.
+        abgeschlossen: bool,
+        /// Every `check` query received.
+        asked: std::sync::Arc<std::sync::Mutex<Vec<std::collections::HashMap<String, String>>>>,
+    }
+
+    /// A `marktd` that knows every Messlokation and every Marktpartner — so a
+    /// check that read `partner_known` would always find the MSBN — and
+    /// answers the Rahmenvertrag lookup with `stub.abgeschlossen`.
+    async fn stub_marktd(stub: Stub) -> mako_markt::marktd_client::MarktdClient {
+        use axum::{
+            Json, Router,
+            extract::{Query, State},
+            routing::get,
+        };
+        async fn check(
+            State(stub): State<Stub>,
+            Query(q): Query<std::collections::HashMap<String, String>>,
+        ) -> Json<serde_json::Value> {
+            stub.asked.lock().unwrap().push(q);
+            let befund = if stub.abgeschlossen {
+                "abgeschlossen"
+            } else {
+                "kein_vertrag"
+            };
+            Json(serde_json::json!({
+                "abgeschlossen": stub.abgeschlossen, "befund": befund, "vertrag": null,
+            }))
+        }
+        let app = Router::new()
+            .route(
+                "/api/v1/melos/{id}",
+                get(|| async { Json(serde_json::json!({})) }),
+            )
+            .route(
+                "/api/v1/partners/{id}",
+                get(|| async { Json(serde_json::json!({})) }),
+            )
+            .route("/api/v1/msb-rahmenvertraege/check", get(check))
+            .with_state(stub);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        mako_markt::marktd_client::MarktdClient::new(
+            format!("http://{addr}"),
+            secrecy::SecretString::from("test"),
+            reqwest::Client::new(),
+        )
+    }
+
+    fn msb_cfg() -> MsbModuleConfig {
+        MsbModuleConfig::for_state("9900987654321", "t", true, false, None, None)
+    }
+
+    /// A well-formed Anmeldung MSB the Vorlauf and Versicherung checks pass.
+    fn anmeldung(pid: u32, nb: &str) -> MsbWechselPayload {
+        MsbWechselPayload::parse(&ev(
+            pid,
+            serde_json::json!({
+                "malo_id": "51238696012",
+                "melo_id": "DE0001234567890123456789012345678",
+                "new_msb": "9900357000004",
+                "grid_operator": nb,
+                "process_date": "2026-04-01",
+                "versicherung": true,
+            }),
+            "2026-03-02T08:30:00Z",
+        ))
+        .expect("parses")
+    }
+
+    /// A known Strom MSBN with no Rahmenvertrag is escalated. The
+    /// stub knows every Marktpartner, so this fails if the arm reads
+    /// `partner_known` instead of the contract.
+    #[tokio::test]
+    async fn a_known_strom_msbn_without_a_contract_is_escalated() {
+        let stub = Stub::default();
+        let marktd = stub_marktd(stub.clone()).await;
+        let outcome = evaluate(&msb_cfg(), &anmeldung(55_042, "9900987654321"), &marktd)
+            .await
+            .expect("marktd answered");
+        let MsbDecisionOutcome::Escalate { reason } = outcome else {
+            panic!("a known MSBN without a Rahmenvertrag must escalate, got {outcome:?}")
+        };
+        assert!(reason.contains("§ 9 Abs. 1 Nr. 3 MsbG"), "{reason}");
+        assert_eq!(
+            stub.asked.lock().unwrap().len(),
+            1,
+            "the registry was asked"
+        );
+    }
+
+    /// With a concluded contract the same Anmeldung is confirmed, and the
+    /// lookup names the order's Sparte, NB, MSBN and its Zuordnungsbeginn —
+    /// the day the contract must be valid on, not the day of arrival.
+    #[tokio::test]
+    async fn a_concluded_contract_is_looked_up_per_sparte_on_the_zuordnungsbeginn() {
+        for (pid, sparte, nb) in [
+            (55_042, "STROM", "9900987654321"),
+            (44_042, "GAS", "9870112700007"),
+        ] {
+            let stub = Stub {
+                abgeschlossen: true,
+                ..Stub::default()
+            };
+            let marktd = stub_marktd(stub.clone()).await;
+            let outcome = evaluate(&msb_cfg(), &anmeldung(pid, nb), &marktd)
+                .await
+                .expect("marktd answered");
+            assert!(
+                matches!(outcome, MsbDecisionOutcome::Accept { .. }),
+                "PID {pid}: {outcome:?}"
+            );
+            let asked = stub.asked.lock().unwrap();
+            assert_eq!(asked.len(), 1);
+            assert_eq!(asked[0]["sparte"], sparte, "PID {pid}");
+            assert_eq!(asked[0]["nb_mp_id"], nb, "PID {pid}");
+            assert_eq!(asked[0]["msb_mp_id"], "9900357000004");
+            assert_eq!(asked[0]["datum"], "2026-04-01", "the Zuordnungsbeginn");
+        }
+    }
+
+    /// An order that names no NB has no contract to look up: the Vertragslage
+    /// is unknown and the Anmeldung escalates — never a confirmation, and no
+    /// lookup under a key `marktd` would refuse on every redelivery.
+    #[tokio::test]
+    async fn an_order_without_an_nb_escalates_without_a_lookup() {
+        let stub = Stub {
+            abgeschlossen: true,
+            ..Stub::default()
+        };
+        let marktd = stub_marktd(stub.clone()).await;
+        let outcome = evaluate(&msb_cfg(), &anmeldung(55_042, ""), &marktd)
+            .await
+            .expect("no marktd failure");
+        assert!(
+            matches!(outcome, MsbDecisionOutcome::Escalate { .. }),
+            "{outcome:?}"
+        );
+        assert!(stub.asked.lock().unwrap().is_empty());
     }
 }

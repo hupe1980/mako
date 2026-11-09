@@ -17,6 +17,7 @@ use super::*;
 const LF_MP_ID: &str = "9805550000003";
 const GNB_MP_ID: &str = "9800357000005";
 const MALO_ID: &str = "51238696012";
+const MELO_ID: &str = "DE00056266802AO6G56M11SN51G21M24S";
 
 async fn lfg_state() -> CommandsApiState {
     let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
@@ -80,7 +81,7 @@ async fn a_datenabruf_without_its_zeitspanne_is_refused() {
     let refused = dispatch_command(
         &state,
         "geli.datenabruf.anfragen",
-        &serde_json::json!({ "malo_id": MALO_ID }),
+        &serde_json::json!({ "malo_id": MALO_ID, "melo_id": MELO_ID, "zeitspanne_von": "2026-01-01" }),
     )
     .await;
     assert!(
@@ -92,13 +93,22 @@ async fn a_datenabruf_without_its_zeitspanne_is_refused() {
 #[tokio::test]
 async fn a_datenabruf_waits_for_the_tenth_werktag_of_the_following_month() {
     let state = lfg_state().await;
-    // A Zeitspanne ending this month: its Brennwert exists only from the
-    // 10. Werktag of next month, which is later than ten Werktage from now.
-    let heute = mako_fristen::heute();
+    // The latest Zeitspanne the LF may ask for ends with yesterday's Gastag:
+    // its Brennwert exists only from the 10. Werktag of the following month,
+    // which is later than ten Werktage from now unless that month is this one.
+    let bis = mako_fristen::heute()
+        .previous_day()
+        .and_then(time::Date::previous_day)
+        .expect("calendar date");
     let outcome = dispatch_command(
         &state,
         "geli.datenabruf.anfragen",
-        &serde_json::json!({ "malo_id": MALO_ID, "zeitspanne_bis": heute.to_string() }),
+        &serde_json::json!({
+            "malo_id": MALO_ID,
+            "melo_id": MELO_ID,
+            "zeitspanne_von": bis.to_string(),
+            "zeitspanne_bis": bis.to_string(),
+        }),
     )
     .await
     .expect("accepted");
@@ -108,12 +118,9 @@ async fn a_datenabruf_waits_for_the_tenth_werktag_of_the_following_month() {
         deadlines[0].label(),
         mako_geli_gas::datenabruf::ANTWORT_WINDOW_LABEL
     );
-    let monatsende = time::Date::from_calendar_date(
-        heute.year(),
-        heute.month(),
-        heute.month().length(heute.year()),
-    )
-    .expect("calendar date");
+    let monatsende =
+        time::Date::from_calendar_date(bis.year(), bis.month(), bis.month().length(bis.year()))
+            .expect("calendar date");
     let zehnter = mako_fristen::end_of_day_berlin(mako_fristen::add_werktage(
         monatsende,
         10,
@@ -123,6 +130,52 @@ async fn a_datenabruf_waits_for_the_tenth_werktag_of_the_following_month() {
         deadlines[0].due_at() >= zehnter,
         "the answer cannot be due before the 10. WT of the following month"
     );
+}
+
+/// The ORDERS names the Messlokation (ORDERS AHB 1.1b Kap. 4.1.3 `LOC+172`).
+#[tokio::test]
+async fn a_datenabruf_without_its_messlokation_is_refused() {
+    let state = lfg_state().await;
+    let refused = dispatch_command(
+        &state,
+        "geli.datenabruf.anfragen",
+        &serde_json::json!({
+            "malo_id": MALO_ID,
+            "zeitspanne_von": "2026-01-01",
+            "zeitspanne_bis": "2026-01-31",
+        }),
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(DispatchError::InvalidPayload(ref m)) if m.contains("melo_id")),
+        "{refused:?}"
+    );
+}
+
+/// GeLi Gas 3.0 Kap. 4.2: „die in der Vergangenheit liegende Zeitspanne",
+/// asked „bis 12 Monate nach dem letzten Tag der betreffenden Zeitspanne".
+#[test]
+fn a_datenabruf_zeitspanne_lies_in_the_past_and_within_twelve_months() {
+    use time::macros::{date, datetime};
+    let check = |von, bis, am| zeitspanne_in_der_vergangenheit(von, bis, am).is_ok();
+    // Monday 02.11.2026, 09:00 MEZ.
+    let am = datetime!(2026-11-02 08:00 UTC);
+    assert!(check(date!(2026 - 10 - 01), date!(2026 - 10 - 31), am));
+    // Sunday's Gastag runs until Monday 06:00 MEZ — it has ended.
+    assert!(check(date!(2026 - 11 - 01), date!(2026 - 11 - 01), am));
+    // Today's Gastag has not.
+    assert!(!check(date!(2026 - 11 - 02), date!(2026 - 11 - 02), am));
+    // At 05:30 MEZ on Monday, Sunday's Gastag has not ended either.
+    assert!(!check(
+        date!(2026 - 11 - 01),
+        date!(2026 - 11 - 01),
+        datetime!(2026-11-02 04:30 UTC)
+    ));
+    // Twelve months after the last day is still in time; the day after is not.
+    assert!(check(date!(2025 - 10 - 01), date!(2025 - 11 - 02), am));
+    assert!(!check(date!(2025 - 10 - 01), date!(2025 - 11 - 01), am));
+    // A Zeitspanne cannot end before it begins.
+    assert!(!check(date!(2026 - 10 - 31), date!(2026 - 10 - 01), am));
 }
 
 #[tokio::test]
@@ -148,9 +201,24 @@ async fn a_stornierung_inherits_the_cancelled_messages_window() {
         "geli.lieferbeginn.anmelden",
         &serde_json::json!({
             "malo_id": MALO_ID,
-            "zaehlpunkt": "DE0001111222233334444555566667777",
             "process_date": "20261201",
+            "transaktionsgrund": "E03",
             "bilanzkreis": "THE0BFH000000001",
+            "abrechnungsintervall_monate": 12,
+            "haushaltskunde": true,
+            "netznutzungsvertrag": "LIEFERANT_NB",
+            "netznutzung_zahler": "LIEFERANT",
+            "gemeinderabatt_prozent": "0",
+            "kunde": {
+                "nachname": "Mustermann",
+                "anschrift": { "strasse": "Hauptstraße 1", "postleitzahl": "50667",
+                               "ort": "Köln", "landescode": "DE" }
+            },
+            "ablesekarte": {
+                "nachname": "Mustermann",
+                "anschrift": { "strasse": "Hauptstraße 1", "postleitzahl": "50667",
+                               "ort": "Köln", "landescode": "DE" }
+            },
         }),
     )
     .await

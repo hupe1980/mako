@@ -433,6 +433,30 @@ CREATE TABLE vertragskomponenten (
     -- without it is refused rather than billed at an arbitrary tier.
     jahresverbrauch_kwh     NUMERIC(14,3)
                         CHECK (jahresverbrauch_kwh IS NULL OR jahresverbrauch_kwh >= 0),
+    -- ── The contract facts a GeLi Gas Anmeldung NN 44001 states ─────────────
+    -- UTILMD AHB Gas 1.2 Kap. 5.6 makes each Muss; a GAS component registered
+    -- at the NB is refused on creation without them (`domain`, `outbound`).
+    -- Why the supply begins: the 44001's `SG4 STS+7` Transaktionsgrund
+    -- (`E03` / `E01` / `E02` / `ZD2`, S. 45), which also decides the
+    -- Mindestvorlauffrist.
+    lieferbeginn_anlass     TEXT        CHECK (lieferbeginn_anlass IS NULL OR lieferbeginn_anlass IN (
+                                'WECHSEL','UMZUG','NEUANLAGE','ENDE_ERSATZVERSORGUNG'
+                            )),
+    -- `SG10 CAV+Z74` Netznutzungsvertrag (S. 52).
+    netznutzungsvertrag     TEXT        CHECK (netznutzungsvertrag IS NULL OR netznutzungsvertrag IN (
+                                'KUNDE_NB','LIEFERANT_NB'
+                            )),
+    -- `SG10 CAV+Z73` Zahlung der Netznutzung; the Kunde pays only under his own
+    -- Netznutzungsvertrag (Bedingung [216]).
+    netznutzung_zahler      TEXT        CHECK (netznutzung_zahler IS NULL OR netznutzung_zahler IN (
+                                'KUNDE','LIEFERANT'
+                            )),
+    -- `SG8 SEQ+Z12 QTY+Z16` Gemeinderabatt in Prozent: ≥ 0, ≤ 10, two
+    -- Nachkommastellen (Bedingungen [902], [938], [930], S. 55).
+    gemeinderabatt_prozent  NUMERIC(4,2)
+                        CHECK (gemeinderabatt_prozent IS NULL
+                               OR gemeinderabatt_prozent BETWEEN 0 AND 10),
+    CHECK (netznutzung_zahler IS DISTINCT FROM 'KUNDE' OR netznutzungsvertrag = 'KUNDE_NB'),
     fulfillment_data        JSONB,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()

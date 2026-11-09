@@ -230,6 +230,18 @@ pub fn run(workspace_root: &str) -> bool {
 ///   to where the work is recorded, never to quiet a finding.
 const KNOWN_UNCARRIED: &[(&str, &str, &str)] = &[
     (
+        "E_3013",
+        "ZG4",
+        "printed in the tree's Codeliste G_0034 (EBD 4.3 Kap. 13.13.1.4), which mako \
+         catalogues under its own number for the Antwort 44157; E_3013_CODES is G_0031's",
+    ),
+    (
+        "E_3013",
+        "ZJ5",
+        "printed in the tree's Codeliste G_0036 (EBD 4.3 Kap. 13.13.1.2), which mako \
+         catalogues under its own number for the Ablehnung 44182; E_3013_CODES is G_0031's",
+    ),
+    (
         "E_0623",
         "A30",
         "quoted by Prüfschritt 50: „wurde der Code A30 … verwendet?“ — an E_0624 code",

@@ -34,7 +34,7 @@ const SITES: &[(&str, usize, &str)] = &[
     ("services/marktd/src/mcp_server.rs", 2, SPLICE),
     ("services/marktd/src/pg/bilanzierung.rs", 2, SPLICE),
     ("services/marktd/src/pg/correlation.rs", 3, SPLICE),
-    ("services/marktd/src/pg/msb_rahmenvertrag_gas.rs", 2, SPLICE),
+    ("services/marktd/src/pg/msb_rahmenvertrag.rs", 3, SPLICE),
     ("services/marktd/src/pg/nb_contract.rs", 3, SPLICE),
     ("services/marktd/src/pg/netzzugang.rs", 3, SPLICE),
     ("services/marktd/src/pg/partner.rs", 2, SPLICE),

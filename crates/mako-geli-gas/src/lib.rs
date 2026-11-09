@@ -160,10 +160,11 @@ pub mod stornierung;
 pub mod zuordnungsmeldung;
 
 pub use stammdatenaenderung::{
-    ANFRAGE_PIDS as GAS_STAMMDATEN_ANFRAGE_PIDS, GasAntwort, GasStammdatenCommand,
-    GasStammdatenData, GasStammdatenEvent, GasStammdatenState, GeliGasStammdatenaenderungWorkflow,
-    STAMMDATEN_PAIRS as GAS_STAMMDATEN_PAIRS, WORKFLOW_NAME as GAS_STAMMDATEN_WORKFLOW_NAME,
-    antwort_for as gas_stammdaten_antwort_for, is_aenderung_pid as gas_is_stammdaten_aenderung_pid,
+    ANFRAGE_PIDS as GAS_STAMMDATEN_ANFRAGE_PIDS, AngefragteGruppe, GasAnfrageData,
+    GasStammdatenCommand, GasStammdatenData, GasStammdatenEvent, GasStammdatenState,
+    GeliGasStammdatenaenderungWorkflow, STAMMDATEN_PAIRS as GAS_STAMMDATEN_PAIRS,
+    WORKFLOW_NAME as GAS_STAMMDATEN_WORKFLOW_NAME, antwort_for as gas_stammdaten_antwort_for,
+    is_aenderung_pid as gas_is_stammdaten_aenderung_pid,
 };
 
 pub use datenabruf::{

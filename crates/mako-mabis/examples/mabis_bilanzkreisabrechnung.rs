@@ -129,6 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 version: v(1),
                 im_erstaufschlag: phase_v1.ist_erstaufschlag(),
                 clearing_ende: None,
+                kbka_clearing_ende: None,
                 absender: absender.clone(),
                 biko_id: biko.clone(),
                 message_ref: MessageRef::new("MSCONS-BG-2026-01-V1"),
@@ -244,6 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 version: v(2),
                 im_erstaufschlag: phase_v2.ist_erstaufschlag(),
                 clearing_ende: None,
+                kbka_clearing_ende: None,
                 absender,
                 biko_id: biko,
                 message_ref: MessageRef::new("MSCONS-BG-2026-01-V2"),
@@ -315,6 +317,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
     let state = process.state().await?;
+    println!(
+        "  Status : {} — the KBKA Clearingphase runs on",
+        state.status_str()
+    );
+    assert!(matches!(state, BillingState::KbkaOffen(_)));
+    println!(
+        "  The KBKA window closes at the end of the 7th month (Tabelle 2), and with it the \
+         settlement."
+    );
+    process
+        .run(
+            BillingCommand::CloseClearing {
+                lauf: Abrechnungslauf::Kbka,
+            },
+            RunOptions::new(),
+        )
+        .await?;
+    let state = process.state().await?;
     println!("  Status : {}", state.status_str());
     assert!(matches!(state, BillingState::Geschlossen(_)));
 
@@ -343,6 +363,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 version: v(3),
                 im_erstaufschlag: false,
                 clearing_ende: None,
+                kbka_clearing_ende: None,
                 absender: MarktpartnerCode::new("9900357000004"),
                 biko_id: BikoId::new("10YDE-VE-------2"),
                 message_ref: MessageRef::new("MSCONS-BG-2026-01-V3"),

@@ -29,7 +29,11 @@
 //! `makod` called it would have hidden three orphans behind one.
 //!
 //! Test code is excluded deliberately. A row exercised only by a unit test of
-//! its own arithmetic is the defect, not the refutation of it.
+//! its own arithmetic is the defect, not the refutation of it. Comments are
+//! stripped before the scan for the same reason: a doc comment that quotes a
+//! key („checked against `wim.vorabinformation-ersteinbau-ims`") is a claim
+//! about a reader, not a reader, and counting it certifies the very row the
+//! comment says is read.
 //!
 //! ## The exemption list
 //!
@@ -160,12 +164,7 @@ pub fn run(workspace_root: &Path) -> bool {
     let mut stale: Vec<&str> = Vec::new();
     let mut consulted = 0usize;
     for row in &rows {
-        let quoted = format!("\"{}\"", row.key);
-        let named = callers.contains(&quoted)
-            || row.consts.iter().any(|c| callers.contains(c.as_str()))
-            || reached_helpers.iter().any(|h| {
-                h.body.contains(&quoted) || row.consts.iter().any(|c| h.body.contains(c.as_str()))
-            });
+        let named = is_named(row, &callers, &reached_helpers);
         let exempt = UNCHECKED.iter().any(|(k, _)| *k == row.key);
         match (named, exempt) {
             (true, false) => consulted += 1,
@@ -198,6 +197,100 @@ pub fn run(workspace_root: &Path) -> bool {
         );
     }
     false
+}
+
+/// Whether `row` is named by the production `callers` (comment-stripped) or by
+/// a helper they call.
+fn is_named(row: &Row, callers: &str, reached_helpers: &[Helper]) -> bool {
+    let quoted = format!("\"{}\"", row.key);
+    callers.contains(&quoted)
+        || row.consts.iter().any(|c| callers.contains(c.as_str()))
+        || reached_helpers.iter().any(|h| {
+            h.body.contains(&quoted) || row.consts.iter().any(|c| h.body.contains(c.as_str()))
+        })
+}
+
+/// `src` with every comment removed — line comments (`//`, `///`, `//!`) and
+/// block comments (`/* … */`, nested) — and every string, raw string and
+/// character literal kept, so a key in a `"…"` literal survives and a `//`
+/// inside one (a URL) is not taken for a comment.
+fn strip_comments(src: &str) -> String {
+    let b = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+    let mut kept = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                out.push_str(&src[kept..i]);
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                kept = i;
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                out.push_str(&src[kept..i]);
+                let mut depth = 0usize;
+                while i < b.len() {
+                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                out.push(' ');
+                kept = i;
+            }
+            b'r' if matches!(b.get(i + 1), Some(b'"' | b'#'))
+                && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_')) =>
+            {
+                let mut j = i + 1;
+                let mut hashes = 0usize;
+                while b.get(j) == Some(&b'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                if b.get(j) != Some(&b'"') {
+                    i += 1;
+                    continue;
+                }
+                j += 1;
+                let close: Vec<u8> = std::iter::once(b'"')
+                    .chain(std::iter::repeat_n(b'#', hashes))
+                    .collect();
+                while j < b.len() && !b[j..].starts_with(&close) {
+                    j += 1;
+                }
+                i = (j + close.len()).min(b.len());
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            // A character literal (`'"'`, `'\''`), not a lifetime.
+            b'\'' if b.get(i + 1) == Some(&b'\\') => {
+                i += 2;
+                while i < b.len() && b[i] != b'\'' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'\'' if b.get(i + 2) == Some(&b'\'') => i += 3,
+            _ => i += 1,
+        }
+    }
+    out.push_str(&src[kept.min(src.len())..]);
+    out
 }
 
 /// One catalogued row, as far as this scan reads it.
@@ -284,7 +377,9 @@ fn concat_production_sources(dir: &Path, root: &Path, scanned: &mut usize, out: 
             continue;
         };
         *scanned += 1;
-        out.push_str(src.split("#[cfg(test)]").next().unwrap_or_default());
+        out.push_str(&strip_comments(
+            src.split("#[cfg(test)]").next().unwrap_or_default(),
+        ));
     }
 }
 
@@ -304,7 +399,9 @@ struct Helper {
 /// declarations, and absorbing those into the preceding helper credits its
 /// callers with rows it never reads.
 fn helpers(src: &str) -> Vec<Helper> {
-    let src = without_table_literal(src.split("#[cfg(test)]").next().unwrap_or_default());
+    let src = strip_comments(&without_table_literal(
+        src.split("#[cfg(test)]").next().unwrap_or_default(),
+    ));
     let mut starts: Vec<(usize, String)> = Vec::new();
     for pat in ["\npub fn ", "\npub const fn "] {
         let mut from = 0usize;
@@ -408,6 +505,41 @@ mod tests {
             "code after it survives"
         );
         assert!(!out.contains("wim.ende-msb"), "the table itself is dropped");
+    }
+
+    /// A doc comment that quotes a key is a claim about a reader, not a reader:
+    /// the 21029 row was certified by exactly such a comment on
+    /// `SendVorabinformation`.
+    #[test]
+    fn a_key_named_only_in_a_comment_is_not_consulted() {
+        let row = Row {
+            key: "wim.vorabinformation-ersteinbau-ims".to_owned(),
+            consts: vec!["VORAB_MONATE".to_owned()],
+        };
+        for only_in_a_comment in [
+            "/// checked against `vorlauf(\"wim.vorabinformation-ersteinbau-ims\")`\npub struct S;",
+            "//! \"wim.vorabinformation-ersteinbau-ims\"\nfn f() {}",
+            "fn f() { /* VORAB_MONATE */ }",
+            "fn f() { /* outer /* \"wim.vorabinformation-ersteinbau-ims\" */ */ }",
+        ] {
+            assert!(
+                !is_named(&row, &strip_comments(only_in_a_comment), &[]),
+                "{only_in_a_comment}"
+            );
+        }
+        for in_code in [
+            "fn f() { vorlauf(\"wim.vorabinformation-ersteinbau-ims\") } // read",
+            "const U: &str = \"https://x\"; fn f() { g(VORAB_MONATE) }",
+            "fn f() { let c = '\"'; vorlauf(\"wim.vorabinformation-ersteinbau-ims\") }",
+            "fn f<'a>(x: &'a str) { vorlauf(r#\"wim.vorabinformation-ersteinbau-ims\"#) }",
+        ] {
+            let stripped = strip_comments(in_code);
+            let named = is_named(&row, &stripped, &[])
+                || stripped.contains("wim.vorabinformation-ersteinbau-ims");
+            assert!(named, "{in_code} → {stripped}");
+        }
+        // A string holding `//` does not swallow the code after it.
+        assert!(strip_comments("let u = \"a//b\"; KEEP").contains("KEEP"));
     }
 
     /// A scan that read nothing certifies nothing.

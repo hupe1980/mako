@@ -135,6 +135,131 @@ impl Kuendigungsgrund {
     }
 }
 
+// ── Lieferbeginn Gas ──────────────────────────────────────────────────────────
+
+/// Why a gas supply begins — the contract fact the Anmeldung NN 44001 states as
+/// its `SG4 STS+7` Transaktionsgrund (UTILMD AHB Gas 1.2 Kap. 5.6, S. 45).
+///
+/// It decides the Mindestvorlauffrist as well: a Wechsel needs 10 WT, an
+/// Einzug has the NB correct the date (AWH GeLi Gas 2.0 Kap. 2.5.2, Kap. 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Lieferbeginnanlass {
+    /// `E03` Wechsel.
+    Wechsel,
+    /// `E01` Ein-/Auszug (Umzug).
+    Umzug,
+    /// `E02` Einzug in Neuanlage.
+    Neuanlage,
+    /// `ZD2` Lieferbeginn und Abmeldung aus der Ersatzversorgung.
+    EndeErsatzversorgung,
+}
+
+impl Lieferbeginnanlass {
+    /// Every variant, in the order the schema lists them.
+    pub const ALL: &'static [Self] = &[
+        Self::Wechsel,
+        Self::Umzug,
+        Self::Neuanlage,
+        Self::EndeErsatzversorgung,
+    ];
+
+    #[must_use]
+    pub fn from_db(s: &str) -> Option<Self> {
+        Some(match s {
+            "WECHSEL" => Self::Wechsel,
+            "UMZUG" => Self::Umzug,
+            "NEUANLAGE" => Self::Neuanlage,
+            "ENDE_ERSATZVERSORGUNG" => Self::EndeErsatzversorgung,
+            _ => None?,
+        })
+    }
+
+    #[must_use]
+    pub const fn as_db(self) -> &'static str {
+        match self {
+            Self::Wechsel => "WECHSEL",
+            Self::Umzug => "UMZUG",
+            Self::Neuanlage => "NEUANLAGE",
+            Self::EndeErsatzversorgung => "ENDE_ERSATZVERSORGUNG",
+        }
+    }
+
+    /// The `SG4 STS+7` DE 9013 code of the 44001.
+    #[must_use]
+    pub const fn transaktionsgrund(self) -> &'static str {
+        match self {
+            Self::Wechsel => "E03",
+            Self::Umzug => "E01",
+            Self::Neuanlage => "E02",
+            Self::EndeErsatzversorgung => "ZD2",
+        }
+    }
+}
+
+/// The contract's `abrechnungszyklus` as the „Abrechnungsintervall des LF" in
+/// Monaten (`SG6 DTM+Z20`, UTILMD AHB Gas 1.2 Kap. 5.6, S. 48) — the four
+/// cadences § 40b Abs. 1 EnWG has the supplier offer.
+#[must_use]
+pub fn abrechnungsintervall_monate(abrechnungszyklus: &str) -> Option<u8> {
+    Some(match abrechnungszyklus {
+        "MONATLICH" => 1,
+        "VIERTELJAEHRLICH" => 3,
+        "HALBJAEHRLICH" => 6,
+        "JAEHRLICH" => 12,
+        _ => None?,
+    })
+}
+
+/// The Kunde as a UTILMD `SG12 NAD` names him, read from his BO4E
+/// `Geschaeftspartner` and, for a natural person, his `Person`.
+///
+/// The Korrespondenzanschrift is the Kunde's own address; where he has none it
+/// is `marktlokation` — „Wenn keine Korrespondenzanschrift des Endverbrauchers/
+/// Kunden vorliegt, ist die Anschrift der Marktlokation zu übermitteln" (UTILMD
+/// AHB Gas 1.2 Kap. 5.6, S. 64, Bedingung `[556]`). A payload that does not
+/// read as BO4E contributes nothing, and the Anmeldung is then refused naming
+/// what is missing.
+#[must_use]
+pub fn utilmd_kunde(
+    geschaeftspartner: Option<&serde_json::Value>,
+    person: Option<&serde_json::Value>,
+    marktlokation: Option<&rubo4e::current::Adresse>,
+) -> mako_markt::utilmd_stammdaten::Kunde {
+    use rubo4e::current::{Adresse, Geschaeftspartner, Person};
+    let gp =
+        geschaeftspartner.and_then(|v| serde_json::from_value::<Geschaeftspartner>(v.clone()).ok());
+    let person = person.and_then(|v| serde_json::from_value::<Person>(v.clone()).ok());
+    let nonempty = |s: Option<&String>| s.filter(|s| !s.trim().is_empty()).cloned();
+    let anschrift = |a: &Adresse| mako_markt::utilmd_stammdaten::Anschrift {
+        strasse: a.strasse.clone(),
+        hausnummer: a.hausnummer.clone(),
+        postleitzahl: a.postleitzahl.clone(),
+        ort: a.ort.clone(),
+        ortsteil: a.ortsteil.clone(),
+        landescode: a.landescode.map(|c| c.to_string()),
+    };
+    let adresse = gp
+        .as_ref()
+        .and_then(|g| g.adresse.as_ref())
+        .or_else(|| person.as_ref().and_then(|p| p.adresse.as_ref()))
+        .or(marktlokation);
+    mako_markt::utilmd_stammdaten::Kunde {
+        organisationsname: gp
+            .as_ref()
+            .and_then(|g| nonempty(g.organisationsname.as_ref())),
+        nachname: gp
+            .as_ref()
+            .and_then(|g| nonempty(g.nachname.as_ref()))
+            .or_else(|| person.as_ref().and_then(|p| nonempty(p.nachname.as_ref()))),
+        vorname: gp
+            .as_ref()
+            .and_then(|g| nonempty(g.vorname.as_ref()))
+            .or_else(|| person.as_ref().and_then(|p| nonempty(p.vorname.as_ref()))),
+        anschrift: adresse.map(anschrift),
+    }
+}
+
 // ── Kündigungsfristen ─────────────────────────────────────────────────────────
 
 /// The earliest date a termination may take effect, with the rule that produced

@@ -582,7 +582,6 @@ fn meldung_payload(
     referenz_vorgangsnummer: Option<&str>,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
-        "direction":         "outbound",
         "pid":               meldung.pid(),
         "sender":            sender.as_str(),
         "receiver":          receiver.as_str(),

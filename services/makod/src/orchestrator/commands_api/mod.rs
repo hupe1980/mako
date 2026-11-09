@@ -330,6 +330,7 @@ mod eog_stammdaten;
 mod ersteinbau;
 mod esa;
 mod gabi_gas;
+mod gda_stammdaten;
 mod geli_gas;
 mod geschaeftsdatenanfrage;
 mod gpke;
@@ -337,6 +338,7 @@ mod handler;
 pub mod idempotency;
 mod iftsta;
 mod invoic_stellen;
+mod lf_anmeldung_gas;
 mod mabis;
 mod netzbilanz;
 mod netzzugang;
@@ -347,6 +349,8 @@ mod wim;
 
 #[cfg(test)]
 mod geli_frist_tests;
+#[cfg(test)]
+mod geli_lf_anmeldung_tests;
 #[cfg(test)]
 mod invoic_stellen_tests;
 #[cfg(test)]

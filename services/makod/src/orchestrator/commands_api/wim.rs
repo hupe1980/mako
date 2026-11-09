@@ -1145,11 +1145,12 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
         latest_format_version(),
     );
 
-    // The counterparty's answer window: the WiM Teil 1 process window the
-    // sibling workflows use (5 Werktage, BK6-24-174).
+    // The counterparty's answer window on a Beendigung — the 17006 row of
+    // `mako_fristen::antwort` (WiM Strom Teil 1 Kap. 3.6.3.5.2 Nr. 2), the
+    // same window the ingest side registers when the Beendigung is inbound.
     let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
-        5,
+        mako_fristen::antwort::RECHNUNGSABWICKLUNG_WERKTAGE,
         mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let process_id = spawn_process::<WimRechnungsabwicklungWorkflow>(

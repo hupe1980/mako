@@ -68,8 +68,7 @@ pub struct CreateVersorgungsvertragInput {
 pub struct CreateKomponenteInput {
     pub sparte: String,
     pub malo_id: Option<String>,
-    /// Messlokation. Mandatory for GAS: `start-supply-gas` carries it as the
-    /// Zählpunktbezeichnung (RFF+Z13).
+    /// Messlokation.
     pub melo_id: Option<String>,
     pub nb_mp_id: Option<String>,
     /// The Bilanzkreis (an X-type EIC) this supply runs in. Absent, processd
@@ -87,7 +86,97 @@ pub struct CreateKomponenteInput {
     /// product rather than picking a tier.
     #[serde(default)]
     pub jahresverbrauch_kwh: Option<rust_decimal::Decimal>,
+    /// Why the supply begins — the GeLi Gas Anmeldung's Transaktionsgrund.
+    /// Required for a GAS component registered at the NB.
+    #[serde(default)]
+    pub lieferbeginn_anlass: Option<domain::Lieferbeginnanlass>,
+    /// Who holds the Netznutzungsvertrag with the NB (`CAV+Z74`). Required for
+    /// a GAS component registered at the NB.
+    #[serde(default)]
+    pub netznutzungsvertrag: Option<mako_markt::utilmd_stammdaten::Netznutzungsvertrag>,
+    /// Who pays the Netznutzung (`CAV+Z73`). Required for a GAS component
+    /// registered at the NB.
+    #[serde(default)]
+    pub netznutzung_zahler: Option<mako_markt::utilmd_stammdaten::NetznutzungZahler>,
+    /// Gemeinderabatt in Prozent (`QTY+Z16`, 0 to 10) — `0` for a Kunde that
+    /// is not the Gemeinde. Required for a GAS component registered at the NB.
+    #[serde(default)]
+    pub gemeinderabatt_prozent: Option<rust_decimal::Decimal>,
     pub fulfillment_data: Option<serde_json::Value>,
+}
+
+impl CreateKomponenteInput {
+    /// `true` when the component is registered at the NB on creation — the
+    /// condition [`insert_versorgungsvertrag`] enqueues the Lieferbeginn on.
+    #[must_use]
+    pub fn wird_angemeldet(&self) -> bool {
+        VertragskomponenteRow::requires_mako_workflow(&self.sparte)
+            && self.malo_id.is_some()
+            && self.nb_mp_id.is_some()
+    }
+
+    /// The GeLi Gas Anmeldung of this component, from it, its contract and the
+    /// contract's Kunde. `Ok(None)` for every component that is not a GAS one
+    /// registered at the NB.
+    ///
+    /// # Errors
+    ///
+    /// Each fact the 44001 needs and the contract does not state.
+    pub fn gas_anmeldung(
+        &self,
+        abrechnungszyklus: &str,
+        kunde: &KundeAnmeldedaten,
+    ) -> std::result::Result<Option<outbound::GasAnmeldung>, Vec<String>> {
+        if self.sparte != "GAS" || !self.wird_angemeldet() {
+            return Ok(None);
+        }
+        outbound::GasAnmeldung::aus_vertrag(
+            self.lieferbeginn_anlass,
+            abrechnungszyklus,
+            kunde.haushaltskunde,
+            self.netznutzungsvertrag,
+            self.netznutzung_zahler,
+            self.gemeinderabatt_prozent,
+            kunde.kunde.clone(),
+        )
+        .map(Some)
+    }
+}
+
+/// The Kunde `kunden_id` as a GeLi Gas Anmeldung names him; `standort` is the
+/// contract's supply address, his Korrespondenzanschrift where he has none of
+/// his own (see [`domain::utilmd_kunde`]). `None` when there is no such Kunde.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn kunde_anmeldedaten(
+    conn: &mut sqlx::PgConnection,
+    kunden_id: Uuid,
+    tenant: &str,
+    standort: Option<&mako_markt::bo4e::Bo4e<rubo4e::current::Adresse>>,
+) -> Result<Option<KundeAnmeldedaten>> {
+    let row: Option<(bool, Option<serde_json::Value>, Option<serde_json::Value>)> = sqlx::query_as(
+        "SELECT haushaltskunde, geschaeftspartner, person FROM kunden
+             WHERE id=$1 AND tenant=$2",
+    )
+    .bind(kunden_id)
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(|(haushaltskunde, gp, person)| KundeAnmeldedaten {
+        haushaltskunde,
+        kunde: domain::utilmd_kunde(gp.as_ref(), person.as_ref(), standort.map(|a| &**a)),
+    }))
+}
+
+/// The contract's Kunde as a GeLi Gas Anmeldung names him.
+#[derive(Debug, Clone)]
+pub struct KundeAnmeldedaten {
+    /// The Kunde's `haushaltskunde` — `SG10 CCI+++Z15`/`Z18`.
+    pub haushaltskunde: bool,
+    /// Name and Korrespondenzanschrift — `SG12 NAD+Z09`/`Z04`/`Z05`.
+    pub kunde: mako_markt::utilmd_stammdaten::Kunde,
 }
 
 /// Terminate a contract.
@@ -394,8 +483,8 @@ pub async fn list_versorgungsvertraege_by_rahmenvertrag(
 ///
 /// # Errors
 ///
-/// Propagates storage errors, and refuses a gas component with no Messlokation
-/// (see [`outbound::lieferbeginn`]).
+/// Propagates storage errors, and refuses a gas component whose Anmeldung
+/// lacks a contract fact (see [`CreateKomponenteInput::gas_anmeldung`]).
 pub async fn insert_versorgungsvertrag(
     pool: &PgPool,
     kunden_id: Uuid,
@@ -451,21 +540,51 @@ pub async fn insert_versorgungsvertrag(
 
     let mut komponenten = Vec::new();
     let mut dispatched = 0usize;
+    // The Kunde a GeLi Gas Anmeldung names — read once, and only when one of
+    // the components is such an Anmeldung.
+    let kunde = if is_new
+        && input
+            .komponenten
+            .iter()
+            .any(|k| k.sparte == "GAS" && k.wird_angemeldet())
+    {
+        Some(
+            kunde_anmeldedaten(&mut tx, kunden_id, tenant, input.standort_adresse.as_ref())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Kunde {kunden_id} not found"))?,
+        )
+    } else {
+        None
+    };
     if is_new {
         for komp in &input.komponenten {
             let komp_id = insert_komponente(&mut tx, actual_id, tenant, lf_mp_id, komp).await?;
             // Persist-before-dispatch: the registration intent commits with the
             // contract, so it survives a restart and can be retried.
-            if VertragskomponenteRow::requires_mako_workflow(&komp.sparte)
-                && let (Some(malo_id), Some(_)) = (&komp.malo_id, &komp.nb_mp_id)
+            if komp.wird_angemeldet()
+                && let Some(malo_id) = &komp.malo_id
             {
+                let gas = kunde
+                    .as_ref()
+                    .map_or(Ok(None), |kunde| {
+                        komp.gas_anmeldung(
+                            input.abrechnungszyklus.as_deref().unwrap_or("JAEHRLICH"),
+                            kunde,
+                        )
+                    })
+                    .map_err(|fehlend| {
+                        anyhow::anyhow!(
+                            "the Anmeldung NN 44001 of {malo_id} lacks: {}",
+                            fehlend.join("; ")
+                        )
+                    })?;
                 let task = outbound::lieferbeginn(
                     komp_id,
                     &komp.sparte,
                     malo_id,
-                    komp.melo_id.as_deref(),
                     komp.bilanzkreis.as_deref(),
                     komp.lieferbeginn,
+                    gas.as_ref(),
                 )?;
                 if outbound::enqueue(&mut *tx, tenant, &task).await? {
                     dispatched += 1;
@@ -515,8 +634,9 @@ async fn insert_komponente(
     sqlx::query(
         "INSERT INTO vertragskomponenten
          (id,vertrag_id,tenant,sparte,malo_id,melo_id,lf_mp_id,nb_mp_id,bilanzkreis,
-          lieferbeginn,lieferende,jahresverbrauch_kwh,fulfillment_data)
-         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+          lieferbeginn,lieferende,jahresverbrauch_kwh,fulfillment_data,
+          lieferbeginn_anlass,netznutzungsvertrag,netznutzung_zahler,gemeinderabatt_prozent)
+         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
          FROM versorgungsvertraege v WHERE v.id=$2",
     )
     .bind(id)
@@ -531,6 +651,10 @@ async fn insert_komponente(
     .bind(k.lieferende)
     .bind(k.jahresverbrauch_kwh)
     .bind(&k.fulfillment_data)
+    .bind(k.lieferbeginn_anlass.map(domain::Lieferbeginnanlass::as_db))
+    .bind(k.netznutzungsvertrag.map(|v| v.as_str()))
+    .bind(k.netznutzung_zahler.map(|z| z.as_str()))
+    .bind(k.gemeinderabatt_prozent)
     .execute(&mut *conn)
     .await?;
     // The product a component starts on is its first valid-time slice. Written
@@ -1144,13 +1268,7 @@ pub async fn kuendige_vertrag(
                 // re-issued to a different date must replace the reading order
                 // it scheduled, not sit behind it.
                 outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &ablesung).await?;
-                let task = outbound::lieferende(
-                    k.id,
-                    &k.sparte,
-                    malo_id,
-                    k.melo_id.as_deref(),
-                    input.lieferende,
-                )?;
+                let task = outbound::lieferende(k.id, &k.sparte, malo_id, input.lieferende);
                 // Superseding for the same reason: the key carries the date,
                 // and a task for another date that is still queued is obsolete.
                 outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &task).await?;

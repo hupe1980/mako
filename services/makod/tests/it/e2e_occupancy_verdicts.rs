@@ -238,7 +238,7 @@ async fn an_answered_gas_stammdatenaenderung_does_not_block_the_next_one() {
         44112,
         "geli-gas-stammdatenaenderung",
         vec![mako_geli_gas::GasStammdatenCommand::SendAntwort {
-            antwort: mako_geli_gas::GasAntwort::Zustimmung,
+            antwort_code: "E15".to_owned(),
         }],
     )
     .await;

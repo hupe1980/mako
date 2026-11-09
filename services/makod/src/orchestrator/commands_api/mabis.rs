@@ -141,6 +141,8 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
         version,
         im_erstaufschlag: phase.ist_erstaufschlag(),
         clearing_ende: monat.clearing_ende(zeitreihe, mako_mabis::fristen::Abrechnungslauf::Bka),
+        kbka_clearing_ende: monat
+            .clearing_ende(zeitreihe, mako_mabis::fristen::Abrechnungslauf::Kbka),
         absender: MarktpartnerCode::new(absender_str),
         biko_id: BikoId::new(biko_id_str),
         message_ref: MessageRef::new(message_ref_str),

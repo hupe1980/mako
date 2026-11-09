@@ -22,27 +22,24 @@
 //! 55036 / 44036 is what tells the new supplier **who the old supplier is** —
 //! „Hierbei teilt der NB dem LFN insbesondere die Identität des LFA … mit".
 //!
-//! # These windows belong to the Lieferbeginn, not to the PID
+//! # A window belongs to its Sequenzdiagramm, not to the PID
 //!
 //! The same Prüfidentifikator recurs in other Sequenzdiagramme with a
-//! *different* window, so a caller must key on the process it is running and
-//! not on the message it is about to send. The Anwendungsübersicht der
-//! Prüfidentifikatoren 4.0 lists, beside the six rows above:
+//! *different* window, so a caller keys on the message that opened the process
+//! it is running — [`meldepflichten_for`] — and never on the message it is about
+//! to send. The Anwendungsübersicht der Prüfidentifikatoren 4.0 lists, beside
+//! the six rows above:
 //!
 //! | PID | Sequenzdiagramm | Nr. | Spätester ÜZ |
 //! |---|---|---|---|
-//! | 55037 | Fall 2 / 3 / 4: LF-Zuordnung bei EEG-/KWKG-Anlagen | 8 | **17:00 Uhr am ÜT** von Nr. 1 |
-//! | 55038 | Lieferende von NB an LF | 8 | **07:00 Uhr** des 1. WT nach dem ÜT von Nr. 1 |
+//! | 55037 | Fall 2 / 3 / 4: LF-Zuordnung bei EEG-/KWKG-Anlagen (opened by 55607) | 8 | I.) **17:00 Uhr am ÜT** von Nr. 1; II.) 17:00 Uhr des 1. WT nach dem ÜT von Nr. 1 |
+//! | 55038 | Lieferende von NB an LF (opened by 55007) | 8 | **07:00 Uhr** des 1. WT nach dem ÜT von Nr. 1 |
 //!
-//! Those two run from the NB's **own** initiating message rather than from an
-//! inbound one, and they would need a second entry under the same PID —
-//! [`meldepflicht`] resolves one per Prüfidentifikator, so the catalogue holds
-//! the Lieferbeginn window and a caller running one of those two Sequenzdiagramme
-//! resolves its own.
-//!
-//! [`GPKE_LIEFERENDE`] is the same shape and *is* catalogued, because 55611
-//! appears in no other Sequenzdiagramm: it is anchored on
-//! [`MeldungAnchor::EigeneAnkuendigung`].
+//! Both run from the NB's **own** initiating message rather than from an
+//! inbound one ([`MeldungAnchor::EigeneAnkuendigung`]), and both are catalogued
+//! as a second entry under their PID — [`GPKE_EEG_KWKG`] and
+//! [`GPKE_LIEFERENDE`], beside 55611, which the same „Lieferende von NB an LF"
+//! owes the MSB.
 //!
 //! `services/makod/tests/it/meldepflicht_coverage.rs` pins the catalogue against
 //! what the PID router actually handles, so a new entry here is either routed
@@ -64,7 +61,7 @@
 //! the **Antwort** („am selben Tag wie in Prozessschritt 5"). [`MeldungAnchor`]
 //! names which, so a caller cannot resolve one against the other.
 
-use time::OffsetDateTime;
+use time::{Date, OffsetDateTime};
 
 use crate::HolidayCalendar;
 use crate::antwort::{Family, FristShape};
@@ -89,6 +86,46 @@ pub enum MeldungAnchor {
     EigeneAnkuendigung,
 }
 
+/// A Meldepflicht's window — one shape, or two the Sequenzdiagramm chooses
+/// between by where the Zuordnungsbeginn lies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeldeFrist {
+    /// One window whatever the Zuordnungsbeginn.
+    Fest(FristShape),
+    /// „I.) Sofern der Zuordnungsbeginn des LFN in der Zukunft liegt, gilt: …
+    /// II.) Sofern der Zuordnungsbeginn des LFN nicht in der Zukunft liegt,
+    /// gilt: …" — the LF-Zuordnung bei EEG-/KWKG-Anlagen (GPKE Teil 2 Kap.
+    /// 2.4.2.3–2.4.2.5).
+    NachZuordnungsbeginn {
+        /// I.) — the Zuordnungsbeginn lies after the ÜT of the anchor.
+        in_der_zukunft: FristShape,
+        /// II.) — it does not.
+        sonst: FristShape,
+    },
+}
+
+impl MeldeFrist {
+    /// The shape that binds for a Zuordnungsbeginn on `zuordnungsbeginn`,
+    /// judged against the German date of `anchor_at`: a Zuordnungsbeginn lies
+    /// „in der Zukunft" when its day begins after the ÜT of the anchor.
+    #[must_use]
+    pub fn shape(self, anchor_at: OffsetDateTime, zuordnungsbeginn: Date) -> FristShape {
+        match self {
+            Self::Fest(shape) => shape,
+            Self::NachZuordnungsbeginn {
+                in_der_zukunft,
+                sonst,
+            } => {
+                if zuordnungsbeginn > crate::berlin_date(anchor_at) {
+                    in_der_zukunft
+                } else {
+                    sonst
+                }
+            }
+        }
+    }
+}
+
 /// One message a party is obliged to send, with no answer expected back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Meldepflicht {
@@ -111,8 +148,8 @@ pub struct Meldepflicht {
     pub triggered_by: &'static [u32],
     /// Which instant [`Meldepflicht::frist`] is resolved against.
     pub anchor: MeldungAnchor,
-    /// The window shape.
-    pub frist: FristShape,
+    /// The window.
+    pub frist: MeldeFrist,
     /// Which Festlegung family states it.
     pub family: Family,
     /// Citation, for the audit trail.
@@ -127,9 +164,20 @@ impl Meldepflicht {
     /// the Antwort for [`MeldungAnchor::Antwort`], the dispatch of this party's
     /// own initiating message for [`MeldungAnchor::EigeneAnkuendigung`]. Passing
     /// the wrong one resolves a real window against a fictional start.
+    ///
+    /// `zuordnungsbeginn` is the Zuordnungsbeginn the process concerns; it
+    /// chooses between the two windows of a [`MeldeFrist::NachZuordnungsbeginn`]
+    /// and leaves a [`MeldeFrist::Fest`] window unchanged.
     #[must_use]
-    pub fn due_at(&self, anchor_at: OffsetDateTime, cal: HolidayCalendar) -> OffsetDateTime {
-        self.frist.due_at(anchor_at, cal)
+    pub fn due_at(
+        &self,
+        anchor_at: OffsetDateTime,
+        zuordnungsbeginn: Date,
+        cal: HolidayCalendar,
+    ) -> OffsetDateTime {
+        self.frist
+            .shape(anchor_at, zuordnungsbeginn)
+            .due_at(anchor_at, cal)
     }
 }
 
@@ -154,10 +202,10 @@ pub const GPKE: &[Meldepflicht] = &[
         sent_to: "LFN",
         triggered_by: &[55_001, 55_077],
         anchor: MeldungAnchor::Eingang,
-        frist: FristShape::WerktagAt {
+        frist: MeldeFrist::Fest(FristShape::WerktagAt {
             werktage: 1,
             at: at(7),
-        },
+        }),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 2 — „Unverzüglich, jedoch \
                  spätester ÜZ ist 07:00 Uhr des 1. WT nach dem ÜT von Nr. 1\"; „Hierbei teilt \
@@ -172,10 +220,10 @@ pub const GPKE: &[Meldepflicht] = &[
         sent_to: "LFA",
         triggered_by: &[55_001, 55_077],
         anchor: MeldungAnchor::Eingang,
-        frist: FristShape::WerktagAt {
+        frist: MeldeFrist::Fest(FristShape::WerktagAt {
             werktage: 1,
             at: at(12),
-        },
+        }),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 10 — „Unverzüglich nach dem \
                  ÜZ von Nr. 5, jedoch spätester ÜZ ist 12:00 Uhr des 1. WT nach dem ÜT von \
@@ -188,10 +236,10 @@ pub const GPKE: &[Meldepflicht] = &[
         sent_to: "LFZ",
         triggered_by: &[55_001, 55_077],
         anchor: MeldungAnchor::Eingang,
-        frist: FristShape::WerktagAt {
+        frist: MeldeFrist::Fest(FristShape::WerktagAt {
             werktage: 1,
             at: at(12),
-        },
+        }),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 13 — „Unverzüglich nach dem \
                  ÜZ von Nr. 5, jedoch spätester ÜZ ist 12:00 Uhr des 1. WT nach dem ÜT von \
@@ -215,7 +263,7 @@ pub const GELI_GAS: &[Meldepflicht] = &[
         sent_to: "LFN",
         triggered_by: &[44_001],
         anchor: MeldungAnchor::Eingang,
-        frist: FristShape::EndOfWerktag(4),
+        frist: MeldeFrist::Fest(FristShape::EndOfWerktag(4)),
         family: Family::GeliGas,
         source: "AWH GeLi Gas V1.2 Kap. 2.5.2 SD Lieferbeginn Nr. 2 — „Unverzüglich, jedoch \
                  spätestens bis zum Ablauf des 4. WT nach Eingang der Anmeldung\"; „Hierbei \
@@ -230,7 +278,7 @@ pub const GELI_GAS: &[Meldepflicht] = &[
         sent_to: "LFA",
         triggered_by: &[44_001],
         anchor: MeldungAnchor::Antwort,
-        frist: FristShape::SameDay,
+        frist: MeldeFrist::Fest(FristShape::SameDay),
         family: Family::GeliGas,
         source: "AWH GeLi Gas V1.2 Kap. 2.5.2 SD Lieferbeginn Nr. 6 — „Am selben Tag wie in \
                  Prozessschritt 5, wenn die Anmeldung bestätigt wurde\"",
@@ -242,46 +290,99 @@ pub const GELI_GAS: &[Meldepflicht] = &[
         sent_to: "LFZ",
         triggered_by: &[44_001],
         anchor: MeldungAnchor::Antwort,
-        frist: FristShape::SameDay,
+        frist: MeldeFrist::Fest(FristShape::SameDay),
         family: Family::GeliGas,
         source: "AWH GeLi Gas V1.2 Kap. 2.5.2 SD Lieferbeginn Nr. 7 — „Am selben Tag wie in \
                  Prozessschritt 5, wenn die Anmeldung bestätigt wurde\"",
     },
 ];
 
-/// GPKE Strom — the notification the NB owes the **MSB** when it ends a
-/// Zuordnung of its own accord.
+/// GPKE Strom — the notification the NB owes the **LFA** when it assigns a
+/// LF of its own accord in the LF-Zuordnung bei EEG-/KWKG-Anlagen.
 ///
-/// A different Sequenzdiagramm from the three above: „Lieferende von NB an LF"
-/// is opened by the NB (55007, Nr. 1), not by an inbound Anmeldung, so this runs
-/// from [`MeldungAnchor::EigeneAnkuendigung`]. One PID, two Prozessschritte and
-/// two recipients — Nr. 11 tells the **MSB** its Zuordnung ends (`ZC8`), Nr. 13
-/// tells the **MSBZ** a future one is cancelled (`ZH1`) — on the same window.
+/// Fall 2, 3 and 4 (GPKE Teil 2 Kap. 2.4.2.3–2.4.2.5) are opened by the NB's
+/// own Ankündigung der Zuordnung (55607, Nr. 1), so the window runs from
+/// [`MeldungAnchor::EigeneAnkuendigung`]; Nr. 8 is the Beendigung der Zuordnung
+/// des LFA zur Tranche on 55037. Its latest ÜZ depends on where the
+/// Zuordnungsbeginn of the LFN lies ([`MeldeFrist::NachZuordnungsbeginn`]).
+pub const GPKE_EEG_KWKG: &[Meldepflicht] = &[Meldepflicht {
+    pid: 55_037,
+    name: "Beendigung der Zuordnung",
+    sent_by: "NB",
+    sent_to: "LFA",
+    triggered_by: &[55_607],
+    anchor: MeldungAnchor::EigeneAnkuendigung,
+    frist: MeldeFrist::NachZuordnungsbeginn {
+        in_der_zukunft: FristShape::SameDayAt(at(17)),
+        sonst: FristShape::WerktagAt {
+            werktage: 1,
+            at: at(17),
+        },
+    },
+    family: Family::Gpke,
+    source: "BK6-24-174 GPKE Teil 2 Kap. 2.4.2.3 (S. 46), 2.4.2.4 (S. 49) und 2.4.2.5 (S. 52 f.) \
+             SD Fall 2 / 3 / 4: LF-Zuordnung bei EEG-/KWKG-Marktlokationen Nr. 8 — I.) „Sofern \
+             der Zuordnungsbeginn des LFN in der Zukunft liegt, gilt: Unverzüglich nach dem ÜZ \
+             von Nr. 2, sofern es sich um eine Zustimmung handelt, bzw. nach dem ÜZ von Nr. 3, \
+             jedoch spätester ÜZ ist 17:00 Uhr am ÜT von Nr. 1.\"; II.) „… jedoch spätester ÜZ \
+             ist 17:00 Uhr des 1. WT nach dem ÜT von Nr. 1.\" Anwendungsübersicht der \
+             Prüfidentifikatoren 4.0 Lfd. Nr. 20630, 20720, 20810.",
+}];
+
+/// GPKE Strom — the notifications the NB owes the **LFZ** and the **MSB** when
+/// it ends a Zuordnung of its own accord.
 ///
-/// It is the one message in the Zuordnungs-Meldung family that may name a
+/// A different Sequenzdiagramm from the Lieferbeginn: „Lieferende von NB an
+/// LF" is opened by the NB (55007, Nr. 1), not by an inbound Anmeldung, so these
+/// run from [`MeldungAnchor::EigeneAnkuendigung`]. Nr. 8 cancels a future
+/// Zuordnung of the **LFZ** on 55038; on 55611, Nr. 11 tells the **MSB** its
+/// Zuordnung ends (`ZC8`) and Nr. 13 tells the **MSBZ** a future one is
+/// cancelled (`ZH1`) — all three on the same window.
+///
+/// 55611 is the one message in the Zuordnungs-Meldung family that may name a
 /// **Messlokation**: „Der MSB ist ausschließlich dem Objekt Messlokation
 /// zugeordnet" (WiM Strom Teil 1 Kap. 2.1.2 d), so `SG5 LOC` carries `Z16` or
 /// `Z17` where the other three carry `Z16` or `Z21`.
-pub const GPKE_LIEFERENDE: &[Meldepflicht] = &[Meldepflicht {
-    pid: 55_611,
-    name: "Beendigung der Zuordnung des MSB zur MaLo / MeLo",
-    sent_by: "NB",
-    sent_to: "MSB / MSBZ",
-    triggered_by: &[55_007],
-    anchor: MeldungAnchor::EigeneAnkuendigung,
-    frist: FristShape::WerktagAt {
-        werktage: 1,
-        at: at(7),
+pub const GPKE_LIEFERENDE: &[Meldepflicht] = &[
+    Meldepflicht {
+        pid: 55_038,
+        name: "Aufhebung einer zukünftigen Zuordnung",
+        sent_by: "NB",
+        sent_to: "LFZ",
+        triggered_by: &[55_007],
+        anchor: MeldungAnchor::EigeneAnkuendigung,
+        frist: MeldeFrist::Fest(FristShape::WerktagAt {
+            werktage: 1,
+            at: at(7),
+        }),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 Kap. 2.5.2.2 SD Lieferende von NB an LF Nr. 8 (S. 63) — \
+                 „Unverzüglich nach dem ÜZ von Nr. 2, sofern es sich um eine Zustimmung \
+                 handelt, bzw. nach dem ÜZ von Nr. 3, jedoch spätester ÜZ ist 07:00 Uhr des 1. \
+                 WT nach dem ÜT von Nr. 1.\" Anwendungsübersicht der Prüfidentifikatoren 4.0 \
+                 Lfd. Nr. 20990.",
     },
-    family: Family::Gpke,
-    source: "BK6-24-174 GPKE Teil 2 § 2.5.2 SD Lieferende von NB an LF Nr. 11 und Nr. 13 — \
-             \"Unverzüglich nach dem ÜZ von Nr. 2, sofern es sich um eine Zustimmung handelt, \
-             bzw. nach dem ÜZ von Nr. 3, jedoch spätester ÜZ ist 07:00 Uhr des 1. WT nach dem \
-             ÜT von Nr. 1\". Nr. 11 beendet die Zuordnung des MSB (STS+7++ZC8), Nr. 13 hebt \
-             die des MSBZ auf (ZH1).",
-}];
+    Meldepflicht {
+        pid: 55_611,
+        name: "Beendigung der Zuordnung des MSB zur MaLo / MeLo",
+        sent_by: "NB",
+        sent_to: "MSB / MSBZ",
+        triggered_by: &[55_007],
+        anchor: MeldungAnchor::EigeneAnkuendigung,
+        frist: MeldeFrist::Fest(FristShape::WerktagAt {
+            werktage: 1,
+            at: at(7),
+        }),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 § 2.5.2 SD Lieferende von NB an LF Nr. 11 und Nr. 13 — \
+                 \"Unverzüglich nach dem ÜZ von Nr. 2, sofern es sich um eine Zustimmung handelt, \
+                 bzw. nach dem ÜZ von Nr. 3, jedoch spätester ÜZ ist 07:00 Uhr des 1. WT nach dem \
+                 ÜT von Nr. 1\". Nr. 11 beendet die Zuordnung des MSB (STS+7++ZC8), Nr. 13 hebt \
+                 die des MSBZ auf (ZH1).",
+    },
+];
 
-const TABLES: &[&[Meldepflicht]] = &[GPKE, GPKE_LIEFERENDE, GELI_GAS];
+const TABLES: &[&[Meldepflicht]] = &[GPKE, GPKE_EEG_KWKG, GPKE_LIEFERENDE, GELI_GAS];
 
 /// A window with **both** bounds: „frühester ÜZ ist … und spätester …".
 ///
@@ -300,7 +401,7 @@ pub struct Sendefenster {
 ///
 /// Not a [`Meldepflicht`]: it is owed only on the counterparty's silence, and
 /// it carries the same Prüfidentifikator as the message that went unanswered,
-/// so it is neither in [`all`] nor reachable through [`meldepflicht`] — a
+/// so it is neither in [`all`] nor reachable through [`meldepflichten_for`] — a
 /// lookup by PID would hand it to every caller asking about the original
 /// message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -393,16 +494,13 @@ pub fn all() -> impl Iterator<Item = &'static Meldepflicht> {
     TABLES.iter().copied().flatten()
 }
 
-/// The Meldepflicht carrying `pid`, if one is catalogued.
-#[must_use]
-pub fn meldepflicht(pid: u32) -> Option<&'static Meldepflicht> {
-    all().find(|m| m.pid == pid)
-}
-
-/// Every Meldepflicht that an inbound `trigger_pid` puts on the receiver.
+/// Every Meldepflicht that `trigger_pid` — the message that opened the process,
+/// inbound or this party's own — puts on its NB.
 ///
-/// Returns the obligations in Prozessschritt order, which is also the order
-/// their windows close.
+/// The one lookup: a Prüfidentifikator recurs in several Sequenzdiagramme with
+/// a different window each (55037, 55038), so a Meldepflicht is found by the
+/// process it belongs to, never by its own PID. Returns the obligations in
+/// Prozessschritt order, which is also the order their windows close.
 pub fn meldepflichten_for(trigger_pid: u32) -> impl Iterator<Item = &'static Meldepflicht> {
     all().filter(move |m| m.triggered_by.contains(&trigger_pid))
 }
@@ -419,6 +517,24 @@ mod tests {
             Time::from_hms(h, 0, 0).expect("valid time"),
         )
     }
+
+    fn day(y: i32, m: Month, d: u8) -> Date {
+        Date::from_calendar_date(y, m, d).expect("valid date")
+    }
+
+    /// The Meldepflicht `pid` the process opened by `trigger` owes.
+    fn row(trigger: u32, pid: u32) -> &'static Meldepflicht {
+        meldepflichten_for(trigger)
+            .find(|m| m.pid == pid)
+            .unwrap_or_else(|| panic!("{trigger} owes {pid}"))
+    }
+
+    /// A Zuordnungsbeginn well after every anchor below — the Lieferbeginn
+    /// windows do not depend on it.
+    const BEGINN: Date = match Date::from_calendar_date(2026, Month::April, 1) {
+        Ok(d) => d,
+        Err(_) => panic!("valid date"),
+    };
 
     /// A Meldepflicht is never also an Antwort: the two tables describe
     /// different obligations, and a PID in both would be counted twice by every
@@ -448,8 +564,8 @@ mod tests {
     #[test]
     fn the_existierende_zuordnung_closes_before_the_anmeldung_is_answered() {
         let received = utc(2026, Month::March, 2, 9); // Monday
-        let info = meldepflicht(55_036).expect("catalogued");
-        let info_due = info.due_at(received, HolidayCalendar::BdewMaKo);
+        let info = row(55_001, 55_036);
+        let info_due = info.due_at(received, BEGINN, HolidayCalendar::BdewMaKo);
         let antwort_due =
             antwort::antwort_deadline(55_001, received).expect("55001 has a published Frist");
         assert!(
@@ -464,9 +580,7 @@ mod tests {
     fn a_friday_anmeldung_is_notified_on_monday() {
         let friday = utc(2026, Month::March, 6, 14);
         for pid in [55_036_u32, 55_037, 55_038] {
-            let due = meldepflicht(pid)
-                .expect("catalogued")
-                .due_at(friday, HolidayCalendar::BdewMaKo);
+            let due = row(55_001, pid).due_at(friday, BEGINN, HolidayCalendar::BdewMaKo);
             assert_eq!(
                 due.date(),
                 Date::from_calendar_date(2026, Month::March, 9).expect("valid date"),
@@ -481,18 +595,14 @@ mod tests {
     #[test]
     fn the_gas_beendigung_is_anchored_on_the_answer_not_the_arrival() {
         for pid in [44_037_u32, 44_038] {
-            let m = meldepflicht(pid).expect("catalogued");
-            assert_eq!(m.anchor, MeldungAnchor::Antwort, "PID {pid}");
+            assert_eq!(row(44_001, pid).anchor, MeldungAnchor::Antwort, "PID {pid}");
         }
-        let m = meldepflicht(44_036).expect("catalogued");
-        assert_eq!(m.anchor, MeldungAnchor::Eingang);
+        assert_eq!(row(44_001, 44_036).anchor, MeldungAnchor::Eingang);
 
         // Anmeldung Monday, answered on the 3rd Werktag: „am selben Tag" is
         // Wednesday, not Monday.
         let antwort_sent = utc(2026, Month::March, 4, 15);
-        let due = meldepflicht(44_037)
-            .expect("catalogued")
-            .due_at(antwort_sent, HolidayCalendar::BdewMaKo);
+        let due = row(44_001, 44_037).due_at(antwort_sent, BEGINN, HolidayCalendar::BdewMaKo);
         assert_eq!(
             due.date(),
             Date::from_calendar_date(2026, Month::March, 4).expect("valid date")
@@ -529,8 +639,65 @@ mod tests {
             "the window opens where the LF's answer window to the same 55007 closes"
         );
         assert!(
-            meldepflicht(55_007).is_none(),
+            all().all(|m| m.pid != 55_007),
             "a step owed on silence is not a Meldepflicht of the PID it re-sends"
+        );
+    }
+
+    /// 55037 and 55038 recur outside the Lieferbeginn with windows of their
+    /// own (PID overview 4.0 Lfd. Nr. 20630/20720/20810 and 20990): each is
+    /// catalogued twice, and the process that opened it finds the right one.
+    #[test]
+    fn the_lieferbeginn_pids_carry_their_second_instance() {
+        for pid in [55_037_u32, 55_038] {
+            assert_eq!(all().filter(|m| m.pid == pid).count(), 2, "PID {pid}");
+        }
+        assert_eq!(
+            row(55_001, 55_037).anchor,
+            MeldungAnchor::Eingang,
+            "the Lieferbeginn instance runs from the Anmeldung"
+        );
+        for (trigger, pid) in [(55_607_u32, 55_037_u32), (55_007, 55_038)] {
+            assert_eq!(
+                row(trigger, pid).anchor,
+                MeldungAnchor::EigeneAnkuendigung,
+                "{trigger} → {pid} runs from the NB's own Nr. 1"
+            );
+        }
+        let pids: Vec<u32> = meldepflichten_for(55_007).map(|m| m.pid).collect();
+        assert_eq!(pids, [55_038, 55_611], "Nr. 8 before Nr. 11 / 13");
+    }
+
+    /// Fall 2 / 3 / 4 Nr. 8: the Beendigung goes to the LFA by 17:00 on the ÜT
+    /// of the Ankündigung when the Zuordnungsbeginn lies in the future (I.),
+    /// else by 17:00 of the 1. WT after it (II.) — here across the start of
+    /// summer time (29.03.2026).
+    #[test]
+    fn the_eeg_beendigung_resolves_both_branches() {
+        let m = row(55_607, 55_037);
+        // Friday 27.03.2026, 10:00 MEZ.
+        let sent = utc(2026, Month::March, 27, 9);
+        assert_eq!(
+            m.due_at(sent, day(2026, Month::April, 1), HolidayCalendar::BdewMaKo),
+            utc(2026, Month::March, 27, 16),
+            "I.) 17:00 MEZ on the ÜT"
+        );
+        assert_eq!(
+            m.due_at(sent, day(2026, Month::March, 27), HolidayCalendar::BdewMaKo),
+            utc(2026, Month::March, 30, 15),
+            "II.) 17:00 MESZ on Monday, the 1. WT after the ÜT"
+        );
+    }
+
+    /// Lieferende von NB an LF Nr. 8: the LFZ hears by 07:00 of the 1. WT after
+    /// the NB's own 55007.
+    #[test]
+    fn the_aufhebung_after_an_own_lieferende_is_due_at_seven() {
+        let sent = utc(2026, Month::March, 6, 14); // Friday
+        assert_eq!(
+            row(55_007, 55_038).due_at(sent, BEGINN, HolidayCalendar::BdewMaKo),
+            utc(2026, Month::March, 9, 6),
+            "07:00 MEZ on Monday"
         );
     }
 

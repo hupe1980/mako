@@ -13,6 +13,33 @@ History before this file is in `git log`.
 
 ### Added
 
+- marktd: `GET /api/v1/msb-rahmenvertraege/check` answers whether an
+  MSB-Rahmenvertrag of a Sparte between an NB and an MSBN is concluded and valid
+  on a day, `befund` naming why not; `mako-markt` gains
+  `MarktdClient::msb_rahmenvertrag_check`.
+- marktd: `GET /api/v1/malos/{id}/lokationsbuendel?stichtag=` serves the
+  Lokationsbündel on a Stichtag, edges in either direction, and
+  `PUT /api/v1/malos/{id}/lokationsbuendel-angaben` stores the NB's dated
+  Angaben (ÜNB, NNA positions, OBIS Verwendungszwecke, Wertegranularität,
+  technische Einrichtungen, normiertes Profil).
+- makod: a MSB Strom deployment receives the ORDERS addressed to it —
+  `gpke-sperrung-msb` takes the Anfrage Sperrung 17116 (3 WT; a lapse counts as
+  Zustimmung, GPKE Teil 2 Kap. 3.5.1.2 Nr. 4), `gpke-datenabruf-msb` takes
+  17004 / 17102 / 17113 (Ablehnung 2 / 1 / 3 WT), `wim-technik-aenderung` takes
+  17011 with the MSB's 10 WT.
+- GeLi Gas: `geli.stammdaten.anfrage.beantworten` answers the Kap. 5.12
+  Antworten — the GNB's 44142 (Stammdatenänderung), 44157 (Prognosegrundlage)
+  and 44181/44182 (Marktlokationsstruktur) from marktd's record on the
+  Änderungsdatum, the LF's 44138 and 44151/44152 from the facts its command
+  states; the code selects the column, its PID and Codeliste, and unreadable
+  master data is refused (`503` / `422`) with nothing sent.
+- marktd: `malo_netznutzungsdaten` holds the Turnusablesung and the
+  Netznutzungsvertrag / Zahler (`KUNDE` only under `KUNDE_NB`).
+- mako-pruefung catalogues `E_3013`, `E_3026` and the Codelisten `G_0034`–`G_0036`,
+  `G_0038`–`G_0040` under their own numbers.
+- `mako_fristen::antwort` rows for 17004, 17102 and 17113; the Meldepflicht
+  catalogue adds 55037 (LF-Zuordnung bei EEG-/KWKG-Anlagen) and 55038.
+- `edi-energy`: `OrdersBuilder::leistung` and `OrdersBuilder::positionszeitraum`.
 - makod counts every inbound AHB finding by class
   (`makod_inbound_findings_total`) and every Formatbedingung finding by number
   (`makod_formatbedingung_findings_total`); a Formatbedingung finding maps to
@@ -27,6 +54,76 @@ History before this file is in `git log`.
 
 ### Changed
 
+- **Breaking:** `mako_engine::payload` types (`UtilmdPayload`, `AperakPayload`,
+  `MaloIdentifiedPayload` and their nested types) refuse unknown keys, and
+  `PendingOutbox::new` refuses an undeclared key in debug builds
+  (`payload::undeclared_key`): a key no renderer reads is no longer dropped in
+  silence. `check-event-payloads` requires the attribute and keeps these types
+  out of event and state enums.
+- **Breaking:** `mako_geli_gas::GasAntwort` is removed; `SendAntwort { antwort_code }`
+  is checked against the column's Codeliste (`ANTWORT_CODELISTEN`),
+  `ReceiveAenderung` gains `vertragsbeginn`, `vorgangsnummer`, `dokumentenart`,
+  `SendAenderung` gains `vertragsbeginn`.
+- **Breaking:** the GeLi Gas Anmeldung 44001 is sendable: `geli.lieferbeginn.anmelden`
+  reads `mako_markt::commands::GeliLieferbeginnAnmelden`, refuses unknown keys,
+  requires the contract's facts (`transaktionsgrund`, `bilanzkreis`,
+  `abrechnungsintervall_monate`, `haushaltskunde`, `netznutzungsvertrag`,
+  `netznutzung_zahler`, `gemeinderabatt_prozent`, `kunde`, `ablesekarte`) and
+  renders `IMD++Z36+Z12`, `RFF+Z18 DTM+Z20`, `CCI+++Z15/Z18`, `CCI+++Z88`,
+  `SEQ+Z12`, `NAD+Z09/Z04/Z05` (UTILMD AHB Gas 1.2 Kap. 5.6), passing the
+  pre-send gate before the process is spawned. processd `start-supply-gas`
+  takes the facts and refuses `ANMELDEDATEN_UNVOLLSTAENDIG` /
+  `ANMELDEDATEN_UNGUELTIG` / `TRANSAKTIONSGRUND_UNZULAESSIG`; an absent
+  `transaktionsgrund` no longer reads as `E03`. vertragd `vertragskomponenten`
+  gains `lieferbeginn_anlass`, `netznutzungsvertrag`, `netznutzung_zahler`,
+  `gemeinderabatt_prozent`, and a GAS component registered at the NB is
+  refused without them or without the Kunde's name and address.
+- **Breaking:** `zaehlpunkt` is removed from the GeLi Gas LF Anmeldung,
+  Abmeldung and Kündigung (workflow, makod, processd, vertragd): the Gas UTILMD
+  names the Marktlokation alone in `SG5 LOC+172`.
+- **Breaking:** marktd's MSB-Rahmenvertrag registry covers both Sparten:
+  `msb_rahmenvertraege_gas` is `msb_rahmenvertraege` with `sparte` in the key
+  and `nb_mp_id` for `gnb_mp_id`, the routes move to
+  `/api/v1/msb-rahmenvertraege`, the Cedar actions to `read-msb-rv` /
+  `write-msb-rv`, and two contracts of the same parties and Sparte cannot cover
+  one day; `mako-events` `markt::MSB_RAHMENVERTRAG_UPDATED`
+  (`de.markt.msb-rahmenvertrag.updated`) carries `sparte`.
+- **Breaking:** processd confirms an Anmeldung MSB (55042 / 44042) only on an
+  `abgeschlossen` MSB-Rahmenvertrag of the order's Sparte with the MSBN, valid
+  on the Zuordnungsbeginn, and escalates otherwise — a known Marktpartner is no
+  contract; a Gas contract still in Fassung BK7-17-026 escalates from
+  01.10.2026 (GeLi Gas 3.0 Tenor 13–15). A deployment escalates every
+  Anmeldung MSB until its contracts are loaded.
+- **Breaking:** a GeLi Gas Anfrage zur Stammdatenänderung (44139/44140) opens the
+  NB's process with its 10-WT window (AWH GeLi Gas V1.2 Kap. 4.4.2 Nr. 2)
+  instead of being answered at once; `GasStammdatenCommand` gains
+  `SendAnfrageAntwort`, and `ANFRAGE_ANTWORT_PAIRS` answers 44165 and 44166
+  with 44167.
+- **Breaking:** `gpke.geschaeftsdatenanfrage.beantworten` builds the 55035 from
+  marktd's Stammdaten and Lokationsbündel on the Stichtag and no longer takes
+  `stammdaten`; 55095 and 55060 are refused naming the groups not yet
+  assembled.
+- **Breaking:** `geli.datenabruf.anfragen` requires `melo_id` and
+  `zeitspanne_von`, and refuses a Zeitspanne not yet ended or ended more than
+  12 months ago (GeLi Gas 3.0 Kap. 4.2); the ORDERS 17103 carries its full
+  Prüfschablone, `SG29 DTM+163/164` included.
+- **Breaking:** `mabis-billing` closes the KBKA clearing window on its own
+  deadline; the BKA close leads to `KbkaOffen`, which still takes versions
+  (BK6-24-174 Anlage 3 Kap. 9.7.1).
+- **Breaking:** `mako_fristen::meldung::meldepflicht` is removed for
+  `meldepflichten_for`; `Meldepflicht::due_at` takes the Zuordnungsbeginn.
+- **Breaking:** `GpkeModule` registers no LF or NB PID for a MSB-only role set;
+  `gpke-sperrung` no longer lists 17116.
+- **Breaking:** `edi-energy` `Bgm::pruefidentifikator` is removed — `BGM` DE
+  1004 is a Dokumentennummer on most messages; the Prüfidentifikator is read
+  through `detect_pruefidentifikator` alone.
+- The GNB side of ORDERS 17103 registers `brennwert_zustandszahl_due` from the
+  Anfrage's `DTM+164`; 17104 registers the 1-WT Geschäftsdatenanfrage window
+  and spawns without `LOC+172`.
+- The MaBiS Erstaufschlag is judged on the Berlin receipt day.
+- `check-frist-literals` refuses an integer Werktage count in code;
+  `check-vorlauf-consulted` ignores comments; `validate-profiles` refuses a
+  `RETIRED_PIDS` entry naming the wrong release.
 - **Breaking:** every processd `[[lf.bilanzkreise]]` row names its `sparte`
   (`strom` / `gas`), and every Bilanzkreis lookup — the 55607, the E/G
   Zustimmung, the start-supply default — reads only its own Sparte's rows, so
@@ -73,6 +170,30 @@ History before this file is in `git log`.
 
 ### Fixed
 
+- `check-command-constructors` read a test module kept in its own file
+  (`#[cfg(test)] mod name;`) as shipped code, so a variant only a test
+  constructs passed as wired; such a file is now test code, as an inline
+  `#[cfg(test)]` module is.
+- The GeLi Gas Antworten auf Änderung (44111, 44115, 44119, 44121, 44124,
+  44161, 44176) carried no Antwortcode — it rode a payload key no renderer
+  read; they send `SG4 STS+E01` with their column's Codeliste (`G_0016`,
+  `G_0019`, `G_0022`, `G_0023`, `G_0025`, `G_0026`, `G_0027`, `G_0030`), the
+  column's `STS+7` and `RFF+TN`, and 44176 and the outbound Änderungen send
+  `DTM+92` and `DTM+157`. Fifteen more producers in GeLi Gas, GPKE, WiM and
+  MaBiS wrote keys no renderer read; among them the GPKE Rückmeldung now
+  sends its `A01`/`A02` and the EoG 55014/55015 its `A09` or `E_0615`
+  Ablehnungscode in `STS+E01`.
+- makod: the REMADV (GPKE and WiM) and INSRPT adapters read the
+  Prüfidentifikator from `BGM` DE 1004, so every conformant message carrying it
+  in `RFF+Z13` was refused; the 31011 adapter likewise.
+- makod: the GNB answers a Gas Sperr-/Entsperrauftrag (17115/17117) within
+  1 WT, not 10 — no BK7-24-01-009 Sperrprozess exists; INVOIC 31011 / 31007 /
+  31008 / 31010 are due at their `DTM+265` Zahlungsziel and refused without
+  one; an outbound Beendigung 17006 waits its 8 WT, not 5.
+- makod: ORDRSP 19007 / 19102 / 19114 find their process by `SG1 RFF+ON`, not
+  by a Lokation the ORDRSP does not carry; 19007 resumes `gpke-datenabruf`.
+- marktd: the MSB-Rahmenvertrag `PUT` stores the contract and its CloudEvent
+  in one transaction.
 - Every Gas UTILMD answer left its `STS+E01` Codeliste empty; a WiM
   MSB-Wechsel answer reused the order's Vorgangsnummer as its own; an ORDERS
   17001 Geräteübernahme was always read without its Termin.

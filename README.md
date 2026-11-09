@@ -30,7 +30,7 @@ proposes while code computes every Frist, amount and verdict.
 
 | Layer | What it is |
 |---|---|
-| **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon — 71 workflows over 472 Prüfidentifikatoren |
+| **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon — 73 workflows over 473 Prüfidentifikatoren |
 | **Market data** | `mako-markt` library · `marktd` hub (PostgreSQL, durable CloudEvents fan-out, OIDC/JWT) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer management** | `accountingd` ledger · `portald` portal · `outputd` documents · `vertragd` contracts · `productd` catalogue |
@@ -131,7 +131,7 @@ Each crate's README carries its scope, PIDs and regulatory sources.
 | [`mako-as4`](crates/mako-as4/) | BDEW AS4-Profil over `asx-rs` — sign, encrypt, signed receipts |
 | [`mako-engine`](crates/mako-engine/) | Event-sourced runtime — `Workflow`, `Process`, event store, outbox, deadlines |
 | [`mako-fristen`](crates/mako-fristen/) | BDEW Werktage, the MaKo holiday table, the per-PID Antwortfristen |
-| [`mako-markt`](crates/mako-markt/) | Master data — 99 active `rubo4e::current` types behind one gate, validated `MaloId` / `MeloId` / `MarktpartnerId`, the master-data record types |
+| [`mako-markt`](crates/mako-markt/) | Master data — 100 active `rubo4e::current` types behind one gate, validated `MaloId` / `MeloId` / `MarktpartnerId`, the master-data record types |
 | [`mako-gpke`](crates/mako-gpke/) | GPKE Strom — Lieferantenwechsel, Stammdatenänderung, Sperrung, PARTIN, INVOIC |
 | [`mako-geli-gas`](crates/mako-geli-gas/) | GeLi Gas — Lieferantenwechsel Gas, Stammdatenänderung, Sperrprozesse |
 | [`mako-wim`](crates/mako-wim/) | WiM, Strom and Gas — MSB-Wechsel, Geräteübernahme, Preisanfrage, INSRPT, ESA |
@@ -156,7 +156,7 @@ config, deployment — is [mako docs · Services](https://hupe1980.github.io/mak
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 472 Prüfidentifikatoren, AS4 · REST · iMS |
+| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 73 workflows over 473 Prüfidentifikatoren, AS4 · REST · iMS |
 | [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, durable CloudEvents fan-out |
 | [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Process decision engine — answers the published Entscheidungsbäume, escalates what it cannot decide; the process read model (KPIs, Fristen, the § 7a Abs. 5 EnWG Gleichbehandlung report) and the NB Sperr-/Entsperrauftrag queue |
 | [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 16 MCP tools |

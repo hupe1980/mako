@@ -2,6 +2,7 @@
 //! file in this directory. A crate links its dependency graph once per test
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
+mod adapter_pid_source;
 mod admin_error_shape;
 mod anmeldung_stammdaten_extraction;
 mod as4_security;
@@ -27,11 +28,14 @@ mod e2e_dvgw_gas_transport;
 mod e2e_emob_modellwechsel;
 mod e2e_esa_werteanfrage_reqote;
 mod e2e_esa_wertebestellung;
+mod e2e_gas_anfrage_antworten;
+mod e2e_gas_stammdatenanfrage;
 mod e2e_gnb_antwort_gas;
 mod e2e_gnb_lf_combined_gas;
 mod e2e_gpke_ankuendigung_zuordnung_lf;
 mod e2e_gpke_anmeldung_conformance;
 mod e2e_gpke_antwort_conformance;
+mod e2e_gpke_gda_marktd;
 mod e2e_gpke_geschaeftsdatenanfrage;
 mod e2e_gpke_lf_abmeldung;
 mod e2e_gpke_neuanlage;
@@ -46,6 +50,7 @@ mod e2e_lieferende_gas;
 mod e2e_loopback;
 mod e2e_mabis;
 mod e2e_mabis_dispatch;
+mod e2e_msb_receivers;
 mod e2e_mscons_values_reach_the_erp;
 mod e2e_nb_lf_combined_strom;
 mod e2e_netznutzungsabrechnung;
@@ -63,9 +68,11 @@ mod e2e_wim_steuerungsauftrag;
 mod edifact_dispatch_failure;
 mod engine_modules;
 mod erp_response_dispatch;
+mod geli_gas_datenabruf_frist;
 mod health_probes;
 mod healthy_deadline_interleavings;
 mod inbound_receipt_instant;
+mod ingest_antwortfristen;
 mod malo_sync;
 mod meldepflicht_coverage;
 mod mscons_conformance;

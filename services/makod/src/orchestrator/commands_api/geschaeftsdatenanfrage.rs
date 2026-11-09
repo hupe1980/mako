@@ -9,10 +9,9 @@
 //! (with the Anfragender's MP-ID, because the number is unique only per
 //! sender) for one it received.
 
-use mako_engine::payload::{Stammdaten, StammdatenBlock, StammdatenLokation, StammdatenSegment};
 use mako_gpke::geschaeftsdatenanfrage::{
-    Anfragender, GdaAnfrage, GdaCommand, GpkeGeschaeftsdatenanfrageWorkflow, WORKFLOW_NAME,
-    anfragender_key, netzbetreiber_key,
+    ANTWORT_PIDS, Anfragender, GdaAnfrage, GdaCommand, GdaState,
+    GpkeGeschaeftsdatenanfrageWorkflow, WORKFLOW_NAME, anfragender_key, netzbetreiber_key,
 };
 
 use super::*;
@@ -30,7 +29,8 @@ struct AnfrageBody {
     anfrage_nummer: Option<String>,
 }
 
-/// Body of `gpke.geschaeftsdatenanfrage.beantworten`.
+/// Body of `gpke.geschaeftsdatenanfrage.beantworten`. The Stammdaten are
+/// marktd's, read at this boundary; the body names the Anfrage and the answer.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AntwortBody {
@@ -41,11 +41,11 @@ struct AntwortBody {
     /// `55035` (verbrauchende MaLo, to a LF), `55095` (erzeugende MaLo, to a
     /// LF) or `55060` (to a MSB).
     antwort_pid: u32,
-    /// `SG4 STS+7` Transaktionsgrundergänzung on 55035 (`ZW4` / `ZAP`).
+    /// The day the Stammdaten are read for (`YYYY-MM-DD`); absent = the
+    /// Berlin day the answer is sent, which is the day whose Stammdaten the
+    /// answer states.
     #[serde(default)]
-    transaktionsgrund_ergaenzung: Option<String>,
-    /// The Stammdaten the answer transmits.
-    stammdaten: StammdatenBody,
+    stichtag: Option<String>,
 }
 
 /// Body of `gpke.geschaeftsdatenanfrage.ablehnen`.
@@ -60,87 +60,6 @@ struct AblehnungBody {
     anfragender: String,
     /// The Ablehnungscode of that EBD.
     antwortcode: String,
-}
-
-/// Stammdaten a command carries whole, segment by segment — the answer to a
-/// Geschäftsdatenanfrage.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StammdatenBody {
-    /// `SG5 LOC`, in the MIG's order.
-    lokationen: Vec<LokationBody>,
-    /// `SG6` segments — each `RFF` and the `DTM`s of its group.
-    #[serde(default)]
-    sg6: Vec<SegmentBody>,
-    /// `SG8` blocks.
-    bloecke: Vec<BlockBody>,
-    /// `SG12` segments.
-    #[serde(default)]
-    sg12: Vec<SegmentBody>,
-}
-
-/// One `SG5 LOC`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LokationBody {
-    /// DE 3227.
-    qualifier: String,
-    /// DE 3225.
-    id: String,
-}
-
-/// One `SG8` block.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BlockBody {
-    /// `SEQ` DE 1229.
-    seq: String,
-    /// The segments under it, in order.
-    segmente: Vec<SegmentBody>,
-}
-
-/// One segment.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SegmentBody {
-    /// Segment tag.
-    tag: String,
-    /// Data elements, each a list of components.
-    elemente: Vec<Vec<String>>,
-}
-
-impl From<SegmentBody> for StammdatenSegment {
-    fn from(s: SegmentBody) -> Self {
-        Self {
-            tag: s.tag,
-            elemente: s.elemente,
-        }
-    }
-}
-
-impl From<StammdatenBody> for Stammdaten {
-    fn from(b: StammdatenBody) -> Self {
-        Self {
-            lokationen: b
-                .lokationen
-                .into_iter()
-                .map(|l| StammdatenLokation {
-                    qualifier: l.qualifier,
-                    id: l.id,
-                })
-                .collect(),
-            sg6: b.sg6.into_iter().map(Into::into).collect(),
-            bloecke: b
-                .bloecke
-                .into_iter()
-                .map(|blk| StammdatenBlock {
-                    seq: blk.seq,
-                    segmente: blk.segmente.into_iter().map(Into::into).collect(),
-                })
-                .collect(),
-            sg12: b.sg12.into_iter().map(Into::into).collect(),
-        }
-    }
 }
 
 fn parse_body<T: serde::de::DeserializeOwned>(
@@ -265,7 +184,13 @@ async fn dispatch_anfrage(
     Ok(DispatchOutcome::Spawned { process_id })
 }
 
-/// The NB answers an inbound 17132 with the Stammdaten.
+/// The NB answers an inbound 17132 with the Stammdaten marktd holds.
+///
+/// The Anfrage names the Marktlokation; its UTILMD Stammdaten and its
+/// Lokationsbündel are read from marktd on the Stichtag and set down as the
+/// answer's column lists them (`gda_stammdaten`). marktd unreadable is a 503,
+/// a fact it does not hold a 422 naming it — in both cases nothing is
+/// written, the process stays `Offen` and its 1-WT window keeps running.
 async fn dispatch_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -278,20 +203,58 @@ async fn dispatch_antwort(
     let antwort_pid = Pruefidentifikator::new(body.antwort_pid).map_err(|e| {
         DispatchError::InvalidPayload(format!("\"antwort_pid\" {}: {e}", body.antwort_pid))
     })?;
-    let transaktionsgrund_ergaenzung = body
-        .transaktionsgrund_ergaenzung
-        .map(|e| e.trim().to_owned())
-        .filter(|e| !e.is_empty());
-    let stammdaten = Stammdaten::from(body.stammdaten);
-    dispatch_to_process::<GpkeGeschaeftsdatenanfrageWorkflow, _>(
+    if !ANTWORT_PIDS.contains(&antwort_pid.as_u32()) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "\"antwort_pid\" {antwort_pid} is no UTILMD answer to a Geschäftsdatenanfrage \
+             (one of {ANTWORT_PIDS:?})"
+        )));
+    }
+    let stichtag = match body.stichtag.as_deref() {
+        Some(raw) => super::eog_stammdaten::stichtag(raw)?,
+        None => mako_fristen::heute(),
+    };
+
+    let current =
+        super::current_state::<GpkeGeschaeftsdatenanfrageWorkflow>(state, &key, WORKFLOW_NAME)
+            .await?;
+    let GdaState::Offen(anfrage) = current.offen() else {
+        return Err(DispatchError::InvalidPayload(format!(
+            "the Geschäftsdatenanfrage {} of {} is not open for an answer (state {})",
+            body.anfrage_nummer,
+            body.anfragender_mp_id,
+            current.status_str()
+        )));
+    };
+    let malo_id =
+        extract_malo_id(&serde_json::json!({ "malo_id": anfrage.lokation_id })).map_err(|_| {
+            DispatchError::NotImplemented(format!(
+                "the Anfrage names the Messlokation {}: reading the Lokationsbündel of a \
+                 Messlokation's Marktlokation for the answer is not assembled",
+                anfrage.lokation_id
+            ))
+        })?;
+
+    let sd = super::eog_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
+    let lb = super::gda_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
+    let antwort = super::gda_stammdaten::antwort(antwort_pid.as_u32(), &sd, &lb)?;
+    let cmd = GdaCommand::SendAntwort {
+        antwort_pid,
+        message_ref: MessageRef::new(uuid::Uuid::new_v4().simple().to_string()),
+        transaktionsgrund_ergaenzung: antwort.ergaenzung.map(str::to_owned),
+        stammdaten: antwort.stammdaten,
+    };
+    // The answer is checked against its profile before anything is written —
+    // the check the pre-send gate runs.
+    dispatch_to_process_with_state::<GpkeGeschaeftsdatenanfrageWorkflow, _>(
         state,
         &key,
         WORKFLOW_NAME,
-        move || GdaCommand::SendAntwort {
-            antwort_pid,
-            message_ref: MessageRef::new(uuid::Uuid::new_v4().simple().to_string()),
-            transaktionsgrund_ergaenzung,
-            stammdaten,
+        move |current| {
+            use mako_engine::workflow::Workflow as _;
+            let out = GpkeGeschaeftsdatenanfrageWorkflow::handle(current, cmd.clone())
+                .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            Ok(cmd)
         },
     )
     .await

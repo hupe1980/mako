@@ -141,14 +141,27 @@ impl PendingOutbox {
     /// Chain [`caused_by`] to change it.
     ///
     /// [`caused_by`]: PendingOutbox::caused_by
+    ///
+    /// # Panics
+    ///
+    /// In a debug build, when `payload` carries a key the typed payload of
+    /// `message_type` does not declare ([`crate::payload::undeclared_key`]).
+    /// The renderer refuses such an entry, so the producer is the place to
+    /// learn of it: a key no renderer reads is a segment that never reaches
+    /// the wire, and every workflow test that writes one fails here.
     #[must_use]
     pub fn new(
         message_type: impl Into<Box<str>>,
         recipient: impl Into<Box<str>>,
         payload: serde_json::Value,
     ) -> Self {
+        let message_type = message_type.into();
+        #[cfg(debug_assertions)]
+        if let Some(refusal) = crate::payload::undeclared_key(&message_type, &payload) {
+            panic!("{message_type} outbox payload carries a key no renderer reads: {refusal}");
+        }
         Self {
-            message_type: message_type.into(),
+            message_type,
             recipient: recipient.into(),
             payload,
             deliver_after: None,

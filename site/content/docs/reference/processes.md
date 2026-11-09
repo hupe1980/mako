@@ -60,7 +60,7 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GPKE Sperrung/Entsperrung (NB)** | ⚡ | `mako-gpke` `gpke-sperrung` | ORDERS 17115/17117 → ORDRSP 19116/19117 | ORDRSP 1. WT nach dem ÜT · Ausführung 6 WT · IFTSTA 1 WT nach Abschluss | BK6-24-174 Teil 2 § 3.5 |
 | **GPKE Sperrung/Entsperrung (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDERS 17115/17117 (out) · ORDCHG 39000 (out) · ORDRSP 19116/19117 · 19128/19129 · IFTSTA 21039 | Vorlauf 6 WT (nicht termingebunden) / 12 WT (termingebunden) | BK6-24-174 Teil 2 § 3.5 |
 | **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | zum Zahlungsziel (`SG8 DTM+265`) | BK6-24-174 Teil 2 § 3.3 |
-| **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` | ORDERS 17004/17102/17113 → ORDRSP rejection | nicht quantifiziert | BK6-24-174 Teil 4 |
+| **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` · `gpke-datenabruf-msb` (MSB side) | ORDERS 17004/17102/17113 → ORDRSP rejection 19007/19102/19114 | **1 WT** on 17102 (GPKE Teil 4 Kap. 3.2 Nr. 4) · Ablehnung **2 WT** on 17004, **3 WT** on 17113 (WiM Teil 2 Kap. 2.6.3/2.7.3 Nr. 2) — the values themselves follow „Darstellung der zu übermittelnden Werte" | GPKE Teil 4 · WiM Teil 2 Kap. 2.6/2.7 |
 | **GPKE Geschäftsdatenanfrage** | ⚡ | `mako-gpke` `gpke-geschaeftsdatenanfrage` | ORDERS 17132 → UTILMD 55035/55095/55060 · ORDRSP 19101 | **1 WT** (NB antwortet) | BK6-22-024 Anlage 1d Teil 4 Kap. 3.2 |
 | **GPKE Anfrage Bestellung (55555)** | ⚡ | `mako-gpke` `gpke-anfrage-bestellung` | UTILMD 55555 | nicht quantifiziert | BK6-24-174 Teil 4 |
 | **GPKE Allokationsliste Strom** | ⚡ | `mako-gpke` `gpke-allokationsliste` | ORDERS 17110/17114 · ORDRSP 19110/19115 · MSCONS 13014 | nicht quantifiziert | BK6-24-174 |
@@ -93,16 +93,16 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GeLi Gas Stornierung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung-lf` | UTILMD G 44023/44024 (Lf-only inbound) | — (der GNB antwortet) | GeLi Gas 2.0 Kap. 1.8 |
 | **GeLi Gas Sperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` | ORDERS 17115/17117 · ORDCHG 39000 | **1 WT** (Sparte-neutrale 17115/17117-Zeile) | BK6-24-174 GPKE Teil 2 § 3.5 |
 | **GeLi Gas Sperrung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-nb` | ORDERS 17115–17117 · ORDCHG 39000/39001 · ORDRSP 19118/19119 | **1 WT** (17115/17117/39000) · **3 WT** (17116) | BK6-24-174 GPKE Teil 2 § 3.5 |
-| **GeLi Gas AWH-Abrechnung** | 🔥 | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` | INVOIC 31011 | — | BK7-24-01-009 |
+| **GeLi Gas AWH-Abrechnung** | 🔥 | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` | INVOIC 31011 | das Zahlungsziel der Rechnung (`SG8 DTM+265`, Muss); ohne es wird die Rechnung abgewiesen | AWH Sperrprozesse Gas · INVOIC AHB 1.0b Kap. 3.1.5 |
 | **GeLi Gas Messdaten (MSCONS)** | 🔥 | `mako-geli-gas` `geli-gas-mscons` | MSCONS 13002/13007/13008/13009 | — | BK7-24-01-009 |
-| **GeLi Gas Datenabruf** | 🔥 | `mako-geli-gas` `geli-gas-datenabruf` | ORDERS 17103/17104 → ORDRSP 19103/19104 | **10 WT** — hier ist die Zehn echt (AWH § 5.12), nicht die Vorlauffrist | AWH GeLi Gas § 5.12 |
+| **GeLi Gas Datenabruf** | 🔥 | `mako-geli-gas` `geli-gas-datenabruf` | ORDERS 17103/17104 → ORDRSP 19103/19104 | 17103: Ablauf des **10. WT** nach Eingang, aber **nicht vor dem 10. WT des Folgemonats** des Zeitspannen-Endes (`SG29 DTM+164`) — beide Seiten registrieren den späteren Termin · 17104: **1 WT** (Geschäftsdatenanfrage) | BK7-24-01-009 GeLi Gas 3.0 Kap. 4.2 · GPKE Teil 4 Kap. 3.2 Nr. 2 |
 | **GeLi Gas Stammdatenänderung** | 🔥 | `mako-geli-gas` `geli-gas-stammdatenaenderung` | UTILMD G 44109–44182 | Ablauf des **10. WT** — hier echt: Gas gibt eine Zustimmung/Ablehnung, Strom nur Qualitätsrückmeldung | AWH GeLi Gas § 4.3.2 |
 | **GeLi Gas Zuordnungs-Meldungen** | 🔥 | `mako-geli-gas` `geli-gas-zuordnungsmeldung` | UTILMD G 44036/44037/44038 | — Meldepflicht, **keine Antwortnachricht** | AWH GeLi Gas |
 | **PARTIN Gas Kommunikationsdaten** | 🔥 | `mako-geli-gas` `geli-gas-partin` | PARTIN 37008–37014 | — | PARTIN AHB 1.0f |
 | **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim` `wim-device-change` | UTILMD G 44039–44044/44051–44053/44168/44169/44183 | 3 / 5 / 7 / 1 WT | AWH WiM Gas 2.0 |
 | **WiM INSRPT** | 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23001–23009 (23005/23009 beide Sparten; Gas an den NB) | 3 WT Antwort · 7 WT Ergebnis | AWH WiM Gas 2.0 Kap. 4.3 |
 | **WiM Gas Abrechnung** | 🔥 | `mako-wim` `wim-invoic` | INVOIC 31003/31004 | Zahlungsziel (DTM+265) | AWH WiM Gas 2.0 Kap. 4.7 |
-| **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | — | BK7-24-01-008 |
+| **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | das Zahlungsziel der Rechnung (`SG8 DTM+265`, Muss); ohne es wird die Rechnung abgewiesen | BK7-24-01-008 · INVOIC AHB 1.0b Kap. 3.1.3/3.1.4 |
 | **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | MSCONS 13013 (ORDERS 17110 / ORDRSP 19110 routed via `mako-gpke` `gpke-allokationsliste`) | — | BK7-24-01-008 |
 | **GaBi Gas ALOCAT** | 🔥 | `mako-gabi-gas` `gabi-gas-allocation` | PIDs 70001–70023 | — | DVGW ALOCAT 5.11a |
 | **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | PIDs 70030–70039 | — | DVGW NOMINT 4.6 / NOMRES 4.7 |
@@ -314,7 +314,7 @@ PIDs 17115 and 17117 are shared with the Gas Sperrung — see
 |---|---|---|---|---|---|
 | Sperrauftrag LF-initiiert (Strom) | LF → NB | ORDERS **17115** | ORDRSP 19116 | ORDRSP 19117 | `mako-gpke` ✅ |
 | Entsperrauftrag LF-initiiert (Strom) | LF → NB | ORDERS **17117** | ORDRSP 19116 | ORDRSP 19117 | `mako-gpke` ✅ |
-| Anfrage Sperrung (NB → MSB) | NB → MSB | ORDERS **17116** | ORDRSP 19118 | ORDRSP 19119 | `mako-gpke` ✅ |
+| Anfrage Sperrung (NB → MSB) | NB → MSB | ORDERS **17116** | ORDRSP 19118 | ORDRSP 19119 | `mako-gpke` ✅ — the MSB receives it in `gpke-sperrung-msb` (3 WT, a lapse counts as Zustimmung); its ORDRSP answer is not built |
 | Auftragsstatus Sperren | NB → LF/MSB/ÜNB | — | IFTSTA **21039** | — | `mako-gpke` ✅ |
 | Info Entsperrauftrag | NB → MSB | — | IFTSTA **21040** | — | — |
 | Stornierung Sperrauftrag | LF → NB | ORDCHG **39000** | ORDRSP 19128 | ORDRSP 19129 | `mako-gpke` ✅ |
@@ -627,9 +627,10 @@ the requested date is less than 20 Werktage out.
 > `BGM` response code. The ESA Ab-/Bestellung answers (ORDRSP 19011–19014)
 > belong to the ESA Wertebestellung below, **not** here.
 >
-> **Direction:** mako implements both sides. As requester it sends the ORDERS and
-> ingests the ORDRSP; as MSB it answers 35005 and 17011 out of the four trees
-> above and reports the Durchführung with `E_0286`.
+> **Direction:** as requester mako sends the ORDERS and ingests the ORDRSP; as
+> MSB it answers the REQOTE 35005 and receives the 17011 (`ReceiveAuftrag`,
+> under the sender and the Dokumentennummer, with its own 10-WT window). The
+> MSB's ORDRSP 19005/19006 out of the four trees above is not built yet.
 
 ### ESA Wertebestellung (WiM Strom Teil 2, Kap. 4)
 
@@ -1146,9 +1147,15 @@ actual data (MSCONS or similar); ORDRSP is sent only for rejections.
 | Process | Initiator → Responder | ORDERS PID | Ablehnung PID | Crate |
 |---|---|---|---|---|
 | Anfrage Abrechnungsbrennwert / Zustandszahl | LF → GNB/MSB | ORDERS **17103** | ORDRSP 19103 | `mako-geli-gas` ✅ |
-| Anfrage MSB Gas an NB Strom (Messwerte) | MSB Gas → NB Strom | ORDERS **17104** | ORDRSP 19104 | `mako-geli-gas` ✅ |
+| Anfrage MSB Gas an NB Strom (Messwerte) ¹ | MSB Gas → NB Strom | ORDERS **17104** | ORDRSP 19104 | `mako-geli-gas` ✅ |
 | Anfrage Stammdaten MaLo Gas | LF → GNB | ORDERS **17101** | ORDRSP 19101 | — |
 | Anfrage Stammdaten MeLo Gas | MSB → GNB | ORDERS **17126** | — | — |
+
+> ¹ A 17104 may name the Messlokation by its address alone — `LOC+172` is
+> conditional (`[64]`) beside the Messlokationsadresse `NAD+Z03` (ORDERS AHB
+> 1.1b Kap. 4.1.4) — so each Anfrage is its own process, keyed by the sending
+> MSB and the Dokumentennummer (`BGM` DE 1004), and indexed under the
+> Messlokation when it names one.
 
 ### MSCONS Gas — Messwert- und Energiemengenübermittlung
 
@@ -1588,7 +1595,7 @@ name one Sparte loads no crate of the other.
 |---|---|---|---|
 | 17115 (Sperrauftrag) | Inbound NB receives from LF (`mako-gpke` `gpke-sperrung`) | **Outbound** LF→GNB (`geli-gas-sperrung-lf`) · **Inbound** GNB receives from LF (`geli-gas-sperrung-nb`) | loaded crate + `DeploymentRoles` |
 | 17117 (Entsperrauftrag) | Inbound NB receives from LF (`mako-gpke` `gpke-sperrung`) | **Outbound** LF→GNB (`geli-gas-sperrung-lf`) · **Inbound** GNB receives from LF (`geli-gas-sperrung-nb`) | loaded crate + `DeploymentRoles` |
-| 17116 (Anfrage Sperrung) | NB→MSB outbox (`mako-gpke` `gpke-sperrung`) · **Inbound** MSB→NB response via 19118/19119 | GNB→gMSB outbox (`geli-gas-sperrung-nb`) · **Inbound** gMSB→GNB response via 19118/19119 | loaded crate |
+| 17116 (Anfrage Sperrung) | NB→MSB outbox (`mako-gpke` `gpke-sperrung`) · **Inbound** at the MSB (`gpke-sperrung-msb`, MSB role only) · MSB→NB response via 19118/19119 | GNB→gMSB outbox (`geli-gas-sperrung-nb`) · **Inbound** gMSB→GNB response via 19118/19119 | loaded crate |
 | 19118 (Best. Anfrage Sperr.) | Inbound NB receives from MSB (`mako-gpke` `gpke-sperrung`) | Inbound GNB receives from gMSB (`geli-gas-sperrung-nb`) | loaded crate + `DeploymentRoles` |
 | 19119 (Abl. Anfrage Sperr.) | Inbound NB receives from MSB (`mako-gpke` `gpke-sperrung`) | Inbound GNB receives from gMSB (`geli-gas-sperrung-nb`) | loaded crate + `DeploymentRoles` |
 | 19116 (Bestätigung Sperrung) | Inbound LF receives from NB (`mako-gpke`) | Inbound LF receives from GNB (`mako-geli-gas`) | `DeploymentRoles` / `Marktrolle` |

@@ -33,6 +33,21 @@
 //! strings quote the Festlegung verbatim — the one place a Frist is written
 //! beside its source by design. [`EXEMPT`] lists every other admitted literal,
 //! each with its reason.
+//!
+//! ## The second surface: a Werktage count in code
+//!
+//! A window computed from an integer literal — `deadline_at_werktage(now, 10,
+//! …)` under a comment naming a Festlegung — is the same defect in code: the
+//! comment is not scanned, the number is free to be wrong, and nothing ties it
+//! to the row that publishes it. So the production code of the same trees,
+//! with comments and string literals blanked, is refused where a
+//! Werktage-counting call of `mako_fristen` — [`COUNTING_CALLS`] — takes an
+//! integer literal as its count, or a `FristShape::EndOfWerktag` /
+//! `WerktagAt { werktage: … }` is built from one. The count comes from a row of
+//! `mako_fristen::antwort` / `vorlauf` or a named constant of a domain crate's
+//! own Frist table. [`COUNT_EXEMPT`] lists the admitted calls — arithmetic on a
+//! position rather than a Frist, or a defect with its open task — and may only
+//! shrink. Files named `*tests.rs` are test modules and are not scanned.
 
 use std::path::Path;
 
@@ -116,6 +131,45 @@ const SPERR_AUSFUEHRUNG: &str = "the execution window is the Hinweis column of G
      § 3.5.1.2 Nr. 1 and has no catalogue entry; `mako_fristen::vorlauf::SPERRAUFTRAG_VORLAUF_WT` \
      is the 6 WT before the frühestmöglicher Sperrtermin, a different window";
 
+/// The `mako_fristen` calls whose second argument is a number of Werktage.
+const COUNTING_CALLS: &[&str] = &[
+    "deadline_at_werktage",
+    "add_werktage",
+    "sub_werktage",
+    "end_of_werktag_after",
+    "nth_werktag_at",
+];
+
+/// Admitted Werktage-count literals in code, by path and a fragment of the
+/// call. The list may only shrink: an entry whose call is gone fails as stale.
+const COUNT_EXEMPT: &[Exempt] = &[
+    Exempt {
+        path: "crates/mako-pruefung/src/lf/abmeldung.rs",
+        fragment: "add_werktage(erster_wt, 4,",
+        reason: "a position, not a Frist: the 5. Werktag of the month is the first Werktag \
+                 plus four. Open: the 5 belongs in a named, sourced constant",
+    },
+    Exempt {
+        path: "crates/mako-wim/src/geraetewechsel.rs",
+        fragment: "deadline_at_werktage(received_at, 1,",
+        reason: "the NB's answer to a Gesamtvorgang report (WiM Teil 1 Kap. 2.3.2 Nr. 8); the \
+                 21009 / 21010 rows of `mako_fristen::antwort` publish it — open: read it from \
+                 there",
+    },
+    Exempt {
+        path: "services/processd/src/nb_module.rs",
+        fragment: "add_werktage(uet, 1,",
+        reason: "the Zuordnungsende floor of E_0623 Fall b, one Werktag after the ÜT — open: \
+                 read it from a catalogued row",
+    },
+    Exempt {
+        path: "services/processd/src/server.rs",
+        fragment: "add_werktage(today_berlin, 1,",
+        reason: "the earliest Lieferbeginn the NB's 1. WT answer leaves — open: derive it from \
+                 the 55001 row of `mako_fristen::antwort`",
+    },
+];
+
 /// One finding: path, line, literal excerpt.
 type Finding = (String, usize, String);
 
@@ -137,6 +191,7 @@ pub fn run(workspace_root: &Path) -> bool {
     }
     let matcher = Matcher::new();
     let mut findings = Vec::new();
+    let mut counts_seen: Vec<(String, &'static str)> = Vec::new();
     for path in &files {
         let rel = path
             .strip_prefix(workspace_root)
@@ -150,6 +205,22 @@ pub fn run(workspace_root: &Path) -> bool {
             continue;
         };
         findings.extend(matcher.findings(&rel, &src));
+        if !is_test_module(&rel) {
+            findings.extend(count_findings(&rel, &src, &mut counts_seen));
+        }
+    }
+    for e in COUNT_EXEMPT {
+        if !counts_seen
+            .iter()
+            .any(|(p, f)| *p == e.path && *f == e.fragment)
+        {
+            eprintln!(
+                "check-frist-literals: COUNT_EXEMPT admits `{}` in {}, which no longer makes \
+                 that call — remove the entry",
+                e.fragment, e.path
+            );
+            return false;
+        }
     }
     let procedures = procedure_findings(workspace_root, &matcher);
     for (file, literal, _) in PROCEDURE_EXPLANATIONS {
@@ -173,15 +244,16 @@ pub fn run(workspace_root: &Path) -> bool {
     if findings.is_empty() {
         println!(
             "check-frist-literals: no string literal in {} file(s) states a Frist beside its \
-             source, and the {procedure_count} agent manifest(s) state none beyond the admitted \
-             explanations",
-            files.len()
+             source, no Werktage count in their code is a literal beyond the {} admitted, and \
+             the {procedure_count} agent manifest(s) state none beyond the admitted explanations",
+            files.len(),
+            COUNT_EXEMPT.len()
         );
         return true;
     }
     eprintln!(
-        "check-frist-literals: {} literal(s) state a Frist beside a source — render it from \
-         `mako_fristen` instead:",
+        "check-frist-literals: {} literal(s) state a Frist beside a source, or count Werktage \
+         from a number — render or read it from `mako_fristen` instead:",
         findings.len()
     );
     for (path, line, excerpt) in &findings {
@@ -370,6 +442,177 @@ impl Matcher {
             })
             .collect()
     }
+}
+
+/// Whether `rel` is a test module included from its parent under
+/// `#[cfg(test)]`, which the file itself does not repeat.
+fn is_test_module(rel: &str) -> bool {
+    rel.rsplit('/')
+        .next()
+        .is_some_and(|f| f.ends_with("tests.rs") || f.ends_with("_test.rs"))
+}
+
+/// Every Werktage count in `src`'s production code that is an integer literal,
+/// unless [`COUNT_EXEMPT`] admits the call. Admitted calls are recorded in
+/// `seen`, so an entry that matches nothing can be reported stale.
+fn count_findings(rel: &str, src: &str, seen: &mut Vec<(String, &'static str)>) -> Vec<Finding> {
+    let production = src.find("#[cfg(test)]").map_or(src, |i| &src[..i]);
+    let code = code_only(production);
+    let mut out = Vec::new();
+    for (at, text) in werktage_counts(&code) {
+        let line = code[..at].matches('\n').count() + 1;
+        let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if let Some(e) = COUNT_EXEMPT
+            .iter()
+            .find(|e| e.path == rel && flat.contains(e.fragment))
+        {
+            seen.push((rel.to_owned(), e.fragment));
+            continue;
+        }
+        out.push((rel.to_owned(), line, flat.chars().take(140).collect()));
+    }
+    out
+}
+
+/// Every Werktage-counting construct in `code` whose count is an integer
+/// literal, as `(byte offset, the construct's text)`.
+fn werktage_counts(code: &str) -> Vec<(usize, String)> {
+    let literal = Regex::new(r"^\d[\d_]*(u8|u16|u32|u64|usize|i32|i64)?$").expect("literal");
+    let calls = Regex::new(&format!(r"\b({})\s*\(", COUNTING_CALLS.join("|"))).expect("calls");
+    let shapes =
+        Regex::new(r"\bEndOfWerktag\s*\(\s*\d[\d_]*\s*\)|\bWerktagAt\s*\{[^}]*\bwerktage\s*:\s*\d")
+            .expect("shapes");
+    let mut out = Vec::new();
+    for m in calls.find_iter(code) {
+        let open = m.end() - 1;
+        let Some(args) = call_arguments(code, open) else {
+            continue;
+        };
+        if args.get(1).is_some_and(|a| literal.is_match(a.trim())) {
+            let end = open + 1 + args.iter().map(|a| a.len() + 1).sum::<usize>();
+            out.push((m.start(), code[m.start()..end.min(code.len())].to_owned()));
+        }
+    }
+    for m in shapes.find_iter(code) {
+        out.push((m.start(), m.as_str().to_owned()));
+    }
+    out.sort_by_key(|(at, _)| *at);
+    out
+}
+
+/// The top-level arguments of the call whose `(` is at `open`.
+fn call_arguments(code: &str, open: usize) -> Option<Vec<&str>> {
+    let b = code.as_bytes();
+    let mut depth = 0usize;
+    let mut start = open + 1;
+    let mut args = Vec::new();
+    for (i, &c) in b.iter().enumerate().skip(open) {
+        match c {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    args.push(&code[start..i]);
+                    return Some(args);
+                }
+            }
+            b',' if depth == 1 => {
+                args.push(&code[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `src` with every comment and the content of every string and char literal
+/// replaced by spaces, newlines kept, so a pattern over it sees code only and
+/// line numbers still hold.
+fn code_only(src: &str) -> String {
+    let b = src.as_bytes();
+    let mut out = b.to_vec();
+    let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
+        for c in &mut out[from..to.min(b.len())] {
+            if *c != b'\n' {
+                *c = b' ';
+            }
+        }
+    };
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                let start = i;
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                blank(&mut out, start, i);
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let start = i;
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+                blank(&mut out, start, i);
+            }
+            b'\'' => {
+                if b.get(i + 1) == Some(&b'\\') {
+                    let start = i;
+                    i += 2;
+                    while i < b.len() && b[i] != b'\'' {
+                        i += 1;
+                    }
+                    i += 1;
+                    blank(&mut out, start, i);
+                } else if b.get(i + 2) == Some(&b'\'') {
+                    blank(&mut out, i, i + 3);
+                    i += 3;
+                } else {
+                    let rest = &src[i + 1..];
+                    let mut chars = rest.char_indices();
+                    match (chars.next(), chars.next()) {
+                        (Some((_, c)), Some((j, '\''))) if c != '\'' => {
+                            blank(&mut out, i, i + 2 + j);
+                            i += 1 + j + 1;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            b'r' if is_raw_start(b, i) => {
+                let start = i;
+                let mut j = i + 1;
+                let mut hashes = 0;
+                while b.get(j) == Some(&b'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                j += 1;
+                let closing: Vec<u8> = std::iter::once(b'"')
+                    .chain(std::iter::repeat_n(b'#', hashes))
+                    .collect();
+                while j < b.len() && !b[j..].starts_with(&closing) {
+                    j += 1;
+                }
+                i = j + closing.len();
+                blank(&mut out, start, i);
+            }
+            b'"' => {
+                let start = i;
+                let mut j = i + 1;
+                while j < b.len() && b[j] != b'"' {
+                    j += if b[j] == b'\\' { 2 } else { 1 };
+                }
+                i = j + 1;
+                blank(&mut out, start, i);
+            }
+            _ => i += 1,
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// Every string literal in `src` as `(1-based line of its start, text)`.
@@ -593,6 +836,67 @@ mod tests {
     #[test]
     fn an_exemption_names_its_reason() {
         for e in EXEMPT {
+            assert!(!e.reason.is_empty() && !e.fragment.is_empty() && !e.path.is_empty());
+        }
+    }
+
+    fn counted(src: &str) -> usize {
+        let mut seen = Vec::new();
+        count_findings("services/makod/src/x.rs", src, &mut seen).len()
+    }
+
+    /// The literal that hid behind a comment: a GNB Sperrauftrag window of ten
+    /// Werktage „per BK7-24-01-009 §5", a number no Festlegung publishes.
+    #[test]
+    fn a_werktage_count_literal_beside_a_comment_is_refused() {
+        let src = "fn f() {\n    // Antwortfrist: 10 Werktage (BK7-24-01-009 §5).\n    let due_at =\n        \
+                   fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);\n}\n";
+        assert_eq!(counted(src), 1);
+        assert_eq!(
+            counted("fn f() { let d = mako_fristen::add_werktage(from, 3_u32, cal); }"),
+            1
+        );
+        assert_eq!(
+            counted("const S: FristShape = FristShape::EndOfWerktag(2);"),
+            1
+        );
+        assert_eq!(
+            counted("let s = FristShape::WerktagAt { werktage: 1, at: at(11) };"),
+            1
+        );
+    }
+
+    /// A count read from a catalogued row or a named constant passes, and so
+    /// does the same call inside a comment, a string or test code.
+    #[test]
+    fn a_catalogued_werktage_count_passes() {
+        assert_eq!(
+            counted(
+                "fn f() { deadline_at_werktage(received_at, antwort::ESA_ANGEBOT_WERKTAGE, cal); \
+                 add_werktage(f(x, 1), n, cal); }"
+            ),
+            0
+        );
+        assert_eq!(
+            counted("/// `deadline_at_werktage(sent_at, 10, cal)`\nfn f() {}"),
+            0
+        );
+        assert_eq!(
+            counted("fn f() { let s = \"add_werktage(d, 10, cal)\"; }"),
+            0
+        );
+        assert_eq!(
+            counted("fn f() {}\n#[cfg(test)]\nmod t { fn g() { add_werktage(d, 10, c); } }"),
+            0
+        );
+        assert!(is_test_module(
+            "services/makod/src/orchestrator/commands_api/geli_frist_tests.rs"
+        ));
+    }
+
+    #[test]
+    fn a_count_exemption_names_its_reason() {
+        for e in COUNT_EXEMPT {
             assert!(!e.reason.is_empty() && !e.fragment.is_empty() && !e.path.is_empty());
         }
     }

@@ -48,6 +48,14 @@
 //! where an old fixture that no longer folds is the failure, and it is the
 //! honest place for it.
 //!
+//! ## The outbound payloads are held the other way
+//!
+//! The typed outbox payloads ([`PAYLOAD_FILES`]) are read once, by the
+//! renderer, and a key the struct does not declare is a segment that never
+//! reaches the wire. Every `Deserialize` type there must carry
+//! `deny_unknown_fields`, and none may be named inside an `…Event` or `…State`
+//! enum — which keeps the two rules from colliding.
+//!
 //! ## Why it refuses an empty tree
 //!
 //! A scanner that silently stops matching certifies nothing. [`MIN_CRATES`] is
@@ -76,12 +84,43 @@ const NOT_WORKFLOW_CRATES: &[&str] = &[
     "mako-engine",
 ];
 
-/// Typed outbound payloads, scanned although their crate holds no workflow.
+/// Typed outbound payloads — held to the **opposite** rule.
 ///
-/// An outbox row is written by one build and drained by the next, so these are
-/// tolerant readers by the same argument as an event: a strict struct turns a
-/// removed field into a dead-lettered message.
+/// An outbox payload is not a replayed record: the renderer reads it once, and
+/// a producer that spells a key the struct does not declare has written a
+/// segment that never reaches the wire. serde drops such a key in silence —
+/// the GeLi Gas Antwort auf Änderung carried its Antwortcode under `pruefung`
+/// and no `SG4 STS+E01` went out. So every `Deserialize` type in these files
+/// must carry `deny_unknown_fields`, and because a strict type inside an event
+/// would make that event unfoldable, none of them may be named inside an
+/// `…Event` or `…State` enum of a workflow crate.
 const PAYLOAD_FILES: &[&str] = &["crates/mako-engine/src/payload.rs"];
+
+/// Every `Deserialize` type in `src` as `(line, name, strict)`: whether one of
+/// the attributes above its `struct`/`enum` line refuses unknown keys.
+fn payload_types(src: &str) -> Vec<(usize, String, bool)> {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if !(t.starts_with("#[derive(") && t.contains("Deserialize")) {
+            continue;
+        }
+        let mut strict = false;
+        for l in lines.iter().skip(n + 1).take(12) {
+            let l = l.trim_start();
+            if l.starts_with("#[") || l.starts_with("///") {
+                strict |= l.contains(FORBIDDEN);
+                continue;
+            }
+            if let Some(name) = attached_type(&lines[n..], 0) {
+                out.push((n + 1, name, strict));
+            }
+            break;
+        }
+    }
+    out
+}
 
 /// Request-body types that live in a workflow crate because the calculation
 /// that reads them lives there: `(file, type, reason)`. Each may be strict for
@@ -160,6 +199,57 @@ fn event_and_state_enums(src: &str) -> Vec<String> {
             }
         }
     }
+    out
+}
+
+/// Every workflow-crate file whose `…Event`/`…State` enums name the type `name`.
+fn enums_naming(workspace_root: &Path, name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(workspace_root.join("crates")) else {
+        return out;
+    };
+    let mut stack: Vec<std::path::PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|d| {
+            d.file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|n| n.starts_with(CRATE_PREFIX) && !NOT_WORKFLOW_CRATES.contains(&n))
+        })
+        .map(|d| d.join("src"))
+        .collect();
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.filter_map(Result::ok) {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().and_then(|s| s.to_str()) == Some("rs") {
+                let Ok(text) = std::fs::read_to_string(&p) else {
+                    continue;
+                };
+                let body = strip_test_modules(&text);
+                // Code only: a doc comment saying „Stammdaten" names no type.
+                let names_it = event_and_state_enums(&body).iter().any(|e| {
+                    e.lines()
+                        .map(|l| l.split("//").next().unwrap_or(""))
+                        .flat_map(|l| l.split(|c: char| !c.is_alphanumeric() && c != '_'))
+                        .any(|w| w == name)
+                });
+                if names_it {
+                    out.push(
+                        p.strip_prefix(workspace_root)
+                            .unwrap_or(&p)
+                            .display()
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    out.sort();
     out
 }
 
@@ -281,6 +371,7 @@ pub fn run(workspace_root: &Path) -> bool {
         }
     }
 
+    let mut strict_payloads: Vec<String> = Vec::new();
     for rel in PAYLOAD_FILES {
         let p = workspace_root.join(rel);
         let Ok(text) = std::fs::read_to_string(&p) else {
@@ -288,10 +379,32 @@ pub fn run(workspace_root: &Path) -> bool {
             continue;
         };
         scanned_files += 1;
-        for (n, line) in strip_test_modules(&text).lines().enumerate() {
-            if line.contains(FORBIDDEN) {
-                findings.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+        let types = payload_types(&strip_test_modules(&text));
+        if types.is_empty() {
+            findings.push(format!(
+                "{rel}: no `Deserialize` type found — the scan is broken"
+            ));
+        }
+        for (n, name, strict) in types {
+            if strict {
+                strict_payloads.push(name);
+            } else {
+                findings.push(format!(
+                    "{rel}:{n}: `{name}` is an outbound payload that admits a key it does not \
+                     declare — add `#[serde(deny_unknown_fields)]`, or a producer's misspelt \
+                     key drops its segment off the wire in silence"
+                ));
             }
+        }
+    }
+    // A strict outbound payload inside an event or state enum makes that event
+    // unfoldable the day a field is removed.
+    for name in &strict_payloads {
+        for hit in enums_naming(workspace_root, name) {
+            findings.push(format!(
+                "{hit}: names the outbound payload `{name}`, which refuses unknown keys — an \
+                 event or state that carries it no longer folds once a field is removed"
+            ));
         }
     }
 
@@ -345,13 +458,13 @@ pub fn run(workspace_root: &Path) -> bool {
     if findings.is_empty() {
         println!(
             "check-event-payloads: {scanned_files} file(s) across {scanned_crates} workflow \
-             crate(s) — no event payload denies unknown fields"
+             crate(s) — no event payload denies unknown fields, every outbound payload does"
         );
         return true;
     }
 
     println!(
-        "check-event-payloads: FAIL — {} event payload(s) deny unknown fields:\n",
+        "check-event-payloads: FAIL — {} finding(s):\n",
         findings.len()
     );
     for f in &findings {
@@ -363,7 +476,8 @@ pub fn run(workspace_root: &Path) -> bool {
          carries the event — a § 147 Abs. 1 AO record that no longer folds.\n\
          The attribute belongs on a request body where serde buffers (a flattened field, an \
          untagged or internally tagged enum), and `check-request-bodies` requires it there.\n\
-         Remove it here."
+         An outbound payload is the opposite: read once by its renderer, it must refuse a key \
+         it does not declare, and so must stay out of every event and state."
     );
     false
 }
@@ -421,26 +535,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A strict outbound payload is refused although its crate holds no
-    /// workflow: an outbox row outlives the build that wrote it.
+    /// The outbound payloads are held to the opposite rule: one that admits an
+    /// undeclared key is refused, and so is a strict one inside an event.
     #[test]
-    fn catches_a_strict_outbound_payload() {
-        let dir = std::env::temp_dir().join("mako-check-event-payloads-outbound");
-        let _ = std::fs::remove_dir_all(&dir);
-        for c in [
-            "mako-a", "mako-b", "mako-c", "mako-d", "mako-e", "mako-f", "mako-g",
-        ] {
-            std::fs::create_dir_all(dir.join("crates").join(c).join("src")).unwrap();
-            std::fs::write(dir.join("crates").join(c).join("src").join("lib.rs"), "").unwrap();
-        }
-        std::fs::create_dir_all(dir.join("crates/mako-engine/src")).unwrap();
-        std::fs::write(
-            dir.join("crates/mako-engine/src/payload.rs"),
-            "#[serde(deny_unknown_fields)]\npub struct AperakPayload {}\n",
-        )
-        .unwrap();
-        assert!(!run(&dir), "a strict outbound payload must be refused");
-        let _ = std::fs::remove_dir_all(&dir);
+    fn an_outbound_payload_must_refuse_unknown_keys_and_stay_out_of_events() {
+        let tree = |payload: &str, event: &str| {
+            let dir = std::env::temp_dir().join(format!(
+                "mako-check-event-payloads-outbound-{}",
+                payload.len() + event.len()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            for c in [
+                "mako-a", "mako-b", "mako-c", "mako-d", "mako-e", "mako-f", "mako-g",
+            ] {
+                std::fs::create_dir_all(dir.join("crates").join(c).join("src")).unwrap();
+                std::fs::write(dir.join("crates").join(c).join("src").join("lib.rs"), event)
+                    .unwrap();
+            }
+            std::fs::create_dir_all(dir.join("crates/mako-engine/src")).unwrap();
+            std::fs::write(dir.join("crates/mako-engine/src/payload.rs"), payload).unwrap();
+            let ok = run(&dir);
+            let _ = std::fs::remove_dir_all(&dir);
+            ok
+        };
+        let strict =
+            "#[derive(Deserialize)]\n#[serde(deny_unknown_fields)]\npub struct UtilmdPayload {}\n";
+        let tolerant = "#[derive(Deserialize)]\npub struct UtilmdPayload {}\n";
+        assert!(
+            tree(strict, ""),
+            "a strict payload outside every event passes"
+        );
+        assert!(
+            !tree(tolerant, ""),
+            "a payload that drops an unknown key is refused"
+        );
+        assert!(
+            !tree(
+                strict,
+                "pub enum FooEvent {\n    A { p: UtilmdPayload },\n}\n"
+            ),
+            "a strict payload inside an event is refused"
+        );
+        assert!(
+            tree(
+                strict,
+                "pub enum FooEvent {\n    /// the UtilmdPayload it sent\n    A,\n}\n"
+            ),
+            "a doc comment names no type"
+        );
     }
 
     /// A tolerant tree passes, and an excluded crate is not scanned.
@@ -461,7 +603,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("crates/mako-engine/src")).unwrap();
         std::fs::write(
             dir.join("crates/mako-engine/src/payload.rs"),
-            "pub struct P {}\n",
+            "#[derive(Deserialize)]\n#[serde(deny_unknown_fields)]\npub struct P {}\n",
         )
         .unwrap();
         // An excluded crate may hold the attribute — it has HTTP bodies.

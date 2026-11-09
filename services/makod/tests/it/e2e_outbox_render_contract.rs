@@ -73,8 +73,6 @@ fn gnb_bestaetigung_renders_to_parseable_utilmd() {
         LFN,
         serde_json::json!({
             "pid":           44002,
-            "anfrage_pid":   44001,
-            "accepted":      true,
             "malo":          MALO,
             "sender":        GNB,
             "receiver":      LFN,
@@ -101,9 +99,7 @@ fn gnb_ablehnung_renders_to_parseable_utilmd() {
         LFN,
         serde_json::json!({
             "pid":           44003,
-            "anfrage_pid":   44001,
-            "accepted":      false,
-            "reason":        "MaLo nicht im Netzgebiet",
+            "bemerkung":     "MaLo nicht im Netzgebiet",
             "malo":          MALO,
             "sender":        GNB,
             "receiver":      LFN,
@@ -127,8 +123,6 @@ fn the_lfn_reads_a_gnb_answer_as_what_it_says() {
             LFN,
             serde_json::json!({
                 "pid":           pid,
-                "anfrage_pid":   44001,
-                "accepted":      accepted,
                 "malo":          MALO,
                 "sender":        GNB,
                 "receiver":      LFN,
@@ -158,7 +152,6 @@ fn gnb_initiated_anfrage_renders_to_parseable_utilmd() {
         LFN,
         serde_json::json!({
             "pid":           44007,
-            "anfrage_pid":   44007,
             "malo":          MALO,
             "sender":        GNB,
             "receiver":      LFN,

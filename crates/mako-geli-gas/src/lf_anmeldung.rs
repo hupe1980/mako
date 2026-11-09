@@ -21,12 +21,22 @@
 //! Counterparty answer deadline: the published window per PID from
 //! `mako_fristen::antwort` — 4 Werktage for 44001, 3 for 44004 and 44016.
 //!
-//! ## Key Gas-specific requirement (R3)
+//! ## Identification
 //!
-//! **Both `malo_id` (`SG5 LOC+Z16`) and `zaehlpunkt` are mandatory** in
-//! UTILMD G 44001 per AHB rules `AHB-44001-IDE-M` and `AHB-44001-RFF-M`.
-//! The LFN must supply both fields from the ERP command; there is no
-//! NB-side resolution of a missing Gas-MaLo-ID.
+//! A Gas Vorgang names its Marktlokation in `SG5 LOC+172` Meldepunkt, „genau
+//! einmal je SG4 IDE" (Bedingung `[2061]`), and the 44001 identifies it by its
+//! ID under `IMD++Z36+Z12` (UTILMD AHB Gas 1.2 Kap. 5.6, S. 44, 46). There is no
+//! second Lokation beside it: the LFN supplies the Gas-MaLo-ID, and there is
+//! no NB-side resolution of a missing one.
+//!
+//! ## What the 44001 carries beside it
+//!
+//! The Anmeldung NN states the Lieferant's contract facts — Abrechnungsintervall,
+//! Gruppenzuordnung, Netznutzungsvertrag, Gemeinderabatt, the Kunde and the
+//! Ablesekarte — as `SG6`/`SG8`/`SG12` segments the column makes Muss. They
+//! reach the workflow as [`Stammdaten`] assembled at the command door, which
+//! refuses a fact the caller does not state; the workflow carries them onto
+//! the outbox entry whole.
 //!
 //! ## Comparison with GPKE
 //!
@@ -35,12 +45,13 @@
 //! | Request PID         | 55001                          | 44001                                  |
 //! | Response PIDs       | 55002 (✓) / 55003 (✗)          | 44002 (✓) / 44003 (✗)                 |
 //! | Antwortfrist        | clock time des 1. WT (GPKE Teil 2) | 4 / 3 Werktage (BK7-24-01-009 Kap. 3.1–3.2.3) |
-//! | MaLo source         | API-Webdienste Strom optional  | ERP must supply `malo_id` + `zaehlpunkt` |
+//! | MaLo source         | API-Webdienste Strom optional  | ERP must supply `malo_id`              |
 //! | Activation step     | explicit `Activate` command    | explicit `Activate` command            |
 //!
 //! Both emit a `ProcessInitiated` CloudEvent on spawn.
 
 use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
+use mako_engine::payload::Stammdaten;
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -110,10 +121,8 @@ pub enum GeliGasLfAnmeldungEvent {
         /// PID of the outbound Anfrage (44001 Lieferbeginn, 44004 Lieferende,
         /// 44016 Kündigung).
         pruefidentifikator: Pruefidentifikator,
-        /// Gas Marktlokations-ID — rendered into `SG5 LOC+Z16`, never `IDE`.
+        /// Gas Marktlokations-ID — rendered into `SG5 LOC+172`, never `IDE`.
         malo_id: MaLo,
-        /// Zählpunktbezeichnung.
-        zaehlpunkt: String,
         /// Our own GLN (the Lieferant / LFN).
         sender: MarktpartnerCode,
         /// GNB GLN (receiver).
@@ -196,8 +205,6 @@ pub struct GeliGasLfAnmeldungData {
     pub pruefidentifikator: Pruefidentifikator,
     /// Gas Marktlokations-ID.
     pub malo_id: MaLo,
-    /// Zählpunktbezeichnung (RFF+Z13).
-    pub zaehlpunkt: String,
     /// Our own GLN (the Lieferant).
     pub sender: MarktpartnerCode,
     /// GNB GLN.
@@ -288,23 +295,21 @@ impl GeliGasLfAnmeldungState {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum GeliGasLfAnmeldungCommand {
-    /// ERP instructs the engine to initiate a Gas Lieferbeginn or Lieferende.
+    /// ERP instructs the engine to initiate a Gas Lieferbeginn, Lieferende or
+    /// Kündigung.
     ///
-    /// **Both `malo_id` and `zaehlpunkt` are mandatory** (BK7-24-01-009 AHB rules
-    /// `AHB-44001-IDE-M` and `AHB-44001-RFF-M`). The engine enqueues an outbound
-    /// UTILMD G 44001/44002 as a `PendingOutbox` entry; the AS4 sender delivers
-    /// it to the GNB.
+    /// The engine enqueues the outbound UTILMD G 44001/44004/44016 as a
+    /// `PendingOutbox` entry; the AS4 sender delivers it.
     InitiateAnmeldung {
-        /// Outbound request PID (44001 = Lieferbeginn, 44002 = Lieferende).
+        /// Outbound request PID (44001 Lieferbeginn, 44004 Lieferende, 44016
+        /// Kündigung).
         pid: Pruefidentifikator,
         /// Our own GLN (the Lieferant / LFN).
         sender: MarktpartnerCode,
         /// GNB GLN (resolved from MaLo cache).
         receiver: MarktpartnerCode,
-        /// Gas Marktlokations-ID → `SG5 LOC+Z16`.
+        /// Gas Marktlokations-ID → `SG5 LOC+172`.
         malo_id: MaLo,
-        /// Zählpunktbezeichnung (RFF+Z13) — mandatory for Gas.
-        zaehlpunkt: String,
         /// Requested Lieferbeginn or Lieferende date (YYYYMMDD, in CET/CEST).
         process_date: String,
         /// SG4 STS Transaktionsgrund (DE9013) — `E01` Ein-/Auszug (retroactive
@@ -318,6 +323,11 @@ pub enum GeliGasLfAnmeldungCommand {
         /// where GPKE Strom puts the Bilanzkreis in `SG8 SEQ+Z79`, Gas states it
         /// in this one segment. `None` on 44004, which registers nothing.
         bilanzkreis: Option<String>,
+        /// The Lieferant's contract facts a 44001 carries as `SG6`/`SG8`/`SG12`
+        /// segments (UTILMD AHB Gas 1.2 Kap. 5.6) — assembled at the command
+        /// door, carried onto the outbox entry whole. Empty on 44004/44016.
+        #[serde(default, skip_serializing_if = "Stammdaten::is_empty")]
+        stammdaten: Stammdaten,
         /// UTC wall-clock time when the ERP command was received.
         #[serde(with = "time::serde::rfc3339")]
         received_at: OffsetDateTime,
@@ -400,14 +410,12 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
             GeliGasLfAnmeldungEvent::Initiated {
                 pruefidentifikator,
                 malo_id,
-                zaehlpunkt,
                 sender,
                 receiver,
                 process_date,
             } => GeliGasLfAnmeldungState::Pending(GeliGasLfAnmeldungData {
                 pruefidentifikator: *pruefidentifikator,
                 malo_id: malo_id.clone(),
-                zaehlpunkt: zaehlpunkt.clone(),
                 sender: sender.clone(),
                 receiver: receiver.clone(),
                 process_date: process_date.clone(),
@@ -456,10 +464,10 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                 sender,
                 receiver,
                 malo_id,
-                zaehlpunkt,
                 process_date,
                 transaktionsgrund,
                 bilanzkreis,
+                stammdaten,
                 received_at: _,
             } => {
                 if !matches!(state, GeliGasLfAnmeldungState::New) {
@@ -486,7 +494,6 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                 let event = GeliGasLfAnmeldungEvent::Initiated {
                     pruefidentifikator: pid,
                     malo_id: malo_id.clone(),
-                    zaehlpunkt: zaehlpunkt.clone(),
                     sender: sender.clone(),
                     receiver: receiver.clone(),
                     process_date: process_date.clone(),
@@ -494,28 +501,25 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
 
                 // Enqueue the outbound UTILMD G as a PendingOutbox entry.
                 // The renderer derives document_date and message_ref at dispatch
-                // time. `zaehlpunkt` carries RFF+Z13.
+                // time.
+                let mut utilmd = serde_json::json!({
+                    "pid":               pid.as_u32(),
+                    "sender":            sender.as_str(),
+                    "receiver":          receiver.as_str(),
+                    "malo":              malo_id.as_str(),
+                    "process_date":      process_date,
+                    // SG4 STS Transaktionsgrund (DE 9013).
+                    "transaktionsgrund": transaktionsgrund,
+                    // `SG10 CCI+Z19` DE 7037 — the Gas shape of the
+                    // Bilanzkreis; GeLi Gas has no Produktpaket.
+                    "bilanzkreis":       bilanzkreis,
+                });
+                if !stammdaten.is_empty() {
+                    utilmd["stammdaten"] = serde_json::to_value(&stammdaten)
+                        .map_err(|e| WorkflowError::rejected(e.to_string()))?;
+                }
                 let outbox = vec![
-                    PendingOutbox::new(
-                        "UTILMD",
-                        receiver.as_str(),
-                        serde_json::json!({
-                            "direction":         "outbound",
-                            "pid":               pid.as_u32(),
-                            "sender":            sender.as_str(),
-                            "receiver":          receiver.as_str(),
-                            "malo":              malo_id.as_str(),
-                            "zaehlpunkt":        zaehlpunkt,
-                            "process_date":      process_date,
-                            // SG4 STS Transaktionsgrund — E01/E02 permit the
-                            // 6-week retroactive window (AWH GeLi Gas 2.0
-                            // Kap. 2.2); E03 is future-only.
-                            "transaktionsgrund": transaktionsgrund,
-                            // `SG10 CCI+Z19` DE 7037 — the Gas shape of the
-                            // Bilanzkreis; GeLi Gas has no Produktpaket.
-                            "bilanzkreis":       bilanzkreis,
-                        }),
-                    ),
+                    PendingOutbox::new("UTILMD", receiver.as_str(), utilmd),
                     // ProcessInitiated CE — notifies marktd → processd/invoicd/edmd.
                     PendingOutbox::new(
                         "ProcessInitiated",
@@ -629,10 +633,10 @@ mod tests {
             sender: mc("9900000000001"),
             receiver: mc("9904234560001"),
             malo_id: MaLo::new("DE0001234567890"),
-            zaehlpunkt: "DE00123456789012345678901234567890".to_owned(),
             process_date: "20261001".to_owned(),
             transaktionsgrund: None,
             bilanzkreis: Some("9870000000006".to_owned()),
+            stammdaten: Stammdaten::default(),
             received_at: time::OffsetDateTime::now_utc(),
         };
         let output = GeliGasLfAnmeldungWorkflow::handle(&state, cmd).unwrap();
@@ -651,12 +655,48 @@ mod tests {
         assert!(matches!(state2, GeliGasLfAnmeldungState::Pending(_)));
     }
 
+    /// The contract facts the door assembled ride the UTILMD entry whole, and
+    /// the entry names the Marktlokation alone — the 44001 column has no place
+    /// for a second Lokation beside it (UTILMD AHB Gas 1.2 Kap. 5.6, S. 46).
+    #[test]
+    fn the_44001_carries_its_stammdaten_and_no_second_lokation() {
+        use mako_engine::payload::{StammdatenBlock, StammdatenSegment};
+        let stammdaten = Stammdaten {
+            bloecke: vec![StammdatenBlock {
+                seq: "Z12".to_owned(),
+                segmente: vec![StammdatenSegment {
+                    tag: "QTY".to_owned(),
+                    elemente: vec![vec!["Z16".to_owned(), "0".to_owned(), "P1".to_owned()]],
+                }],
+            }],
+            ..Stammdaten::default()
+        };
+        let cmd = GeliGasLfAnmeldungCommand::InitiateAnmeldung {
+            pid: pid(44001),
+            sender: mc("9800000000005"),
+            receiver: mc("9800357000005"),
+            malo_id: MaLo::new("51238696012"),
+            process_date: "20261001".to_owned(),
+            transaktionsgrund: Some("E03".to_owned()),
+            bilanzkreis: Some("THE0BFH000000001".to_owned()),
+            stammdaten: stammdaten.clone(),
+            received_at: time::OffsetDateTime::now_utc(),
+        };
+        let out = GeliGasLfAnmeldungWorkflow::handle(&GeliGasLfAnmeldungState::New, cmd).unwrap();
+        let utilmd = &out.outbox[0];
+        assert_eq!(&*utilmd.message_type, "UTILMD");
+        let carried: Stammdaten =
+            serde_json::from_value(utilmd.payload["stammdaten"].clone()).unwrap();
+        assert_eq!(carried, stammdaten);
+        assert!(utilmd.payload.get("zaehlpunkt").is_none());
+        assert_eq!(utilmd.payload["malo"], "51238696012");
+    }
+
     #[test]
     fn gnb_bestaetigung_44002() {
         let data = GeliGasLfAnmeldungData {
             pruefidentifikator: pid(44001),
             malo_id: MaLo::new("DE0001234567890"),
-            zaehlpunkt: "DE00123456789012345678901234567890".to_owned(),
             sender: mc("9900000000001"),
             receiver: mc("9904234560001"),
             process_date: "20261001".to_owned(),
@@ -688,7 +728,6 @@ mod tests {
         let data = GeliGasLfAnmeldungData {
             pruefidentifikator: pid(44001),
             malo_id: MaLo::new("DE0001234567890"),
-            zaehlpunkt: "DE00123456789012345678901234567890".to_owned(),
             sender: mc("9900000000001"),
             receiver: mc("9904234560001"),
             process_date: "20261001".to_owned(),
@@ -717,10 +756,10 @@ mod tests {
             sender: mc("9900000000001"),
             receiver: mc("9904234560001"),
             malo_id: MaLo::new("DE0001234567890"),
-            zaehlpunkt: "DE00123456789012345678901234567890".to_owned(),
             process_date: "20261001".to_owned(),
             transaktionsgrund: None,
             bilanzkreis: Some("9870000000006".to_owned()),
+            stammdaten: Stammdaten::default(),
             received_at: time::OffsetDateTime::now_utc(),
         };
         assert!(GeliGasLfAnmeldungWorkflow::handle(&state, cmd).is_err());

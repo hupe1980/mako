@@ -301,7 +301,8 @@ fn the_removed_bo4e_enums_are_not_a_column_domain() {
 #[test]
 fn utilmd_stammdaten_enums_match_their_check_lists() {
     use mako_markt::utilmd_stammdaten::{
-        Abrechnungsvariante, Betriebszustand, MsbGrundlage, MsbRolle,
+        Abrechnungsvariante, Betriebszustand, MsbGrundlage, MsbRolle, NetznutzungZahler,
+        Netznutzungsvertrag,
     };
     fn reads<T: serde::de::DeserializeOwned>(v: &str, wire: impl Fn(&T) -> &'static str) -> bool {
         serde_json::from_value::<T>(serde_json::Value::String(v.to_owned()))
@@ -309,7 +310,7 @@ fn utilmd_stammdaten_enums_match_their_check_lists() {
     }
     let sql = migration_sql();
     type Case = (&'static str, &'static [&'static str], fn(&str) -> bool);
-    let cases: [Case; 4] = [
+    let cases: [Case; 6] = [
         ("betriebszustand", Betriebszustand::VARIANTS, |v| {
             Betriebszustand::from_wire(v).is_some() && reads::<Betriebszustand>(v, |e| e.as_str())
         }),
@@ -323,6 +324,14 @@ fn utilmd_stammdaten_enums_match_their_check_lists() {
         ("grundlage", MsbGrundlage::VARIANTS, |v| {
             MsbGrundlage::from_wire(v).is_some() && reads::<MsbGrundlage>(v, |e| e.as_str())
         }),
+        ("netznutzungsvertrag", Netznutzungsvertrag::VARIANTS, |v| {
+            Netznutzungsvertrag::from_wire(v).is_some()
+                && reads::<Netznutzungsvertrag>(v, |e| e.as_str())
+        }),
+        ("netznutzung_zahler", NetznutzungZahler::VARIANTS, |v| {
+            NetznutzungZahler::from_wire(v).is_some()
+                && reads::<NetznutzungZahler>(v, |e| e.as_str())
+        }),
     ];
     for (column, variants, reads_back) in cases {
         let lists = all_check_lists(&sql, column);
@@ -333,5 +342,35 @@ fn utilmd_stammdaten_enums_match_their_check_lists() {
         for v in variants {
             assert!(reads_back(v), "`{column}`: {v} must read back as itself");
         }
+    }
+}
+
+/// `msb_rahmenvertraege.status` and `MsbRvStatus` name the same four states,
+/// in both directions: a variant the CHECK refuses fails the write that uses
+/// it, and a CHECK value the enum lacks fails every read of the row — and the
+/// lookup `processd` escalates on would then answer `500` instead of a Befund.
+#[test]
+fn msb_rahmenvertrag_status_matches_its_check_list() {
+    use marktd::pg::msb_rahmenvertrag::MsbRvStatus;
+
+    let sql = migration_sql();
+    let start = sql
+        .find("CREATE TABLE msb_rahmenvertraege (")
+        .expect("msb_rahmenvertraege is declared");
+    let table = &sql[start..start + sql[start..].find("\n);").expect("table is closed")];
+    let check: BTreeSet<String> = check_values(table, "status").into_iter().collect();
+    let enum_set: BTreeSet<String> = MsbRvStatus::VARIANTS
+        .iter()
+        .map(|v| v.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        check, enum_set,
+        "`msb_rahmenvertraege.status` CHECK vs MsbRvStatus"
+    );
+    for v in MsbRvStatus::VARIANTS {
+        let back: MsbRvStatus =
+            serde_json::from_value(serde_json::Value::String(v.as_str().to_owned()))
+                .expect("reads back");
+        assert_eq!(back, v);
     }
 }

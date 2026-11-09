@@ -101,13 +101,12 @@ pub fn wim_invoic_remadv_registry() -> AdapterRegistry<WimInvoicWorkflow> {
                     "WiM REMADV adapter: expected REMADV message (PIDs 33001–33004)".into(),
                 ));
             };
-            let pid = r
-                .bgm()
-                .and_then(|b| b.pruefidentifikator())
-                .ok_or_else(|| {
-                    EngineError::Deserialization(
-                        "WiM REMADV adapter: PID not found in REMADV BGM".into(),
-                    )
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM REMADV adapter: PID detection failed: {e}"
+                    ))
                 })
                 .and_then(convert_pid)?;
             Ok(InvoicCommand::ReceiveRemadv {
@@ -1178,13 +1177,12 @@ pub fn wim_insrpt_registry(
                     "WiM Strom INSRPT adapter: expected INSRPT message".into(),
                 ));
             };
-            let pid = insrpt
-                .bgm()
-                .and_then(|b| b.pruefidentifikator())
-                .ok_or_else(|| {
-                    EngineError::Deserialization(
-                        "WiM Strom INSRPT adapter: PID not found in INSRPT BGM".into(),
-                    )
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Strom INSRPT adapter: PID detection failed: {e}"
+                    ))
                 })
                 .and_then(convert_pid)?;
             let sender = MarktpartnerCode::new(
@@ -1248,18 +1246,17 @@ pub fn wim_insrpt_registry(
     registry
 }
 
-// ── WiM Technikänderung ORDRSP (PIDs 19003–19007) ────────────────────────────
+// ── WiM Technikänderung ORDERS 17011 / ORDRSP 19005/19006 ────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimTechnikAenderungWorkflow`].
 ///
-/// The Technikänderung process is **requester-initiated**: mako sends ORDERS
-/// 17011 (Änderung der Technik, LF/NB → MSB) or 17118 (Konfigurationsänderung,
-/// MSB → MSB) and the counterparty answers with an ORDRSP. Only that answer is
-/// ingested here — it resumes the open process, never spawns one.
+/// Both sides of the Technikänderung: an inbound **ORDERS 17011** (NB, LF an
+/// MSB — ORDERS AHB 1.1b Kap. 4.12) is the MSB's copy of an Auftrag and becomes
+/// `TechnikAenderungCommand::ReceiveAuftrag`; an inbound **ORDRSP** answers an
+/// Auftrag mako sent and resumes that process, never spawns one.
 ///
 /// The accepted/rejected split is carried by the ORDRSP **PID** rather than the
-/// BGM response code: 19003 (Fortführungsbestätigung) and 19005
-/// (Auftragsbestätigung) are confirmations, 19004/19006/19007 are rejections.
+/// BGM response code: 19005 (Auftragsbestätigung) confirms, 19006 rejects.
 /// `TechnikAenderungCommand::ReceiveOrdrsp` re-derives that split from the PID,
 /// so the adapter only supplies the human-readable rejection reason.
 ///
@@ -1282,9 +1279,37 @@ pub fn wim_technik_aenderung_registry() -> AdapterRegistry<WimTechnikAenderungWo
                 )
             })?;
 
+            if let AnyMessage::Orders(o) = msg {
+                let orders_pid = msg
+                    .detect_pruefidentifikator()
+                    .map_err(|e| {
+                        EngineError::Deserialization(format!(
+                            "WiM Technikänderung adapter: PID detection failed: {e}"
+                        ))
+                    })
+                    .and_then(convert_pid)?;
+                let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+                let location_id = o
+                    .segments()
+                    .iter()
+                    .find(|s| s.tag == "LOC")
+                    .and_then(|s| s.component_str(1, 0))
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_owned);
+                return Ok(TechnikAenderungCommand::ReceiveAuftrag {
+                    orders_pid,
+                    sender: mako_engine::types::MarktpartnerCode::new(
+                        o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                    ),
+                    location_id,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                    validation_passed,
+                    validation_errors,
+                });
+            }
             let AnyMessage::Ordrsp(o) = msg else {
                 return Err(EngineError::Deserialization(
-                    "WiM Technikänderung adapter: expected ORDRSP message".into(),
+                    "WiM Technikänderung adapter: expected ORDERS or ORDRSP message".into(),
                 ));
             };
 

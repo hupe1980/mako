@@ -201,7 +201,8 @@ impl EdifactIngestDispatcher {
                     // arrives in decides the Datenstatus the BIKO will assign
                     // (Kap. 3.8.3), so it is derived from the calendar here
                     // rather than taken from the message.
-                    let cmd = adapters::mabis_summenzeitreihe_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::mabis_summenzeitreihe_registry(inbound.received_at)
+                        .dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     return self
                         .spawn_or_resume_guarded::<MabisBillingWorkflow>(

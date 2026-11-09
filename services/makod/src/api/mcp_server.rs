@@ -153,8 +153,8 @@ pub struct SubmitCommandParams {
     /// | `gpke.lieferbeginn.anmelden` | `malo_id` (11-digit), `lieferbeginn_datum` (YYYY-MM-DD) |
     /// | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
     /// | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum` |
-    /// | `geli.lieferbeginn.anmelden` | `malo_id` (gas), `lieferbeginn_datum` |
-    /// | `geli.lieferende.anmelden` | `malo_id` (gas), `lieferende_datum` |
+    /// | `geli.lieferbeginn.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund`, `bilanzkreis`, `abrechnungsintervall_monate`, `haushaltskunde`, `netznutzungsvertrag`, `netznutzung_zahler`, `gemeinderabatt_prozent`, `kunde`, `ablesekarte` — `mako_markt::commands::GeliLieferbeginnAnmelden`, no other key |
+    /// | `geli.lieferende.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD) |
     /// | `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id` |
     /// | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
     #[schemars(example = "{\"malo_id\": \"10001234558\", \"lieferbeginn_datum\": \"2026-10-01\"}")]
@@ -2047,7 +2047,9 @@ fn next_steps_hint(command: &str) -> String {
                 .to_owned();
         }
         "geli.datenabruf.anfragen" => {
-            return "Datenabruf (ORDERS 17103) sent. No answer Frist is catalogued for 17103."
+            return "Datenabruf (ORDERS 17103) sent. The GNB answers with MSCONS 13007 or \
+                    ORDRSP 19103; the answer window depends on the Zeitspanne and is registered \
+                    with the process (GeLi Gas 3.0 Kap. 4.2)."
                 .to_owned();
         }
         "geli.gas.sperrung.bestaetigen" | "gpke.sperrung.bestaetigen" => {

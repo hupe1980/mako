@@ -52,6 +52,8 @@ const EXPECTED: &[(&str, Verdict, usize)] = &[
     ("GpkeEogWorkflow", Verdict::Trait, 1),
     ("GpkeGeschaeftsdatenanfrageWorkflow", Verdict::Closure, 1),
     ("GpkeSperrungWorkflow", Verdict::Closure, 1),
+    ("GpkeSperrungMsbWorkflow", Verdict::Trait, 1),
+    ("GpkeDatenabrufMsbWorkflow", Verdict::Closure, 1),
     ("GpkeZuordnungsmeldungWorkflow", Verdict::Trait, 1),
     ("MabisAnforderungWorkflow", Verdict::Trait, 1),
     // Two arms: the Summenzeitreihe and the inbound IFTSTA.
@@ -64,6 +66,7 @@ const EXPECTED: &[(&str, Verdict, usize)] = &[
     ("WimErsteinbauWorkflow", Verdict::Trait, 1),
     ("WimGeraeteubernahmeWorkflow", Verdict::Trait, 1),
     ("WimInsrptWorkflow", Verdict::Closure, 1),
+    ("WimTechnikAenderungWorkflow", Verdict::Closure, 1),
     ("WimInvoicWorkflow", Verdict::OwnReference, 1),
     ("WimRechnungsabwicklungWorkflow", Verdict::Trait, 1),
     ("WimWeiterverpflichtungWorkflow", Verdict::Trait, 1),
@@ -83,7 +86,7 @@ const EXPECTED: &[(&str, Verdict, usize)] = &[
     ("AktivierungWorkflow", Verdict::OwnReference, 2),
     ("GaBiGasAllocationWorkflow", Verdict::Trait, 1),
     ("GaBiGasMehrMindermengenWorkflow", Verdict::Trait, 1),
-    ("GeliGasDatenabrufWorkflow", Verdict::Trait, 1),
+    ("GeliGasDatenabrufWorkflow", Verdict::Trait, 2),
     ("GeliGasPartinWorkflow", Verdict::Trait, 1),
     ("GpkeAnfrageBestellungWorkflow", Verdict::Trait, 1),
     ("GpkeKonfigurationWorkflow", Verdict::Trait, 1),
@@ -211,7 +214,7 @@ fn the_stated_counts_are_the_counts() {
     let total = trait_impls + closures;
 
     let claim = format!(
-        "{total} of the 63 workflow names dispatched here supply a verdict at \
+        "{total} of the 65 workflow names dispatched here supply a verdict at \
          all — {trait_impls} through that trait, {closures} through an inherent \
          terminal-state closure"
     );
@@ -235,7 +238,7 @@ fn the_stated_counts_are_the_counts() {
     };
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     for phrase in [
-        format!("**{total}** of the **63** workflow names"),
+        format!("**{total}** of the **65** workflow names"),
         format!("{trait_impls} through an `OccupiesBusinessKey`"),
         format!("{closures} through an inherent terminal-state closure"),
     ] {

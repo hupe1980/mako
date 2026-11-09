@@ -4,7 +4,7 @@
 crates into one process engine on a durable [SlateDB](https://github.com/slatedb/slatedb)
 event store, receives and sends EDIFACT over AS4, takes ERP commands over REST,
 and serves the BDEW API-Webdienste Strom. Seven modules register
-**71 workflows** over 472 Prüfidentifikatoren in the default build.
+**73 workflows** over 473 Prüfidentifikatoren in the default build.
 
 ## Run it
 

@@ -47,6 +47,7 @@
 //! that finds fewer means the `impl … Workflow for …` shape moved and the guard
 //! has to be taught the new one, not that the defect class went away.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// Trees holding the workflow implementations.
@@ -360,6 +361,59 @@ pub(crate) fn blank_cfg_test(src: &str, mask: &mut [bool]) {
             }
         }
     }
+}
+
+/// The files `#[cfg(test)] mod name;` declarations pull in, by the relative
+/// paths `files` carry — and every file beneath such a module.
+///
+/// [`blank_cfg_test`] removes a test item written inline; a test module kept in
+/// its own file is the same item, and without this a construction inside it
+/// reads as shipped code. A declaration resolves by Rust's module-path rule:
+/// from `lib.rs`, `main.rs` or `mod.rs` to a sibling `name.rs` or
+/// `name/mod.rs`, from `foo.rs` to `foo/name.rs` or `foo/name/mod.rs`.
+pub(crate) fn cfg_test_module_files(files: &[(String, String)]) -> BTreeSet<String> {
+    let mut roots: Vec<String> = Vec::new();
+    for (rel, src) in files {
+        let mask = code_mask(src);
+        let Some((dir, stem)) = rel.rsplit_once('/') else {
+            continue;
+        };
+        let stem = stem.strip_suffix(".rs").unwrap_or(stem);
+        let base = if matches!(stem, "lib" | "main" | "mod") {
+            dir.to_owned()
+        } else {
+            format!("{dir}/{stem}")
+        };
+        for (start, marker) in src.match_indices("#[cfg(test)]") {
+            if !mask[start] {
+                continue;
+            }
+            let rest = src[start + marker.len()..].trim_start();
+            let rest = rest.strip_prefix("pub(crate)").unwrap_or(rest).trim_start();
+            let Some(rest) = rest.strip_prefix("mod ") else {
+                continue;
+            };
+            let name: String = rest
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let after = rest.trim_start()[name.len()..].trim_start();
+            if !name.is_empty() && after.starts_with(';') {
+                roots.push(format!("{base}/{name}"));
+            }
+        }
+    }
+    files
+        .iter()
+        .map(|(rel, _)| rel)
+        .filter(|rel| {
+            roots.iter().any(|root| {
+                rel.as_str() == format!("{root}.rs") || rel.starts_with(&format!("{root}/"))
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 /// A per-byte mask of what is real code: comments, string literals and char

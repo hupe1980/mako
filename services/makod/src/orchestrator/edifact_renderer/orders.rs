@@ -271,6 +271,56 @@ pub(super) fn render_orders(
             builder = builder.abonnement(abo);
         }
     }
+    // ── Anfrage Brennwert und Zustandszahl (17103) ───────────────────────────
+    //
+    // ORDERS AHB 1.1b Kap. 4.1.3. Muss: `BGM+7` (Prozessdatenbericht),
+    // `IMD++Z10` (Abrechnungsbrennwert und Zustandszahl), the Messlokation in
+    // `LOC+172`, and one `SG29 LIN` carrying the Zeitspanne as `DTM+163` /
+    // `DTM+164`. The Zeitspanne's end is what the GNB's answer window is
+    // computed from (GeLi Gas 3.0 Kap. 4.2), so an ORDERS without it would
+    // leave the GNB unable to register the window it owes — refused, never
+    // rendered without. A Gas process date is the instant its Gastag begins
+    // (Allgemeine Festlegungen V6.1d Kap. 3.1), and the Ende is the beginning
+    // of the Gastag after the last one.
+    if pid == Some(17103) {
+        let tag = |field: &str| -> Result<time::Date, RenderError> {
+            let missing = || RenderError::MissingField {
+                message_type: mt.into(),
+                field: field.into(),
+            };
+            let v = p.get(field).and_then(|v| v.as_str()).ok_or_else(missing)?;
+            time::Date::parse(v, time::macros::format_description!("[year]-[month]-[day]"))
+                .map_err(|_| missing())
+        };
+        if p.get("location")
+            .and_then(|v| v.as_str())
+            .is_none_or(str::is_empty)
+        {
+            return Err(RenderError::MissingField {
+                message_type: mt.into(),
+                field: "location (Messlokation)".into(),
+            });
+        }
+        let von = tag("zeitspanne_von")?;
+        let bis = tag("zeitspanne_bis")?;
+        let ende = bis.next_day().ok_or_else(|| RenderError::MissingField {
+            message_type: mt.into(),
+            field: "zeitspanne_bis".into(),
+        })?;
+        builder = builder
+            .document_code("7")
+            .leistung("Z10")
+            .positionszeitraum(
+                ccyymmddhhmm(mako_fristen::tagesbeginn_utc(
+                    von,
+                    mako_fristen::Sparte::Gas,
+                )),
+                ccyymmddhhmm(mako_fristen::tagesbeginn_utc(
+                    ende,
+                    mako_fristen::Sparte::Gas,
+                )),
+            );
+    }
 
     finish_interchange(builder.serialize(), sender, msg.recipient.as_ref(), msg)
 }

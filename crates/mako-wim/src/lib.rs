@@ -189,10 +189,10 @@ pub use steuerungsauftrag::{
     WORKFLOW_NAME as STEUERUNGSAUFTRAG_WORKFLOW_NAME, WimSteuerungsauftragWorkflow,
 };
 pub use technik_aenderung::{
-    AuftragData as TechnikAenderungAuftragData, ORDERS_PIDS as TECHNIK_AENDERUNG_ORDERS_PIDS,
-    ORDRSP_PIDS as TECHNIK_AENDERUNG_ORDRSP_PIDS, TechnikAenderungCommand, TechnikAenderungEvent,
-    TechnikAenderungState, WORKFLOW_NAME as TECHNIK_AENDERUNG_WORKFLOW_NAME,
-    WimTechnikAenderungWorkflow,
+    AuftragData as TechnikAenderungAuftragData, EingangData as TechnikAenderungEingangData,
+    ORDERS_PIDS as TECHNIK_AENDERUNG_ORDERS_PIDS, ORDRSP_PIDS as TECHNIK_AENDERUNG_ORDRSP_PIDS,
+    TechnikAenderungCommand, TechnikAenderungEvent, TechnikAenderungState,
+    WORKFLOW_NAME as TECHNIK_AENDERUNG_WORKFLOW_NAME, WimTechnikAenderungWorkflow,
 };
 pub use weiterverpflichtung::{
     ANTWORT_WINDOW_LABEL as WEITERVERPFLICHTUNG_ANTWORT_WINDOW_LABEL,
@@ -567,11 +567,22 @@ impl mako_engine::builder::EngineModule for WimModule {
 
         // WiM Technikänderung — device/config change requests (ORDERS/ORDRSP).
         //
-        // Covers LF→MSB Änderung der Technik (17011) and MSB→MSB Bestellung
-        // Konfigurationsänderung (17118). The ESA order PIDs (17007/17008,
+        // ORDERS 17011 Änderung der Technik runs NB, LF → MSB (ORDERS AHB 1.1b
+        // Kap. 4.12): the MSB receives it (`ReceiveAuftrag`), so it routes only
+        // for a MSB role; the NB or LF sends it and receives the ORDRSP
+        // 19005/19006. 17118 (MSB → MSB Bestellung Konfigurationsänderung)
+        // stays registered here as before. The ESA order PIDs (17007/17008,
         // ORDRSP 19011–19014) belong to `wertebestellung`.
-        // ORDRSP: Bestätigung (19003/19005) and Ablehnung (19004/19006/19007).
+        let msb = {
+            use mako_engine::marktrolle::Marktrolle;
+            roles.contains(Marktrolle::Msb)
+                || roles.contains(Marktrolle::Nmsb)
+                || roles.contains(Marktrolle::Amsb)
+        };
         for &pid in technik_aenderung::ORDERS_PIDS {
+            if technik_aenderung::RECEIVE_ORDERS_PIDS.contains(&pid) && !msb {
+                continue;
+            }
             router.register(pid, technik_aenderung::WORKFLOW_NAME);
         }
         for &pid in technik_aenderung::ORDRSP_PIDS {

@@ -18,7 +18,8 @@
 use mako_markt::domain::{MaloId, MeloId, Sparte};
 use mako_markt::error::MdmError;
 use mako_markt::utilmd_stammdaten::{
-    Abrechnungsvariante, Betriebszustand, MsbGrundlage, MsbRolle, Netznutzungsdaten,
+    Abrechnungsvariante, Betriebszustand, MsbGrundlage, MsbRolle, NetznutzungZahler,
+    Netznutzungsdaten, Netznutzungsvertrag,
 };
 use marktd::pg::{
     MsbDetails, PgMaloRepository, PgMeloMsbRepository, PgMeloRepository,
@@ -157,6 +158,9 @@ fn netznutzung(valid_from: time::Date) -> Netznutzungsdaten {
         abrechnungsintervall_monate: Some(12),
         abrechnungsvariante: Some(Abrechnungsvariante::ArbeitspreisLeistungspreis),
         gemeinderabatt_prozent: Some(rust_decimal::Decimal::ZERO),
+        turnusablesung: Some("05040504".to_owned()),
+        netznutzungsvertrag: Some(Netznutzungsvertrag::LieferantNb),
+        netznutzung_zahler: Some(NetznutzungZahler::Lieferant),
     }
 }
 
@@ -276,4 +280,85 @@ async fn overlapping_netznutzungsdaten_are_refused() {
         .await
         .expect_err("a month 13 is refused");
     assert!(matches!(err, MdmError::Unprocessable { .. }), "{err:?}");
+}
+
+/// The Turnusablesung and the Netznutzungsvertrag with its Zahler are stored
+/// and read back on the Stichtag they are valid for, and refused in a shape
+/// the UTILMD cannot carry: a `DTM+752` other than `MMDD`/`MMWWMMWW`, the
+/// 29.02. the MIG replaces by the 28.02., and a Kunde paying under a Vertrag
+/// zwischen Lieferanten und NB (Bedingung `[216]`).
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn turnusablesung_and_netznutzungsvertrag_are_held_per_stichtag() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    seed_malo(&pool, true).await;
+    let repo = PgUtilmdStammdatenRepository::new(pool.clone());
+    let mut first = netznutzung(date!(2026 - 01 - 01));
+    first.valid_to = Some(date!(2027 - 01 - 01));
+    repo.upsert_netznutzung(TENANT, MALO, &first)
+        .await
+        .expect("first row");
+    let mut second = netznutzung(date!(2027 - 01 - 01));
+    second.turnusablesung = Some("0915".to_owned());
+    second.netznutzungsvertrag = Some(Netznutzungsvertrag::KundeNb);
+    second.netznutzung_zahler = Some(NetznutzungZahler::Kunde);
+    repo.upsert_netznutzung(TENANT, MALO, &second)
+        .await
+        .expect("the next row, starting where the first ends");
+
+    let read = |d: time::Date| {
+        let repo = repo.clone();
+        async move {
+            repo.find_at(TENANT, MALO, d)
+                .await
+                .expect("read")
+                .expect("held")
+                .netznutzung
+                .expect("a row covers the Stichtag")
+        }
+    };
+    let n = read(date!(2026 - 12 - 31)).await;
+    assert_eq!(n.turnusablesung.as_deref(), Some("05040504"));
+    assert_eq!(
+        n.netznutzungsvertrag,
+        Some(Netznutzungsvertrag::LieferantNb)
+    );
+    assert_eq!(n.netznutzung_zahler, Some(NetznutzungZahler::Lieferant));
+    // Half-open: the first row's valid_to is the second row's first day.
+    let n = read(date!(2027 - 01 - 01)).await;
+    assert_eq!(n.turnusablesung.as_deref(), Some("0915"));
+    assert_eq!(n.netznutzungsvertrag, Some(Netznutzungsvertrag::KundeNb));
+    assert_eq!(n.netznutzung_zahler, Some(NetznutzungZahler::Kunde));
+
+    for (what, row) in [
+        ("29.02.", {
+            let mut r = netznutzung(date!(2028 - 01 - 01));
+            r.turnusablesung = Some("0229".to_owned());
+            r
+        }),
+        ("a fifth week", {
+            let mut r = netznutzung(date!(2028 - 01 - 01));
+            r.turnusablesung = Some("05050505".to_owned());
+            r
+        }),
+        ("a Kunde paying under a Lieferant's Vertrag", {
+            let mut r = netznutzung(date!(2028 - 01 - 01));
+            r.netznutzungsvertrag = Some(Netznutzungsvertrag::LieferantNb);
+            r.netznutzung_zahler = Some(NetznutzungZahler::Kunde);
+            r
+        }),
+    ] {
+        let mut row = row;
+        row.valid_from = date!(2030 - 01 - 01);
+        let err = repo
+            .upsert_netznutzung(TENANT, MALO, &row)
+            .await
+            .expect_err(what);
+        assert!(
+            matches!(err, MdmError::Unprocessable { .. }),
+            "{what}: {err:?}"
+        );
+    }
 }

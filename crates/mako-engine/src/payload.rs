@@ -11,9 +11,18 @@
 //! ([`PendingOutbox::typed`](crate::outbox::PendingOutbox::typed) serialises,
 //! [`OutboundPayload::from_payload`] deserialises).
 //!
-//! The structs are **tolerant readers**, like event payloads: an outbox row is
-//! written by one build and may be drained by the next, so a field is an
-//! `Option` or carries `#[serde(default)]`, and no struct denies unknown fields.
+//! An outbox row is written by one build and may be drained by the next, so a
+//! field is an `Option` or carries `#[serde(default)]`: a row that lacks a
+//! field a later build added still reads.
+//!
+//! **No struct admits a key it does not declare** (`#[serde(deny_unknown_fields)]`).
+//! A producer that builds its payload with `serde_json::json!` instead of the
+//! struct can spell a key no renderer reads, and serde would drop it in
+//! silence — the GeLi Gas Änderung Antworten wrote their Antwortcode under
+//! `pruefung`, and no `SG4 STS+E01` reached the wire. Refused, the key fails
+//! the render naming itself, and [`undeclared_key`] lets
+//! [`PendingOutbox::new`](crate::outbox::PendingOutbox::new) refuse it where
+//! it is written.
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -48,6 +57,7 @@ pub const APERAK_PID_ANERKENNUNG: u32 = 29002;
 /// only `313`. The renderer derives `BGM` from `error_code`, so a constructor
 /// that set one without the other could not exist.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AperakPayload {
     /// Sender MP-ID — the party acknowledging.
     pub sender: String,
@@ -93,6 +103,7 @@ pub struct AperakPayload {
 
 /// One further `SG4 ERC` group of a Fehlermeldung.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AperakFehler {
     /// `ERC` DE 9321.
     pub error_code: String,
@@ -187,6 +198,7 @@ impl AperakPayload {
 /// Prüfschablone's question, and the renderer asks it. A field the profile
 /// requires and the payload lacks is refused at render time, naming the field.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UtilmdPayload {
     /// Prüfidentifikator.
     pub pid: u32,
@@ -228,6 +240,11 @@ pub struct UtilmdPayload {
     /// Second `SG4 DTM+159`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bilanzierungsende: Option<String>,
+    /// Second `SG4 DTM+92` „Datum Vertragsbeginn", beside a `157` process
+    /// date — a GeLi Gas Antwort auf Anfrage restates both dates of the
+    /// Anfrage (UTILMD AHB Gas 1.2 Kap. 5.12.1, Bedingung `[528]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertragsbeginn: Option<String>,
     /// `SG4 SG6 RFF+TN` — the request's `IDE+24`, on every answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub referenz_vorgangsnummer: Option<String>,
@@ -332,6 +349,7 @@ impl OutboundPayload for UtilmdPayload {
 /// workflow derives. It is carried segment by segment and the AHB profile
 /// checks what renders.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Stammdaten {
     /// `SG5 LOC` — `(DE 3227 qualifier, DE 3225 ID)`, in the MIG's order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -361,6 +379,7 @@ impl Stammdaten {
 
 /// One `SG5 LOC`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StammdatenLokation {
     /// DE 3227 — `Z16` Marktlokation, `Z17` Messlokation, `Z18` Netzlokation, …
     pub qualifier: String,
@@ -370,6 +389,7 @@ pub struct StammdatenLokation {
 
 /// One `SG8` block: its `SEQ` DE 1229 and the segments under it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StammdatenBlock {
     /// `SEQ` DE 1229 — `ZD5`, `Z98`, `ZE1`, …
     pub seq: String,
@@ -380,6 +400,7 @@ pub struct StammdatenBlock {
 
 /// One segment: its tag and its data elements, each a list of components.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StammdatenSegment {
     /// Segment tag.
     pub tag: String,
@@ -391,7 +412,7 @@ pub struct StammdatenSegment {
 /// The Tranchengröße: a bare string is the prozentuale Aufteilung; the object
 /// names which of the three Produkteigenschaften it is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum Tranchengroesse {
     /// The prozentuale Aufteilung.
     Prozent(String),
@@ -407,6 +428,7 @@ pub enum Tranchengroesse {
 
 /// A postal address — `SG12 NAD` `C059`/`C080` components.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Anschrift {
     /// Street and house number.
     #[serde(default)]
@@ -424,6 +446,7 @@ pub struct Anschrift {
 
 /// A `ZugeordneterMsb` — the four codes `SG10 CCI+++ZB3` needs.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ZugeordneterMsb {
     /// MP-ID of the MSB.
     pub mp_id: String,
@@ -440,6 +463,7 @@ pub struct ZugeordneterMsb {
 
 /// One Messlokation of a Marktlokation, with its MSB.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UtilmdMesslokation {
     /// Messlokations-ID.
     pub melo_id: String,
@@ -450,6 +474,7 @@ pub struct UtilmdMesslokation {
 
 /// One member of a UTILMD Listennachricht.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ListenPosition {
     /// The disputed Marktlokation.
     pub malo: String,
@@ -472,6 +497,7 @@ pub struct ListenPosition {
 /// so the entry carries no `payload_schema`, and the CloudEvent no
 /// `dataschema`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MaloIdentifiedPayload {
     /// The MaLo-Identifikation transaction the answer belongs to.
     pub tx_id: String,
@@ -487,6 +513,30 @@ pub struct MaloIdentifiedPayload {
 
 impl OutboundPayload for MaloIdentifiedPayload {
     const MESSAGE_TYPE: &'static str = "MaloIdentified";
+}
+
+/// The serde error naming a key `payload` carries that the typed payload of
+/// `message_type` does not declare — `None` when every key is declared, or
+/// when `message_type` has no typed payload here.
+///
+/// Only the unknown-key refusal is reported. A payload that lacks a field is
+/// another question: some entries are intent-only and the renderer names what
+/// is missing when it renders.
+#[must_use]
+pub fn undeclared_key(message_type: &str, payload: &serde_json::Value) -> Option<String> {
+    fn refusal<P: OutboundPayload>(payload: &serde_json::Value) -> Option<String> {
+        let text = P::from_payload(payload).err()?.to_string();
+        text.contains("unknown field").then_some(text)
+    }
+    if message_type == UtilmdPayload::MESSAGE_TYPE {
+        refusal::<UtilmdPayload>(payload)
+    } else if message_type == AperakPayload::MESSAGE_TYPE {
+        refusal::<AperakPayload>(payload)
+    } else if message_type == MaloIdentifiedPayload::MESSAGE_TYPE {
+        refusal::<MaloIdentifiedPayload>(payload)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -505,15 +555,56 @@ mod tests {
         assert!(err.is_fehler());
     }
 
-    /// An entry round-trips through the stored JSON, and a row written with an
-    /// extra key still reads.
+    /// An entry round-trips through the stored JSON, and a row that lacks a
+    /// field a later build added still reads.
     #[test]
-    fn the_payload_round_trips_and_reads_tolerantly() {
+    fn the_payload_round_trips_and_reads_a_row_without_a_newer_field() {
         let p = AperakPayload::fehler("a", "b", "UNH1", "Z29", "kaputt").off_the_wire();
         let json = serde_json::to_value(&p).expect("serialise");
         assert_eq!(AperakPayload::from_payload(&json).expect("read"), p);
-        let mut extra = json;
-        extra["positive"] = serde_json::Value::Bool(false);
-        assert_eq!(AperakPayload::from_payload(&extra).expect("tolerant"), p);
+        let mut older = json;
+        older
+            .as_object_mut()
+            .expect("an object")
+            .remove("suppress_wire");
+        let read = AperakPayload::from_payload(&older).expect("a missing field defaults");
+        assert!(!read.suppress_wire);
+    }
+
+    /// A key no struct declares is refused, not dropped: a producer that wrote
+    /// the GeLi Gas Antwortcode under `pruefung` sent no `SG4 STS+E01`, and
+    /// serde said nothing. The nested structs refuse in the same way.
+    #[test]
+    fn an_undeclared_key_is_refused_at_every_level() {
+        let utilmd = serde_json::json!({
+            "pid": 44_115, "sender": "9800000000001", "pruefung": "E15",
+        });
+        let refused = undeclared_key("UTILMD", &utilmd).expect("refused");
+        assert!(refused.contains("pruefung"), "{refused}");
+        let nested = serde_json::json!({
+            "pid": 44_142, "sender": "9800000000001",
+            "stammdaten": { "lokationen": [{ "qualifier": "Z16", "id": "x", "typ": "y" }] },
+        });
+        assert!(undeclared_key("UTILMD", &nested).is_some());
+        let tranche = serde_json::json!({
+            "pid": 55_001, "sender": "9900000000001",
+            "tranchengroesse": { "wert": "50", "einheit": "%" },
+        });
+        assert!(UtilmdPayload::from_payload(&tranche).is_err());
+        let aperak = serde_json::json!({
+            "sender": "a", "pid": 29_001, "orig_message_ref": "UNH1", "positive": false,
+        });
+        assert!(undeclared_key("APERAK", &aperak).is_some());
+        // A declared payload passes, and a payload missing a field is the
+        // renderer's to name.
+        assert_eq!(
+            undeclared_key(
+                "UTILMD",
+                &serde_json::json!({ "pid": 44_115, "sender": "x" })
+            ),
+            None
+        );
+        assert_eq!(undeclared_key("UTILMD", &serde_json::json!({})), None);
+        assert_eq!(undeclared_key("ProcessCompleted", &utilmd), None);
     }
 }

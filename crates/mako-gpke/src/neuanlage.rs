@@ -631,7 +631,6 @@ impl Workflow for GpkeNeuanlageWorkflow {
                         data.sender.as_str(),
                         serde_json::json!({
                             "pid":          rpid.as_u32(),
-                            "anfrage_pid":  data.pruefidentifikator.as_u32(),
                             "sender":       data.receiver.as_str(),
                             "receiver":     data.sender.as_str(),
                             "malo":         nennt_marktlokation.then(|| data.location_id.as_str()),

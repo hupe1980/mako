@@ -99,9 +99,14 @@ An outbound payload is a typed struct from `mako_engine::payload`
 (`AperakPayload`, `UtilmdPayload`, …): the workflow builds it with
 `PendingOutbox::typed`, `makod`'s renderer reads it back with
 `OutboundPayload::from_payload`, so a field renamed on one side does not compile
-on the other. The structs are tolerant readers (`Option` fields, no
-`deny_unknown_fields`), because an outbox row written by one build may be
-drained by the next.
+on the other. A field is an `Option` or defaults, so a row that lacks a field
+a later build added still reads; a key the struct does not declare is
+refused (`deny_unknown_fields`), because a producer that writes the payload
+with `json!` can misspell a key and serde would drop it — a segment that never
+reaches the wire. The render names the key, and in a debug build
+`PendingOutbox::new` panics where it is written, so every workflow test that
+writes one fails at the producer. `cargo xtask check-event-payloads` holds
+every payload type strict and keeps each out of event and state enums.
 
 ### `Process`
 

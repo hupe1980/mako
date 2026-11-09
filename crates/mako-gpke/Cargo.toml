@@ -15,6 +15,9 @@ categories   = ["data-structures"]
 mako-fristen = { workspace = true }
 mako-engine = { workspace = true }
 mako-invoic = { workspace = true }
+# The Antwortcode catalogue (`codes`, built without a role feature): an answer
+# refuses a code its Entscheidungsbaum does not publish.
+mako-pruefung = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 time        = { workspace = true }

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {#- ⚠ Guarded numbers. `services/makod/tests/it/published_counts.rs` reads this file
-    and requires the phrases "472 Prüfidentifikatoren" and "71 workflows" to
+    and requires the phrases "473 Prüfidentifikatoren" and "73 workflows" to
     survive tag-stripping, so a number must stay immediately before its unit with
     only markup between them. `e2e_ahb_rule_coverage_guard.rs` reads the AHB-rule
     count out of the last <strong> element preceding the words it greps for in
@@ -43,16 +43,16 @@
 <section class="stats" aria-label="Scope">
   <div class="stats-inner">
     <div><strong>482 / 482</strong><span>published Prüfidentifikatoren imported</span></div>
-    <div><strong>472</strong><span>Prüfidentifikatoren routed</span></div>
-    <div><strong>71</strong><span>MaKo workflows</span></div>
+    <div><strong>473</strong><span>Prüfidentifikatoren routed</span></div>
+    <div><strong>73</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>14</strong><span>services</span></div>
     <div><strong>4</strong><span>deployable roles</span></div>
   </div>
   <p class="stats-note wrap">Three views of one catalogue. Every one of the 482
-    Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported; 472 are
+    Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported; 473 are
     <em>routed</em> to a workflow — including the DVGW gas codes BDEW does not publish — and
-    <strong>437</strong> additionally carry validated AHB segment rules. The 35 that do not
+    <strong>438</strong> additionally carry validated AHB segment rules. The 35 that do not
     are exactly that DVGW block: ALOCAT, NOMINT/NOMRES and SSQNOT ride <code>dvgw-edi</code>,
     for which no BDEW AHB exists to import rules from. A release that would shrink any of the
     three fails the build.</p>

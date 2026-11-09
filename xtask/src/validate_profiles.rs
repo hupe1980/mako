@@ -37,47 +37,88 @@ use serde::Deserialize;
 const PROFILES_DIR: &str = "crates/edi-energy/profiles";
 const MIRROR_MANIFEST: &str = "regulatories/bdew-mako/manifest.json";
 
-/// Prüfidentifikatoren BDEW retired: (message type, track suffix, PID, why).
+/// Prüfidentifikatoren BDEW retired: (message type, track suffix, PID, the
+/// first profile without it, why).
+///
 /// A PID that vanishes between two releases and is not listed here is an
-/// import regression.
-const RETIRED_PIDS: &[(&str, &str, u32, &str)] = &[
+/// import regression. The profile it names must be the one that drops it: the
+/// release a PID leaves decides how long a process created under the previous
+/// one can still receive it, so a wrong release in this list is a wrong
+/// statement about which messages may still arrive.
+const RETIRED_PIDS: &[(&str, &str, u32, &str, &str)] = &[
     (
         "ORDERS",
         "",
         17003,
-        "retired in ORDERS AHB 1.1b (01.04.2026) — Beauftragung zur Änderung der Technik (Messlokationsänderung Gas)",
+        "fv20261001",
+        "dropped by ORDERS AHB 1.1b (Anwendungszeitpunkt 01.10.2026); AHB 1.1a (fv20260401) still publishes it — Beauftragung zur Änderung der Technik (Messlokationsänderung Gas)",
     ),
     (
         "ORDERS",
         "",
         17114,
-        "retired in ORDERS AHB 1.1b (01.04.2026) — Anforderung der bilanzierten Menge",
+        "fv20261001",
+        "dropped by ORDERS AHB 1.1b (Anwendungszeitpunkt 01.10.2026); AHB 1.1a (fv20260401) Kap. 4.2.2, S. 28 still publishes it, NB an ÜNB — Anforderung der bilanzierten Menge",
     ),
     (
         "IFTSTA",
         "",
         21015,
+        "fv20261001",
         "withdrawn by IFTSTA AHB 2.1 Änd-ID 27061 (01.10.2026)",
     ),
     (
         "IFTSTA",
         "",
         21024,
+        "fv20261001",
         "withdrawn by IFTSTA AHB 2.1 (01.10.2026) — Messstellenumbau, Änderungshistorie",
     ),
     (
         "IFTSTA",
         "",
         21026,
+        "fv20261001",
         "withdrawn by IFTSTA AHB 2.1 (01.10.2026) — Messstellenumbau, Änderungshistorie",
     ),
     (
         "ORDRSP",
         "",
         19115,
+        "fv20261001",
         "withdrawn by ORDRSP AHB 1.1b (01.10.2026) — Ablehnung Anforderung bilanzierte Menge",
     ),
 ];
+
+/// The findings for the Prüfidentifikatoren `vanished` between the profiles
+/// `a` and `b` (directory names, `<type>/fv<yyyymmdd>`) of one `ty`/`suffix`
+/// chain: each must be listed in `retired` under `b`'s release.
+fn vanished_pid_errors(
+    ty: &str,
+    suffix: &str,
+    a: &str,
+    b: &str,
+    vanished: &BTreeSet<u32>,
+    retired: &[(&str, &str, u32, &str, &str)],
+) -> Vec<String> {
+    let release_of = |dir: &str| dir.rsplit('/').next().unwrap_or(dir).to_owned();
+    let mut errors = Vec::new();
+    for pid in vanished {
+        let entry = retired
+            .iter()
+            .find(|(t, s, p, _, _)| *t == ty && *s == suffix && p == pid);
+        match entry {
+            None => errors.push(format!(
+                "{b}: Prüfidentifikator {pid} of {a} is gone — an import regression unless BDEW retired it (then list it in RETIRED_PIDS)"
+            )),
+            Some((_, _, _, gone_from, _)) if *gone_from != release_of(b) => errors.push(format!(
+                "RETIRED_PIDS says {ty}{suffix} {pid} is gone from {gone_from}, but {b} is the first profile without it — {a} still publishes it"
+            )),
+            Some(_) => {}
+        }
+    }
+    errors
+}
 
 #[derive(Deserialize)]
 struct Sources {
@@ -827,17 +868,15 @@ pub fn run(workspace_root: &str) -> bool {
                     }
                 }
             }
-            for pid in a.3.difference(&b.3) {
-                let retired = RETIRED_PIDS
-                    .iter()
-                    .any(|(t, s, p, _)| t == ty && *s == suffix && p == pid);
-                if !retired {
-                    errors.push(format!(
-                        "{}: Prüfidentifikator {pid} of {} is gone — an import regression unless BDEW retired it (then list it in RETIRED_PIDS)",
-                        b.0, a.0
-                    ));
-                }
-            }
+            let vanished: BTreeSet<u32> = a.3.difference(&b.3).copied().collect();
+            errors.extend(vanished_pid_errors(
+                ty,
+                suffix,
+                &a.0,
+                &b.0,
+                &vanished,
+                RETIRED_PIDS,
+            ));
         }
         if let Some(last) = chain.last()
             && last.2.is_some()
@@ -878,8 +917,50 @@ pub fn run(workspace_root: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        UNEVALUATED_FORMATBEDINGUNGEN, entailed_publikationsdatum, format_ids, publication_errors,
+        RETIRED_PIDS, UNEVALUATED_FORMATBEDINGUNGEN, entailed_publikationsdatum, format_ids,
+        publication_errors, vanished_pid_errors,
     };
+
+    /// A retired PID must name the release that drops it. ORDERS 17114 is
+    /// published by AHB 1.1a (fv20260401, Kap. 4.2.2) and gone from AHB 1.1b
+    /// (fv20261001); naming fv20260401 would tell every reader that a process
+    /// created under that release can no longer receive it.
+    #[test]
+    fn a_retired_pid_that_names_the_wrong_release_is_refused() {
+        let vanished: std::collections::BTreeSet<u32> = [17_114].into();
+        let wrong = [("ORDERS", "", 17_114, "fv20260401", "wrong release")];
+        let errors = vanished_pid_errors(
+            "ORDERS",
+            "",
+            "orders/fv20260401",
+            "orders/fv20261001",
+            &vanished,
+            &wrong,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("orders/fv20261001 is the first profile without it"));
+
+        assert!(
+            vanished_pid_errors(
+                "ORDERS",
+                "",
+                "orders/fv20260401",
+                "orders/fv20261001",
+                &vanished,
+                RETIRED_PIDS,
+            )
+            .is_empty()
+        );
+        let unlisted = vanished_pid_errors(
+            "ORDERS",
+            "",
+            "orders/fv20260401",
+            "orders/fv20261001",
+            &[17_999].into(),
+            RETIRED_PIDS,
+        );
+        assert!(unlisted[0].contains("import regression"), "{unlisted:?}");
+    }
 
     /// The exemption list only shrinks.
     ///

@@ -88,7 +88,8 @@ Commands:
                         credential fields, role columns, feature-gated security modules —
                         names where it is consulted, or why nothing does
   check-frist-literals   Refuse a Werktage or clock-time literal in a string that also names
-                        a Festlegung, an AHB or an AWH — the Frist renders from mako_fristen
+                        a Festlegung, an AHB or an AWH, and a Werktage count in code that is
+                        an integer literal — the Frist renders or reads from mako_fristen
   policy-inventory       Generate the operator-policy page from the policy_choice! declarations
                         (--check: refuse a page that differs; --json <file>: the evidence input)
   check-policy-settings  Every operator policy option sourced, its docs anchor resolving, the

@@ -628,47 +628,73 @@ carries `earliest_lieferbeginn` and `berlin_date`. The `202` carries
 
 ### Gas: `POST /api/v1/start-supply-gas`
 
-Initiates a GeLi Gas Lieferbeginn (UTILMD 44001).
+Initiates a GeLi Gas Lieferbeginn (UTILMD 44001). The body carries the
+Lieferant's contract facts the Anmeldung NN makes Muss (UTILMD AHB Gas 1.2
+Kap. 5.6); `vertragd` sends them from the supply contract.
 
 ```bash
 curl -X POST http://processd:8580/api/v1/start-supply-gas \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "malo_id":    "10001234558",
-    "zaehlpunkt": "DE00123456789012345678901234567890",
-    "process_date": "20261001",
-    "bilanzkreis": "9870000000006"
+    "malo_id": "51238696012",
+    "process_date": "20261201",
+    "transaktionsgrund": "E03",
+    "bilanzkreis": "9870000000006",
+    "abrechnungsintervall_monate": 12,
+    "haushaltskunde": true,
+    "netznutzungsvertrag": "LIEFERANT_NB",
+    "netznutzung_zahler": "LIEFERANT",
+    "gemeinderabatt_prozent": "0",
+    "kunde": { "vorname": "Erika", "nachname": "Mustermann",
+               "anschrift": { "strasse": "Hauptstraße", "hausnummer": "1",
+                              "postleitzahl": "50667", "ort": "Köln", "landescode": "DE" } },
+    "ablesekarte": { "vorname": "Erika", "nachname": "Mustermann",
+               "anschrift": { "strasse": "Hauptstraße", "hausnummer": "1",
+                              "postleitzahl": "50667", "ort": "Köln", "landescode": "DE" } }
   }'
 ```
 
-| Field | Required | Notes |
+| Field | Required | Segment (UTILMD AHB Gas 1.2 Kap. 5.6) |
 |---|---|---|
-| `malo_id` | ✓ | Gas-MaLo-ID — rendered into `SG5 LOC+Z16`; supplied by the ERP |
-| `zaehlpunkt` | ✓ | Zählpunktbezeichnung (RFF+Z13) |
-| `process_date` | ✓ | Lieferbeginn date (YYYYMMDD, CET/CEST) |
-| `bilanzkreis` | ✓* | `SG10 CCI+Z19` DE 7037 (UTILMD AHB Gas 1.2, Muss on 44001) — Gas has no Produktpaket |
-| `transaktionsgrund` | — | `E03` Wechsel (default), `E01`/`E02` Einzug |
+| `malo_id` | ✓ | `SG5 LOC+172` under `IMD++Z36+Z12` (S. 44, 46); supplied by the ERP |
+| `process_date` | ✓ | `SG4 DTM+92`, YYYYMMDD (CET/CEST) |
+| `transaktionsgrund` | ✓ | `SG4 STS+7` — a code the 44001 column admits (S. 45), read from the profile in force |
+| `bilanzkreis` | ✓* | `SG10 CCI+Z19` (S. 50) — Gas has no Produktpaket |
+| `abrechnungsintervall_monate` | ✓ | `SG6 DTM+Z20` — 1, 3, 6 or 12 (S. 48) |
+| `haushaltskunde` | ✓ | `SG10 CCI+++Z15`/`Z18` Gruppenzuordnung nach EnWG (S. 51) |
+| `netznutzungsvertrag` | ✓ | `CAV+Z74` — `LIEFERANT_NB` (`Z09`) or `KUNDE_NB` (`Z08`) (S. 52) |
+| `netznutzung_zahler` | ✓ | `CAV+Z73` — `LIEFERANT` (`Z11`), or `KUNDE` (`Z10`) beside `KUNDE_NB` only (`[216]`) |
+| `gemeinderabatt_prozent` | ✓ | `SG8 SEQ+Z12 QTY+Z16` — 0 to 10, two Nachkommastellen (S. 55) |
+| `kunde` | ✓ | `SG12 NAD+Z09` and `NAD+Z04` Korrespondenzanschrift (S. 63–64) |
+| `ablesekarte` | ✓ | `SG12 NAD+Z05` Name und Adresse für die Ablesekarte (S. 65) |
 
 \* Same fallback as Strom. A `process_date` that is not a YYYYMMDD date is
-`INVALID_DATE`, and the forwarded payload is exactly the fields above. A Lieferantenwechsel needs **10 WT** Mindestvorlauf
-(AWH GeLi Gas 2.0 Kap. 2.5.2 Nr. 1), enforced here; an Einzug passes with a
+`INVALID_DATE`. Every missing fact is named in one `422`
+`ANMELDEDATEN_UNVOLLSTAENDIG` (`fehlend`), a value the column cannot carry in
+`ANMELDEDATEN_UNGUELTIG` (`maengel`), and a Transaktionsgrund outside the column
+— `e03` included — in `TRANSAKTIONSGRUND_UNZULAESSIG` (`zulaessig`). The body
+forwarded to `makod` is `mako_markt::commands::GeliLieferbeginnAnmelden`. A
+Lieferantenwechsel (`E03`) needs **10 WT** Mindestvorlauf (AWH GeLi Gas 2.0
+Kap. 2.5.2 Nr. 1), enforced here; an Einzug passes with a
 `vorlauffrist_hinweis`, because the NB corrects the date rather than rejecting
 (Kap. 4). The GNB answers 44002 / 44003 by **Ablauf des 4. WT** (Kap. 3.2.3).
 
 `POST /api/v1/end-supply` takes `malo_id` and `lieferende_datum` (ISO-8601) and
 forwards `gpke.lieferende.anmelden` as `LF`. `POST /api/v1/end-supply-gas` takes
-`malo_id`, `zaehlpunkt` and `process_date` (YYYYMMDD, `INVALID_DATE` otherwise)
-— the fields `geli.lieferende.anmelden` reads — and forwards it as `LFG`, the
-only role that command is licensed to. All fields are mandatory; the notice
-period is `vertragd`'s to enforce.
+`malo_id` and `process_date` (YYYYMMDD, `INVALID_DATE` otherwise) — the fields
+`geli.lieferende.anmelden` reads — and forwards it as `LFG`, the only role that
+command is licensed to. All fields are mandatory; the notice period is
+`vertragd`'s to enforce.
 
 ### Gas Datenabruf
 
 Abrechnungsbrennwert and Zustandszahl are requested through `makod`'s command
-API (`geli.datenabruf.anfragen`, ORDERS 17103, payload `malo_id` and the
-required `zeitspanne_bis`): the GNB answers within ten Werktage, but not before
-the 10. Werktag of the month after the Zeitspanne ends (GeLi Gas 3.0 Kap. 4.2).
+API (`geli.datenabruf.anfragen`, ORDERS 17103, payload `malo_id`, `melo_id`,
+`zeitspanne_von` and `zeitspanne_bis`): the GNB answers within ten Werktage, but
+not before the 10. Werktag of the month after the Zeitspanne ends (GeLi Gas 3.0
+Kap. 4.2). The Zeitspanne lies in the past and ended at most twelve months
+before the Anfrage.
 The answer is MSCONS 13007 or ORDRSP 19103; a delivery updates `edmd`
 `meter_billing_periods` via `record_gas_quality`.
 
@@ -1156,7 +1182,8 @@ target: **≥ 80 %**. The Prüfschritte are `mako_pruefung::msb`.
 ```
 de.mako.process.initiated (PID 55039 / 55042 / 55051 / 55168)
   → GET marktd /api/v1/melos/{melo_id}          ← MeLo known?
-  → GET marktd /api/v1/partners/{msb_mp_id}     ← Rahmenvertrag § 9 Abs. 1 Nr. 3 MsbG?
+  → GET marktd /api/v1/msb-rahmenvertraege/check ← Rahmenvertrag § 9 Abs. 1 Nr. 3 MsbG?
+      (55042/44042: Sparte, NB, MSBN, Zuordnungsbeginn)
   → mako_pruefung::msb::pruefe_{anmeldung,abmeldung,kuendigung}
       Accept   → wim.geraetewechsel.bestaetigen (antwortcode) [if auto_accept]
                  else approval_queue with the WiM Frist
@@ -1167,15 +1194,15 @@ de.mako.process.initiated (PID 55039 / 55042 / 55051 / 55168)
 The Frist runs from the Übertragungstag in the CloudEvent's `time`, so a
 redelivery does not restart it.
 
-**Anmeldung MSB (55042), `E_0201`, answered by the NB** (WiM Strom Teil 1
-Kap. 2.3.2 Nr. 2):
+**Anmeldung MSB (55042/44042), `E_0201`/`E_2002`, answered by the NB** (WiM
+Strom Teil 1 Kap. 2.3.2 Nr. 2; AWH WiM Gas 2.0 Kap. 3.5.2 Nr. 2):
 
 | Check | Outcome on failure |
 |---|---|
 | Messlokation known to this NB | `ZC9` |
 | Versicherung über die Beauftragung durch den AN vorhanden | `ZB6` |
 | Mindestvorlaufzeit eingehalten — 15 WT, 7 WT bei erstmaliger Einrichtung | `E17`, naming the earliest reachable Zuordnungsbeginn |
-| Vertrag nach § 9 Abs. 1 Nr. 3 MsbG mit dem MSBN | Escalate — `E_0201` publishes no code |
+| Vertrag nach § 9 Abs. 1 Nr. 3 MsbG mit dem MSBN — `marktd` `msb-rahmenvertraege/check` for the order's Sparte, NB and MSBN, `abgeschlossen` and valid on the Zuordnungsbeginn | Escalate — `E_0201` publishes no code; also when the order names no NB or MSBN MP-ID. A `marktd` failure is a redelivery, never a finding |
 
 The metering technology is not a ground: §5 MsbG gives the Anschlussnutzer a
 free choice of MSB, §14 MsbG the right to switch.

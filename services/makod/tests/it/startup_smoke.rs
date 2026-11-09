@@ -58,7 +58,7 @@ fn each_role_registers_its_module_set() {
             &["gpke", "wim", "mabis", "emob", "redispatch"],
         ),
         (Rolle::NbGas, &["wim", "geli-gas", "mako-gabi-gas"]),
-        (Rolle::MsbStrom, &["wim"]),
+        (Rolle::MsbStrom, &["gpke", "wim"]),
         (Rolle::MsbGas, &["wim"]),
         (Rolle::EsaStrom, &["wim"]),
     ];

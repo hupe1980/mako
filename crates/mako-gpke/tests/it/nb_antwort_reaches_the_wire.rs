@@ -157,13 +157,13 @@ fn every_code_used_here_is_published_by_its_tree() {
 
 // ── Fall b: the interval the Bestätigung leaves behind ────────────────────────
 
-/// **Fall b travels with the Bestätigung.** `E_0624` `A34` lets the LFA release
-/// the Marktlokation *before* the Zuordnungsbeginn the NB then confirms, and the
-/// days in between are supplied by nobody — § 38 Abs. 1 EnWG. No single message
-/// states both ends, so the LFA's date rides the completion payload to the
-/// supply projection, which holds the other.
+/// **Fall b is not a segment of the 55002.** `E_0624` `A34` lets the LFA
+/// release the Marktlokation *before* the Zuordnungsbeginn the NB then
+/// confirms; the Bestätigung still names the Zuordnungsbeginn the LFN asked
+/// for, and the LFA's date has no place in the UTILMD — a key there is one no
+/// renderer reads.
 #[test]
-fn a_bestaetigung_carries_the_altlieferants_own_lieferende() {
+fn a_bestaetigung_keeps_the_zuordnungsbeginn_beside_an_earlier_lieferende() {
     let out = answer_with(
         55001,
         LfAntwort::zustimmung("A51", "E_0623"),
@@ -171,10 +171,8 @@ fn a_bestaetigung_carries_the_altlieferants_own_lieferende() {
     );
     let payload = utilmd(&out);
     assert_eq!(payload["pid"], 55002);
-    // The Zuordnungsbeginn stands where the LFN asked for it …
     assert_eq!(payload["process_date"], "20260901");
-    // … and the earlier release is stated beside it, not instead of it.
-    assert_eq!(payload["lfa_lieferende"], "20260815");
+    assert!(payload.get("lfa_lieferende").is_none());
 }
 
 /// The ordinary answer states none: the LFA releases exactly at the

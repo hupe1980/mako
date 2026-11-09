@@ -13,7 +13,8 @@
 //!
 //! The NB dispatches ORDRSP 19116 (Bestätigung) or 19117 (Ablehnung) back to the LF
 //! via the outbox. When NB forwards an Anfrage Sperrung (17116) to the MSB, the MSB
-//! responds with ORDRSP 19118 (Bestätigung) or 19119 (Ablehnung).
+//! responds with ORDRSP 19118 (Bestätigung) or 19119 (Ablehnung). The NB never
+//! receives a 17116: the MSB that does runs [`crate::sperrung_msb`].
 //!
 //! For the **LF-side** workflow (LF initiates Sperrung and awaits NB's ORDRSP),
 //! see [`crate::sperrung_lf`].
@@ -50,9 +51,11 @@ pub const WORKFLOW_NAME: &str = "gpke-sperrung";
 /// | PID   | Direction  | Description                              |
 /// |-------|------------|------------------------------------------|
 /// | 17115 | LF → NB    | Sperrauftrag                             |
-/// | 17116 | NB → MSB   | Anfrage Sperrung (NB queries MSB)        |
 /// | 17117 | LF → NB    | Entsperrauftrag                          |
-pub const SPERRUNG_PIDS: &[u32] = &[17115, 17116, 17117];
+///
+/// 17116 „Anfrage Sperrung" runs NB → MSB (ORDERS AHB 1.1b Kap. 4.3, S. 25):
+/// the MSB receives it, in [`crate::sperrung_msb`].
+pub const SPERRUNG_PIDS: &[u32] = &[17115, 17117];
 
 /// ORDCHG Prüfidentifikatoren for Stornierung of a Sperr-/Entsperrauftrag.
 ///
@@ -73,9 +76,9 @@ pub const MSB_ANTWORT_PIDS: &[u32] = &[19118, 19119];
 /// Entsperrauftrag.
 ///
 /// „Unverzüglich, jedoch spätester ÜT ist der 1. WT nach dem ÜT" for 17115 /
-/// 17117 / 39000, and der **3. WT** for the Anfrage Sperrung 17116 that the NB
-/// puts to the MSB (BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 / 3.5.2.2 / 3.5.3.2).
-/// Werktage, not wall-clock hours, and not one flat number across the four.
+/// 17117 / 39000 (BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 / 3.5.2.2 / 3.5.3.2).
+/// Werktage, not wall-clock hours. The MSB's 3-WT window on the Anfrage
+/// Sperrung 17116 is the MSB's, in [`crate::sperrung_msb`].
 ///
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
@@ -93,7 +96,7 @@ pub const SPERRUNG_WINDOW_LABEL: &str = "gpke-sperrung-window";
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum SperrungEvent {
-    /// ORDERS Sperrung/Entsperrauftrag (17115/17116/17117) received from NB.
+    /// ORDERS Sperrung/Entsperrauftrag (17115/17117) received from the LF.
     AnweisungErhalten {
         /// Marktlokation EIC code.
         location_id: MaLo,
@@ -103,7 +106,7 @@ pub enum SperrungEvent {
         document_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
-        /// BDEW Prüfidentifikator (17115, 17116, or 17117).
+        /// BDEW Prüfidentifikator (17115 or 17117).
         pruefidentifikator: Pruefidentifikator,
     },
     /// EDIFACT message passed profile validation.
@@ -214,7 +217,7 @@ pub struct SperrungData {
     pub sender: MarktpartnerCode,
     /// EDIFACT document date from the UTILMD.
     pub document_date: String,
-    /// BDEW Prüfidentifikator (17115, 17116, or 17117).
+    /// BDEW Prüfidentifikator (17115 or 17117).
     pub pruefidentifikator: Pruefidentifikator,
 }
 
@@ -234,7 +237,7 @@ pub enum SperrungState {
     /// No events yet.
     #[default]
     New,
-    /// ORDERS Sperrauftrag/Entsperrauftrag (17115/17116/17117) received; awaiting validation.
+    /// ORDERS Sperrauftrag/Entsperrauftrag (17115/17117) received; awaiting validation.
     AnweisungErhalten(SperrungData),
     /// Validation passed; awaiting execution confirmation.
     ValidationPassed(SperrungData),
@@ -314,10 +317,10 @@ impl SperrungState {
 /// Commands for the GPKE Sperrung workflow (NB-role perspective).
 #[derive(Clone)]
 pub enum SperrungCommand {
-    /// Inbound ORDERS 17115/17116/17117 received from LF. Domain fields extracted and
+    /// Inbound ORDERS 17115/17117 received from LF. Domain fields extracted and
     /// validation performed by the caller before constructing this command.
     ReceiveSperrung {
-        /// Prüfidentifikator of the inbound ORDERS (17115, 17116, or 17117).
+        /// Prüfidentifikator of the inbound ORDERS (17115 or 17117).
         pid: Pruefidentifikator,
         /// GLN of the LF sending the Sperrungsanweisung.
         sender: MarktpartnerCode,
@@ -414,7 +417,7 @@ impl Workflow for GpkeSperrungWorkflow {
     ///
     /// | Label | State guard | Command emitted | Fundstelle |
     /// |---|---|---|---|
-    /// | [`SPERRUNG_WINDOW_LABEL`] | `AnweisungErhalten` or `ValidationPassed` | `TimeoutExpired` | BK6-24-174 GPKE Teil 2 Kap. 3.5 — 1 WT (17115/17117/39000), 3 WT (17116) |
+    /// | [`SPERRUNG_WINDOW_LABEL`] | `AnweisungErhalten` or `ValidationPassed` | `TimeoutExpired` | BK6-24-174 GPKE Teil 2 Kap. 3.5 — 1 WT (17115/17117/39000) |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
@@ -518,7 +521,7 @@ impl Workflow for GpkeSperrungWorkflow {
                 }
                 if !SPERRUNG_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a Sperrung PID (17115, 17116, or 17117), got {pid}",
+                        "expected a Sperrauftrag or Entsperrauftrag (17115 or 17117), got {pid}",
                     )));
                 }
                 // Clone before move for APERAK emission in the validation-failed path.

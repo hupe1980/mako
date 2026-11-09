@@ -58,7 +58,7 @@ fn new_event() -> NewEvent {
 }
 
 fn pending_outbox() -> PendingOutbox {
-    PendingOutbox::new("APERAK", "9900000000001", serde_json::json!({"ok": true}))
+    PendingOutbox::aperak_anerkennung("9900000000002", "9900000000001", "UNH1")
 }
 
 async fn open() -> SlateDbStore {
@@ -259,13 +259,9 @@ async fn pending_excludes_future_dated_messages() {
     let now = OffsetDateTime::now_utc();
     let future = now + time::Duration::hours(1);
 
-    let due_now = PendingOutbox::new("APERAK", "9900000000001", serde_json::json!({"now": true}));
-    let deferred = PendingOutbox::new(
-        "APERAK",
-        "9900000000001",
-        serde_json::json!({"future": true}),
-    )
-    .with_deliver_after(future);
+    let due_now = PendingOutbox::aperak_anerkennung("9900000000002", "9900000000001", "UNH1");
+    let deferred = PendingOutbox::aperak_anerkennung("9900000000002", "9900000000001", "UNH2")
+        .with_deliver_after(future);
 
     store
         .append(

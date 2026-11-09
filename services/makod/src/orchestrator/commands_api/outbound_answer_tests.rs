@@ -20,6 +20,10 @@ const OWN_MP_ID: &str = "9900357000004";
 const PARTNER_MP_ID: &str = "9905550000005";
 const MELO_ID: &str = "DE0001000001234567890000000000001";
 const VORGANG_ID: &str = "STORNO-VG-1";
+/// DVGW-Codenummern for the Gas Stornierung: a Gas UTILMD admits NAD DE 3055
+/// `9` or `332` only (UTILMD AHB Gas 1.2 Kap. 5.2), never the BDEW `293`.
+const GAS_OWN_MP_ID: &str = "9807317000007";
+const GAS_PARTNER_MP_ID: &str = "9870012345678";
 
 async fn state_for(roles: &[&str]) -> CommandsApiState {
     let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
@@ -111,8 +115,8 @@ async fn seed_geli_storno(state: &CommandsApiState) {
         mako_geli_gas::STORNIERUNG_WORKFLOW_NAME,
         mako_geli_gas::GeliGasStornierungCommand::ReceiveUtilmd {
             pid: Pruefidentifikator::const_new(44022),
-            sender: MarktpartnerCode::new(PARTNER_MP_ID),
-            receiver: MarktpartnerCode::new(OWN_MP_ID),
+            sender: MarktpartnerCode::new(GAS_PARTNER_MP_ID),
+            receiver: MarktpartnerCode::new(GAS_OWN_MP_ID),
             vorgang_id: MaLo::new(VORGANG_ID),
             document_code: "E01".to_owned(),
             document_date: "20261104".to_owned(),
@@ -204,10 +208,11 @@ async fn the_gnb_answers_a_gas_stornierung_with_utilmd_44023_or_44024() {
     .expect("the GNB refuses the 44022");
     let utilmd = outbox(&state, "UTILMD").await;
     assert_eq!(utilmd.len(), 1);
-    assert_eq!(utilmd[0].0, PARTNER_MP_ID);
+    assert_eq!(utilmd[0].0, GAS_PARTNER_MP_ID);
     assert_eq!(utilmd[0].1["pid"], 44024);
     assert_eq!(utilmd[0].1["antwort_code"], "E14");
     assert_eq!(utilmd[0].1["antwort_codeliste"], "G_0003");
+    assert_renders_to_its_profile(&state, &utilmd[0]);
 
     let other = state_for(&["GNB"]).await;
     seed_geli_storno(&other).await;
@@ -221,6 +226,22 @@ async fn the_gnb_answers_a_gas_stornierung_with_utilmd_44023_or_44024() {
     let utilmd = outbox(&other, "UTILMD").await;
     assert_eq!(utilmd.len(), 1);
     assert_eq!(utilmd[0].1["pid"], 44023);
+    assert_renders_to_its_profile(&other, &utilmd[0]);
+}
+
+/// The answer renders to a UTILMD its AHB column accepts — the check the
+/// pre-send gate runs — so a 44023/44024 is never an APERAK in disguise nor a
+/// message the gate dead-letters (UTILMD AHB Gas 1.2 Kap. 5.2).
+fn assert_renders_to_its_profile(
+    state: &CommandsApiState,
+    (recipient, payload): &(String, serde_json::Value),
+) {
+    let pending =
+        mako_engine::outbox::PendingOutbox::new("UTILMD", recipient.as_str(), payload.clone());
+    let findings =
+        crate::orchestrator::edifact_renderer::utilmd_ahb_findings(&pending, state.tenant_id)
+            .expect("the answer renders");
+    assert!(findings.is_empty(), "{}: {findings:#?}", payload["pid"]);
 }
 
 /// The answer is the Netzbetreiber's: the LF that sent the 55022 cannot post
@@ -615,52 +636,6 @@ fn gda_skeleton(pid: u32) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// The Stammdaten of a conformant answer — every `SG5 LOC`, `SG8` block and
-/// `SG12` segment of the profile's skeleton of `pid` — as the NB would post
-/// them.
-fn gda_stammdaten(pid: u32) -> mako_engine::payload::Stammdaten {
-    use mako_engine::payload::{StammdatenBlock, StammdatenLokation, StammdatenSegment};
-    let edi = gda_skeleton(pid);
-    let msg = edi_energy::parse(edi.as_bytes()).expect("skeleton parses");
-    let edi_energy::AnyMessage::Utilmd(u) = &msg else {
-        panic!("{pid} is a UTILMD");
-    };
-    let segment = |s: &edifact_rs::Segment<'_>| StammdatenSegment {
-        tag: s.tag.to_string(),
-        elemente: s
-            .elements
-            .iter()
-            .map(|e| e.components.iter().map(|(c, _)| c.to_string()).collect())
-            .collect(),
-    };
-    let mut out = mako_engine::payload::Stammdaten::default();
-    let mut in_sg12 = false;
-    for s in u.segments() {
-        match s.tag.as_ref() {
-            "LOC" => out.lokationen.push(StammdatenLokation {
-                qualifier: s.component_str(0, 0).unwrap_or_default().to_owned(),
-                id: s.component_str(1, 0).unwrap_or_default().to_owned(),
-            }),
-            "SEQ" => out.bloecke.push(StammdatenBlock {
-                seq: s.component_str(0, 0).unwrap_or_default().to_owned(),
-                segmente: vec![],
-            }),
-            "NAD" if !out.bloecke.is_empty() => {
-                in_sg12 = true;
-                out.sg12.push(segment(s));
-            }
-            "UNT" | "UNZ" => {}
-            _ if in_sg12 => out.sg12.push(segment(s)),
-            _ => {
-                if let Some(block) = out.bloecke.last_mut() {
-                    block.segmente.push(segment(s));
-                }
-            }
-        }
-    }
-    out
-}
-
 const GDA_NUMMER: &str = "GDA-4711";
 
 /// The NB's side: an inbound 17132 from the partner, open and owed an answer.
@@ -761,57 +736,66 @@ async fn the_anfrage_issues_its_own_number() {
     assert_eq!(orders[0].1["location"], MELO_ID);
 }
 
-/// The NB's answer leaves an AHB-valid UTILMD — 55035/55095 to a LF, 55060 to
-/// a MSB — with the Anfrage-Nummer in `SG6 RFF+AAV`.
+/// The NB's answer is built from marktd's record, never from the caller: a
+/// body carrying Stammdaten is refused as an unknown key, and without a
+/// readable marktd the answer is refused `503`, nothing is sent and the
+/// Anfrage stays open — its 1-WT window keeps running. The answer from a
+/// marktd that holds the bündel is `tests/it/e2e_gpke_gda_marktd.rs`.
 #[tokio::test]
-async fn the_nb_answers_with_an_ahb_valid_utilmd() {
-    for (pid, grund) in [(55_035, "ZY7"), (55_095, "ZY6"), (55_060, "ZY4")] {
+async fn the_nb_answer_reads_marktd_and_refuses_without_it() {
+    for pid in [55_035, 55_095, 55_060] {
         let state = state_for(&["NB"]).await;
         seed_gda_eingang(&state).await;
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "anfragender_mp_id": PARTNER_MP_ID,
             "anfrage_nummer": GDA_NUMMER,
             "antwort_pid": pid,
-            "stammdaten": gda_stammdaten(pid),
         });
-        dispatch_command(&state, "gpke.geschaeftsdatenanfrage.beantworten", &body)
-            .await
-            .unwrap_or_else(|e| panic!("the NB answers with {pid}: {e:?}"));
-        let utilmd = outbox_messages(&state, "UTILMD").await;
-        assert_eq!(utilmd.len(), 1, "{pid}");
-        assert_eq!(utilmd[0].recipient.as_ref(), PARTNER_MP_ID);
-        let wire = render_ahb_valid(&utilmd[0], OWN_MP_ID, "NB");
-        assert!(wire.contains(&format!("RFF+Z13:{pid}'")), "{wire}");
-        assert!(wire.contains(&format!("RFF+AAV:{GDA_NUMMER}'")), "{wire}");
-        assert!(wire.contains("BGM+E44+"), "{wire}");
-        assert!(wire.contains(&format!("STS+7++{grund}")), "{wire}");
+        assert!(
+            matches!(
+                dispatch_command(&state, "gpke.geschaeftsdatenanfrage.beantworten", &body).await,
+                Err(DispatchError::MarktdUnavailable(_))
+            ),
+            "{pid}: without marktd there is no answer"
+        );
+        body["stammdaten"] = serde_json::json!({ "lokationen": [], "bloecke": [] });
+        assert!(
+            matches!(
+                dispatch_command(&state, "gpke.geschaeftsdatenanfrage.beantworten", &body).await,
+                Err(DispatchError::InvalidPayload(_))
+            ),
+            "{pid}: the caller's Stammdaten are not a field"
+        );
+        assert!(outbox(&state, "UTILMD").await.is_empty(), "{pid}");
+        let current = super::current_state::<mako_gpke::GpkeGeschaeftsdatenanfrageWorkflow>(
+            &state,
+            &mako_gpke::geschaeftsdatenanfrage::netzbetreiber_key(PARTNER_MP_ID, GDA_NUMMER),
+            mako_gpke::GDA_WORKFLOW_NAME,
+        )
+        .await
+        .expect("state");
+        assert!(
+            matches!(current, mako_gpke::GdaState::Offen(_)),
+            "{pid}: the Anfrage stays open, got {current:?}"
+        );
     }
 }
 
-/// An answer that is no UTILMD answer to a 17132, or names no Stammdaten, is
-/// refused and nothing is sent.
+/// An answer that is no UTILMD answer to a 17132 is refused and nothing is
+/// sent.
 #[tokio::test]
 async fn an_answer_outside_the_column_is_refused() {
     let state = state_for(&["NB"]).await;
     seed_gda_eingang(&state).await;
-    let mut body = serde_json::json!({
+    let body = serde_json::json!({
         "anfragender_mp_id": PARTNER_MP_ID,
         "anfrage_nummer": GDA_NUMMER,
         "antwort_pid": 55_036,
-        "stammdaten": gda_stammdaten(55_035),
     });
-    assert!(
-        dispatch_command(&state, "gpke.geschaeftsdatenanfrage.beantworten", &body)
-            .await
-            .is_err()
-    );
-    body["antwort_pid"] = 55_035.into();
-    body["stammdaten"] = serde_json::json!({ "lokationen": [], "bloecke": [] });
-    assert!(
-        dispatch_command(&state, "gpke.geschaeftsdatenanfrage.beantworten", &body)
-            .await
-            .is_err()
-    );
+    assert!(matches!(
+        dispatch_command(&state, "gpke.geschaeftsdatenanfrage.beantworten", &body).await,
+        Err(DispatchError::InvalidPayload(_))
+    ));
     assert!(outbox(&state, "UTILMD").await.is_empty());
 }
 

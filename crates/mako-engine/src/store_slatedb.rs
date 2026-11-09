@@ -3436,11 +3436,8 @@ mod tests {
         let stream = make_stream("test/atomic");
 
         let event = make_event(1);
-        let pending_outbox = PendingOutbox::new(
-            "APERAK",
-            "9900000000001",
-            serde_json::json!({ "type": "APERAK" }),
-        );
+        let pending_outbox =
+            PendingOutbox::aperak_anerkennung("9900000000002", "9900000000001", "UNH1");
 
         store
             .append(
@@ -3605,11 +3602,8 @@ mod tests {
         let dl_store = store.as_deadline_store();
 
         let event = make_event(1);
-        let pending_outbox = PendingOutbox::new(
-            "APERAK",
-            "9900000000001",
-            serde_json::json!({ "type": "APERAK" }),
-        );
+        let pending_outbox =
+            PendingOutbox::aperak_anerkennung("9900000000002", "9900000000001", "UNH1");
         let deadline = Deadline::new(
             stream.clone(),
             ProcessId::new(),

@@ -698,7 +698,11 @@ impl ProcessdMcpHandler {
                  (spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn — \
                  BK6-24-174 GPKE Teil 2, SD Lieferbeginn).\n\n\
                  For Gas (GeLi Gas UTILMD G PID 44001):\n\
-                 POST /api/v1/start-supply-gas with malo_id, lieferbeginn_datum, gasqualitaet.\n\n\
+                 POST /api/v1/start-supply-gas with malo_id, process_date (YYYYMMDD), \
+                 transaktionsgrund and the contract facts the Anmeldung NN makes Muss — \
+                 abrechnungsintervall_monate, haushaltskunde, netznutzungsvertrag, \
+                 netznutzung_zahler, gemeinderabatt_prozent, kunde, ablesekarte (UTILMD AHB \
+                 Gas 1.2 Kap. 5.6). vertragd sends them from the supply contract.\n\n\
                  processd validates:\n\
                  - MaLo exists in marktd with correct netzebene/bilanzierungsgebiet\n\
                  - Active Preisblatt for the NB\n\

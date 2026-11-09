@@ -76,50 +76,29 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
     // would drop every inbound version without a trace. 13010–13012 likewise:
     // the LF and the MSB receive the normierte Profile and may answer with an
     // ORDERS 17211 Reklamation, which is what `mabis-profile` exists for.
-    // ── GPKE Datenabruf ORDERS Anfragen (→ MSB) ──────────────────────────────
-    // mako is the requester; it ingests only the ORDRSP answers. An MSB-side
-    // receiver for these does not exist.
-    (
-        17004,
-        "gpke-datenabruf",
-        "Anforderung von Werten — MSB receiver not implemented",
-    ),
-    (
-        17102,
-        "gpke-datenabruf",
-        "Anfrage Werte — MSB receiver not implemented",
-    ),
-    (
-        17113,
-        "gpke-datenabruf",
-        "Reklamation Werte — MSB receiver not implemented",
-    ),
     // ── MMM Allokationsliste Anforderungen ───────────────────────────────────
     (
         17110,
         "gpke-allokationsliste",
         "Anforderung Allokationsliste (LF → NB) — NB receiver not implemented",
     ),
-    // Retired in ORDERS AHB 1.1b (01.04.2026): absent from the current
-    // `fv20260401` profile and from the PID overview 4.0 (see `RETIRED_PIDS` in
-    // xtask). Still registered so messages from the `fv20251001` window resolve,
-    // but no counterparty can send one under the current release — this entry is
-    // to be dropped, not implemented.
+    // ORDERS fv20260401 (AHB 1.1a Kap. 4.2.2, S. 28, NB an ÜNB) publishes it;
+    // fv20261001 (AHB 1.1b, 01.10.2026) drops it — `RETIRED_PIDS` in xtask
+    // names that release. It stays registered while a process created under
+    // fv20260401 can still be open; then the registration and this entry go.
+    // It is not implemented: the receiver is the ÜNB.
     (
         17114,
         "gpke-allokationsliste",
-        "Anforderung bilanzierte Menge (NB → ÜNB) — RETIRED 01.04.2026, do not implement",
+        "Anforderung bilanzierte Menge (NB → ÜNB) — dropped by ORDERS fv20261001, do not implement",
     ),
     // ── Sperrprozesse ────────────────────────────────────────────────────────
-    (
-        17116,
-        "gpke-sperrung",
-        "Anfrage Sperrung (NB → MSB) — MSB receiver not implemented",
-    ),
+    // The Strom MSB receives 17116 in `gpke-sperrung-msb`; the Gas gMSB has no
+    // receiver yet, and the GNB-side workflow still names the PID.
     (
         17116,
         "geli-gas-sperrung-nb",
-        "Anfrage Sperrung (NB → MSB) — MSB receiver not implemented",
+        "Anfrage Sperrung (GNB → gMSB) — gMSB receiver not implemented",
     ),
     // ── GPKE Teil 3 Konfigurationsänderung ORDERS Anfragen (LF → NB/MSB) ─────
     // mako implements the LF side: it sends these and ingests the ORDRSP /
@@ -170,19 +149,15 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
         "gpke-konfiguration-aenderung",
         "Bestellung Änderung Abrechnungsdaten — NB receiver not implemented",
     ),
-    // ── WiM Technikänderung ORDERS Anfragen ──────────────────────────────────
-    // mako implements the requester side: it sends these and ingests the
-    // ORDRSP 19003–19007 answers. The MSB receiving side has no command —
-    // `TechnikAenderungCommand` models `SendAuftrag`, not `ReceiveAuftrag`.
-    (
-        17011,
-        "wim-technik-aenderung",
-        "Beauftragung Änderung der Technik (LF/NB → MSB) — MSB receiver not implemented",
-    ),
+    // ── GPKE Teil 3 Konfigurationsänderung, registered under WiM ────────────
+    // The MSB receives the 17011 Auftrag in `wim-technik-aenderung`
+    // (`ReceiveAuftrag`). 17118 is not a Technikänderung: the Anwendungsübersicht
+    // 4.0 (lfd. Nr. 22600–23180) files it under GPKE Teil 3 „Bestellung einer
+    // Konfiguration", answered by ORDRSP 19127 out of `E_0527` / `E_0539`.
     (
         17118,
         "wim-technik-aenderung",
-        "Bestellung Konfigurationsänderung (MSB → MSB) — MSB receiver not implemented",
+        "Bestellung Konfigurationsänderung (MSB → MSB, GPKE Teil 3) — registered under the wrong workflow, receiver not implemented",
     ),
     // ── MaBiS Listenabgleich replies ─────────────────────────────────────────
     // mako implements the *receiver of the list*: it ingests 55065/55195/55201/

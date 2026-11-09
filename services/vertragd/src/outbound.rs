@@ -27,7 +27,10 @@ use time::Date;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use mako_markt::utilmd_stammdaten::{Kunde, NetznutzungZahler, Netznutzungsvertrag};
+
 use crate::config::VertragdConfig;
+use crate::domain::Lieferbeginnanlass;
 
 /// How many times a task is attempted before it is dead-lettered.
 const MAX_ATTEMPTS: i32 = 8;
@@ -105,20 +108,18 @@ pub struct Task {
 ///
 /// # Errors
 ///
-/// Refuses a gas component without a Messlokation: `start-supply-gas` requires
-/// the Zählpunktbezeichnung (RFF+Z13, mandatory per the BK7-24-01-009 AHB), and
-/// a MaLo-ID is not one — an 11-digit MaLo in a 33-character Zählpunkt field is
-/// a malformed UTILMD, which the NB rejects after the fact instead of the API
-/// rejecting it now.
+/// Refuses a gas component without its [`GasAnmeldung`]: `start-supply-gas`
+/// carries the Lieferant's contract facts the Anmeldung NN 44001 makes Muss,
+/// and a task without them is a 422 on every attempt.
 pub fn lieferbeginn(
     komp_id: Uuid,
     sparte: &str,
     malo_id: &str,
-    melo_id: Option<&str>,
     bilanzkreis: Option<&str>,
     lieferbeginn: Date,
+    gas: Option<&GasAnmeldung>,
 ) -> Result<Task> {
-    let payload = lieferbeginn_body(sparte, malo_id, melo_id, bilanzkreis, lieferbeginn)?;
+    let payload = lieferbeginn_body(sparte, malo_id, bilanzkreis, lieferbeginn, gas)?;
     Ok(Task {
         kind: TaskKind::Lieferbeginn,
         komp_id: Some(komp_id),
@@ -140,14 +141,93 @@ fn compact_date(d: Date) -> String {
     format!("{:04}{:02}{:02}", d.year(), u8::from(d.month()), d.day())
 }
 
-/// The Zählpunktbezeichnung of a gas component: its Messlokation.
-fn gas_zaehlpunkt<'a>(malo_id: &str, melo_id: Option<&'a str>, call: &str) -> Result<&'a str> {
-    melo_id.filter(|m| !m.is_empty()).ok_or_else(|| {
-        anyhow::anyhow!(
-            "gas supply point {malo_id} has no melo_id; \
-             {call} requires the Zählpunktbezeichnung (RFF+Z13)"
-        )
-    })
+/// The Lieferant's contract facts a GeLi Gas Anmeldung NN 44001 carries
+/// beside the Marktlokation, the date and the Bilanzkreis (UTILMD AHB Gas 1.2
+/// Kap. 5.6) — each one the contract's, each Muss in the column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GasAnmeldung {
+    /// `SG4 STS+7` — from the component's [`Lieferbeginnanlass`].
+    pub transaktionsgrund: &'static str,
+    /// `SG6 DTM+Z20` — the contract's `abrechnungszyklus`.
+    pub abrechnungsintervall_monate: u8,
+    /// `SG10 CCI+++Z15`/`Z18` — the Kunde's `haushaltskunde`.
+    pub haushaltskunde: bool,
+    /// `SG10 CAV+Z74`.
+    pub netznutzungsvertrag: Netznutzungsvertrag,
+    /// `SG10 CAV+Z73`.
+    pub netznutzung_zahler: NetznutzungZahler,
+    /// `SG9 QTY+Z16` in Prozent.
+    pub gemeinderabatt_prozent: rust_decimal::Decimal,
+    /// `SG12 NAD+Z09`/`Z04` — the contract's Kunde.
+    pub kunde: Kunde,
+}
+
+impl GasAnmeldung {
+    /// Assemble the facts, or name every one the contract does not state.
+    ///
+    /// The Ablesekarte goes to the contract's Kunde: the contract names no
+    /// other addressee, and he is the Anschlussnutzer whose meter it reads.
+    ///
+    /// # Errors
+    ///
+    /// Each missing or unusable fact, named with the segment it fills.
+    pub fn aus_vertrag(
+        anlass: Option<Lieferbeginnanlass>,
+        abrechnungszyklus: &str,
+        haushaltskunde: bool,
+        netznutzungsvertrag: Option<Netznutzungsvertrag>,
+        netznutzung_zahler: Option<NetznutzungZahler>,
+        gemeinderabatt_prozent: Option<rust_decimal::Decimal>,
+        kunde: Kunde,
+    ) -> std::result::Result<Self, Vec<String>> {
+        let mut fehlend = Vec::new();
+        if anlass.is_none() {
+            fehlend.push("lieferbeginn_anlass (SG4 STS+7 Transaktionsgrund)".to_owned());
+        }
+        let intervall = crate::domain::abrechnungsintervall_monate(abrechnungszyklus);
+        if intervall.is_none() {
+            fehlend.push(format!(
+                "abrechnungszyklus {abrechnungszyklus:?} (SG6 DTM+Z20 Abrechnungsintervall des LF)"
+            ));
+        }
+        if netznutzungsvertrag.is_none() {
+            fehlend.push("netznutzungsvertrag (SG10 CAV+Z74)".to_owned());
+        }
+        if netznutzung_zahler.is_none() {
+            fehlend.push("netznutzung_zahler (SG10 CAV+Z73)".to_owned());
+        }
+        if gemeinderabatt_prozent.is_none() {
+            fehlend.push("gemeinderabatt_prozent (SG8 SEQ+Z12 QTY+Z16)".to_owned());
+        }
+        fehlend.extend(
+            kunde
+                .anmeldung_maengel()
+                .into_iter()
+                .map(|m| format!("the Kunde (SG12 NAD+Z09/Z04/Z05): {m}")),
+        );
+        match (
+            anlass,
+            intervall,
+            netznutzungsvertrag,
+            netznutzung_zahler,
+            gemeinderabatt_prozent,
+        ) {
+            (Some(anlass), Some(intervall), Some(vertrag), Some(zahler), Some(rabatt))
+                if fehlend.is_empty() =>
+            {
+                Ok(Self {
+                    transaktionsgrund: anlass.transaktionsgrund(),
+                    abrechnungsintervall_monate: intervall,
+                    haushaltskunde,
+                    netznutzungsvertrag: vertrag,
+                    netznutzung_zahler: zahler,
+                    gemeinderabatt_prozent: rabatt,
+                    kunde,
+                })
+            }
+            _ => Err(fehlend),
+        }
+    }
 }
 
 /// Build the `processd` Lieferbeginn call for the commodity.
@@ -156,8 +236,8 @@ fn gas_zaehlpunkt<'a>(malo_id: &str, melo_id: Option<&'a str>, call: &str) -> Re
 /// reads it through `processd::server::StartSupplyRequest` and
 /// `processd::server::StartSupplyGasRequest` as the handler does:
 /// - `start-supply` (Strom et al.) takes `lieferbeginn_datum` (ISO-8601);
-/// - `start-supply-gas` takes `zaehlpunkt` (the Messlokation) and
-///   `process_date` (YYYYMMDD).
+/// - `start-supply-gas` takes `process_date` (YYYYMMDD) and the
+///   [`GasAnmeldung`].
 ///
 /// `bilanzkreis` is the contract's own; without one processd uses the single
 /// `standard` entry of its `[[lf.bilanzkreise]]` and refuses the Anmeldung
@@ -165,20 +245,32 @@ fn gas_zaehlpunkt<'a>(malo_id: &str, melo_id: Option<&'a str>, call: &str) -> Re
 ///
 /// # Errors
 ///
-/// A gas supply point with no Messlokation.
+/// A gas supply point without its [`GasAnmeldung`].
 pub fn lieferbeginn_body(
     sparte: &str,
     malo_id: &str,
-    melo_id: Option<&str>,
     bilanzkreis: Option<&str>,
     lieferbeginn: Date,
+    gas: Option<&GasAnmeldung>,
 ) -> Result<serde_json::Value> {
     let mut body = if sparte == "GAS" {
-        let zaehlpunkt = gas_zaehlpunkt(malo_id, melo_id, "start-supply-gas")?;
+        let gas = gas.ok_or_else(|| {
+            anyhow::anyhow!(
+                "gas supply point {malo_id}: start-supply-gas carries the contract facts of \
+                 the Anmeldung NN 44001, and none were assembled"
+            )
+        })?;
         serde_json::json!({
             "malo_id": malo_id,
-            "zaehlpunkt": zaehlpunkt,
             "process_date": compact_date(lieferbeginn),
+            "transaktionsgrund": gas.transaktionsgrund,
+            "abrechnungsintervall_monate": gas.abrechnungsintervall_monate,
+            "haushaltskunde": gas.haushaltskunde,
+            "netznutzungsvertrag": gas.netznutzungsvertrag,
+            "netznutzung_zahler": gas.netznutzung_zahler,
+            "gemeinderabatt_prozent": gas.gemeinderabatt_prozent,
+            "kunde": gas.kunde,
+            "ablesekarte": gas.kunde,
         })
     } else {
         serde_json::json!({
@@ -206,26 +298,15 @@ pub fn lieferbeginn_body(
 /// collapses into one task. Enqueue it with [`enqueue_superseding`].
 ///
 /// The body is `processd`'s request type, as for [`lieferbeginn_body`]:
-/// `end-supply` takes `lieferende_datum` (ISO-8601), `end-supply-gas` the
-/// `zaehlpunkt` and a `YYYYMMDD` `process_date`.
-///
-/// # Errors
-///
-/// A gas supply point with no Messlokation.
-pub fn lieferende(
-    komp_id: Uuid,
-    sparte: &str,
-    malo_id: &str,
-    melo_id: Option<&str>,
-    lieferende: Date,
-) -> Result<Task> {
+/// `end-supply` takes `lieferende_datum` (ISO-8601), `end-supply-gas` a
+/// `YYYYMMDD` `process_date`.
+#[must_use]
+pub fn lieferende(komp_id: Uuid, sparte: &str, malo_id: &str, lieferende: Date) -> Task {
     let payload = if sparte == "GAS" {
-        let zaehlpunkt = gas_zaehlpunkt(malo_id, melo_id, "end-supply-gas")?;
         processd_call(
             "end-supply-gas",
             serde_json::json!({
                 "malo_id": malo_id,
-                "zaehlpunkt": zaehlpunkt,
                 "process_date": compact_date(lieferende),
             }),
         )
@@ -238,12 +319,12 @@ pub fn lieferende(
             }),
         )
     };
-    Ok(Task {
+    Task {
         kind: TaskKind::Lieferende,
         komp_id: Some(komp_id),
         payload,
         dedupe_key: format!("LIEFERENDE:{komp_id}:{lieferende}"),
-    })
+    }
 }
 
 /// An `edmd` reading order (GPKE Beginn-/Schlussablesung).
@@ -870,30 +951,61 @@ mod tests {
     use super::*;
     use time::macros::date;
 
-    const MELO: &str = "DE0001112223334445556667778889";
+    fn kunde() -> Kunde {
+        crate::domain::utilmd_kunde(
+            Some(&serde_json::json!({
+                "_typ": "GESCHAEFTSPARTNER",
+                "nachname": "Mustermann",
+                "vorname": "Erika",
+                "adresse": {
+                    "strasse": "Hauptstraße", "hausnummer": "1",
+                    "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+                }
+            })),
+            None,
+            None,
+        )
+    }
+
+    fn gas() -> GasAnmeldung {
+        GasAnmeldung::aus_vertrag(
+            Some(Lieferbeginnanlass::Wechsel),
+            "JAEHRLICH",
+            true,
+            Some(Netznutzungsvertrag::LieferantNb),
+            Some(NetznutzungZahler::Lieferant),
+            Some(rust_decimal::Decimal::ZERO),
+            kunde(),
+        )
+        .expect("a full contract")
+    }
 
     #[test]
     fn strom_carries_lieferbeginn_datum() {
         let b =
-            lieferbeginn_body("STROM", "51238696012", None, None, date!(2026 - 04 - 01)).unwrap();
+            lieferbeginn_body("STROM", "51238696012", None, date!(2026 - 04 - 01), None).unwrap();
         assert_eq!(b["endpoint"], "start-supply");
         assert_eq!(b["body"]["lieferbeginn_datum"], "2026-04-01");
-        assert!(b["body"].get("zaehlpunkt").is_none());
     }
 
     #[test]
-    fn gas_carries_the_messlokation_as_zaehlpunkt_and_a_compact_date() {
+    fn gas_carries_the_contract_facts_and_a_compact_date() {
         let b = lieferbeginn_body(
             "GAS",
             "51238696012",
-            Some(MELO),
             None,
             date!(2026 - 04 - 01),
+            Some(&gas()),
         )
         .unwrap();
         assert_eq!(b["endpoint"], "start-supply-gas");
-        assert_eq!(b["body"]["zaehlpunkt"], MELO);
         assert_eq!(b["body"]["process_date"], "20260401");
+        assert_eq!(b["body"]["transaktionsgrund"], "E03");
+        assert_eq!(b["body"]["abrechnungsintervall_monate"], 12);
+        assert_eq!(b["body"]["netznutzungsvertrag"], "LIEFERANT_NB");
+        assert_eq!(b["body"]["kunde"]["nachname"], "Mustermann");
+        assert_eq!(b["body"]["ablesekarte"], b["body"]["kunde"]);
+        assert!(b["body"].get("zaehlpunkt").is_none());
     }
 
     /// The posted body is processd's request type and nothing else: the
@@ -901,18 +1013,18 @@ mod tests {
     #[test]
     fn the_body_carries_no_key_beside_the_request_fields() {
         for b in [
-            lieferbeginn_body("STROM", "51238696012", None, None, date!(2026 - 04 - 01)).unwrap(),
+            lieferbeginn_body("STROM", "51238696012", None, date!(2026 - 04 - 01), None).unwrap(),
             lieferbeginn_body(
                 "GAS",
                 "51238696012",
-                Some(MELO),
                 None,
                 date!(2026 - 04 - 01),
+                Some(&gas()),
             )
             .unwrap(),
         ] {
             let body = b["body"].as_object().unwrap();
-            for key in ["endpoint", "nb_mp_id", "lf_mp_id"] {
+            for key in ["endpoint", "nb_mp_id", "lf_mp_id", "zaehlpunkt"] {
                 assert!(!body.contains_key(key), "{key} in {body:?}");
             }
         }
@@ -923,54 +1035,85 @@ mod tests {
         let with = lieferbeginn_body(
             "STROM",
             "51238696012",
-            None,
             Some("11XBK-STANDARD-4"),
             date!(2026 - 04 - 01),
+            None,
         )
         .unwrap();
         assert_eq!(with["body"]["bilanzkreis"], "11XBK-STANDARD-4");
         let without =
-            lieferbeginn_body("STROM", "51238696012", None, None, date!(2026 - 04 - 01)).unwrap();
+            lieferbeginn_body("STROM", "51238696012", None, date!(2026 - 04 - 01), None).unwrap();
         assert!(without["body"].get("bilanzkreis").is_none());
     }
 
     #[test]
-    fn gas_without_a_messlokation_is_refused_rather_than_sent_with_the_malo() {
-        // An 11-digit MaLo is not a 33-character Zählpunktbezeichnung.
+    fn gas_without_its_contract_facts_is_refused() {
         let err =
-            lieferbeginn_body("GAS", "51238696012", None, None, date!(2026 - 04 - 01)).unwrap_err();
-        assert!(err.to_string().contains("Zählpunktbezeichnung"));
-        let err = lieferende(
-            Uuid::nil(),
-            "GAS",
-            "51238696012",
+            lieferbeginn_body("GAS", "51238696012", None, date!(2026 - 04 - 01), None).unwrap_err();
+        assert!(err.to_string().contains("44001"), "{err}");
+    }
+
+    /// Each fact the contract does not state is named; nothing is filled in.
+    #[test]
+    fn a_contract_missing_a_gas_fact_names_it() {
+        let fehlend = GasAnmeldung::aus_vertrag(
             None,
-            date!(2026 - 12 - 31),
+            "WOECHENTLICH",
+            false,
+            None,
+            None,
+            None,
+            Kunde {
+                nachname: None,
+                vorname: None,
+                organisationsname: None,
+                anschrift: None,
+            },
         )
         .unwrap_err();
-        assert!(err.to_string().contains("end-supply-gas"), "{err}");
+        let all = fehlend.join("\n");
+        for named in [
+            "lieferbeginn_anlass",
+            "abrechnungszyklus",
+            "netznutzungsvertrag",
+            "netznutzung_zahler",
+            "gemeinderabatt_prozent",
+            "the name",
+            "the anschrift",
+        ] {
+            assert!(all.contains(named), "{named}: {all}");
+        }
     }
 
+    /// Without an address of his own the Kunde's Korrespondenzanschrift is
+    /// the Marktlokation's (Bedingung `[556]`).
     #[test]
-    fn an_empty_melo_counts_as_absent() {
-        assert!(
-            lieferbeginn_body("GAS", "51238696012", Some(""), None, date!(2026 - 04 - 01)).is_err()
-        );
-    }
-
-    #[test]
-    fn a_gas_lieferende_carries_the_zaehlpunkt_and_a_compact_date() {
-        let t = lieferende(
-            Uuid::nil(),
-            "GAS",
-            "51238696012",
-            Some(MELO),
-            date!(2026 - 12 - 31),
-        )
+    fn a_kunde_without_an_address_is_written_to_at_the_marktlokation() {
+        let standort: rubo4e::current::Adresse = serde_json::from_value(serde_json::json!({
+            "strasse": "Werkstraße", "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+        }))
         .unwrap();
+        let k = crate::domain::utilmd_kunde(
+            Some(
+                &serde_json::json!({ "_typ": "GESCHAEFTSPARTNER", "organisationsname": "Muster GmbH" }),
+            ),
+            None,
+            Some(&standort),
+        );
+        assert!(
+            k.anmeldung_maengel().is_empty(),
+            "{:?}",
+            k.anmeldung_maengel()
+        );
+        assert_eq!(k.anschrift.unwrap().strasse.as_deref(), Some("Werkstraße"));
+    }
+
+    #[test]
+    fn a_gas_lieferende_carries_a_compact_date() {
+        let t = lieferende(Uuid::nil(), "GAS", "51238696012", date!(2026 - 12 - 31));
         assert_eq!(t.payload["endpoint"], "end-supply-gas");
-        assert_eq!(t.payload["body"]["zaehlpunkt"], MELO);
         assert_eq!(t.payload["body"]["process_date"], "20261231");
+        assert!(t.payload["body"].get("zaehlpunkt").is_none());
         assert!(t.payload["body"].get("lieferende_datum").is_none());
     }
 
@@ -984,7 +1127,7 @@ mod tests {
     #[test]
     fn the_lieferende_key_is_the_component_and_its_date() {
         let komp = Uuid::nil();
-        let at = |d| lieferende(komp, "STROM", "51238696012", None, d).unwrap();
+        let at = |d| lieferende(komp, "STROM", "51238696012", d);
         assert_eq!(
             at(date!(2026 - 12 - 31)).dedupe_key,
             at(date!(2026 - 12 - 31)).dedupe_key,

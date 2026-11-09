@@ -219,6 +219,7 @@ pub mod ankuendigung_zuordnung_lf;
 pub mod antwortfrist;
 pub mod beendigung_zuordnung;
 pub mod datenabruf;
+pub mod datenabruf_msb;
 pub mod eog;
 pub mod geschaeftsdatenanfrage;
 pub mod konfiguration;
@@ -233,6 +234,7 @@ pub mod partin;
 pub mod post_acceptance;
 pub mod sperrung;
 pub mod sperrung_lf;
+pub mod sperrung_msb;
 pub mod stammdatenaenderung;
 pub mod stornierung;
 pub mod utilts;
@@ -280,6 +282,10 @@ pub use datenabruf::{
     DatenabrufCommand, DatenabrufEvent, DatenabrufState, GpkeDatenabrufWorkflow,
     ORDERS_ANFRAGE_PIDS as DATENABRUF_ORDERS_PIDS, ORDRSP_ABLEHNUNG_PIDS as DATENABRUF_ORDRSP_PIDS,
     WORKFLOW_NAME as DATENABRUF_WORKFLOW_NAME,
+};
+pub use datenabruf_msb::{
+    DatenabrufMsbCommand, DatenabrufMsbEvent, DatenabrufMsbState, GpkeDatenabrufMsbWorkflow,
+    WORKFLOW_NAME as DATENABRUF_MSB_WORKFLOW_NAME, WerteAnfrage,
 };
 pub use eog::{
     EOG_ANMELDUNG_PID, EOG_ANTWORT_PIDS, EOG_PIDS, EOG_RESPONSE_WINDOW_LABEL, EogCommand, EogData,
@@ -343,6 +349,10 @@ pub use sperrung_lf::{
     IFTSTA_SPERRUNG_PID, ORDRSP_SPERRUNG_PIDS, ORDRSP_STORNO_PIDS,
     SPERRUNG_ANFRAGE_PIDS as SPERRUNG_LF_ANFRAGE_PIDS, SperrungAuftragData, SperrungLfCommand,
     SperrungLfEvent, SperrungLfState, WORKFLOW_NAME as SPERRUNG_LF_WORKFLOW_NAME,
+};
+pub use sperrung_msb::{
+    AnfrageSperrung, GpkeSperrungMsbWorkflow, SperrungMsbCommand, SperrungMsbEvent,
+    SperrungMsbState, WORKFLOW_NAME as SPERRUNG_MSB_WORKFLOW_NAME,
 };
 pub use stammdatenaenderung::{
     GpkeStammdatenaenderungWorkflow, Qualitaet,
@@ -485,6 +495,12 @@ impl mako_engine::builder::EngineModule for GpkeModule {
                 konfiguration_aenderung::WORKFLOW_NAME,
             ),
             WorkflowDriver::of::<datenabruf::GpkeDatenabrufWorkflow>(datenabruf::WORKFLOW_NAME),
+            WorkflowDriver::of::<datenabruf_msb::GpkeDatenabrufMsbWorkflow>(
+                datenabruf_msb::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<sperrung_msb::GpkeSperrungMsbWorkflow>(
+                sperrung_msb::WORKFLOW_NAME,
+            ),
             WorkflowDriver::of::<geschaeftsdatenanfrage::GpkeGeschaeftsdatenanfrageWorkflow>(
                 geschaeftsdatenanfrage::WORKFLOW_NAME,
             ),
@@ -505,6 +521,41 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         router: &mut mako_engine::pid_router::PidRouter,
         roles: &mako_engine::marktrolle::DeploymentRoles,
     ) {
+        use mako_engine::marktrolle::Marktrolle;
+
+        // ── MSB side ─────────────────────────────────────────────────────────
+        //
+        // The ORDERS a Messstellenbetreiber Strom receives and owes an answer
+        // to: the Anfrage Sperrung 17116 (NB an MSB, ORDERS AHB 1.1b Kap. 4.3)
+        // and the Anfrage / Anforderung / Reklamation von Werten 17102 / 17004
+        // / 17113 (an MSB, Kap. 4.1.2.2 / 4.13 / 4.8). Registered for a MSB
+        // role only, each under its own workflow, so a deployment that is NB or
+        // LF as well never meets its own outbound copy on one key.
+        if roles.contains(Marktrolle::Msb)
+            || roles.contains(Marktrolle::Nmsb)
+            || roles.contains(Marktrolle::Amsb)
+        {
+            router.register(sperrung_msb::ANFRAGE_PID, sperrung_msb::WORKFLOW_NAME);
+            // Sparte-qualified as every Sperrung PID is: GeLi Gas carries
+            // 17116 for its gMSB.
+            router.register_with_sparte(
+                sperrung_msb::ANFRAGE_PID,
+                mako_engine::types::Sparte::Strom,
+                sperrung_msb::WORKFLOW_NAME.to_owned(),
+            );
+            for &pid in datenabruf_msb::ORDERS_PIDS {
+                router.register(pid, datenabruf_msb::WORKFLOW_NAME);
+            }
+        }
+
+        // Everything below is the LF's and the NB's. A deployment that is only
+        // a MSB registers none of it, so a GPKE message misaddressed to it is
+        // refused as an unknown PID instead of being answered in a role it does
+        // not hold.
+        if !(roles.contains(Marktrolle::Nb) || roles.contains(Marktrolle::Lf)) {
+            return;
+        }
+
         // UTILMD inbound ANFRAGE PIDs — routed to gpke-supplier-change.
         // Only inbound request PIDs are registered. The outbound ANTWORT PIDs
         // (55002/55003, 55005/55006, 55017, 55018) are derived internally and never routed as inbound.
@@ -754,13 +805,10 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             router.register(pid, konfiguration_aenderung::WORKFLOW_NAME);
         }
 
-        // GPKE Datenabruf — LF-initiated data-value requests and reclamations.
-        //
-        // LF sends ORDERS 17102/17113 (Anfrage/Reklamation von Werten) to NB/MSB.
-        // NB/MSB rejects with ORDRSP 19102/19114 (positive response via MSCONS).
-        for &pid in datenabruf::ORDERS_ANFRAGE_PIDS {
-            router.register(pid, datenabruf::WORKFLOW_NAME);
-        }
+        // GPKE Datenabruf — the requesting side. Its ORDERS 17004/17102/17113
+        // go out to the MSB; only the ORDRSP Ablehnungen 19007/19102/19114 come
+        // back (the values arrive on MSCONS). The MSB that receives the ORDERS
+        // runs `gpke-datenabruf-msb`, registered above.
         for &pid in datenabruf::ORDRSP_ABLEHNUNG_PIDS {
             router.register(pid, datenabruf::WORKFLOW_NAME);
         }

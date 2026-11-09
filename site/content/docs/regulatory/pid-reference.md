@@ -143,6 +143,7 @@ routed inbound:
 |---|---|
 | **Outbound-only** — generated or dispatched by mako, never received | 17134, 17135 (ORDERS sent by `GpkeKonfigurationWorkflow`); 19003, 19004 (the MSBA's answer to ORDERS 17002) |
 | **Role-conditional** — registered only when the deployment roles name `NMSB` | 19001, 19002 (ORDRSP Bestellbestätigung/Ablehnung, answering ORDERS 17001) — GPKE Konfiguration claims the same two on an NB instance |
+| **Role-conditional** — registered only when the deployment roles name a MSB (`MSB`, `NMSB`, `AMSB`) | 17004, 17102, 17113 (`gpke-datenabruf-msb`) and 17116 Strom (`gpke-sperrung-msb`) — the ORDERS a MSB Strom receives; a NB or LF deployment sends them and registers only their ORDRSP answers |
 | **Named but not routed** — outside the band the named workflow registers | 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55553 |
 
 An inbound message carrying one of the last group is dead-lettered as
@@ -156,7 +157,13 @@ An inbound message carrying one of the last group is dead-lettered as
 one-way: no Bestätigung, so a missing one raises no timeout and no dead letter.
 They route to `gpke-zuordnungsmeldung` and `geli-gas-zuordnungsmeldung`;
 `mako_fristen::meldung` catalogues their windows and Fundstellen, and
-`meldepflicht_coverage.rs` cross-checks it against the `PidRouter`.
+`meldepflicht_coverage.rs` cross-checks it against the `PidRouter`. A window
+belongs to the Sequenzdiagramm, not to the PID: 55037 is also Nr. 8 of the
+LF-Zuordnung bei EEG-/KWKG-Anlagen (opened by the NB's 55607; 17:00 Uhr am ÜT,
+or of the 1. WT after it when the Zuordnungsbeginn does not lie in the future),
+and 55038 Nr. 8 of „Lieferende von NB an LF" (opened by 55007; 07:00 Uhr of the
+1. WT), so `meldung::meldepflichten_for` looks a window up by the message that
+opened the process.
 
 ---
 
@@ -472,7 +479,7 @@ They route to `gpke-zuordnungsmeldung` and `geli-gas-zuordnungsmeldung`;
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 17001 | Bestellung Geräteübernahmeangebot | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
 | 17002 | Weiterverpflichtung | WiM Gas / WiM Strom Teil 1 | NB → MSB · NB → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-weiterverpflichtung` |
-| 17004 | Anforderung von Werten | WiM Strom Teil 2 / GeLi Gas 2.0 | NB → MSB · MSB → MSB · LF → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf` |
+| 17004 | Anforderung von Werten | WiM Strom Teil 2 / GeLi Gas 2.0 | NB → MSB · MSB → MSB · LF → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf-msb` (MSB Strom receives, Ablehnung 2 WT; `gpke-datenabruf` sends) |
 | 17005 | Bestellung Angebot Rechnungsabwicklung Messstellenbetrieb — this Bestellung *is* the answer to the QUOTES 15002 Angebot; no ORDRSP answers it | WiM Strom Teil 1 | LF → MSB | 15002 | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
 | 17006 | Beendigung Rechnungsabwicklung MSB über LF | WiM Strom Teil 1 | MSB → LF · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
 | 17007 | Bestellung von Werten ESA | WiM Strom Teil 2 Kap. 4 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` (MSB inbound) / `esa-wertebestellung` (ESA outbound) |
@@ -480,14 +487,14 @@ They route to `gpke-zuordnungsmeldung` and `geli-gas-zuordnungsmeldung`;
 | 17009 | Ankündigung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
 | 17011 | Beauftragung zur Änderung der Technik (Messlokationsänderung Strom) | WiM Strom Teil 1 | NB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
 | 17101 | Anfrage Stammdaten Marktlokation (Gas) | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
-| 17102 | Anfrage von Werten | GPKE Teil 4 / GeLi Gas 2.0 | LF → MSB · LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf` |
+| 17102 | Anfrage von Werten | GPKE Teil 4 / GeLi Gas 2.0 | LF → MSB · LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf-msb` (MSB Strom receives, 1 WT; `gpke-datenabruf` sends) |
 | 17103 | Anfrage Brennwert / Zustandszahl | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
 | 17104 | Anfrage vom MSB Gas | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
 | 17110 | Anforderung der Allokationsliste | MMM Strom/Gas | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-gpke` `gpke-allokationsliste` (Gas-only; formal home `gabi-gas-mmma`) |
-| 17113 | Reklamation von Werten | WiM Gas / WiM Strom Teil 2 | LF → NB · NB → MSB · MSB → MSB · LF → MSB · ÜNB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf` |
-| 17114 | Anforderung bilanzierte Menge | MMM Strom/Gas | NB → ÜNB | — | ✅ | — | ✅ | ⚠️ | `mako-gpke` `gpke-allokationsliste` |
+| 17113 | Reklamation von Werten | WiM Gas / WiM Strom Teil 2 | LF → NB · NB → MSB · MSB → MSB · LF → MSB · ÜNB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf-msb` (MSB Strom receives, Ablehnung 3 WT; `gpke-datenabruf` sends) |
+| 17114 | Anforderung bilanzierte Menge | MMM Strom/Gas | NB → ÜNB | — | ✅ | — | ✅ | ⚠️ | `mako-gpke` `gpke-allokationsliste` (ORDERS fv20260401 only — AHB 1.1a Kap. 4.2.2; fv20261001 drops it) |
 | 17115 | Sperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` · `mako-geli-gas` `geli-gas-sperrung-nb` |
-| 17116 | Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas GNB→gMSB role) |
+| 17116 | Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-msb` (MSB Strom receives, 3 WT, lapse = Zustimmung) · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas GNB→gMSB role) |
 | 17117 | Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` · `mako-geli-gas` `geli-gas-sperrung-nb` |
 | 17118 | Bestellung einer Konfigurationsänderung | GPKE Teil 3 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
 | 17120 | Bestellung Änderung Prognosegrundlage | GPKE Teil 3 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
@@ -526,7 +533,7 @@ They route to `gpke-zuordnungsmeldung` and `geli-gas-zuordnungsmeldung`;
 | 19004 | Ablehnung Fortführung | WiM Gas / WiM Strom Teil 1 | MSB → NB · MSBA → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-weiterverpflichtung` |
 | 19005 | Bestätigung Auftrag Änderung Technik | WiM Gas / WiM Strom Teil 1 / AWH Änd. Technik | MSB → LF · MSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
 | 19006 | Ablehnung Auftrag Änderung Technik | WiM Gas / WiM Strom Teil 1 / AWH Änd. Technik | MSB → LF · MSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
-| 19007 | Ablehnung Anforderung Werte | WiM Strom Teil 2 / GeLi Gas 2.0 | MSB → NB · MSB → MSB · MSB → LF | — | ✅ | ✅ | ✅ | ✅ | — |
+| 19007 | Ablehnung Anforderung Werte | WiM Strom Teil 2 / GeLi Gas 2.0 | MSB → NB · MSB → MSB · MSB → LF | 17004 | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf` |
 | 19009 | Bestätigung Beendigung Rechnungsabwicklung MSB | WiM Strom Teil 1 | LF → MSB · MSB → LF | 17006 | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
 | 19010 | Ablehnung Beendigung Rechnungsabwicklung MSB | WiM Strom Teil 1 | LF → MSB · MSB → LF | 17006 | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
 | 19011 | Bestätigung der Ab-/Bestellung von Werten für ESA | WiM Strom Teil 2 Kap. 4 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |

@@ -57,8 +57,10 @@ pub struct ByMaloQuery {
 ///
 /// - a term § 309 Nr. 9 BGB does not permit for a consumer, or an
 ///   Ersatzversorgung running past the § 38 Abs. 4 EnWG three months;
-/// - a gas component without a Messlokation — `start-supply-gas` needs the
-///   Zählpunktbezeichnung and a MaLo-ID is not one.
+/// - a gas component registered at the NB whose Anmeldung NN 44001 lacks a
+///   contract fact the column makes Muss — the Anlass, the Netznutzungsvertrag
+///   and its Zahler, the Gemeinderabatt, an Abrechnungsintervall, or the
+///   Kunde's name and address (UTILMD AHB Gas 1.2 Kap. 5.6). Each is named.
 pub async fn create(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -89,11 +91,42 @@ pub async fn create(
         if let Some(bk) = k.bilanzkreis.as_deref() {
             domain::pruefe_bilanzkreis(&k.sparte, bk).map_err(ApiError::unprocessable)?;
         }
-        if k.sparte == "GAS" && k.melo_id.as_deref().unwrap_or("").is_empty() {
-            return Err(ApiError::unprocessable(
-                "eine GAS-Komponente braucht eine melo_id — start-supply-gas trägt sie als \
-                 Zählpunktbezeichnung (RFF+Z13); eine MaLo-ID ist keine",
-            ));
+    }
+    // The GeLi Gas Anmeldung is assembled here as it will be on insert, so a
+    // contract that cannot be registered is refused before it is written.
+    if input
+        .komponenten
+        .iter()
+        .any(|k| k.sparte == "GAS" && k.wird_angemeldet())
+    {
+        let mut conn = ctx
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| ApiError::Internal(e.into()))?;
+        let anmeldedaten = pg::kunde_anmeldedaten(
+            &mut conn,
+            kunden_id,
+            ctx.tenant(),
+            input.standort_adresse.as_ref(),
+        )
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::NotFound)?;
+        let zyklus = input.abrechnungszyklus.as_deref().unwrap_or("JAEHRLICH");
+        let fehlend: Vec<String> = input
+            .komponenten
+            .iter()
+            .filter_map(|k| k.gas_anmeldung(zyklus, &anmeldedaten).err())
+            .flatten()
+            .collect();
+        if !fehlend.is_empty() {
+            return Err(unprocessable_json(serde_json::json!({
+                "error": "die Anmeldung NN 44001 braucht Angaben, die der Vertrag nicht enthält \
+                          (UTILMD AHB Gas 1.2 Kap. 5.6)",
+                "code": "anmeldedaten_unvollstaendig",
+                "fehlend": fehlend,
+            })));
         }
     }
 

@@ -341,6 +341,7 @@ const fn at(hour: u8) -> Time {
 /// | 17117 | Entsperrauftrag | NB | spätester ÜT ist der 1. WT nach dem ÜT |
 /// | 39000 | Stornierung Sperr-/Entsperrauftrag | NB | spätester ÜT ist der 1. WT nach dem ÜT |
 /// | 17116 | Anfrage Sperrung (NB → MSB) | MSB | spätester ÜT ist der 3. WT nach dem ÜT |
+/// | 17102 | Anfrage von Werten (LF → MSB, GPKE Teil 4) | MSB | spätester ÜZ ist 1 WT nach dem ÜZ |
 /// | 55156 | Rückmeldung/Bestellung Abr.-Daten BK-Abr. verb. MaLo | NB | 2. WT nach dem ÜT |
 /// | 55673 | Rückmeldung/Bestellung Abr.-Daten BK-Abr. erz. MaLo | NB | 2. WT nach dem ÜT |
 /// | 55220 | Rückmeldung/Bestellung Abr.-Daten NN-Abr. | NB | 2. WT nach dem ÜT |
@@ -349,6 +350,12 @@ const fn at(hour: u8) -> Time {
 /// | 55693 | Änderung Daten der TR (LF → NB) | NB | 2. WT nach dem ÜT |
 /// | 55557 | Änderung MSB-Abrechnungsdaten der MaLo (MSB → NB) | NB | 2. WT nach dem ÜT |
 /// | 55639–55643 | Stammdatenänderung vom MSB (NeLo/MaLo/SR/Tranche/MeLo) | NB | 2. WT nach dem ÜT |
+///
+/// **17102 is keyed for Strom.** The Sparte Gas files the same PID as the
+/// Geschäftsdatenanfrage vom LF an den NB, answered „spätestens bis zum Ablauf
+/// des 10. Werktags nach Eingang" (GeLi Gas 3.0 Kap. 4.4, S. 14). No Gas
+/// receiver of 17102 exists; one that is built resolves its window from the
+/// Sparte rather than from this row.
 ///
 /// **The Neuanlage window is not a mistake.** `E_0608` Prüfschritte 110 and 590
 /// make the identification of a newly commissioned Marktlokation a *daily*
@@ -548,6 +555,18 @@ pub const GPKE: &[AntwortObligation] = &[
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Prozessschritt 4 — „spätester ÜT ist der \
                  3. WT nach dem ÜT von Nr. 3\"; Fristverstreichen gilt als Zustimmung",
+    },
+    AntwortObligation {
+        trigger_pid: 17_102,
+        name: "Anfrage von Werten (Geschäftsdatenanfrage an den MSB)",
+        answered_by: "MSB",
+        // The values ride MSCONS under several PIDs; 19102 is the Ablehnung.
+        antwort_pids: (19_102, 19_102),
+        ebd: None,
+        frist: FristShape::EndOfWerktag(GESCHAEFTSDATENANFRAGE_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-22-024 GPKE Teil 4 Kap. 3.2 Nr. 4 (S. 30) — „Unverzüglich, jedoch \
+                 spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 3\"",
     },
     AntwortObligation {
         trigger_pid: 55_156,
@@ -885,6 +904,8 @@ pub fn gas_lieferbeginn_antwort_bei_ausbleiben(
 /// | 35005 | Anfrage Angebot Änderung Technik | MSB | 10 WT | — |
 /// | 17011 | Beauftragung Änderung Technik | MSB | 10 WT | `E_0249`/`E_0250`/`E_0279`/`E_0283` ¹ |
 /// | 21029 | Vorabinformation Ersteinbau iMS | **wMSB** | 3 WT | `E_0233` |
+/// | 17004 | Anforderung von Werten — Ablehnung (WiM Teil 2) | MSB | 2 WT | ¹ |
+/// | 17113 | Reklamation von Werten — Ablehnung (WiM Teil 2) | MSB | 3 WT | ¹ |
 ///
 /// **The MSB-Wechsel windows are not one flat number** — 3 / 5 / 7 / 1
 /// Werktage („Unverzüglich, jedoch spätester ÜT ist der *n*. WT nach dem ÜT von
@@ -1159,6 +1180,35 @@ pub const WIM: &[AntwortObligation] = &[
         family: Family::Wim,
         source: "WiM Strom Teil 2 Kap. 4.1.2 Nr. 6 — 2 Werktage",
     },
+    AntwortObligation {
+        trigger_pid: 17_004,
+        name: "Anforderung von Werten",
+        answered_by: "MSB",
+        // The window binds the **Ablehnung** alone: the values themselves
+        // follow the table „Darstellung der zu übermittelnden Werte", so a
+        // positive answer has no PID of its own here.
+        antwort_pids: (19_007, 19_007),
+        // One tree per requesting role (`E_0219`–`E_0225`), so no single one.
+        ebd: None,
+        frist: FristShape::EndOfWerktag(WERTE_ANFORDERUNG_ABLEHNUNG_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 2 Kap. 2.6.3 / 2.6.4 Nr. 2 (S. 40 / 42) — Bearbeitungsstand \
+                 bei Beendigung des Prozesses, „Unverzüglich, jedoch spätester ÜT ist der 2. WT \
+                 nach dem ÜT von Nr. 1\"",
+    },
+    AntwortObligation {
+        trigger_pid: 17_113,
+        name: "Reklamation von Werten",
+        answered_by: "MSB",
+        // As 17004: the Frist binds the Ablehnung der Reklamation.
+        antwort_pids: (19_114, 19_114),
+        ebd: None,
+        frist: FristShape::EndOfWerktag(WERTE_REKLAMATION_ABLEHNUNG_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 2 Kap. 2.7.3 / 2.7.4 Nr. 2 (S. 47 / 49) — Bearbeitungsstand \
+                 bei Beendigung des Prozesses, „Unverzüglich, jedoch spätester ÜT ist der 3. WT \
+                 nach dem ÜT von Nr. 1\"",
+    },
 ];
 
 /// REQOTE „Anfrage von Werten" — the ESA Werteanfrage (WiM Teil 2 Kap. 4).
@@ -1200,6 +1250,20 @@ pub const TECHNIKAENDERUNG_WERKTAGE: u32 = 10;
 /// One window for both legs: the Stammdaten anfrage an den NB and the Werte
 /// anfrage an den MSB are stated identically.
 pub const GESCHAEFTSDATENANFRAGE_WERKTAGE: u32 = 1;
+
+/// Werktage the MSB has to **refuse** an Anforderung von Werten (ORDERS 17004)
+/// — the Bearbeitungsstand bei Beendigung des Prozesses (ORDRSP 19007) of WiM
+/// Strom Teil 2 Kap. 2.6.3 / 2.6.4 / 2.6.5 Nr. 2, whichever role asks.
+///
+/// The values themselves are not bound by it: their window is the table
+/// „Darstellung der zu übermittelnden Werte". The Sparte Gas states the same
+/// two Werktage for its 17004 (AWH GeLi Gas V1.2 Kap. 4.2.2.2 Nr. 2, S. 62).
+pub const WERTE_ANFORDERUNG_ABLEHNUNG_WERKTAGE: u32 = 2;
+
+/// Werktage the MSB has to **refuse** a Reklamation von Werten (ORDERS 17113)
+/// — the Bearbeitungsstand bei Beendigung des Prozesses (ORDRSP 19114) of WiM
+/// Strom Teil 2 Kap. 2.7.3 / 2.7.4 / 2.7.5 Nr. 2, whichever role reclaims.
+pub const WERTE_REKLAMATION_ABLEHNUNG_WERKTAGE: u32 = 3;
 
 /// Werktage the NB has to transmit Abrechnungsbrennwert and Zustandszahl after
 /// the LF's Anfrage (ORDERS 17103) arrives — GeLi Gas 3.0 Kap. 4.2, AWH GeLi
@@ -2166,6 +2230,41 @@ mod tests {
         for pid in [31_001_u32, 37_000, 23_001, 99_999, 0] {
             assert!(antwortfrist(pid, received).is_none(), "PID {pid}");
         }
+    }
+
+    /// The MSB-side Datenabruf: the Anfrage von Werten answers in one Werktag
+    /// (GPKE Teil 4 Kap. 3.2 Nr. 4), the Anforderung and the Reklamation are
+    /// refused within two and three (WiM Strom Teil 2 Kap. 2.6.3 / 2.7.3 Nr. 2).
+    /// Received Friday 23.10.2026 15:00 MESZ, the count crosses the end of
+    /// summer time: Monday 26.10., Tuesday 27.10., Wednesday 28.10., each at
+    /// the end of the day MEZ.
+    #[test]
+    fn the_msb_datenabruf_windows_are_per_pid() {
+        let received = time::macros::datetime!(2026-10-23 13:00 UTC);
+        for (pid, due) in [
+            (17_102, time::macros::date!(2026 - 10 - 26)),
+            (17_004, time::macros::date!(2026 - 10 - 27)),
+            (17_113, time::macros::date!(2026 - 10 - 28)),
+        ] {
+            assert_eq!(
+                antwort_deadline(pid, received),
+                Some(crate::end_of_day_berlin(due)),
+                "PID {pid}"
+            );
+            assert_eq!(
+                antwort_deadline(pid, received).map(|d| d.offset().whole_hours()),
+                Some(1),
+                "PID {pid} closes in MEZ"
+            );
+        }
+        assert_eq!(
+            antwort_obligation(17_004).map(|o| o.antwort_pids),
+            Some((19_007, 19_007))
+        );
+        assert_eq!(
+            antwort_obligation(17_113).map(|o| o.antwort_pids),
+            Some((19_114, 19_114))
+        );
     }
 
     /// No PID may appear in two tables, or the consult order silently decides
