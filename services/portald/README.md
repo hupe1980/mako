@@ -48,6 +48,8 @@ and `/metrics` come from the service runner.
 
 ## Configuration
 
+`portald --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one.
+
 ```toml
 # portald.toml
 tenant = "9900357000004"

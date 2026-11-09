@@ -26,31 +26,48 @@ impl Daemon for Outputd {
         Ok(())
     }
 
-    async fn build(cfg: Arc<config::OutputdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
+    fn validate(cfg: &config::OutputdConfig) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = Vec::new();
+        if cfg.allow_insecure_no_auth {
+            return out;
+        }
         // Fail closed: an unauthenticated outputd lets anyone publish the
         // layout every customer document renders with — and render arbitrary
         // content under the operator's Briefkopf.
-        if !cfg.allow_insecure_no_auth && cfg.oidc.is_none() {
-            anyhow::bail!(
-                "refusing to start without [oidc]: template publishing and \
-                 rendering would accept unauthenticated requests. Configure \
-                 [oidc] or set allow_insecure_no_auth = true (dev only)."
+        if cfg.oidc.is_none() {
+            out.push(
+                Befund::blockiert(
+                    "oidc",
+                    "refusing to start without [oidc]: template publishing and rendering \
+                     would accept unauthenticated requests. Configure [oidc] or set \
+                     allow_insecure_no_auth = true (dev only).",
+                )
+                .bereich(Bereich::Zugriff),
             );
         }
         // The outbound side of the same posture: a relay push carries the
         // customer's document itself — the invoice or Mahnung base64-encoded,
         // with their name, e-mail address, MaLo and Kundennummer beside it. The
         // credential is what signs it, so a URL without one publishes all of
-        // that to whoever answers at that address.
-        let unsigned = cfg.delivery.unsigned_relays();
-        if !cfg.allow_insecure_no_auth && !unsigned.is_empty() {
-            anyhow::bail!(
-                "refusing to start: [delivery] configures a relay URL without a credential \
-                 ({}) — customer documents would be POSTed unsigned and unauthenticated. \
-                 Configure it, or set allow_insecure_no_auth = true (dev only).",
-                unsigned.join(", ")
+        // that to whoever answers at that address. One finding per relay.
+        for key in cfg.delivery.unsigned_relays() {
+            out.push(
+                Befund::blockiert(
+                    format!("delivery.{key}"),
+                    format!(
+                        "[delivery] configures a relay URL without its credential `{key}` — \
+                         customer documents would be POSTed unsigned and unauthenticated. \
+                         Configure it, or set allow_insecure_no_auth = true (dev only)."
+                    ),
+                )
+                .bereich(Bereich::Zugriff),
             );
         }
+        out
+    }
+
+    async fn build(cfg: Arc<config::OutputdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
                 "allow_insecure_no_auth is set — HTTP API authentication is degraded and \
@@ -143,6 +160,9 @@ impl Daemon for Outputd {
                 "/api/v1/templates/by-hash/{hash}",
                 get(handlers::get_template_by_hash),
             )
+            // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
+            // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
+            .merge(mako_service::einrichtung::router(ctx.einrichtung.clone()))
             .layer(Extension(mako_service::oidc::ExpectedTenant(
                 cfg.tenant.clone(),
             )))

@@ -130,6 +130,7 @@ impl MockLfn {
                     process_date: process_date.to_owned(),
                     transaktionsgrund: Some("ZT5".to_owned()),
                     bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+                    kundendaten: None,
                 },
                 RunOptions::new(),
             )

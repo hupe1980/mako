@@ -13,6 +13,33 @@ use mako_service::{Daemon, ServiceContext};
 
 use crate::config::{self, Config};
 
+/// The finding about `[identity] own_mp_id`, if any: a value that is no
+/// 13-digit MP-ID, or a GS1 GLN where a BDEW- (`99…`) or DVGW-Codenummer
+/// (`98…`) identifies a Marktrolle. Warnings, as the Gleichbehandlung evidence
+/// is what reads it.
+fn identitaet(own_mp_id: &str) -> Option<mako_service::Befund> {
+    use mako_service::befund::{Befund, Bereich};
+    let befund = match own_mp_id.parse::<mako_markt::domain::MarktpartnerId>() {
+        Err(e) => Befund::warnung(
+            "identity.own_mp_id",
+            format!(
+                "{own_mp_id:?} is not a 13-digit MarktpartnerId ({e}): the \
+                 Gleichbehandlungsbericht's comparisons fail silently"
+            ),
+        ),
+        Ok(id) if mako_markt::domain::nad_agency_code(&id) == "9" => Befund::warnung(
+            "identity.own_mp_id",
+            format!(
+                "{own_mp_id} is a GS1 GLN, not a BDEW-Codenummer (99…, Strom) or a \
+                 DVGW-Codenummer (98…, Gas)"
+            ),
+        )
+        .quelle("BDEW-AWH Identifikatoren V1.2, Kap. 2.2"),
+        Ok(_) => return None,
+    };
+    Some(befund.bereich(Bereich::Identitaeten))
+}
+
 /// The `processd` daemon.
 pub struct Processd;
 
@@ -32,8 +59,30 @@ impl Daemon for Processd {
         Ok(())
     }
 
-    fn validate(cfg: &Self::Config) -> anyhow::Result<()> {
-        cfg.lf.validate()
+    fn validate(cfg: &Self::Config) -> Vec<mako_service::Befund> {
+        let mut out = cfg.lf.validate();
+        out.extend(identitaet(&cfg.identity.own_mp_id));
+        if let Err(e) = cfg.check_auth_posture() {
+            // The refusal names every unconfigured door; the path is the first.
+            let pfad = if cfg.oidc.is_none() {
+                "oidc"
+            } else if cfg.webhook.inbound_secret.is_none() {
+                "webhook.inbound_secret"
+            } else {
+                "sperr.erp_hmac_secret"
+            };
+            out.push(
+                mako_service::Befund::aus_fehler(pfad, e)
+                    .bereich(mako_service::befund::Bereich::Zugriff),
+            );
+        }
+        out
+    }
+
+    fn policy(cfg: &Self::Config) -> mako_service::policy::PolicyReport {
+        cfg.policy
+            .report()
+            .posture_flag("allow_insecure_no_auth", cfg.allow_insecure_no_auth)
     }
 
     async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<axum::Router> {
@@ -158,6 +207,7 @@ impl Daemon for Processd {
                 },
                 sperr_erp_webhook_url: cfg.sperr.erp_webhook_url.clone(),
                 sperr_erp_hmac_secret,
+                sperr_msb_vorlauf_lesart: cfg.policy.msb_vorlauf_lesart,
                 oidc,
                 cedar,
                 mcp: cfg.mcp.clone(),

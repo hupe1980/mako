@@ -1,4 +1,5 @@
 import { Button, Dialog, DialogTrigger, Heading, Popover } from "react-aria-components";
+import { useT } from "../i18n";
 import { Icon } from "./Icon";
 
 /** Where a figure comes from, as the service attributed it. */
@@ -9,6 +10,8 @@ export interface Quelle {
   regel?: string;
 }
 
+// A Fundstelle cites a German document, so its chapter and page keep the
+// document's own abbreviations in every Sprache.
 function short(q: Quelle): string {
   return [q.dokument, q.kapitel && `Kap. ${q.kapitel}`, q.seite && `S. ${q.seite}`]
     .filter(Boolean)
@@ -20,10 +23,11 @@ function short(q: Quelle): string {
  * attribution a service returned — the Desk never invents one.
  */
 export function SourceChip({ quelle }: { quelle: Quelle }) {
+  const t = useT();
   return (
     <DialogTrigger>
       <Button
-        aria-label={`Quelle: ${short(quelle)}`}
+        aria-label={t.quelle.knopf(short(quelle))}
         className="focus-ring inline-flex min-h-5 max-w-full items-center gap-1 rounded-[10px] border border-separator px-2 py-px text-left text-caption font-medium text-text-2 data-[hovered]:bg-fill data-[hovered]:text-text"
       >
         <Icon name="doc" size={12} className="shrink-0" />
@@ -35,7 +39,7 @@ export function SourceChip({ quelle }: { quelle: Quelle }) {
       >
         <Dialog className="outline-none">
           <Heading slot="title" className="m-0 text-caption font-semibold uppercase text-text-2">
-            Quelle
+            {t.quelle.titel}
           </Heading>
           <p className="m-0 mt-1 text-callout font-medium text-text">{quelle.dokument}</p>
           {(quelle.kapitel || quelle.seite) && (

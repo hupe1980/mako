@@ -1,8 +1,9 @@
 //! The GPKE Lieferant's Anfragen go out as messages their AHB column accepts,
 //! to the party the column names (UTILMD AHB Strom 2.2).
 //!
-//! The Abmeldung 55004 makes `SG4 STS+7` Muss with its Ergänzung (Kap. 5.4,
-//! S. 165–166); the Kündigung 55016 is „LFN an LFA" — it goes to the
+//! The Anmeldung 55001 makes `SG4 STS+7` Muss with `E01`/`E03` (Kap. 8.2,
+//! S. 73); the Abmeldung 55004 with its Ergänzung (Kap. 5.4, S. 165–166); the
+//! Kündigung 55016 is „LFN an LFA" — it goes to the
 //! Altlieferant, never the grid operator.
 
 use std::sync::Arc;
@@ -113,6 +114,136 @@ async fn door(command: &str, body: &serde_json::Value) -> (Vec<String>, String, 
         found.push(edi.replace('\'', "'\n"));
     }
     (found, sent[0].recipient.to_string(), edi)
+}
+
+/// A 55001 body as the Lieferant's contract states it.
+fn anmeldung(grund: Option<&str>) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "malo_id": MALO_ID,
+        "lieferbeginn_datum": "2026-12-01",
+        "bilanzkreis": "11XBK-LF-------9",
+        "haushaltskunde": true,
+        "enfg_grundlage": "ZG1",
+        "kunde": {
+            "vorname": "Erika",
+            "nachname": "Mustermann",
+            "anschrift": {
+                "strasse": "Hauptstraße", "hausnummer": "1",
+                "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+            }
+        },
+    });
+    if let Some(grund) = grund {
+        body["transaktionsgrund"] = grund.into();
+    }
+    body
+}
+
+/// The Anmeldung 55001 the door writes passes its column under either Grund
+/// it admits, `E01` Ein-/Auszug and `E03` Wechsel, with the `ZW4` Ergänzung
+/// (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73).
+#[tokio::test]
+async fn a_55001_from_the_door_passes_its_profile() {
+    for grund in ["E01", "E03"] {
+        let (found, recipient, edi) =
+            door("gpke.lieferbeginn.anmelden", &anmeldung(Some(grund))).await;
+        assert!(found.is_empty(), "55001 {grund}:\n{}", found.join("\n"));
+        assert_eq!(recipient, NB_MP_ID);
+        assert!(edi.contains(&format!("STS+7++{grund}+ZW4'")), "{edi}");
+        for place in [
+            "SEQ+Z01'CCI+++Z15'",
+            "SEQ+Z75'CCI+Z61++ZG1'",
+            "NAD+Z09",
+            "NAD+Z04",
+        ] {
+            assert!(edi.contains(place), "{place} in {edi}");
+        }
+    }
+}
+
+/// The UTILMD a process writes carries the format version the process runs
+/// under, so the renderer can send it in that release after a cutover.
+#[tokio::test]
+async fn the_outbox_entry_carries_its_process_format_version() {
+    let state = lf_state().await;
+    dispatch_command(
+        &state,
+        "gpke.lieferbeginn.anmelden",
+        &anmeldung(Some("E03")),
+    )
+    .await
+    .expect("the 55001 is written");
+    let sent = utilmd(&state).await;
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].format_version.as_ref(),
+        Some(&super::latest_format_version())
+    );
+}
+
+/// The Kunde a 55001 names is Muss — the Gruppenzuordnung, the Grundlage nach
+/// EnFG and the Kunde des Lieferanten with his Korrespondenzanschrift (UTILMD
+/// AHB Strom 2.2 Kap. 8.2, S. 83–86). A body without one, or whose EnFG
+/// Grundlage claims a privilege without naming it, is refused naming the
+/// segment.
+#[tokio::test]
+async fn a_55001_names_its_kunde() {
+    let state = lf_state().await;
+    for (key, value, named) in [
+        ("kunde", None, "kunde"),
+        ("haushaltskunde", None, "haushaltskunde"),
+        ("enfg_grundlage", None, "enfg_grundlage"),
+        ("enfg_grundlage", Some(serde_json::json!("ZF9")), "SG10 CAV"),
+        ("enfg_grundlage", Some(serde_json::json!("Z99")), "SEQ+Z75"),
+        (
+            "kunde",
+            Some(serde_json::json!({ "nachname": "Mustermann" })),
+            "NAD+Z09",
+        ),
+    ] {
+        let mut body = anmeldung(Some("E03"));
+        match value {
+            Some(v) => body[key] = v,
+            None => {
+                body.as_object_mut().expect("an object").remove(key);
+            }
+        }
+        let refused = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &body).await;
+        assert!(
+            matches!(&refused, Err(DispatchError::InvalidPayload(m)) if m.contains(named)),
+            "{key}: {refused:?}"
+        );
+    }
+    assert!(utilmd(&state).await.is_empty());
+}
+
+/// A 55001 without its `SG4 STS+7` Transaktionsgrund is refused naming the
+/// segment, and one with a code the column does not admit is refused too;
+/// nothing is written.
+#[tokio::test]
+async fn a_55001_needs_a_grund_its_column_admits() {
+    let state = lf_state().await;
+    let refused = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &anmeldung(None)).await;
+    assert!(
+        matches!(&refused, Err(DispatchError::InvalidPayload(m))
+            if m.contains("SG4 STS+7") && m.contains("transaktionsgrund")),
+        "{refused:?}"
+    );
+    let mut foreign_ergaenzung = anmeldung(Some("E03"));
+    foreign_ergaenzung["transaktionsgrund_ergaenzung"] = "ZW3".into();
+    for body in [
+        anmeldung(Some("E02")),
+        anmeldung(Some("ZT5")),
+        anmeldung(Some("")),
+        foreign_ergaenzung,
+    ] {
+        let refused = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &body).await;
+        assert!(
+            matches!(&refused, Err(DispatchError::InvalidPayload(m)) if m.contains("STS+7")),
+            "{body}: {refused:?}"
+        );
+    }
+    assert!(utilmd(&state).await.is_empty());
 }
 
 /// The Abmeldung 55004 the door writes passes its column, under an Ende-Grund

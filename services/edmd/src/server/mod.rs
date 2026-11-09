@@ -433,9 +433,10 @@ pub struct RunConfig {
     /// erasure then unlinks without recording that it happened, and the next
     /// delivery for the same MaLo re-links it.
     pub erasure_keys: Vec<Vec<u8>>,
-    /// The policy and posture report, served at `GET /api/v1/policy` and by
-    /// the `get_policy` MCP tool.
-    pub policy: mako_service::policy::PolicyReport,
+    /// The runner's report — findings, policy and posture — served at
+    /// `GET /admin/einrichtung`, `GET /api/v1/policy` and by the `get_policy`
+    /// MCP tool.
+    pub einrichtung: Arc<mako_service::einrichtung::Einrichtung>,
     /// `[policy] physische_loeschung`, named in every erasure result.
     pub physische_loeschung: mako_service::policy::PolicyTriple,
     /// ERP webhook URL for outbound CloudEvents (direct push + quality warnings).
@@ -574,7 +575,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     let repo_for_surveillance = repo.clone();
 
     let mcp_state = Arc::new(crate::mcp_server::EdmdMcpState {
-        policy: Arc::new(cfg.policy.clone()),
+        policy: Arc::new(cfg.einrichtung.policy.clone()),
         pool: pool.clone(),
         repo: repo.clone(),
         tenant: cfg.tenant.clone(),
@@ -712,8 +713,11 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         .merge(
             router(state)
                 .nest("/api/v1/iceberg", iceberg_facade)
-                // Operator policy: GET /api/v1/policy (read-only; Cedar `read-policy`).
-                .merge(mako_service::policy::router(cfg.policy.clone()))
+                // Readiness and operator policy: GET /admin/einrichtung (Cedar
+                // `read-config`) and GET /api/v1/policy (Cedar `read-policy`).
+                .merge(mako_service::einrichtung::router(Arc::clone(
+                    &cfg.einrichtung,
+                )))
                 .layer(Extension(expected_tenant))
                 .layer(Extension(cfg.cedar))
                 .layer(Extension(cfg.oidc))

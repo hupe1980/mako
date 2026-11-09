@@ -107,11 +107,15 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
-            // ── WiM Geräteübernahme (nMSB role) ──────────────────────────────
+            // ── WiM Geräteübernahme (MSBA role) ──────────────────────────────
             // PID 17001: Bestellung Geräteübernahmeangebot, MSBN → MSBA — spawn.
-            // PID 17002: Weiterverpflichtung, NB → MSBA — spawn.
             // PID 17009: Anzeige Gerätewechselabsicht, MSBN → MSBA — spawn.
-            // PIDs 19001/19002: ORDRSP Bestätigung/Ablehnung (MSBA → MSBN) — resume.
+            //
+            // The ORDRSP answers 19001/19002/19015/19016 travel MSBA → MSBN, and
+            // the MSBN side is not built: makod sends no ORDERS 17001 or 17009,
+            // so no process waits for one. They fall to `pid_not_in_dispatch_table`,
+            // which the door dead-letters as `NotDispatchable` — the PIDs stay
+            // registered so the router names their workflow.
             //
             // 17005 and 17011 are deliberately absent — they are different
             // processes and `GERAETEUBERNAHME_PIDS` never registers them here:
@@ -146,19 +150,6 @@ impl EdifactIngestDispatcher {
                         // would be a second definition of the same domain fact,
                         // and it differs — `New` occupies nothing.
                         mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
-                    )
-                    .await
-                }
-                19001 | 19002 | 19015 | 19016 => {
-                    let cmd =
-                        adapters::wim_geraeteubernahme_registry(received_at, self.sparte_of(msg))
-                            .dispatch(raw, &fv)?;
-                    let melo_id = extract_melo_from_orders(msg);
-                    self.resume_by_key::<WimGeraeteubernahmeWorkflow>(
-                        inbound,
-                        &melo_id,
-                        "wim-geraeteubernahme",
-                        cmd,
                     )
                     .await
                 }

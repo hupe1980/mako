@@ -9,6 +9,7 @@ import {
 } from "react";
 import { Button } from "react-aria-components";
 import { Kbd } from "../design/Kbd";
+import { useT } from "../i18n";
 import { type Hold, HoldQueue } from "./holdQueue";
 import { UNDO } from "./keys";
 
@@ -73,6 +74,7 @@ export function useGehalten(key: string): { hold: Hold; ms: number } | null {
 const KEINE: readonly Hold[] = [];
 
 function HoldToasts({ queue }: { queue: HoldQueue }) {
+  const t = useT();
   const holds = useSyncExternalStore(
     (l) => queue.subscribe(l),
     () => queue.list(),
@@ -80,7 +82,7 @@ function HoldToasts({ queue }: { queue: HoldQueue }) {
   return (
     <ol
       aria-live="polite"
-      aria-label="Gleich gesendet"
+      aria-label={t.halten.gleichGesendet}
       className="pointer-events-none fixed bottom-5 left-1/2 z-50 m-0 flex -translate-x-1/2 list-none flex-col items-center gap-2 p-0"
     >
       {holds.map((h, i) => (
@@ -91,6 +93,7 @@ function HoldToasts({ queue }: { queue: HoldQueue }) {
 }
 
 function HoldToast({ hold, newest, queue }: { hold: Hold; newest: boolean; queue: HoldQueue }) {
+  const t = useT();
   return (
     <li className="material squircle pointer-events-auto relative flex h-10 min-w-72 items-center gap-3 overflow-hidden rounded-panel border border-separator pr-2 pl-4 shadow-[var(--shadow-popover)]">
       <span className="flex-1 text-body text-text">{hold.label}</span>
@@ -98,7 +101,7 @@ function HoldToast({ hold, newest, queue }: { hold: Hold; newest: boolean; queue
         onPress={() => queue.undo(hold.id)}
         className="focus-ring flex h-7 items-center gap-1.5 rounded-full px-3 text-body font-semibold text-accent data-[hovered]:bg-fill"
       >
-        Rückgängig
+        {t.halten.rueckgaengig}
         {newest && <Kbd>{UNDO.keys}</Kbd>}
       </Button>
       <span

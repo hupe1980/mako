@@ -11,6 +11,13 @@
 //! operator can act on, where a domestic invoice to a foreign recipient reads
 //! exactly like a correct one downstream.
 //!
+//! The Member-State refusal stands when Art. 369aa MwStSystRL applies from
+//! 01.01.2027 (Richtlinie (EU) 2025/516 Art. 2 Nr. 12 and Art. 6(2)): the
+//! article admits such a supply to the One-Stop-Shop return of Art. 369b
+//! without prescribing invoice content, and the VAT stays that of „the Member
+//! State in which the goods are subject to VAT", whose rates mako does not
+//! hold.
+//!
 //! The rule reads the country code (ISO 3166-1 alpha-2, the EN 16931 BT-55
 //! term) and nothing else. An address without one is refused: the decision is
 //! not taken on the caller's behalf. A service that documents its own default

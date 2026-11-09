@@ -9,6 +9,168 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.31.0] — 2026-11-09
+
+### Added
+
+- Configuration findings (`mako_service::befund::Befund`): every daemon
+  reports every finding about its configuration — severity
+  (`blockiert`/`warnung`), checklist area, TOML path, policy anchor and source.
+  `<daemon> --check-config [--json]` prints them and exits non-zero on a
+  blocking one; every daemon but portald serves them at
+  `GET /admin/einrichtung` (Cedar `read-config`; makod `AdminEinrichtung`).
+- Deployment checklist: makod folds the reports of the daemons listed in
+  `[[einrichtung.dienst]]` into one Ampel per area — identities, certificates,
+  Bilanzkreise, access, reachability, format coverage — at
+  `GET /admin/einrichtung/deployment` and the MCP tool
+  `einrichtung_checkliste`, and flags two daemons naming different MP-IDs for
+  one Rolle and Sparte. `just setup` prints it for the dev configs (or `--url`
+  a running makod) and exits non-zero until it is ready. Guide: Einrichtung.
+- makod findings: a Gas role under a `99…` BDEW-Codenummer or a Strom role
+  under a `98…` DVGW-Codenummer blocks (BDEW-AWH Identifikatoren V1.2 Kap.
+  2.2); an expired AS4 certificate blocks, and one inside `[as4]
+  zertifikat_warnfenster_tage` (default 30) warns.
+- makod: `POST /api/v1/probe/{command}` and the MCP tool `rehearse_command`
+  rehearse a command before go-live — the door runs to its pre-send check and
+  returns the verdict and each UTILMD it built, segment by segment with its MIG
+  names and findings. Nothing is queued, sent or stored. Rehearsable: GPKE
+  55001/55004/55016 and GeLi Gas 44001/44004/44016; anything else is a `422`.
+  New Cedar action `RehearseCommand`, granted to `erp-operator` in
+  `conservative.cedar`.
+- makod: GeLi Gas Stammdatenänderung — `geli.stammdaten-aenderung.beantworten`
+  answers an inbound Änderung (the 44115 to a GNB's 44112, UTILMD AHB Gas 1.2
+  Kap. 5.10.1) with a code of its Codeliste; `geli.stammdaten-aenderung.senden`
+  sends the GNB's 44112 and the LF's 44109 (Kap. 5.11.3), each held against its
+  profile.
+- Desk: English beside German (account menu, kept in the browser) across every
+  view; the market's vocabulary stays German. `cargo xtask check-desk` refuses
+  a German literal in a view or a `.ts` module.
+- Desk: the Einrichtung view — makod's deployment checklist by area with each
+  finding's setting path, manual link and source, refreshed every 15 s — and
+  the Probelauf, which rehearses a message and shows its segments with their
+  AHB names and the failing data element marked.
+- Desk: list–detail layout (first on Fristen überschritten), phone width with
+  the sidebar as a sheet, and `/config.json` beside the bundle naming the
+  operator manual a finding links to (`handbuch`).
+- agentd: `tool://agentd/quote_source` and `find_source` quote a rule verbatim
+  by document, edition and chapter or § from the index `cargo xtask
+  index-sources [--download]` builds out of the operator's `regulatories/`
+  mirror and the EnWG/MsbG (`[quellen] index`). An address the index lacks is
+  refused. Belegprüfung marks a rule `belegt` only when it quotes that address.
+- agentd `[policy] agent_posture` (`advisory` default / `supervised`, with
+  `klassifizierung_ref`): which specialist grants refuse startup. processd and
+  agentd report their settings and `allow_insecure_no_auth` in the policy
+  report.
+- processd `[policy] msb_vorlauf_lesart` (`additiv` default / `wortlaut`):
+  whether the Fristen of GPKE Teil 2 Kap. 3.5.1.2 Nr. 3 and Nr. 4 add up; each
+  Sperrauftrag served by `GET /api/v1/sperr-orders` carries its `msb_fenster`.
+- processd keeps the Antwortcode a counterparty answered with
+  (`antwort_code`, `antwort_codeliste`, schema edited in place); `get_process`
+  and `GET /obs/processes/{id}` return it with its BDEW wording `bedeutung`,
+  and the Desk's Prozess card shows it.
+- `mako_service::mcp` (feature `mcp`): the MCP revisions every server speaks
+  (`REVISIONS` = 2026-07-28, 2025-11-25), the Streamable HTTP `service`, and
+  under `testing` the conformance round trip every MCP server's tests drive.
+- Guards in `just ci`: `check-config-findings` (no `bail!`/`ensure!` in a
+  `Daemon::validate` or a findings collector) and `check-mcp-surface` (MCP
+  revisions, session and capability rules). `check-frist-literals` reads EnWG
+  and MsbG as sources too.
+
+### Changed
+
+- **Breaking:** `mako_service::Daemon::validate` returns `Vec<Befund>` instead
+  of `anyhow::Result<()>`; the runner refuses the boot on a blocking finding
+  and logs each warning. `mako_service::einrichtung::router` replaces
+  `policy::router` and serves both routes. makod reports an adapter gap as a
+  finding instead of panicking.
+- **Breaking:** the eleven MCP servers speak revisions 2026-07-28 and
+  2025-11-25 only (an older `initialize` settles on 2025-11-25) and hold no
+  session: no `Mcp-Session-Id`, `GET /mcp` is `405`, any replica answers any
+  request.
+- **Breaking:** makod renders every outbound process message — UTILMD,
+  ORDERS, ORDRSP, REQOTE, QUOTES, ORDCHG, INVOIC, REMADV, MSCONS, IFTSTA,
+  INSRPT — in the release of its process's format version; an APERAK or
+  CONTRL goes out in the release in force on the day it is sent. A process
+  whose release is not mirrored is refused, not rendered in today's: a
+  process started before 01.04.2026 cannot render ORDERS, ORDRSP, MSCONS or
+  INVOIC, whose oldest mirrored profile is fv20260401.
+  `mako-engine` `OutboxMessage::format_version` carries the process's format
+  version; `FormatVersion::date` reads its Anwendungszeitpunkt.
+- **Breaking:** the Strom Anmeldung 55001 body is typed
+  (`mako_markt::commands::GpkeLieferbeginnAnmelden`): `transaktionsgrund`
+  (`E01`/`E03`), `bilanzkreis`, `haushaltskunde`, `enfg_grundlage`/
+  `enfg_grund` and `kunde` are required (UTILMD AHB Strom 2.2 Kap. 8.2), and
+  the rendered 55001 is held against its profile before anything is written.
+  processd `POST /api/v1/start-supply` requires them too
+  (`TRANSAKTIONSGRUND_UNZULAESSIG`, `ANMELDEDATEN_UNVOLLSTAENDIG`,
+  `ANMELDEDATEN_UNGUELTIG`); vertragd stores `enfg_grundlage`/`enfg_grund` and
+  refuses a Strom component without them or a `lieferbeginn_anlass`
+  (schema edited in place). `mako-gpke` `InitiateAnmeldung` carries
+  `kundendaten`.
+- **Breaking:** `mako-wim` `wim-geraeteubernahme`: the ORDRSP answer follows
+  ORDRSP AHB 1.1b Kap. 4.9.2/4.10 — `ordrsp_antwort_pid` takes the
+  `AntwortCode` (`ZB4`/`ZB5` → 19015, `E17`/`Z07` → 19016, so a `ZB5` leaves
+  the Gerätewechsel open), `DispatchAntwort` takes `AntwortAngaben`
+  (Ansprechpartner, Lieferadresse für Altgeräte, Eigentümer, each refused when
+  missing or not in the column), the commands carry the ORDERS'
+  `orders_nummer`, and `AntwortGesendet` states `abgelehnt`/`begruendung`.
+  `edi-energy` `OrdrespBuilder` gains `execution_date`, `contact`,
+  `involved_party` and `delivery_address`.
+- **Breaking:** `eeg-billing` Beihilfevorbehalt: a fourth state
+  `Eeg2023Verlaengert` (a recorded extension of the EEG 2023 approval
+  C(2022) 9900 final, SA.102084, which ends 31.12.2026) keeps EEG 2023 to the
+  extension's `gilt_bis`; `Genehmigt` is `Eeg2027Genehmigt`;
+  `Beihilfegenehmigung.regelung` replaces `umfang`; `Fassung::fuer_periode`
+  takes the approvals from `SettleInput::beihilfegenehmigungen`. einsd's
+  `[[beihilfevorbehalt.genehmigungen]]` names `regelung = "eeg2023_verlaengerung"
+  | "eeg2027"` and refuses `umfang`, an extension without its end, and two
+  overlapping approvals.
+- **Breaking:** `mako-pruefung` `AnmeldungMsb.msb_rahmenvertrag` is an
+  `Option<RahmenvertragBefund>` and `mako-markt`
+  `MsbRahmenvertragPruefung.befund` a `MsbRahmenvertragBefund`; processd's
+  escalation names the Befund (`kein_vertrag`, `angeboten`, `beendet`, or a Gas
+  contract to adapt per GeLi Gas 3.0 Tenor 15 Satz 2) instead of always
+  „missing contract".
+- **Breaking:** `mako-geli-gas` `GasStammdatenCommand::SendAenderung` takes the
+  changed `stammdaten` and refuses an Änderung naming none (Bedingung `[92]`).
+- **Breaking:** processd `get_process` is a typed MCP tool with an output
+  schema (`ProcessProjectionView`, also for `list_processes_by_family`);
+  `fruehester_sperrtermin_ohne_msb_zustimmung` takes a `MsbVorlaufLesart`.
+- `mako-gpke` `gpke-supplier-change`: each Anmeldung answer (55002/55003/
+  55078/55080) queues a `ProcessCompleted`, so the NB's marktd moves the
+  supplier on its own answer.
+
+### Removed
+
+- **Breaking:** makod `[engine] deployment_roles`, `--deployment-roles` and
+  `MAKOD_DEPLOYMENT_ROLES`: the engine roles come from `[deployment] rollen`
+  and `[[party]]`. The old key is refused.
+
+### Fixed
+
+- A contract-started Strom Anmeldung 55001 lacked `SG4 STS+7`, `SEQ+Z01`,
+  `SEQ+Z75` and the `SG12` Kunde, all Muss (UTILMD AHB Strom 2.2 Kap. 8.2), so
+  the pre-send gate dead-lettered every one.
+- An answer to a process started before the 01.10.2026 cutover goes out in
+  fv20251001, not in the release in force on the day it is sent.
+- WiM Geräteübernahme: a Gerätewechseltermin inside the Mindestvorlaufzeit
+  (WiM Teil 1 Kap. 3.1.2 Nr. 1; AWH WiM Gas 2.0 Kap. 4.1.2 Nr. 1) is answered
+  with ORDRSP 19016 `E17` instead of an APERAK; the ORDRSP 19001/19002/19015/
+  19016 carry `BGM` `Z10`/`Z13`, `SG1 RFF+ON`, `DTM+203` and the parties their
+  AHB column requires.
+- makod: an inbound ORDRSP 19001/19002/19015/19016 reaches the ORDRSP adapter
+  and is dead-lettered as a registered PID with no receiver (`NotDispatchable`),
+  not as „expected ORDERS message".
+- The Fall-b Lieferende (`E_0624` `A34`) reaches marktd: the NB's 55002 carries
+  `lfa_lieferende` on its `ProcessCompleted`, and marktd opens the § 38 Abs. 1
+  EnWG gap up to the Zuordnungsbeginn.
+- agentd connects to every mako MCP server on 2026-07-28 (`McpClient::connect`,
+  `server/discover` first) instead of negotiating down to 2025-11-25.
+- productd prompts: an Angebot defaults to today + 14 calendar days, not „10
+  Werktage"; the B2B prompt cites § 312g Abs. 1 BGB, not „§41 EnWG", for the
+  missing cooling-off period; the dynamic-tariff prompt cites § 41a Abs. 2
+  EnWG and names no clock time for the EPEX import.
+
 ## [0.30.0] — 2026-11-09
 
 ### Added

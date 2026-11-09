@@ -226,7 +226,14 @@ fn the_policy_grants_no_action_the_code_never_checks() {
     let permitted = actions_permitted_in_policy();
     // `use-mcp` is the blanket gate the shared MCP middleware applies
     // (`mako_service::mcp_auth::McpAuth::authenticate`), one crate over.
-    let enforced_elsewhere: BTreeSet<String> = [MCP_GATE.to_owned()].into();
+    // `read-policy` and `read-config` are checked by
+    // `mako_service::einrichtung::router`, the one handler for every daemon.
+    let enforced_elsewhere: BTreeSet<String> = [
+        MCP_GATE.to_owned(),
+        "read-policy".to_owned(),
+        "read-config".to_owned(),
+    ]
+    .into();
     let dead: Vec<_> = permitted
         .difference(&used)
         .filter(|a| !enforced_elsewhere.contains(*a))
@@ -384,8 +391,14 @@ fn operator() -> CedarPrincipal {
     }
 }
 
-/// The actions a token of the tenant reaches without any market role.
-const ROLE_LESS_ACTIONS: [&str; 2] = ["read-product", "read-marktpreise"];
+/// The actions a token of the tenant reaches without any market role — the
+/// catalogue reads and the two read-only reports every daemon serves.
+const ROLE_LESS_ACTIONS: [&str; 4] = [
+    "read-product",
+    "read-marktpreise",
+    "read-policy",
+    "read-config",
+];
 
 #[test]
 fn a_role_less_token_reads_the_catalogue_and_moves_no_price() {

@@ -184,7 +184,7 @@ missing.
 
 A binary carries every profile `sources.json` names, and every known format
 version must be covered by an adapter —
-`makod::startup::validate_adapter_coverage` refuses to boot otherwise. There is
+`makod::startup::adapter_befunde` refuses to boot otherwise. There is
 no per-FV switch: in-flight processes keep the FV on their `WorkflowId`, and the
 inbound message's own FV picks the adapter.
 

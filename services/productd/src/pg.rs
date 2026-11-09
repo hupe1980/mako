@@ -872,7 +872,7 @@ pub struct CreateAngebotRequest {
     pub interessent_name: Option<String>,
     pub contact_email: Option<String>,
     pub contact_phone: Option<String>,
-    /// Proposal validity (YYYY-MM-DD).  Defaults to today + 10 Werktage.
+    /// Proposal validity (YYYY-MM-DD).  Defaults to today + 14 calendar days.
     pub gueltig_bis: Option<String>,
     pub lieferbeginn: Option<String>,
     /// Contract duration in months: 1, 3, 6, 12, 24, 36, 48, or 60.

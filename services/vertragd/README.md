@@ -98,7 +98,9 @@ export: `portabel.<kategorie>` (Art. 20 Abs. 1) and `automatisiert.<prozess>`
 (Art. 15 Abs. 1 lit. h, Art. 22), each defaulting to `true`. The export states
 the Art. 20 subset and the automated-decision statement with the reading
 behind each; the policy report is served at `GET /api/v1/policy` and by the MCP
-tool `get_policy`.
+tool `get_policy`. `vertragd --check-config [--json]` prints every configuration
+finding (path, severity, source) and exits non-zero on a blocking one; the same
+findings are served at `GET /admin/einrichtung`.
 
 DB suite: `just test-vertragd-db`.
 

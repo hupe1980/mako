@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "accountingd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "agentd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "agentplane",
  "anyhow",
@@ -145,6 +145,7 @@ dependencies = [
  "mako-fristen",
  "mako-service",
  "prometheus",
+ "regex",
  "reqwest 0.13.5",
  "rmcp",
  "rubo4e",
@@ -815,7 +816,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1502,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "billingd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1754,7 +1755,7 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1784,7 +1785,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1852,7 +1853,7 @@ checksum = "6a1f896587b6f2c069c73d2f0913e2d590c3990285cd2f0b6aa02b786b4c679c"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2182,7 +2183,7 @@ dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2794,7 +2795,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2816,7 +2817,7 @@ checksum = "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
 dependencies = [
  "darling_core 0.24.1",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -3675,7 +3676,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -3756,7 +3757,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "edifact-rs",
  "rust_decimal",
@@ -3870,7 +3871,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "criterion",
  "edifact-rs",
@@ -3907,12 +3908,12 @@ checksum = "094f587ad16044b1468215cd41eccae3caa7116042f681b6d49a0311ba4dbf68"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
 name = "edmd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -3956,12 +3957,12 @@ dependencies = [
  "enum-ordinalize",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
 name = "eeg-billing"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "billing",
  "grid-billing",
@@ -3976,7 +3977,7 @@ dependencies = [
 
 [[package]]
 name = "einsd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4129,7 +4130,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "axum",
  "base64ct",
@@ -4151,7 +4152,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -4185,7 +4186,7 @@ checksum = "a65863d15a4ce2888bd2f0f543cc963d3879c3a022c8ee43f6141d479a3ac815"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -4805,7 +4806,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -5025,7 +5026,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "billing",
  "mako-markt",
@@ -6023,7 +6024,7 @@ dependencies = [
 
 [[package]]
 name = "invoic-checker"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "billing",
  "mako-fristen",
@@ -6037,7 +6038,7 @@ dependencies = [
 
 [[package]]
 name = "invoicd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6068,9 +6069,9 @@ dependencies = [
 
 [[package]]
 name = "io-uring"
-version = "0.7.15"
+version = "0.7.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed3bd0ecfbb87805f538bb7b32e5239ca0763890c623e349860ecba69469f2bb"
+checksum = "878c26bc5e45fe089ce2ca25689260c152a87ce1d7de2ca86101efeea6973932"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -6830,7 +6831,7 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "asx-rs",
  "thiserror 2.0.21",
@@ -6838,7 +6839,7 @@ dependencies = [
 
 [[package]]
 name = "mako-emob"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -6854,7 +6855,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "criterion",
  "mako-events",
@@ -6875,11 +6876,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.30.0"
+version = "0.31.0"
 
 [[package]]
 name = "mako-fristen"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "time",
  "time-tz",
@@ -6887,7 +6888,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "dvgw-edi",
  "mako-engine",
@@ -6903,7 +6904,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6919,7 +6920,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6935,7 +6936,7 @@ dependencies = [
 
 [[package]]
 name = "mako-invoic"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "mako-engine",
  "rubo4e",
@@ -6947,7 +6948,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -6965,7 +6966,7 @@ dependencies = [
 
 [[package]]
 name = "mako-markt"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -6984,7 +6985,7 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "mako-fristen",
  "rubo4e",
@@ -6996,7 +6997,7 @@ dependencies = [
 
 [[package]]
 name = "mako-pruefung"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "edi-energy",
  "mako-fristen",
@@ -7011,7 +7012,7 @@ dependencies = [
 
 [[package]]
 name = "mako-redispatch"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -7023,7 +7024,7 @@ dependencies = [
 
 [[package]]
 name = "mako-service"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7042,7 +7043,9 @@ dependencies = [
  "opentelemetry_sdk",
  "prometheus",
  "reqwest 0.13.5",
+ "rmcp",
  "rubo4e",
+ "schemars 1.2.3",
  "secrecy",
  "serde",
  "serde_ignored",
@@ -7067,7 +7070,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7084,7 +7087,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -7140,7 +7143,7 @@ dependencies = [
 
 [[package]]
 name = "makotest-native"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "edi-energy",
  "edifact-rs",
@@ -7154,14 +7157,16 @@ dependencies = [
 
 [[package]]
 name = "marktd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
  "futures",
  "http-body-util",
+ "mako-engine",
  "mako-events",
  "mako-fristen",
+ "mako-gpke",
  "mako-markt",
  "mako-service",
  "mako-wim",
@@ -7437,7 +7442,7 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 
 [[package]]
 name = "netzbilanzd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8168,7 +8173,7 @@ dependencies = [
 
 [[package]]
 name = "outputd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8834,7 +8839,7 @@ dependencies = [
 
 [[package]]
 name = "portald"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8947,7 +8952,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bfe0f4c752e450fc2faf62654f1c134747922825d5b04ca717b8874f41a40c0"
 dependencies = [
  "proc-macro2",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -9025,7 +9030,7 @@ dependencies = [
 
 [[package]]
 name = "processd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9083,7 +9088,7 @@ dependencies = [
 
 [[package]]
 name = "productd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9601,7 +9606,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -9644,7 +9649,7 @@ checksum = "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -9993,7 +9998,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_json",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -10365,7 +10370,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -10544,7 +10549,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -10555,7 +10560,7 @@ checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -10613,7 +10618,7 @@ checksum = "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -10676,7 +10681,7 @@ dependencies = [
  "darling 0.24.1",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -11662,9 +11667,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.9"
+version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
+checksum = "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -11699,7 +11704,7 @@ checksum = "901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -11874,7 +11879,7 @@ checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -12032,7 +12037,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -12589,7 +12594,7 @@ checksum = "f153acc4e99a5f2a5aefa09fb078be54e26271b2813f6041200b224c098d8328"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -13344,7 +13349,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vertragd"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -13490,7 +13495,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "wasm-bindgen-shared",
 ]
 
@@ -14118,6 +14123,7 @@ version = "0.1.0"
 dependencies = [
  "edi-energy",
  "mako-fristen",
+ "mako-service",
  "regex",
  "reqwest 0.13.5",
  "rubo4e",
@@ -14165,7 +14171,7 @@ checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "synstructure 0.14.0",
 ]
 
@@ -14206,7 +14212,7 @@ checksum = "f75b4683f6c7f45248d4d64056a24298c6281e0993356d7d1b4a1a962ef10d4a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "synstructure 0.14.0",
 ]
 
@@ -14264,7 +14270,7 @@ checksum = "c3743ddbf47738d929cd1ae2e199d40d0162979dfe31aef8ae646d2bf00bf97a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]

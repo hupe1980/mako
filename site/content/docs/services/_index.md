@@ -83,7 +83,7 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [invoicd](@/docs/services/invoicd.md) | `:8280` | LF | INVOIC plausibility-check — eight stages plus the WiM 31003 send window (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, § 147 AO / GoBD receipts |
-| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB/ÜNB | NNE/KA/MMM/MSB/AWH billing — INVOIC 31001/31002/31005/31009/31011, REMADV lifecycle, §14a Modul 3 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt; MaBiS Summenzeitreihen filed with the BIKO as MSCONS 13003 on the 10. Werktag; 12-tool MCP server |
+| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB/ÜNB | NNE/KA/MMM/MSB/AWH billing — INVOIC 31001/31002/31005/31009/31011, REMADV lifecycle, §14a Modul 3 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt; MaBiS Summenzeitreihen filed with the BIKO as MSCONS 13003 on the 10. Werktag; 13-tool MCP server |
 
 ## Energy Data & Observability
 

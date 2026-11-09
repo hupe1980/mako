@@ -39,7 +39,7 @@
 //!   sender MP-ID for ORDERS messages from a static PID → role table.
 //! - **Deployment role derivation** — [`deployment_role_strings`] normalises the
 //!   `[[party]]` roles into the strings `parse_deployment_roles` accepts, so
-//!   `--deployment-roles` and `--marktrollen` can be derived.
+//!   the engine's PID-registration roles and `--marktrollen` are derived.
 //!
 //! [`is_own_mp_id`]: MpIdRegistry::is_own_mp_id
 //! [`sender_mp_id_for_orders_pid`]: MpIdRegistry::sender_mp_id_for_orders_pid
@@ -71,7 +71,7 @@ struct RoleEntry {
     abbrev: &'static str,
     /// Energy sector.
     sparte: RoleSparte,
-    /// Canonical string for `parse_deployment_roles` / `--deployment-roles`.
+    /// Canonical string for `parse_deployment_roles`.
     ///
     /// `None` = role has no active PID routing in the current engine version;
     /// accepted at startup but excluded from `deployment_role_strings()`.
@@ -278,6 +278,120 @@ pub struct MpIdRegistry {
 impl MpIdRegistry {
     // ── Constructor ───────────────────────────────────────────────────────────
 
+    /// Every finding [`Self::from_config`] refuses on, each at its
+    /// `party[i]` path — all of them, not the first.
+    #[must_use]
+    pub fn pruefe(parties: &[PartyConfig]) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let ident = |pfad: String, text: String| {
+            Befund::blockiert(pfad, text).bereich(Bereich::Identitaeten)
+        };
+        let mut out = Vec::new();
+        if parties.is_empty() {
+            out.push(ident(
+                "party".to_owned(),
+                "makod.toml requires at least one [[party]] entry.\n\
+                 \n\
+                 [[party]]\n\
+                 mp_id     = \"<13-digit BDEW/DVGW code or GS1 GLN>\"\n\
+                 roles   = [\"NB\"]  # or LF, MSB, GNB, LFG, …\n\
+                 primary = true"
+                    .to_owned(),
+            ));
+            return out;
+        }
+
+        let primary_count = parties.iter().filter(|p| p.primary).count();
+        if primary_count > 1 {
+            out.push(ident(
+                "party".to_owned(),
+                format!(
+                    "at most one [[party]] entry may have `primary = true` (found {primary_count})"
+                ),
+            ));
+        }
+
+        let mut seen_glns: HashSet<&str> = HashSet::new();
+        let mut seen_roles: HashMap<Box<str>, &str> = HashMap::new();
+
+        for (i, party) in parties.iter().enumerate() {
+            if let Err(e) = validate_mp_id(&party.mp_id) {
+                out.push(ident(format!("party[{i}].mp_id"), e.to_string()));
+            }
+
+            if !seen_glns.insert(party.mp_id.as_str()) {
+                out.push(ident(
+                    format!("party[{i}].mp_id"),
+                    format!(
+                        "duplicate MP-ID {:?} — each [[party]] entry must have a unique MP-ID \
+                         (BDEW issues separate Codenummern per Marktrolle; use separate \
+                         entries with different MP-IDs)",
+                        party.mp_id
+                    ),
+                ));
+            }
+
+            let mut strom_roles: Vec<&str> = Vec::new();
+            let mut gas_roles: Vec<&str> = Vec::new();
+
+            for role in &party.roles {
+                let upper = role.to_uppercase();
+                let entry = match validate_role(&upper) {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        out.push(ident(
+                            format!("party[{i}].roles"),
+                            format!("in [[party]] mp_id = {:?}: {e}", party.mp_id),
+                        ));
+                        continue;
+                    }
+                };
+
+                let key: Box<str> = upper.into_boxed_str();
+                if let Some(prev_gln) = seen_roles.get(&key) {
+                    out.push(ident(
+                        format!("party[{i}].roles"),
+                        format!(
+                            "role {role:?} is claimed by {prev_gln:?} and {:?} — \
+                             each Marktrolle must belong to exactly one [[party]] entry",
+                            party.mp_id
+                        ),
+                    ));
+                } else {
+                    seen_roles.insert(key, party.mp_id.as_str());
+                }
+
+                match entry.sparte {
+                    RoleSparte::Strom => strom_roles.push(role.as_str()),
+                    RoleSparte::Gas => gas_roles.push(role.as_str()),
+                    RoleSparte::Both => {} // sparte-neutral; never triggers the mix check
+                }
+            }
+
+            // §2.13: a single [[party]] entry must not mix Strom and Gas roles.
+            if !strom_roles.is_empty() && !gas_roles.is_empty() {
+                out.push(
+                    ident(
+                        format!("party[{i}].roles"),
+                        format!(
+                            "[[party]] mp_id = {:?} mixes Strom roles {strom_roles:?} with Gas \
+                             roles {gas_roles:?}.\n\
+                             Per BDEW §2.13 (Allgemeine Festlegungen V6.1d), each Marktrolle \
+                             requires a separate MP-ID, and an operator identifying itself \
+                             by GLN and active in both sectors must use a different GLN per \
+                             energy type and role. Use separate \
+                             [[party]] entries — one for Strom (BDEW code, 99…) and one for \
+                             Gas (DVGW code, 98…).",
+                            party.mp_id,
+                        ),
+                    )
+                    .quelle("Allgemeine Festlegungen V6.1d, Kap. 2.13"),
+                );
+            }
+        }
+        out
+    }
+
     /// Build from `[[party]]` config entries.
     ///
     /// # Errors
@@ -298,81 +412,16 @@ impl MpIdRegistry {
     /// key and default sender MP-ID.  When no entry carries `primary = true`,
     /// the first entry in document order is used.
     pub fn from_config(parties: &[PartyConfig]) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            !parties.is_empty(),
-            "makod.toml requires at least one [[party]] entry.\n\
-             \n\
-             [[party]]\n\
-             mp_id     = \"<13-digit BDEW/DVGW code or GS1 GLN>\"\n\
-             roles   = [\"NB\"]  # or LF, MSB, GNB, LFG, …\n\
-             primary = true"
-        );
-
-        let primary_count = parties.iter().filter(|p| p.primary).count();
-        anyhow::ensure!(
-            primary_count <= 1,
-            "at most one [[party]] entry may have `primary = true` (found {})",
-            primary_count
-        );
-
-        let mut seen_glns: HashSet<&str> = HashSet::new();
-        let mut seen_roles: HashMap<Box<str>, &str> = HashMap::new();
-
-        for party in parties {
-            validate_mp_id(&party.mp_id)?;
-
-            if !seen_glns.insert(party.mp_id.as_str()) {
-                anyhow::bail!(
-                    "duplicate MP-ID {:?} — each [[party]] entry must have a unique MP-ID \
-                     (BDEW issues separate Codenummern per Marktrolle; use separate \
-                     entries with different MP-IDs)",
-                    party.mp_id
-                );
-            }
-
-            // Validate each role and accumulate sparte info for the §2.13 check.
-            // validate_role returns the &RoleEntry, avoiding a second table scan.
-            let mut strom_roles: Vec<&str> = Vec::new();
-            let mut gas_roles: Vec<&str> = Vec::new();
-
-            for role in &party.roles {
-                let upper = role.to_uppercase();
-                let entry = validate_role(&upper)
-                    .map_err(|e| anyhow::anyhow!("in [[party]] mp_id = {:?}: {e}", party.mp_id))?;
-
-                let key: Box<str> = upper.into_boxed_str();
-                if let Some(prev_gln) = seen_roles.get(&key) {
-                    anyhow::bail!(
-                        "role {:?} is claimed by {:?} and {:?} — \
-                         each Marktrolle must belong to exactly one [[party]] entry",
-                        role,
-                        prev_gln,
-                        party.mp_id
-                    );
-                }
-                seen_roles.insert(key, party.mp_id.as_str());
-
-                match entry.sparte {
-                    RoleSparte::Strom => strom_roles.push(role.as_str()),
-                    RoleSparte::Gas => gas_roles.push(role.as_str()),
-                    RoleSparte::Both => {} // sparte-neutral; never triggers the mix check
-                }
-            }
-
-            // §2.13: a single [[party]] entry must not mix Strom and Gas roles.
-            if !strom_roles.is_empty() && !gas_roles.is_empty() {
-                anyhow::bail!(
-                    "[[party]] mp_id = {:?} mixes Strom roles {strom_roles:?} with Gas \
-                     roles {gas_roles:?}.\n\
-                     Per BDEW §2.13 (Allgemeine Festlegungen V6.1d), each Marktrolle \
-                     requires a separate MP-ID, and an operator identifying itself \
-                     by GLN and active in both sectors must use a different GLN per \
-                     energy type and role. Use separate \
-                     [[party]] entries — one for Strom (BDEW code, 99…) and one for \
-                     Gas (DVGW code, 98…).",
-                    party.mp_id,
-                );
-            }
+        let befunde = Self::pruefe(parties);
+        if !befunde.is_empty() {
+            anyhow::bail!(
+                "{}",
+                befunde
+                    .iter()
+                    .map(|b| b.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
         }
 
         // ── Build the registry ────────────────────────────────────────────────
@@ -600,16 +649,14 @@ impl MpIdRegistry {
 
     /// All declared BDEW Marktrollen, normalised to uppercase, sorted.
     ///
-    /// Used to auto-derive `--deployment-roles` / `--marktrollen` when those
-    /// flags are not set explicitly on the CLI.
+    /// Used to derive `--marktrollen` when the flag is not set.
     #[must_use]
     pub fn all_roles(&self) -> &[Box<str>] {
         &self.all_roles
     }
 
     /// BDEW Marktrollen normalised to the canonical strings accepted by
-    /// `parse_deployment_roles` and the `--marktrollen` / `--deployment-roles`
-    /// CLI flags.
+    /// `parse_deployment_roles` and the `--marktrollen` CLI flag.
     ///
     /// Derived from `ROLE_TABLE`.  Gas sub-qualifiers map to their
     /// Strom-canonical engine role name where the engine uses one `Marktrolle`

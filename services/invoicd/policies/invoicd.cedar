@@ -20,7 +20,9 @@ permit(
         Action::"read-receipt",
         Action::"read-disputes",
         Action::"read-overdue-remadv",
-        Action::"use-mcp"
+        Action::"use-mcp",
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

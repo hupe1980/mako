@@ -47,6 +47,11 @@ oidc = ["dep:jsonwebtoken", "cedar"]
 ## handler and adds a per-request recording middleware automatically.
 metrics = ["dep:prometheus", "dep:mako-markt"]
 
+## `mcp`: the MCP revisions every server speaks (`mcp::REVISIONS`) and the
+## stateless Streamable HTTP service (`mcp::service`). With `testing`, the round
+## trips each server's tests drive (`mcp::conformance`).
+mcp = ["dep:rmcp"]
+
 ## Enables `ServiceBuilder::with_rate_limit(RateLimitConfig)`.
 ## Adds a global GCRA rate limiter (429 when exhausted) via `governor`.
 rate-limit = ["dep:governor"]
@@ -86,6 +91,9 @@ base64     = { version = "0.22" }
 # envelope builder is core to every emitting service.
 uuid       = { workspace = true }
 time       = { workspace = true }
+# The readiness report's JSON Schema: makod's `einrichtung_checkliste` tool
+# declares it, so the Desk's generated types hold the wire to it.
+schemars   = { workspace = true }
 
 # Optional OTel deps — only compiled when feature=otel is enabled
 opentelemetry             = { workspace = true, optional = true }
@@ -106,6 +114,9 @@ prometheus                = { version = "0.14", default-features = false, featur
 # Only for `bo4e::fractional_json_number_count` — the process-wide count of
 # fractional JSON numbers the BO4E gate admitted, exported by `metrics`.
 mako-markt                = { workspace = true, optional = true }
+
+# Optional rmcp dep — only compiled when feature=mcp is enabled
+rmcp                      = { workspace = true, optional = true }
 
 # Optional governor dep — only compiled when feature=rate-limit is enabled
 governor                  = { version = "0.6", optional = true }

@@ -22,7 +22,6 @@ use std::sync::Arc;
 
 use agentplane::tools::{McpClient, ToolClient};
 use anyhow::{Context as _, Result};
-use rmcp::ServiceExt as _;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use secrecy::ExposeSecret as _;
@@ -73,7 +72,11 @@ pub async fn connect(
     api_key: &secrecy::SecretString,
     http: &reqwest::Client,
 ) -> Result<Vec<(String, Arc<dyn ToolClient>)>> {
-    let granted = servers_named_in_grants();
+    // agentd's own tools (`quellen`) are compiled in, not reached over MCP.
+    let granted: BTreeSet<String> = servers_named_in_grants()
+        .into_iter()
+        .filter(|s| s != super::quellen::SERVER)
+        .collect();
 
     let missing: Vec<&str> = granted
         .iter()
@@ -126,41 +129,8 @@ async fn connect_one(
     token: &str,
     http: &reqwest::Client,
 ) -> Result<Arc<dyn ToolClient>> {
-    let mut config = StreamableHttpClientTransportConfig::with_uri(uri);
-    if !token.is_empty() {
-        config = config.auth_header(token);
-    }
-    let transport = StreamableHttpClientTransport::with_client(http.clone(), config);
-
-    // `host_info` advertises exactly what agentplane implements. Elicitation,
-    // sampling and roots are deliberately not advertised: a server offered one
-    // would open an interaction that has no governed runtime path.
-    let host_info = McpClient::host_info();
-    // What we offered, read off the very value we send rather than restated —
-    // agentplane bumping its revision must not leave a stale constant here
-    // reporting drift that is not there.
-    let offered = host_info.protocol_version.as_str().to_owned();
-    let service = host_info
-        .serve(transport)
-        .await
-        .with_context(|| format!("MCP handshake with '{name}'"))?;
-
-    // Fallible on purpose: rmcp deserializes any string into a protocol
-    // version, so a server answering a revision nobody implements would
-    // otherwise be talked to in a dialect that does not exist. Refusing here is
-    // a startup failure naming the server, which is the same class as a granted
-    // server missing from `[mcp_servers]`.
-    // The destination the allowlist judges has to be the host actually dialled,
-    // so it is read off `uri` rather than restated — every mako MCP server is a
-    // streamable-HTTP endpoint, so it is always a remote one.
-    let destination = reqwest::Url::parse(uri)
-        .ok()
-        .and_then(|u| u.host_str().map(ToOwned::to_owned))
-        .map_or(agentplane::tools::Destination::Local, |host| {
-            agentplane::tools::Destination::remote(host)
-        });
-    let client = McpClient::new(name, Arc::new(service), destination)
-        .with_context(|| format!("MCP protocol negotiation with '{name}'"))?;
+    let client = open(name, uri, token, http).await?;
+    let offered = agentplane::tools::MCP_REVISION.as_str();
 
     // MCP negotiates *down* by design, and a downgrade is silent: the tasks
     // extension and structured tool responses defined by the offered revision
@@ -180,6 +150,37 @@ async fn connect_one(
     }
 
     Ok(Arc::new(client) as Arc<dyn ToolClient>)
+}
+
+/// The client for one server, its revision settled.
+async fn open(name: &str, uri: &str, token: &str, http: &reqwest::Client) -> Result<McpClient> {
+    let mut config = StreamableHttpClientTransportConfig::with_uri(uri);
+    if !token.is_empty() {
+        config = config.auth_header(token);
+    }
+    let transport = StreamableHttpClientTransport::with_client(http.clone(), config);
+
+    // The destination the allowlist judges has to be the host actually dialled,
+    // so it is read off `uri` rather than restated — every mako MCP server is a
+    // streamable-HTTP endpoint, so it is always a remote one.
+    let destination = reqwest::Url::parse(uri)
+        .ok()
+        .and_then(|u| u.host_str().map(ToOwned::to_owned))
+        .map_or(agentplane::tools::Destination::Local, |host| {
+            agentplane::tools::Destination::remote(host)
+        });
+    // `connect` runs the lifecycle agentplane is written for: `server/discover`
+    // on 2026-07-28 first, the `initialize` handshake on 2025-11-25 only when the
+    // server cannot answer it. A plain `initialize` naming 2026-07-28 is
+    // answered with 2025-11-25, so starting the client by hand would negotiate
+    // down on every connection. It advertises exactly what agentplane
+    // implements — no elicitation, sampling or roots, which would open an
+    // interaction with no governed runtime path — and refuses a server settling
+    // outside `SPOKEN_REVISIONS`: a startup failure naming the server, the same
+    // class as a granted server missing from `[mcp_servers]`.
+    McpClient::connect(name, transport, destination)
+        .await
+        .with_context(|| format!("MCP connection to '{name}'"))
 }
 
 /// A tool server that refuses every call of a run whose stop stands.
@@ -268,6 +269,56 @@ mod tests {
         assert_eq!(spoken, ["2026-07-28", "2025-11-25"]);
     }
 
+    /// agentd's client settles on 2026-07-28 with a server built the way every
+    /// mako server is (`mako_service::mcp`), so no connection negotiates down.
+    #[tokio::test]
+    async fn the_client_settles_on_2026_07_28_with_a_mako_server() {
+        #[derive(Clone)]
+        struct Server;
+        impl rmcp::ServerHandler for Server {
+            fn get_info(&self) -> rmcp::model::ServerConfig {
+                rmcp::model::ServerConfig::new(
+                    rmcp::model::ServerCapabilities::builder()
+                        .enable_tools()
+                        .build(),
+                )
+            }
+            fn supported_protocol_versions(
+                &self,
+            ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+                mako_service::mcp::supported_revisions()
+            }
+        }
+        let app = axum::Router::new().route_service(
+            "/mcp",
+            mako_service::mcp::service(
+                || Ok(Server),
+                rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default(),
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = open(
+            "fixture",
+            &format!("http://{addr}/mcp"),
+            "",
+            &reqwest::Client::new(),
+        )
+        .await
+        .expect("the client connects");
+        assert_eq!(client.negotiated_version().as_deref(), Some("2026-07-28"));
+    }
+
+    /// The servers' declared revisions are the client's spoken ones.
+    #[test]
+    fn the_servers_declare_the_revisions_the_client_speaks() {
+        assert_eq!(mako_service::mcp::REVISIONS, McpClient::SPOKEN_REVISIONS);
+    }
+
     /// The manifests grant tools on servers, and we can name them.
     ///
     /// The list is what `[mcp_servers]` must cover, so an empty one would mean
@@ -307,6 +358,10 @@ mod tests {
         assert!(
             msg.contains("makod"),
             "the error names the missing server: {msg}"
+        );
+        assert!(
+            !msg.contains(&format!("\"{}\"", super::super::quellen::SERVER)),
+            "agentd's own tools need no MCP endpoint: {msg}"
         );
     }
 }

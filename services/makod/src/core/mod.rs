@@ -4,6 +4,7 @@
 pub mod cedar_authz;
 pub mod config;
 pub mod deployment;
+pub mod einrichtung;
 pub mod erp_adapter;
 pub mod health;
 pub mod malo_cache;

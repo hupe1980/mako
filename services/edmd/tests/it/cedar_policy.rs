@@ -36,6 +36,7 @@ fn same_tenant_reads_are_role_agnostic() {
         "read-reading-order",
         "use-mcp",
         "read-policy",
+        "read-config",
     ] {
         assert!(e.check(&lf, action, TENANT).is_ok(), "LF may {action}");
     }

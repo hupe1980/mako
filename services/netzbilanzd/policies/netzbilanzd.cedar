@@ -48,6 +48,9 @@
 //                            with the BIKO
 //   "use-mcp"              — the blanket gate the shared MCP middleware applies
 //                            (`mako_service::mcp_auth::McpAuth::authenticate`)
+//   "read-policy"          — GET  /api/v1/policy (the operator policy report)
+//   "read-config"          — GET  /admin/einrichtung (the configuration
+//                            findings the runner built at boot)
 //
 // `POST /api/v1/webhooks/remadv` carries no Cedar action: it is authenticated
 // by the inbound HMAC (`inbound_secret`) rather than by a bearer token, and
@@ -74,7 +77,9 @@ permit(
         Action::"read-settlement",
         Action::"export-audit",
         Action::"read-kostenblatt",
-        Action::"compute-ausfallarbeit"
+        Action::"compute-ausfallarbeit",
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

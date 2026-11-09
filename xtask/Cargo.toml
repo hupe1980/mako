@@ -7,6 +7,9 @@ publish = false
 
 [dependencies]
 mako-fristen = { workspace = true }
+# `setup` folds the daemons' `--check-config --json` reports with the very
+# checklist makod serves, so the terminal and the Desk cannot disagree.
+mako-service = { workspace = true }
 # The profile gate reads AHB Bedingung expressions with the very parser the
 # validator runs, so a status the gate accepts is one the validator can read.
 edi-energy = { workspace = true }

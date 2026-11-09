@@ -169,11 +169,11 @@ are refused) with these claims:
 ### Cedar policy
 
 `policies/marktd.cedar` is compiled into the binary and has **five `permit`
-statements over 51 actions**, each starting from tenant equality:
+statements over 53 actions**, each starting from tenant equality:
 
 | Group | Actions | Extra condition |
 |---|---|---|
-| Tenant-wide reads | every `read-*` action except the ESA pair, plus `use-mcp` | none |
+| Tenant-wide reads | every `read-*` action except the ESA pair — `read-policy` (`GET /api/v1/policy`) and `read-config` (`GET /admin/einrichtung`) among them — plus `use-mcp` | none |
 | Ordinary writes | `write-malo`, `write-melo`, `write-nb-contract`, `write-partner`, `write-versorgungsstatus`, `write-device`, `write-sr`, `write-netzzugang`, `write-msb-rv`, `write-melo-msb`, `write-bilanzierung`, `write-mabis-zp`, `write-lokationszuordnung` | none |
 | Grid-operator writes | `write-preisblatt`, `write-nelo`, `write-tranche`, `write-malo-grid`, `write-grundversorger`, `write-energiemix`, `write-mmma-preis`, `write-netznutzungsdaten`, `dispatch-pricat` | `mako_roles` contains `NB` |
 | ESA consent | `read-einwilligung`, `write-einwilligung` | `MSB` **or** `ESA` |
@@ -371,7 +371,9 @@ is a `422` naming the stage in `code`:
   lookup. `check` is `abgeschlossen: true` only for a contract with status
   `abgeschlossen` whose `[valid_from, valid_to)` covers `datum`; otherwise
   `befund` names why — `kein_vertrag`, `angeboten`, `anpassung_erforderlich`
-  or `beendet` — and `processd` escalates. Two contracts of the same parties
+  or `beendet` — and `processd` escalates the Anmeldung naming that Befund,
+  so the operator reads whether a contract is to be concluded, settled,
+  renewed or adapted. Two contracts of the same parties
   and Sparte cannot claim the same day.
 - **Two columns are Gas-only.** GeLi Gas 3.0 (BK7-24-01-009, S. 6–7) revokes
   BK7-17-026 with effect from 01.10.2026 (Tenor 13) and requires the
@@ -936,7 +938,10 @@ stateDiagram-v2
 **Gap closure (§38 EnWG).** A gap is an interval no supplier covers. `end_supply`
 finds one when the successor starts later or not at all; a Bestätigung finds one
 in Fall b, when the Altlieferant answered with an earlier Lieferende (`E_0624`
-`A34`, carried as `lfa_lieferende`). Both emit `gap-detected` with
+`A34`, EBD 4.3 Kap. 6.6.3; GPKE Teil 2 Kap. 2.1.2 Nr. 4). The NB's own
+`gpke-supplier-change` queues a `ProcessCompleted` beside each Anmeldung answer
+(55002/55003/55078/55080), and on a Fall-b Bestätigung it carries that
+Lieferende as `lfa_lieferende` next to the Zuordnungsbeginn. Both emit `gap-detected` with
 `gap_from`/`gap_until`; `processd` resolves the Grundversorger and dispatches
 `gpke.eog.anmelden` (UTILMD 55013).
 
@@ -1448,14 +1453,15 @@ Inbound delivery is idempotent on `event_id`.
 
 ## MCP server
 
-`POST /mcp` / `GET /mcp` (Streamable HTTP, spec 2025-11-25) has its **own**
+`POST /mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session) has its **own**
 credential layer, `[mcp]` (API key or OIDC), independent of the REST `[oidc]`;
 the principal is then checked against the single Cedar action `use-mcp`.
 
-**Tools (17)**, every one a read:
+**Tools (19)**, every one a read:
 
 | Tool | Description |
 |---|---|
+| `get_policy` | The operator policy and posture, as `GET /api/v1/policy` serves it |
 | `get_malo` / `list_malo` | One MaLo / list |
 | `get_melo` / `get_melo_standorteigenschaften` | MeLo record / site properties |
 | `get_partner` / `list_partners` | Marktpartner registry |

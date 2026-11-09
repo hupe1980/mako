@@ -55,6 +55,9 @@ Sections: `[http]`, `[database]`, `[identity]`, `[marktd]`, `[subscription]`,
 subject mapping and records a tombstone; `true` is refused at startup because
 this build removes no rows physically). The policy report is served at
 `GET /api/v1/policy` and by the MCP tool `get_policy`.
+`edmd --check-config [--json]` prints every configuration finding (path,
+severity, source) and exits non-zero on a blocking one; the same findings are
+served at `GET /admin/einrichtung`.
 `dev/config/edmd.toml` is a working example.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/edmd/)

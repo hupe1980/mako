@@ -452,7 +452,8 @@ async fn evaluate(
             // Sparte, this NB and this MSBN on the Zuordnungsbeginn, and only
             // an `abgeschlossen` contract valid that day passes. Anything else
             // escalates rather than rejecting, because `E_0201`/`E_2002`
-            // publish no code for a missing Rahmenvertrag.
+            // publish no code for a missing Rahmenvertrag — and the escalation
+            // names the Befund, so the operator reads which act is owed.
             let rahmenvertrag = rahmenvertrag_liegt_vor(payload, prozessdatum, marktd).await?;
             let anfrage = msb::AnmeldungMsb {
                 sparte: sparte_of(payload.pid),
@@ -526,14 +527,15 @@ fn markt_sparte(pid: u32) -> mako_markt::domain::Sparte {
     }
 }
 
-/// Whether a Messstellenbetreiberrahmenvertrag of the order's Sparte between
-/// its NB and its MSBN is `abgeschlossen` and valid on the Zuordnungsbeginn.
+/// What `marktd` says about the Messstellenbetreiberrahmenvertrag of the
+/// order's Sparte between its NB and its MSBN on the Zuordnungsbeginn.
 ///
 /// `Ok(None)` — the Vertragslage is unknown and the Anmeldung escalates — when
 /// the order names no NB or MSBN that is a 13-digit MP-ID: there is no
 /// contract to look up, and asking `marktd` with a malformed key would answer
-/// `400` on every redelivery. `Ok(Some(false))` is `marktd` saying no
-/// concluded contract covers the day.
+/// `400` on every redelivery. Otherwise the Befund itself, which the
+/// escalation names: no contract, one only offered, one ended, or a Gas one
+/// still to be adapted are four different things for the operator to settle.
 ///
 /// # Errors
 ///
@@ -543,7 +545,7 @@ async fn rahmenvertrag_liegt_vor(
     payload: &MsbWechselPayload,
     zuordnungsbeginn: time::Date,
     marktd: &mako_markt::marktd_client::MarktdClient,
-) -> anyhow::Result<Option<bool>> {
+) -> anyhow::Result<Option<mako_pruefung::msb::RahmenvertragBefund>> {
     let mp_id = |s: &str| s.len() == 13 && s.bytes().all(|b| b.is_ascii_digit());
     if !mp_id(&payload.nb_mp_id) || !mp_id(&payload.msb_mp_id) {
         warn!(
@@ -565,11 +567,27 @@ async fn rahmenvertrag_liegt_vor(
     info!(
         process_id = %payload.process_id,
         pid = payload.pid,
-        befund = %pruefung.befund,
+        befund = ?pruefung.befund,
         abgeschlossen = pruefung.abgeschlossen,
         "processd MSB: Rahmenvertrag nach § 9 Abs. 1 Nr. 3 MsbG"
     );
-    Ok(Some(pruefung.abgeschlossen))
+    Ok(Some(rahmenvertrag_befund(pruefung.befund)))
+}
+
+/// `marktd`'s Befund as the decision reads it — one arm per Befund, so a new
+/// one fails to compile here instead of passing as some other.
+const fn rahmenvertrag_befund(
+    befund: mako_markt::marktd_client::MsbRahmenvertragBefund,
+) -> mako_pruefung::msb::RahmenvertragBefund {
+    use mako_markt::marktd_client::MsbRahmenvertragBefund as M;
+    use mako_pruefung::msb::RahmenvertragBefund as P;
+    match befund {
+        M::Abgeschlossen => P::Abgeschlossen,
+        M::KeinVertrag => P::KeinVertrag,
+        M::Angeboten => P::Angeboten,
+        M::AnpassungErforderlich => P::AnpassungErforderlich,
+        M::Beendet => P::Beendet,
+    }
 }
 
 /// `SG4 DTM+93` („Ende zum") versus `DTM+471` („Ende zum nächstmöglichen
@@ -1389,7 +1407,7 @@ mod tests {
                 einrichtungsart: msb::Einrichtungsart::BestehenderMessstellenbetrieb,
                 versicherung_liegt_vor: versicherung,
                 melo_bekannt: bekannt,
-                msb_rahmenvertrag: Some(true),
+                msb_rahmenvertrag: Some(msb::RahmenvertragBefund::Abgeschlossen),
             };
             let entscheidung = msb::pruefe_anmeldung(&anfrage, uet, cal);
             let outcome: MsbDecisionOutcome = entscheidung.clone().into();
@@ -1428,7 +1446,7 @@ mod tests {
                 einrichtungsart: msb::Einrichtungsart::BestehenderMessstellenbetrieb,
                 versicherung_liegt_vor: true,
                 melo_bekannt: Some(true),
-                msb_rahmenvertrag: Some(true),
+                msb_rahmenvertrag: Some(msb::RahmenvertragBefund::Abgeschlossen),
             },
             uet,
             cal,
@@ -1525,6 +1543,9 @@ mod tests {
     struct Stub {
         /// The `abgeschlossen` the `check` endpoint answers.
         abgeschlossen: bool,
+        /// The `befund` it answers beside a `false` — `kein_vertrag` when
+        /// unset.
+        befund: Option<&'static str>,
         /// Every `check` query received.
         asked: std::sync::Arc<std::sync::Mutex<Vec<std::collections::HashMap<String, String>>>>,
     }
@@ -1546,7 +1567,7 @@ mod tests {
             let befund = if stub.abgeschlossen {
                 "abgeschlossen"
             } else {
-                "kein_vertrag"
+                stub.befund.unwrap_or("kein_vertrag")
             };
             Json(serde_json::json!({
                 "abgeschlossen": stub.abgeschlossen, "befund": befund, "vertrag": null,
@@ -1663,5 +1684,26 @@ mod tests {
             "{outcome:?}"
         );
         assert!(stub.asked.lock().unwrap().is_empty());
+    }
+
+    /// A Gas contract still to be adapted to the Fassung GeLi Gas 3.0 Tenor 15
+    /// requires escalates naming the adaptation — not as a missing contract,
+    /// which would send the operator to conclude one that exists.
+    #[tokio::test]
+    async fn a_gas_contract_to_be_adapted_escalates_naming_the_adaptation() {
+        let stub = Stub {
+            befund: Some("anpassung_erforderlich"),
+            ..Stub::default()
+        };
+        let marktd = stub_marktd(stub.clone()).await;
+        let outcome = evaluate(&msb_cfg(), &anmeldung(44_042, "9870112700007"), &marktd)
+            .await
+            .expect("marktd answered");
+        let MsbDecisionOutcome::Escalate { reason } = outcome else {
+            panic!("a contract to be adapted must escalate, got {outcome:?}")
+        };
+        assert!(reason.contains("anzupassen"), "{reason}");
+        assert!(reason.contains("Tenor 15"), "{reason}");
+        assert!(!reason.contains("Kein Vertrag"), "{reason}");
     }
 }

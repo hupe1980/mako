@@ -44,9 +44,7 @@ use rmcp::{
     },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
+    transport::streamable_http_server::StreamableHttpServerConfig,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -69,6 +67,8 @@ pub struct NetzbilanzMcpState {
     /// the `use-mcp` Cedar action, or a configured `[mcp]` key for agent
     /// clients that mint no token.
     pub auth: mako_service::mcp_auth::McpAuth,
+    /// The operator policy and posture the runner built at boot.
+    pub policy: mako_service::policy::PolicyReport,
 }
 
 /// Filters for `list_drafts`.
@@ -223,6 +223,16 @@ impl NetzbilanzMcpHandler {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    #[tool(
+        description = "The operator policy and posture this netzbilanzd deployment runs under: each setting with its value, whether it was set or defaulted, and the primary source of the value. Read-only; a setting changes only by editing the config and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_policy(&self) -> Result<CallToolResult, McpError> {
+        ContentBlock::json(serde_json::to_value(&self.state.policy).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     #[tool(
@@ -868,6 +878,13 @@ impl NetzbilanzMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for NetzbilanzMcpHandler {
+    /// The revisions every mako MCP server speaks, not the SDK's set.
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        mako_service::mcp::supported_revisions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
@@ -924,9 +941,8 @@ async fn mcp_auth_middleware(
 /// The MCP router, mounted at `/mcp`.
 pub fn router(state: Arc<NetzbilanzMcpState>, _shutdown: CancellationToken) -> Router {
     let handler = NetzbilanzMcpHandler::new(Arc::clone(&state));
-    let service = StreamableHttpService::new(
+    let service = mako_service::mcp::service(
         move || Ok(handler.clone()),
-        LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default(),
     );
     Router::new()

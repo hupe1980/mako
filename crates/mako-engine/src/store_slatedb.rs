@@ -3012,6 +3012,7 @@ mod tests {
             attempt_count: 0,
             first_attempt_at: None,
             workflow_name: "".into(),
+            format_version: None,
             trace_context: crate::trace_ctx::current().map(Into::into),
         }
     }

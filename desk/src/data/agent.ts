@@ -7,6 +7,7 @@
 // `Accepted`, `Schritt` and `Answer`.
 
 import type { Instant } from "../format/brands";
+import { katalog as worte } from "../i18n";
 import { problem, sentence } from "./problem";
 import { type Handlung, verweigern } from "./verweigert";
 
@@ -29,8 +30,10 @@ export function ankerArt(a: Anker): AnkerArt {
   return (Object.keys(a)[0] ?? "malo") as AnkerArt;
 }
 
-/** What „Warum?" asks about a Heute item, with its Anker. */
-export const WARUM_FRAGE = "Warum steht das auf meiner Liste, und was entscheidet es?";
+/** What „Warum?" asks about a Heute item, with its Anker — in the Sprache in force. */
+export function warumFrage(): string {
+  return worte().warumFrage.frage;
+}
 
 export interface AnswerSentence {
   text: string;

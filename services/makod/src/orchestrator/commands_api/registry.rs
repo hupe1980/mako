@@ -516,6 +516,23 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(44142),
         dispatch: cmd_geli_stammdaten_anfrage_beantworten,
     },
+    CommandDescriptor {
+        // Antwort auf Änderung (UTILMD AHB Gas 1.2 Kap. 5.10–5.11): the
+        // Berechtigter's 44115 to the NB's 44112, and the Antwort of every
+        // other Änderung column, coded from that column's Codeliste.
+        name: mako_markt::commands::GELI_STAMMDATEN_AENDERUNG_BEANTWORTEN,
+        permitted_roles: &[Marktrolle::Gnb, Marktrolle::Lfg],
+        primary_pid: pid(44115),
+        dispatch: cmd_geli_stammdaten_aenderung_beantworten,
+    },
+    CommandDescriptor {
+        // Nicht bila.rel. Änderung: the NB's 44112 (Kap. 5.10.1) from marktd,
+        // the LF's 44109 (Kap. 5.11.3) from its own facts.
+        name: mako_markt::commands::GELI_STAMMDATEN_AENDERUNG_SENDEN,
+        permitted_roles: &[Marktrolle::Gnb, Marktrolle::Lfg],
+        primary_pid: pid(44112),
+        dispatch: cmd_geli_stammdaten_aenderung_senden,
+    },
     // ── GeLi Gas LF Stornierung (ERP-initiated, LF sends 44022 to GNB) ────────
     // LFN/LFA initiates a supply-change cancellation; ERP supplies `malo_id`
     // and optional `bgm_qualifier` (E01=Kündigung, E02=Rücktritt, E35=Sperrung).

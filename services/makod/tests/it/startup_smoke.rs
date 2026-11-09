@@ -250,7 +250,7 @@ fn party_registry_rejects_duplicate_role() {
 
 // ── D8 Adapter coverage ───────────────────────────────────────────────────────
 
-// Note: `validate_adapter_coverage` is `pub(crate)`, so it cannot be called from
+// Note: `adapter_befunde` is `pub(crate)`, so it cannot be called from
 // integration tests directly.  It is exercised by the `all_workflows_have_adapter_coverage`
 // unit test inside `startup.rs` (run via `cargo test -p makod --lib`).
 // The `all_registered_workflows_covered_by_dispatch_table` test above indirectly validates

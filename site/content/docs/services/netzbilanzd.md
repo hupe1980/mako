@@ -1071,11 +1071,12 @@ Inbound REMADV events arrive on `POST /api/v1/webhooks/remadv`, HMAC-verified ag
 
 ## MCP server
 
-At `/mcp` (Streamable HTTP), behind OIDC (`use-mcp`) or `[mcp] api_key`. **Read-only**, twelve
+At `/mcp` (Streamable HTTP), behind OIDC (`use-mcp`) or `[mcp] api_key`. **Read-only**, thirteen
 tools:
 
 | Tool | Purpose |
 |---|---|
+| `get_policy` | the operator policy and posture, as `GET /api/v1/policy` serves it |
 | `list_drafts` | filter by MaLo, party, PID, **Sparte**, status, Rechnungsart, checker verdict |
 | `get_draft` | one invoice: BO4E document, settlement input, findings, warnings |
 | `list_disputed` | REMADV Abweisungen with their ERC codes |
@@ -1120,6 +1121,7 @@ Seven prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`
 | MaBiS — recording what the BIKO said | `record-biko-response` | a matching tenant — it states what arrived and files nothing, so the relaying ingest identity holds no filing power |
 | MaBiS — filing a Summenzeitreihe | `trigger-mabis-run` | `NB` or `UENB` — the roles that aggregate a Bilanzierungsgebiet; an acked filing cannot be withdrawn |
 | MCP | `use-mcp` | a matching tenant; the tools are read-only by construction |
+| Operator policy and configuration findings — `GET /api/v1/policy`, `GET /admin/einrichtung` | `read-policy`, `read-config` | a matching tenant; both read-only and free of secrets |
 
 There is no four-eyes split: `mako_roles` carries market roles only, so "may settle" and "may
 dispatch" are one grant. Denials are logged with `sub` and action.

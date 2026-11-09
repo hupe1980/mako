@@ -142,23 +142,30 @@ impl RiskConfig {
     /// invoices land in a queue nobody is watching. The scale is 0–100, so a
     /// threshold above 100 has the same effect.
     ///
-    /// # Errors
-    ///
-    /// When the thresholds are not strictly ascending.
-    pub fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.sample_at < self.review_at && self.review_at < self.hold_at,
-            "[risk] thresholds must ascend: sample_at ({}) < review_at ({}) < hold_at ({})",
-            self.sample_at,
-            self.review_at,
-            self.hold_at
-        );
-        anyhow::ensure!(
-            self.hold_at <= 100,
-            "[risk] hold_at ({}) is above the 0–100 score scale, so no invoice can ever be held",
-            self.hold_at
-        );
-        Ok(())
+    /// A finding when the thresholds are not strictly ascending or leave the
+    /// 0–100 scale.
+    pub fn validate(&self) -> Vec<mako_service::befund::Befund> {
+        use mako_service::befund::Befund;
+        let mut out = Vec::new();
+        if !(self.sample_at < self.review_at && self.review_at < self.hold_at) {
+            out.push(Befund::blockiert(
+                "risk",
+                format!(
+                    "[risk] thresholds must ascend: sample_at ({}) < review_at ({}) < hold_at ({})",
+                    self.sample_at, self.review_at, self.hold_at
+                ),
+            ));
+        }
+        if self.hold_at > 100 {
+            out.push(Befund::blockiert(
+                "risk.hold_at",
+                format!(
+                    "[risk] hold_at ({}) is above the 0–100 score scale, so no invoice can ever be held",
+                    self.hold_at
+                ),
+            ));
+        }
+        out
     }
 
     #[must_use]
@@ -495,7 +502,7 @@ mod tests {
             hold_at: 100,
             ..RiskConfig::default()
         };
-        cfg.validate().expect("a legal band configuration");
+        assert!(cfg.validate().is_empty(), "a legal band configuration");
 
         let a = assess(
             &cfg,
@@ -706,18 +713,21 @@ mod tests {
     /// startup, not discovered when an invoice lands in an unreachable queue.
     #[test]
     fn misordered_thresholds_are_refused() {
-        assert!(RiskConfig::default().validate().is_ok());
+        assert!(RiskConfig::default().validate().is_empty());
         let inverted = RiskConfig {
             review_at: 90,
             hold_at: 80,
             ..RiskConfig::default()
         };
-        assert!(inverted.validate().is_err(), "review_at above hold_at");
+        assert!(!inverted.validate().is_empty(), "review_at above hold_at");
         let unreachable = RiskConfig {
             hold_at: 101,
             ..RiskConfig::default()
         };
-        assert!(unreachable.validate().is_err(), "hold_at above the scale");
+        assert!(
+            !unreachable.validate().is_empty(),
+            "hold_at above the scale"
+        );
     }
 
     #[test]

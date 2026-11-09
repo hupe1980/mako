@@ -521,6 +521,8 @@ fn collect_sites(
                     netznutzungsvertrag: None,
                     netznutzung_zahler: None,
                     gemeinderabatt_prozent: None,
+                    enfg_grundlage: None,
+                    enfg_grund: None,
                     fulfillment_data: None,
                 });
         }
@@ -564,6 +566,8 @@ fn collect_sites(
                 netznutzungsvertrag: None,
                 netznutzung_zahler: None,
                 gemeinderabatt_prozent: None,
+                enfg_grundlage: None,
+                enfg_grund: None,
                 fulfillment_data: None,
             });
     }

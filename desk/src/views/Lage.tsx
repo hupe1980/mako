@@ -8,13 +8,10 @@ import { Icon } from "../design/Icon";
 import { Panel } from "../design/Panel";
 import { formatCount } from "../format/count";
 import { formatBerlinTime } from "../format/date";
+import { useT } from "../i18n";
 
 /** The Lieferant's Anmeldungen: Strom (verbrauchend, erzeugend) and Gas. */
 export const ANMELDUNG_PIDS = [55001, 55077, 44001];
-
-function zahl(n: number, eins: string, mehr: string, atLeast = false): string {
-  return `${formatCount(n, atLeast)} ${n === 1 && !atLeast ? eins : mehr}`;
-}
 
 /** One line: the sentence, and where it leads — a list on this page or another view. */
 function Zeile({
@@ -71,6 +68,8 @@ function Ausfall({ error, service }: { error: Error; service: Service }) {
  * line opens the list it counts.
  */
 export function Lage() {
+  const t = useT();
+  const l = t.lage;
   const { rolle } = useRolle();
   const offen = useQuery({
     queryKey: [rolle, "processd", "count_open_processes", ANMELDUNG_PIDS],
@@ -99,11 +98,11 @@ export function Lage() {
       <Panel className="px-3 py-3">
         <div className="flex items-baseline gap-3 px-3 pb-1">
           <h2 id="lage" className="m-0 text-callout font-semibold">
-            Lage
+            {l.titel}
           </h2>
           <span className="flex-1" />
           <span className="text-caption text-text-2">
-            gezählt von {DIENST.processd} und {DIENST.vertragd}
+            {l.gezaehlt(DIENST.processd, DIENST.vertragd)}
           </span>
         </div>
         {loading && <div className="skeleton mx-3 my-2 h-16" />}
@@ -112,38 +111,29 @@ export function Lage() {
             {offen.isError && <Ausfall error={offen.error} service="processd" />}
             {o && o.heute_faellig > 0 && (
               <Zeile ziel="#wartend">
-                {zahl(o.heute_faellig, "Frist läuft", "Fristen laufen")} heute ab
+                {l.heuteFaellig(o.heute_faellig, formatCount(o.heute_faellig))}
                 {o.heute_frueheste && (
                   <span className="text-text-2">
-                    {" "}
-                    · {o.heute_faellig === 1 ? "um" : "die früheste um"}{" "}
-                    {formatBerlinTime(o.heute_frueheste)}
+                    {" · "}
+                    {l.frueheste(o.heute_faellig === 1, formatBerlinTime(o.heute_frueheste))}
                   </span>
                 )}
               </Zeile>
             )}
             {u && u.count > 0 && (
               <Zeile ziel="/fristen" tone="breach">
-                {zahl(u.count, "Frist ist", "Fristen sind", u.saturated)} überschritten
+                {l.ueberschritten(u.count === 1 && !u.saturated, formatCount(u.count, u.saturated))}
               </Zeile>
             )}
             {ueberfaellig.isError && <Ausfall error={ueberfaellig.error} service="processd" />}
             {o && o.offen > 0 && (
-              <Zeile ziel="#wartend">
-                {zahl(o.offen, "Anmeldung wartet", "Anmeldungen warten")} auf den Netzbetreiber
-              </Zeile>
+              <Zeile ziel="#wartend">{l.wartend(o.offen, formatCount(o.offen))}</Zeile>
             )}
             {g !== undefined && g > 0 && (
-              <Zeile ziel="#ohne">
-                {zahl(g, "Anmeldung ist", "Anmeldungen sind")} noch nicht übermittelt
-              </Zeile>
+              <Zeile ziel="#ohne">{l.ohneProzess(g, formatCount(g))}</Zeile>
             )}
             {ohne.isError && <Ausfall error={ohne.error} service="vertragd" />}
-            {ruhig && (
-              <li className="px-3 py-2 text-callout text-text-2">
-                Nichts läuft heute ab, nichts ist überschritten.
-              </li>
-            )}
+            {ruhig && <li className="px-3 py-2 text-callout text-text-2">{l.ruhig}</li>}
           </ul>
         )}
       </Panel>

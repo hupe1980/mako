@@ -216,6 +216,30 @@ const histories: Record<string, unknown> = {
       },
     ],
   },
+  // The first overdue process on Fristen: the Anmeldung that came in and the
+  // answer that never went out.
+  "5a6f0c1e-0000-4000-8000-000000000000": {
+    process_id: "5a6f0c1e-0000-4000-8000-000000000000",
+    workflow_name: "gpke-supplier-change",
+    eintraege: [
+      {
+        sequence: 1,
+        recorded_at: "2026-10-27T09:40:00Z",
+        event_type: "SupplierChangeInitiated",
+        richtung: "eingang",
+        pid: 55001,
+        message_ref: "UTILMD-2026-10-27-0017",
+      },
+      {
+        sequence: 2,
+        recorded_at: "2026-10-27T09:40:01Z",
+        event_type: "SupplierChangeValidationPassed",
+        richtung: null,
+        pid: null,
+        message_ref: null,
+      },
+    ],
+  },
   "2f6c1e4a-0b5d-4c1e-9a77-3d2b8f1c6e10": {
     process_id: "2f6c1e4a-0b5d-4c1e-9a77-3d2b8f1c6e10",
     workflow_name: "gpke-anfrage-bestellung",
@@ -238,6 +262,9 @@ function answer(message: {
   params?: { name?: string; arguments?: { business_key?: string; process_id?: string } };
 }) {
   if (message.method !== "tools/call") return {};
+  if (message.params?.name === "einrichtung_checkliste") {
+    return { content: [], structuredContent: CHECKLISTE };
+  }
   if (message.params?.name === "get_process_history") {
     return {
       content: [],
@@ -270,7 +297,17 @@ async function recordedVertragd(context: BrowserContext) {
   });
 }
 
+// makod's checklist for a planted deployment and a rehearsal's verdict, as
+// makod answered them (desk/fixtures/, held to makod by its tests).
+const CHECKLISTE = JSON.parse(
+  readFileSync(resolve(desk, "fixtures/einrichtung-checkliste.json"), "utf8"),
+);
+const PROBE = readFileSync(resolve(desk, "fixtures/probe-44004-abgelehnt.json"), "utf8");
+
 async function recordedMakod(context: BrowserContext) {
+  await context.route("**/svc/makod/api/v1/probe/**", (route) =>
+    route.fulfill({ contentType: "application/json", body: PROBE }),
+  );
   await context.route("**/svc/makod/mcp", async (route) => {
     const message = JSON.parse(route.request().postData() ?? "{}");
     if (message.id === undefined) return route.fulfill({ status: 202 });
@@ -720,7 +757,7 @@ try {
     await shot(page, "rolle", theme);
     await page.keyboard.press("Escape");
 
-    await page.getByRole("button", { name: /Konto und Erscheinungsbild/ }).click();
+    await page.getByRole("button", { name: /Konto, Erscheinungsbild und Sprache/ }).click();
     await page.getByRole("menu", { name: "Konto" }).waitFor();
     await shot(page, "konto", theme);
     await page.keyboard.press("Escape");
@@ -798,13 +835,47 @@ try {
     await page.getByRole("link", { name: /^Rechnungsdispute 1/ }).waitFor();
     await shot(page, "ueberblick", theme);
 
-    await page.goto(`${base}fristen`);
-    await page.getByRole("link", { name: "41203768152" }).waitFor();
+    // The list–detail–inspector layout: the first overdue process selected,
+    // its Verlauf beside the list and its Angaben on the right.
+    await page.goto(`${base}fristen?id=5a6f0c1e-0000-4000-8000-000000000000`);
+    await page.getByRole("heading", { name: "41203768152", level: 2 }).waitFor();
+    await page.getByText("UTILMD-2026-10-27-0017").waitFor();
     await shot(page, "fristen", theme);
+
+    // The same screen in English: the market's vocabulary stays German.
+    await page.evaluate(() => localStorage.setItem("mako-desk.sprache", "en"));
+    await page.reload();
+    await page.getByRole("heading", { name: "Fristen overdue", level: 1 }).waitFor();
+    await page.getByText("UTILMD-2026-10-27-0017").waitFor();
+    await shot(page, "fristen-englisch", theme);
+    await page.evaluate(() => localStorage.removeItem("mako-desk.sprache"));
 
     await page.goto(`${base}assistent`);
     await page.getByText("Der Assistent liest nur.").waitFor();
     await shot(page, "assistent", theme);
+
+    // Einrichtung: makod's checklist across the deployment — a blocked
+    // identity, a service unreachable (unknown, not failing), an answer kept
+    // verbatim — then a Probelauf's verdict and its segments.
+    await page.goto(`${base}einrichtung`);
+    await page.getByRole("list", { name: "Punkte" }).waitFor();
+    await page.screenshot({ path: resolve(out, `einrichtung-${theme}.png`), fullPage: true });
+    await page.getByRole("button", { name: /Probelauf starten/ }).click();
+    await page.locator("[data-urteil]").waitFor();
+    await page.locator("[data-urteil]").evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await shot(page, "probelauf", theme);
+
+    // At a phone's width: the sidebar folds into a sheet behind the top bar's
+    // button, and the views keep a 16 px gutter with no sideways scroll.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${base}einrichtung`);
+    await page.getByRole("list", { name: "Punkte" }).waitFor();
+    await shot(page, "telefon-einrichtung", theme);
+    await page.getByRole("button", { name: "Ansichten öffnen" }).click();
+    await page.getByRole("dialog", { name: "Ansichten" }).waitFor();
+    await shot(page, "telefon-ansichten", theme);
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 1280, height: 800 });
 
     await page.goto(`${base}kunden?q=Muster`);
     await page.getByText("Musterbäckerei Ostsee GmbH").waitFor();

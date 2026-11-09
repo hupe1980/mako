@@ -92,13 +92,10 @@ pub async fn create(
             domain::pruefe_bilanzkreis(&k.sparte, bk).map_err(ApiError::unprocessable)?;
         }
     }
-    // The GeLi Gas Anmeldung is assembled here as it will be on insert, so a
-    // contract that cannot be registered is refused before it is written.
-    if input
-        .komponenten
-        .iter()
-        .any(|k| k.sparte == "GAS" && k.wird_angemeldet())
-    {
+    // The Anmeldung — the GeLi Gas 44001 or the Strom 55001 — is assembled
+    // here as it will be on insert, so a contract that cannot be registered is
+    // refused before it is written.
+    if input.komponenten.iter().any(|k| k.wird_angemeldet()) {
         let mut conn = ctx
             .pool
             .acquire()
@@ -124,6 +121,20 @@ pub async fn create(
             return Err(unprocessable_json(serde_json::json!({
                 "error": "die Anmeldung NN 44001 braucht Angaben, die der Vertrag nicht enthält \
                           (UTILMD AHB Gas 1.2 Kap. 5.6)",
+                "code": "anmeldedaten_unvollstaendig",
+                "fehlend": fehlend,
+            })));
+        }
+        let fehlend: Vec<String> = input
+            .komponenten
+            .iter()
+            .filter_map(|k| k.strom_anmeldung(&anmeldedaten).err())
+            .flatten()
+            .collect();
+        if !fehlend.is_empty() {
+            return Err(unprocessable_json(serde_json::json!({
+                "error": "die Anmeldung 55001 braucht Angaben, die der Vertrag nicht enthält \
+                          (UTILMD AHB Strom 2.2 Kap. 8.2)",
                 "code": "anmeldedaten_unvollstaendig",
                 "fehlend": fehlend,
             })));

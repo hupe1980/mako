@@ -4,6 +4,7 @@ import { useHold } from "../app/Holds";
 import { AgentAbgelehnt, bewerten } from "../data/agent";
 import { useVerweigert } from "../data/verweigert";
 import { Icon } from "../design/Icon";
+import { useT } from "../i18n";
 
 const TOGGLE =
   "focus-ring inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-caption " +
@@ -24,6 +25,8 @@ export function Bewertung({ run, initial }: { run: string; initial?: boolean | n
   const [warum, setWarum] = useState("");
   const [begruendet, setBegruendet] = useState(false);
   const [stand, setStand] = useState<Stand>("offen");
+  const t = useT();
+  const b = t.bewertung;
   const hold = useHold();
   const verweigert = useVerweigert({ dienst: "agentd", aktion: "bewerten" });
 
@@ -35,20 +38,13 @@ export function Bewertung({ run, initial }: { run: string; initial?: boolean | n
     setStand("gehalten");
     hold(
       `bewertung/${run}`,
-      begruendung
-        ? "Begründung ergänzt"
-        : hilfreich
-          ? "Als hilfreich bewertet"
-          : "Als nicht hilfreich bewertet",
+      begruendung ? b.begruendet : hilfreich ? b.hilfreich : b.nichtHilfreich,
       (keepalive) =>
         bewerten(run, hilfreich, begruendung, keepalive).then(
           () => setStand("gespeichert"),
           (e: unknown) =>
             setStand({
-              fehler:
-                e instanceof AgentAbgelehnt
-                  ? e.message
-                  : "Nicht gespeichert — der Assistent ist nicht erreichbar.",
+              fehler: e instanceof AgentAbgelehnt ? e.message : b.nichtGespeichert,
             }),
         ),
       () => {
@@ -60,9 +56,7 @@ export function Bewertung({ run, initial }: { run: string; initial?: boolean | n
   };
 
   if (verweigert) {
-    return (
-      <p className="m-0 text-caption text-text-2">Bewerten ist Ihnen nicht erlaubt: {verweigert}</p>
-    );
+    return <p className="m-0 text-caption text-text-2">{b.nichtErlaubt(verweigert)}</p>;
   }
 
   const toggle = (an: boolean) =>
@@ -70,20 +64,20 @@ export function Bewertung({ run, initial }: { run: string; initial?: boolean | n
 
   return (
     <fieldset className="m-0 flex flex-wrap items-center gap-2 border-0 p-0">
-      <legend className="float-left mr-1 p-0 text-caption text-text-2">Hilfreich?</legend>
+      <legend className="float-left mr-1 p-0 text-caption text-text-2">{b.frage}</legend>
       <AriaButton
         aria-pressed={urteil === true}
         onPress={() => urteil !== true && halten(true)}
         className={toggle(urteil === true)}
       >
-        <Icon name="thumb" size={14} /> Ja
+        <Icon name="thumb" size={14} /> {b.ja}
       </AriaButton>
       <AriaButton
         aria-pressed={urteil === false}
         onPress={() => urteil !== false && halten(false)}
         className={toggle(urteil === false)}
       >
-        <Icon name="thumb" size={14} className="rotate-180" /> Nein
+        <Icon name="thumb" size={14} className="rotate-180" /> {b.nein}
       </AriaButton>
       {urteil === false && !begruendet && (
         <form
@@ -93,9 +87,9 @@ export function Bewertung({ run, initial }: { run: string; initial?: boolean | n
             if (warum.trim()) halten(false, warum.trim());
           }}
         >
-          <TextField aria-label="Was fehlte?" value={warum} onChange={setWarum} className="flex-1">
+          <TextField aria-label={b.wasFehlte} value={warum} onChange={setWarum} className="flex-1">
             <Input
-              placeholder="Was fehlte? (optional, ↵ sendet)"
+              placeholder={b.wasFehltePlatzhalter}
               maxLength={500}
               className="focus-ring h-7 w-full rounded-full border border-ai-border bg-surface px-3 text-caption text-text outline-none"
             />
@@ -103,7 +97,7 @@ export function Bewertung({ run, initial }: { run: string; initial?: boolean | n
         </form>
       )}
       {stand === "gespeichert" && (urteil === true || begruendet) && (
-        <span className="text-caption text-text-2">Danke — das bleibt beim Lauf.</span>
+        <span className="text-caption text-text-2">{b.danke}</span>
       )}
       {typeof stand === "object" && (
         <span className="text-caption text-critical">{stand.fehler}</span>

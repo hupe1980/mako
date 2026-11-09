@@ -30,7 +30,7 @@ use time::Date;
 use crate::antwort::RejectReason;
 use crate::codes::lookup;
 
-use super::types::{AnmeldungMsb, MsbEntscheidung};
+use super::types::{AnmeldungMsb, MsbEntscheidung, RahmenvertragBefund};
 
 /// Decide the NB's answer to an Anmeldung Messstellenbetrieb.
 ///
@@ -122,26 +122,40 @@ pub fn pruefe_anmeldung(
     }
 
     // Kap. 2.3.2 Nr. 2 Ziff. 3 — the Rahmenvertrag nach § 9 Abs. 1 Nr. 3 MsbG.
-    match anfrage.msb_rahmenvertrag {
-        Some(true) => {}
-        Some(false) => {
-            return MsbEntscheidung::Escalate {
-                reason: format!(
-                    "Kein Vertrag nach § 9 Abs. 1 Nr. 3 MsbG mit MSB {} — E_0201 veröffentlicht \
-                     hierfür keinen Code; der Vertragsschluss ist zu klären, bevor die \
-                     Anmeldung beantwortet wird",
-                    anfrage.msbn_mp_id
-                ),
-            };
-        }
-        None => {
-            return MsbEntscheidung::Escalate {
-                reason: format!(
-                    "Vertragslage nach § 9 Abs. 1 Nr. 3 MsbG mit MSB {} ist unbekannt",
-                    anfrage.msbn_mp_id
-                ),
-            };
-        }
+    // `E_0201`/`E_2002` publish no code for any Befund but a concluded
+    // contract, so each escalates — naming what the registry found, because
+    // concluding, settling an offer, renewing and adapting are different acts.
+    let msbn = &anfrage.msbn_mp_id;
+    let befund = match anfrage.msb_rahmenvertrag {
+        Some(RahmenvertragBefund::Abgeschlossen) => None,
+        Some(RahmenvertragBefund::KeinVertrag) => Some(format!(
+            "Kein Vertrag nach § 9 Abs. 1 Nr. 3 MsbG mit MSB {msbn} — der Vertragsschluss ist \
+             zu klären"
+        )),
+        Some(RahmenvertragBefund::Angeboten) => Some(format!(
+            "Der Vertrag nach § 9 Abs. 1 Nr. 3 MsbG mit MSB {msbn} ist angeboten, aber nicht \
+             abgeschlossen — der Abschluss ist zu klären"
+        )),
+        Some(RahmenvertragBefund::Beendet) => Some(format!(
+            "Der Vertrag nach § 9 Abs. 1 Nr. 3 MsbG mit MSB {msbn} ist zum Zuordnungsbeginn \
+             beendet — ein neuer Vertragsschluss ist zu klären"
+        )),
+        Some(RahmenvertragBefund::AnpassungErforderlich) => Some(format!(
+            "Der Messstellenbetreiberrahmenvertrag mit MSB {msbn} besteht, ist aber an die \
+             geltende Fassung anzupassen (GeLi Gas 3.0, BK7-24-01-009, Tenor 15 Satz 2) — die \
+             Anpassung ist zu klären"
+        )),
+        None => Some(format!(
+            "Vertragslage nach § 9 Abs. 1 Nr. 3 MsbG mit MSB {msbn} ist unbekannt"
+        )),
+    };
+    if let Some(befund) = befund {
+        return MsbEntscheidung::Escalate {
+            reason: format!(
+                "{befund}; {tree} veröffentlicht hierfür keinen Code, die Anmeldung wird erst \
+                 danach beantwortet"
+            ),
+        };
     }
 
     MsbEntscheidung::accept(tree, code("E15"))
@@ -152,6 +166,7 @@ mod tests {
     use super::*;
     use crate::codes::EBD_ANMELDUNG_MSB;
     use crate::msb::types::Einrichtungsart;
+    use crate::msb::types::RahmenvertragBefund;
     use crate::msb::types::Sparte;
     use time::Month;
 
@@ -170,7 +185,7 @@ mod tests {
             einrichtungsart: art,
             versicherung_liegt_vor: true,
             melo_bekannt: Some(true),
-            msb_rahmenvertrag: Some(true),
+            msb_rahmenvertrag: Some(RahmenvertragBefund::Abgeschlossen),
         }
     }
 
@@ -273,5 +288,41 @@ mod tests {
                 c.bedeutung
             );
         }
+    }
+
+    /// Every Befund but `Abgeschlossen` escalates, and the reason names the
+    /// Befund — an offered, ended or Gas contract still to be adapted (GeLi
+    /// Gas 3.0 Tenor 15 Satz 2) is not a missing contract, and the operator
+    /// acts differently on each.
+    #[test]
+    fn the_escalation_names_the_befund() {
+        let beginn = d(2026, Month::June, 1);
+        let uet = mako_fristen::sub_werktage(beginn, 15, CAL);
+        for (befund, says, never) in [
+            (
+                RahmenvertragBefund::KeinVertrag,
+                "Kein Vertrag",
+                "angeboten",
+            ),
+            (RahmenvertragBefund::Angeboten, "angeboten", "Kein Vertrag"),
+            (RahmenvertragBefund::Beendet, "beendet", "Kein Vertrag"),
+            (
+                RahmenvertragBefund::AnpassungErforderlich,
+                "anzupassen",
+                "Kein Vertrag",
+            ),
+        ] {
+            let mut a = anfrage(Einrichtungsart::BestehenderMessstellenbetrieb, beginn);
+            a.sparte = Sparte::Gas;
+            a.msb_rahmenvertrag = Some(befund);
+            let MsbEntscheidung::Escalate { reason } = pruefe_anmeldung(&a, uet, CAL) else {
+                panic!("{befund:?} must escalate");
+            };
+            assert!(reason.contains(says), "{befund:?}: {reason}");
+            assert!(!reason.contains(never), "{befund:?}: {reason}");
+        }
+        let mut a = anfrage(Einrichtungsart::BestehenderMessstellenbetrieb, beginn);
+        a.msb_rahmenvertrag = Some(RahmenvertragBefund::Abgeschlossen);
+        assert_eq!(pruefe_anmeldung(&a, uet, CAL).antwortcode(), Some("E15"));
     }
 }

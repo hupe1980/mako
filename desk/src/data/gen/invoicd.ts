@@ -90,4 +90,4 @@ export interface DisputBefund {
 }
 
 /** Tools invoicd serves without an output schema: no view may read them. */
-export const invoicdUntyped = ["get_check_result","get_receipt","get_zahlungsstatus","list_exceptions","list_overdue_remadv","summarize_billing_month"] as const;
+export const invoicdUntyped = ["get_check_result","get_policy","get_receipt","get_zahlungsstatus","list_exceptions","list_overdue_remadv","summarize_billing_month"] as const;

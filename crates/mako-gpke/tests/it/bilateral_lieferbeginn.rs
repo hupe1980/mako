@@ -192,15 +192,21 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
 
     let lfn = lfn_process();
     let initiate_cmd = LfAnmeldungCommand::InitiateAnmeldung {
-        transaktionsgrund_ergaenzung: None,
+        transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
         tranchengroesse: None,
         pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
         sender: MarktpartnerCode::new(LFN_ID),
         receiver: MarktpartnerCode::new(NB_ID),
         location_id: MaLo::new(MALO_ID),
         process_date: "20250201".to_owned(),
-        transaktionsgrund: None,
+        transaktionsgrund: Some("E03".to_owned()),
         bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+        kundendaten: Some(Box::new(mako_gpke::lf_anmeldung::Kundendaten {
+            haushaltskunde: true,
+            enfg_grundlage: "ZG1".to_owned(),
+            enfg_grund: None,
+            stammdaten: mako_engine::payload::Stammdaten::default(),
+        })),
     };
 
     // Inspect outbox via the pure Workflow::handle — no store required.
@@ -356,9 +362,17 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
 
     assert_eq!(
         nb_output.outbox.len(),
-        3,
-        "accepted 55001 must produce UTILMD 55002 + MSCONS + ORDERS outbox entries"
+        4,
+        "accepted 55001 must produce UTILMD 55002 + ProcessCompleted + MSCONS + ORDERS \
+         outbox entries"
     );
+    let completed = nb_output
+        .outbox
+        .iter()
+        .find(|o| o.message_type.as_ref() == "ProcessCompleted")
+        .expect("the 55002 queues its ProcessCompleted");
+    assert_eq!(completed.payload["pid"], 55002);
+    assert_eq!(completed.payload["outcome"], "accepted");
 
     let utilmd_55002_ob = nb_output
         .outbox
@@ -494,15 +508,21 @@ async fn bilateral_lieferbeginn_rejection_path() {
     let lfn = lfn_process();
     lfn.run(
         LfAnmeldungCommand::InitiateAnmeldung {
-            transaktionsgrund_ergaenzung: None,
+            transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
             tranchengroesse: None,
             pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
             sender: MarktpartnerCode::new(LFN_ID),
             receiver: MarktpartnerCode::new(NB_ID),
             location_id: MaLo::new(MALO_ID),
             process_date: "20250301".to_owned(),
-            transaktionsgrund: None,
+            transaktionsgrund: Some("E03".to_owned()),
             bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+            kundendaten: Some(Box::new(mako_gpke::lf_anmeldung::Kundendaten {
+                haushaltskunde: true,
+                enfg_grundlage: "ZG1".to_owned(),
+                enfg_grund: None,
+                stammdaten: mako_engine::payload::Stammdaten::default(),
+            })),
         },
         RunOptions::new(),
     )
@@ -549,16 +569,21 @@ async fn bilateral_lieferbeginn_rejection_path() {
         lfa_lieferende: None,
     };
 
-    // Rejection enqueues UTILMD 55003 (Ablehnung) but no MSCONS/ORDERS.
+    // Rejection enqueues UTILMD 55003 (Ablehnung) and its ProcessCompleted,
+    // but no MSCONS/ORDERS.
     let nb_out = GpkeSupplierChangeWorkflow::handle(&nb_state, reject_cmd.clone())
         .expect("NB SendAntwort(rejected) must succeed");
     assert_eq!(
         nb_out.outbox.len(),
-        1,
-        "rejected 55001 must produce only UTILMD 55003 (no MSCONS/ORDERS)",
+        2,
+        "rejected 55001 must produce only UTILMD 55003 and its ProcessCompleted",
     );
     assert_eq!(nb_out.outbox[0].message_type.as_ref(), "UTILMD");
     assert_eq!(nb_out.outbox[0].payload["pid"].as_u64().unwrap(), 55003);
+    assert_eq!(nb_out.outbox[1].message_type.as_ref(), "ProcessCompleted");
+    assert_eq!(nb_out.outbox[1].payload["accepted"], false);
+    assert_eq!(nb_out.outbox[1].payload["pid"], 55003);
+    assert_eq!(nb_out.outbox[1].payload["outcome"], "rejected");
 
     nb.run(reject_cmd, RunOptions::new())
         .await
@@ -612,15 +637,21 @@ async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
     let lfn = lfn_process();
     lfn.run(
         LfAnmeldungCommand::InitiateAnmeldung {
-            transaktionsgrund_ergaenzung: None,
+            transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
             tranchengroesse: None,
             pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
             sender: MarktpartnerCode::new(LFN_ID),
             receiver: MarktpartnerCode::new(NB_ID),
             location_id: MaLo::new(MALO_ID),
             process_date: "20250301".to_owned(),
-            transaktionsgrund: None,
+            transaktionsgrund: Some("E03".to_owned()),
             bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+            kundendaten: Some(Box::new(mako_gpke::lf_anmeldung::Kundendaten {
+                haushaltskunde: true,
+                enfg_grundlage: "ZG1".to_owned(),
+                enfg_grund: None,
+                stammdaten: mako_engine::payload::Stammdaten::default(),
+            })),
         },
         RunOptions::new(),
     )

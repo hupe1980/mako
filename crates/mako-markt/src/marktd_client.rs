@@ -333,9 +333,27 @@ pub struct MsbRahmenvertragPruefung {
     /// `true` only when a contract with status `abgeschlossen` is valid on the
     /// day asked about.
     pub abgeschlossen: bool,
-    /// Why, in `marktd`'s words: `abgeschlossen`, `kein_vertrag`,
-    /// `angeboten`, `anpassung_erforderlich` or `beendet`.
-    pub befund: String,
+    /// Why — the Befund the caller names when it escalates.
+    pub befund: MsbRahmenvertragBefund,
+}
+
+/// `marktd`'s Befund on a Messstellenbetreiberrahmenvertrag for one day — the
+/// wire twin of `marktd`'s `MsbRvBefund`, decoded strictly: a Befund this
+/// client does not know is a deserialisation error, never a silent pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MsbRahmenvertragBefund {
+    /// A contract with status `abgeschlossen` covers the day.
+    Abgeschlossen,
+    /// No contract of this Sparte between the two parties covers the day.
+    KeinVertrag,
+    /// The covering contract is only offered.
+    Angeboten,
+    /// Gas: the covering contract is still to be adapted to the current
+    /// Fassung (`GeLi` Gas 3.0, BK7-24-01-009, Tenor 15 Satz 2).
+    AnpassungErforderlich,
+    /// The covering contract is marked ended.
+    Beendet,
 }
 
 impl MarktdClient {

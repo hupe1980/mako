@@ -39,9 +39,7 @@ use rmcp::{
     },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
+    transport::streamable_http_server::StreamableHttpServerConfig,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -90,6 +88,8 @@ pub struct ProcessdMcpState {
     pub makod_url: String,
     /// makod API key for command dispatch.
     pub makod_api_key: secrecy::SecretString,
+    /// The operator policy and posture the runner built at boot.
+    pub policy: mako_service::policy::PolicyReport,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -257,6 +257,16 @@ impl ProcessdMcpHandler {
             tool_router,
             prompt_router,
         }
+    }
+
+    #[tool(
+        description = "The operator policy and posture this processd deployment runs under: each setting with its value, whether it was set or defaulted, and the primary source of the value. Read-only; a setting changes only by editing the config and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_policy(&self) -> Result<CallToolResult, McpError> {
+        ContentBlock::json(serde_json::to_value(&self.state.policy).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     #[tool(
@@ -699,7 +709,9 @@ impl ProcessdMcpHandler {
             PromptMessage::new_text(
                 Role::Assistant,
                 "For Strom (GPKE UTILMD PID 55001):\n\
-                 POST /api/v1/start-supply with malo_id, lieferbeginn_datum (YYYY-MM-DD).\n\
+                 POST /api/v1/start-supply with malo_id, lieferbeginn_datum (YYYY-MM-DD) and \
+                 transaktionsgrund — E01 Ein-/Auszug (Umzug) or E03 Wechsel, Muss in SG4 \
+                 STS+7 (UTILMD AHB Strom 2.2 Kap. 8.2).\n\
                  LFW24 Vorlauffrist: earliest Lieferbeginn is the day after the next Werktag \
                  (spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn — \
                  BK6-24-174 GPKE Teil 2, SD Lieferbeginn).\n\n\
@@ -724,6 +736,13 @@ impl ProcessdMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for ProcessdMcpHandler {
+    /// The revisions every mako MCP server speaks, not the SDK's set.
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        mako_service::mcp::supported_revisions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
@@ -786,6 +805,8 @@ fn instructions() -> String {
 /// about, and defaulting it open is how the gap above appears again.
 fn tool_action(name: &str) -> Option<&'static str> {
     Some(match name {
+        // The same action as `GET /api/v1/policy`.
+        "get_policy" => "read-policy",
         "list_decisions"
         | "get_decision"
         | "get_stp_rate"
@@ -927,9 +948,8 @@ async fn mcp_auth_middleware(
 
 pub fn router(state: Arc<ProcessdMcpState>, _shutdown: CancellationToken) -> Router {
     let handler = ProcessdMcpHandler::new(Arc::clone(&state));
-    let service = StreamableHttpService::new(
+    let service = mako_service::mcp::service(
         move || Ok(handler.clone()),
-        LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default(),
     );
     Router::new()

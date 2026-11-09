@@ -788,7 +788,8 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
     // period. Where none is tabled, the same § number may carry another rule
     // (the EEG 2027 Entwurf renumbers § 53c as § 53b), so nothing is settled.
     if !input.aw_reductions.is_empty()
-        && crate::version::Fassung::fuer_periode(input.billing_date).is_none()
+        && crate::version::Fassung::fuer_periode(input.billing_date, &input.beihilfegenehmigungen)
+            .is_none()
     {
         return SettleOutput {
             settlement_eur: None,
@@ -1007,7 +1008,9 @@ fn apply_aw_cuts(
     // tabled Fassung before any formula runs, so this branch is reached with
     // a Fassung. Without one the AW would have no statute to be read from,
     // and nothing is paid on it.
-    let Some(fassung) = crate::version::Fassung::fuer_periode(input.billing_date) else {
+    let Some(fassung) =
+        crate::version::Fassung::fuer_periode(input.billing_date, &input.beihilfegenehmigungen)
+    else {
         return (Decimal::ZERO, Vec::new());
     };
     crate::aw_reductions::apply_aw_reductions(

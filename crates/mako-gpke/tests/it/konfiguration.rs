@@ -281,13 +281,21 @@ fn send_antwort_lieferbeginn_accepted_emits_mscons_13015_outbox() {
     )
     .expect("SendAntwort must succeed in ValidationPassed");
 
-    // One AntwortGesendet event + UTILMD 55003 + MSCONS 13015.
+    // One AntwortGesendet event + UTILMD + its ProcessCompleted + MSCONS 13015.
     assert_eq!(output.events.len(), 1, "exactly one AntwortGesendet event");
     assert_eq!(
         output.outbox.len(),
-        2,
-        "UTILMD 55003 + MSCONS 13015 outbox entries"
+        3,
+        "UTILMD + ProcessCompleted + MSCONS 13015 outbox entries"
     );
+
+    let completed = output
+        .outbox
+        .iter()
+        .find(|o| o.message_type.as_ref() == "ProcessCompleted")
+        .expect("the 55002 queues its ProcessCompleted");
+    assert_eq!(completed.payload["pid"], 55002);
+    assert_eq!(completed.payload["outcome"], "accepted");
 
     let entry = output
         .outbox
@@ -346,12 +354,21 @@ fn send_antwort_lieferbeginn_with_msb_emits_orders_17134_outbox() {
     )
     .expect("SendAntwort must succeed");
 
-    // One event + three outbox entries (UTILMD 55003 + MSCONS 13015 + ORDERS 17134).
+    // One event + four outbox entries (UTILMD + ProcessCompleted + MSCONS 13015
+    // + ORDERS 17134).
     assert_eq!(
         output.outbox.len(),
-        3,
-        "UTILMD 55003 + MSCONS 13015 + ORDERS 17134 must be emitted"
+        4,
+        "UTILMD + ProcessCompleted + MSCONS 13015 + ORDERS 17134 must be emitted"
     );
+
+    let completed = output
+        .outbox
+        .iter()
+        .find(|o| o.message_type.as_ref() == "ProcessCompleted")
+        .expect("the 55002 queues its ProcessCompleted");
+    assert_eq!(completed.payload["pid"], 55002);
+    assert_eq!(completed.payload["outcome"], "accepted");
 
     let mscons = output
         .outbox

@@ -367,12 +367,12 @@ timeline
 ### What carries a process across a format-version boundary
 
 A Lieferbeginn opened in September may be answered by an APERAK in November
-under the October release. Two mechanisms carry that; neither is a policy a
+under the October release. Three mechanisms carry that; none is a policy a
 workflow declares.
 
 **The adapter registry picks the parser.** The inbound message's own format
 version selects the `MessageAdapter`. At startup
-`makod::startup::validate_adapter_coverage` asks every registry for
+`makod::startup::adapter_befunde` asks every registry for
 `uncovered_format_versions(&known_fvs())` and refuses to boot on a non-empty
 answer — or on an empty `known_fvs()`. Every known version must be covered,
 since a counterparty may reply under any of them.
@@ -381,6 +381,13 @@ since a counterparty may reply under any of them.
 name and the format version it was created with, on every event in the stream.
 `StateMigration` moves it when an in-flight process must be advanced before the
 old version leaves the registry.
+
+**The renderer sends a process step in its process's release.** makod's
+`edifact_renderer::release_for` renders every outbound message in the release
+in force on the Anwendungszeitpunkt of the format version its process runs
+under. An APERAK or CONTRL is the exception: it acknowledges an interchange, not
+a process step, so it goes out in the release in force on the day it is sent —
+the APERAK in November above is October's.
 
 ---
 

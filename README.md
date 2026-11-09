@@ -34,7 +34,7 @@ proposes while code computes every Frist, amount and verdict.
 | **Market data** | `mako-markt` library · `marktd` hub (PostgreSQL, durable CloudEvents fan-out, OIDC/JWT) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer management** | `accountingd` ledger · `portald` portal · `outputd` documents · `vertragd` contracts · `productd` catalogue |
-| **Agent surface** | 11 of the 14 services expose an MCP server — **169 tools** — and `agentd` is the governed consumer: 29 specialists (27 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
+| **Agent surface** | 11 of the 14 services expose an MCP server — **178 tools** — and `agentd` is the governed consumer: 29 specialists (27 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
 | **Operator UI** | `desk/` — mako Desk: processes and their Verlauf, customers, Heute, Freigaben, and an assistant that cites every sentence and proposes decisions on Freigaben, invoice disputes and geparkte Buchungen. The `mako-desk` image runs behind an OIDC gateway; `just desk` for development ([guide](https://hupe1980.github.io/mako/docs/guide/desk/), [AGENTS](desk/AGENTS.md)) |
 | **Testing** | `makotest` — Python toolkit over the same Rust core: check digits, the answer Fristen, Entscheidungsbaum codes, AHB-validated EDIFACT, answering counterparties, a `pytest` plugin ([README](makotest/README.md)) |
 
@@ -161,10 +161,10 @@ config, deployment — is [mako docs · Services](https://hupe1980.github.io/mak
 | [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Process decision engine — answers the published Entscheidungsbäume, escalates what it cannot decide; the process read model (KPIs, Fristen, the § 7a Abs. 5 EnWG Gleichbehandlung report) and the NB Sperr-/Entsperrauftrag queue |
 | [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 16 MCP tools |
 | [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — every contract with a Kunde on one side · 20 MCP tools |
-| [`productd`](services/productd/) | `:9080` | LF | Product and tariff catalogue — 14 categories, Angebot lifecycle, EPEX and BEHG price series · 13 MCP tools |
-| [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement runs — NNE, KA, MMM, MSB, AWH, and the MaBiS Summenzeitreihen filed with the BIKO; issues the INVOIC · 12 MCP tools |
+| [`productd`](services/productd/) | `:9080` | LF | Product and tariff catalogue — 14 categories, Angebot lifecycle, EPEX and BEHG price series · 14 MCP tools |
+| [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement runs — NNE, KA, MMM, MSB, AWH, and the MaBiS Summenzeitreihen filed with the BIKO; issues the INVOIC · 13 MCP tools |
 | [`einsd`](services/einsd/) | `:9180` | NB · LF | Einspeiser registry and EEG/KWKG settlement · 20 MCP tools + 6 prompts |
-| [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle · 7 MCP tools |
+| [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle · 8 MCP tools |
 | [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 13 MCP tools |
 | [`accountingd`](services/accountingd/) | `:9380` | LF | Massenkontokorrent — tamper-evident double-entry ledger, SEPA, Mahnwesen |
 | [`outputd`](services/outputd/) | `:9880` | — | Customer communications — renders and delivers what other services computed |

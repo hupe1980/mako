@@ -16,20 +16,43 @@ use tokio_util::sync::CancellationToken;
 use crate::config::EinsdConfig;
 use crate::mcp_server::EinsdMcpState;
 
+/// What the router is built from: the resolved pieces of the boot it layers in.
+pub struct RouterDeps {
+    /// The loaded configuration.
+    pub cfg: Arc<EinsdConfig>,
+    /// The shared outbound HTTP client.
+    pub http_client: Arc<reqwest::Client>,
+    /// The Cedar enforcer every route checks.
+    pub cedar: Arc<mako_service::cedar::CedarEnforcer>,
+    /// The bearer-token verifier.
+    pub oidc: mako_service::oidc::OidcVerifier,
+    /// The database pool.
+    pub pool: PgPool,
+    /// The MCP server's state.
+    pub mcp_state: Arc<EinsdMcpState>,
+    /// Cancelled on shutdown.
+    pub shutdown: CancellationToken,
+    /// The readiness report the runner built at boot.
+    pub einrichtung: Arc<mako_service::einrichtung::Einrichtung>,
+}
+
 /// Build the complete `einsd` router with every layer applied.
-pub fn build_router(
-    cfg: Arc<EinsdConfig>,
-    http_client: Arc<reqwest::Client>,
-    cedar: Arc<mako_service::cedar::CedarEnforcer>,
-    oidc: mako_service::oidc::OidcVerifier,
-    pool: PgPool,
-    mcp_state: Arc<EinsdMcpState>,
-    shutdown: CancellationToken,
-) -> Router {
+pub fn build_router(deps: RouterDeps) -> Router {
+    let RouterDeps {
+        cfg,
+        http_client,
+        cedar,
+        oidc,
+        pool,
+        mcp_state,
+        shutdown,
+        einrichtung,
+    } = deps;
     Router::new()
         .merge(crate::mcp_server::router(mcp_state, shutdown))
-        // ── Operator policy: GET /api/v1/policy (read-only; Cedar `read-policy`)
-        .merge(mako_service::policy::router(cfg.policy_report()))
+        // ── Readiness and operator policy: GET /admin/einrichtung (Cedar
+        // `read-config`) and GET /api/v1/policy (Cedar `read-policy`), read-only
+        .merge(mako_service::einrichtung::router(einrichtung))
         // ── Anlage CRUD ────────────────────────────────────────────────────────
         .route(
             "/api/v1/anlagen",

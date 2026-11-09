@@ -436,9 +436,10 @@ CREATE TABLE vertragskomponenten (
     -- ── The contract facts a GeLi Gas Anmeldung NN 44001 states ─────────────
     -- UTILMD AHB Gas 1.2 Kap. 5.6 makes each Muss; a GAS component registered
     -- at the NB is refused on creation without them (`domain`, `outbound`).
-    -- Why the supply begins: the 44001's `SG4 STS+7` Transaktionsgrund
-    -- (`E03` / `E01` / `E02` / `ZD2`, S. 45), which also decides the
-    -- Mindestvorlauffrist.
+    -- Why the supply begins: the Anmeldung's `SG4 STS+7` Transaktionsgrund —
+    -- on the 44001 `E03` / `E01` / `E02` / `ZD2` (S. 45), which also decides the
+    -- Mindestvorlauffrist; on the Strom 55001 `E03` / `E01` alone (UTILMD AHB
+    -- Strom 2.2 Kap. 8.2, S. 73).
     lieferbeginn_anlass     TEXT        CHECK (lieferbeginn_anlass IS NULL OR lieferbeginn_anlass IN (
                                 'WECHSEL','UMZUG','NEUANLAGE','ENDE_ERSATZVERSORGUNG'
                             )),
@@ -456,6 +457,20 @@ CREATE TABLE vertragskomponenten (
     gemeinderabatt_prozent  NUMERIC(4,2)
                         CHECK (gemeinderabatt_prozent IS NULL
                                OR gemeinderabatt_prozent BETWEEN 0 AND 10),
+    -- ── What a Strom Anmeldung 55001 states about the Kunde ──────────────────
+    -- UTILMD AHB Strom 2.2 Kap. 8.2 makes each Muss; a component registered at
+    -- the NB under `start-supply` is refused on creation without them.
+    -- `SG8 SEQ+Z75 CCI+Z61` Grundlage zur Verringerung der Umlagen nach EnFG
+    -- (S. 85).
+    enfg_grundlage          TEXT        CHECK (enfg_grundlage IS NULL OR enfg_grundlage IN (
+                                'ZF9','ZG0','ZG1'
+                            )),
+    -- `SG10 CAV` Grund der Privilegierung nach EnFG — beside `ZF9` only
+    -- (Bedingung [463]).
+    enfg_grund              TEXT        CHECK (enfg_grund IS NULL OR enfg_grund IN (
+                                'ZU5','ZU6','ZU7','ZU8','ZU9','ZV0','ZV1','ZV2','ZV3'
+                            )),
+    CHECK ((enfg_grund IS NOT NULL) = (enfg_grundlage IS NOT DISTINCT FROM 'ZF9')),
     CHECK (netznutzung_zahler IS DISTINCT FROM 'KUNDE' OR netznutzungsvertrag = 'KUNDE_NB'),
     fulfillment_data        JSONB,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),

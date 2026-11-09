@@ -7,6 +7,7 @@
 // The draft's key carries `:`, so it is always encoded into the path.
 
 import type { BusinessDate } from "../format/brands";
+import { eintrag, katalog } from "../i18n";
 import { problem, sentence } from "./problem";
 import { Abgelehnt, SchonErledigt } from "./rechnung";
 import { type Handlung, verweigern } from "./verweigert";
@@ -52,29 +53,9 @@ export function verwerfen(key: string, grund: string, keepalive = false): Promis
   );
 }
 
-/** Each Buchungsart accountingd books, as the Lieferant reads it. */
-const ART: Record<string, string> = {
-  RECHNUNG: "Rechnung",
-  STORNO: "Storno",
-  KORREKTUR: "Korrektur",
-  GUTSCHRIFT: "Gutschrift",
-  ABSCHLAG: "Abschlag",
-  ABSCHLAG_VERRECHNUNG: "Abschlagsverrechnung",
-  ZAHLUNG: "Zahlung",
-  BANKRUECKLAST: "Bankrücklastschrift",
-  SEPA_STORNO: "SEPA-Storno",
-  MAHNGEBUEHR: "Mahngebühr",
-  VERZUGSZINSEN: "Verzugszinsen",
-  EEG_GUTSCHRIFT: "EEG-Gutschrift",
-  EEG_MARKTPRAEMIE: "EEG-Marktprämie",
-  EEG_AUSZAHLUNG: "EEG-Auszahlung",
-  EEG_RUECKZAHLUNG: "EEG-Rückzahlung",
-  JAHRESABSCHLUSS: "Jahresabschluss",
-};
-
-/** A Buchungsart in words; one the Desk does not know is shown as sent. */
+/** A Buchungsart in words (the catalogue's `buchungsarten`); one the Desk does not know is shown as sent. */
 export function buchungsart(art: string): string {
-  return ART[art] ?? art;
+  return eintrag(katalog().buchungsarten.art, art);
 }
 
 /**
@@ -82,18 +63,19 @@ export function buchungsart(art: string): string {
  * service's own `hinweis` says what to do about it.
  */
 export function abgelehntWeil(code: number | null): string {
+  const w = katalog().buchungsarten.abgelehnt;
   switch (code) {
     case 301:
-      return "Periode festgeschrieben";
+      return w.festgeschrieben;
     case 300:
-      return "keine Periode für das Datum";
+      return w.keinePeriode;
     case 304:
-      return "Konto an dem Tag nicht eröffnet";
+      return w.kontoNichtEroeffnet;
     case 200:
-      return "Schlüssel trägt eine andere Buchung";
+      return w.schluesselBelegt;
     case null:
-      return "Buchung unvollständig";
+      return w.unvollstaendig;
     default:
-      return "vom Hauptbuch abgelehnt";
+      return w.abgelehnt;
   }
 }

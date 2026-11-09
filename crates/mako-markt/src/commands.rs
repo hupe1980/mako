@@ -127,6 +127,15 @@ pub const GELI_STORNIERUNG_INITIIEREN: &str = "geli.stornierung.initiieren";
 /// GNB: assign a contractless Gas `MaLo` to the Ersatzversorger (UTILMD G
 /// 44013). The Strom twin is [`GPKE_EOG_ANMELDEN`].
 pub const GELI_EOG_ANMELDEN: &str = "geli.eog.anmelden";
+/// Berechtigter: answer an inbound Gas Stammdatenänderung — the 44115 to the
+/// NB's 44112 / 44113, the 44111 / 44121 / 44124 / 44119 / 44161 / 44176 to
+/// the others — with a code of the Antwort column's Codeliste (UTILMD AHB Gas
+/// 1.2 Kap. 5.10–5.11). Body: [`GeliStammdatenAenderungBeantworten`].
+pub const GELI_STAMMDATEN_AENDERUNG_BEANTWORTEN: &str = "geli.stammdaten-aenderung.beantworten";
+/// Verantwortlicher: send a nicht bilanzierungsrelevante Gas Stammdatenänderung
+/// — the LF's 44109 (Kap. 5.11.3) or the NB's 44112 (Kap. 5.10.1). Body:
+/// [`GeliStammdatenAenderungSenden`].
+pub const GELI_STAMMDATEN_AENDERUNG_SENDEN: &str = "geli.stammdaten-aenderung.senden";
 
 // ── WiM Strom ─────────────────────────────────────────────────────────────────
 
@@ -366,6 +375,8 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_SPERRUNG_BESTAETIGEN,
     GPKE_SPERRUNG_FEHLGESCHLAGEN,
     GELI_EOG_ANMELDEN,
+    GELI_STAMMDATEN_AENDERUNG_BEANTWORTEN,
+    GELI_STAMMDATEN_AENDERUNG_SENDEN,
     WIM_WERTEBESTELLUNG_ANBIETEN,
     WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN,
     WIM_WERTEBESTELLUNG_BESTELLUNG_BEANTWORTEN,
@@ -480,6 +491,100 @@ pub const ENFG_PRIVILEGIERUNGEN: [(&str, &str); 9] = [
     ("ZV3", "§ 39 EnFG Landstromanlagen"),
 ];
 
+/// The body of [`GPKE_LIEFERBEGINN_ANMELDEN`] — the Anmeldung verbrauchende
+/// Marktlokation 55001, LF → NB (UTILMD AHB Strom 2.2 Kap. 8.2, S. 70–87). See
+/// [`GpkeEogAnmelden`] for why it is shared.
+///
+/// Every field but the Ergänzung is Muss in the column, and each is a fact of
+/// the Lieferant's contract with its Kunde. The door holds the rendered 55001
+/// against its profile before anything is written.
+///
+/// | Field | Segment | AHB S. |
+/// |---|---|---|
+/// | `transaktionsgrund` | `SG4 STS+7` DE 9013, `E01` Ein-/Auszug (Umzug) or `E03` Wechsel | 73 |
+/// | `bilanzkreis` | `SG8 SEQ+Z79` Produktpaket (Kap. 5.3) | 78 |
+/// | `haushaltskunde` | `SG8 SEQ+Z01` `SG10 CCI+++Z15`/`Z18` Gruppenzuordnung (nach EnWG) | 83 |
+/// | `enfg_grundlage`, `enfg_grund` | `SG8 SEQ+Z75` `SG10 CCI+Z61`, `CAV` beside `ZF9` | 85 |
+/// | `kunde` | `SG12 NAD+Z09` Kunde des Lieferanten, `NAD+Z04` Korrespondenzanschrift | 86 |
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpkeLieferbeginnAnmelden {
+    /// The Marktlokation — `SG5 LOC+Z16`.
+    pub malo_id: String,
+    /// Lieferbeginn `SG4 DTM+92`, `YYYY-MM-DD`.
+    pub lieferbeginn_datum: String,
+    /// `SG4 STS+7` DE 9013 — `E01` or `E03`.
+    pub transaktionsgrund: String,
+    /// `SG4 STS+7` DE 9013 Ergänzung — `ZW4` verbrauchende or `ZAP` ruhende
+    /// Marktlokation; `ZW4` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaktionsgrund_ergaenzung: Option<String>,
+    /// `SG8 SEQ+Z79` / `SG10 CAV+ZV4` — the Bilanzkreis, an X- or Y-EIC.
+    pub bilanzkreis: String,
+    /// `true` for `CCI+++Z15`, a Haushaltskunde; `false` for `Z18`.
+    pub haushaltskunde: bool,
+    /// `CCI+Z61` — one of the [`ENFG_GRUNDLAGEN`] codes.
+    pub enfg_grundlage: String,
+    /// `CAV` — one of the [`ENFG_PRIVILEGIERUNGEN`] codes, beside `ZF9` and
+    /// nowhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enfg_grund: Option<String>,
+    /// The Kunde des Lieferanten with his Korrespondenzanschrift — or, where
+    /// he has none, the Anschrift der Marktlokation (Bedingung `[556]`).
+    pub kunde: crate::utilmd_stammdaten::Kunde,
+}
+
+impl GpkeLieferbeginnAnmelden {
+    /// Every value the 55001 column cannot carry, each naming its segment —
+    /// empty when the body is sendable.
+    ///
+    /// The Transaktionsgrund is not checked here: the workflow that writes the
+    /// message holds it against the column's codes.
+    #[must_use]
+    pub fn maengel(&self) -> Vec<String> {
+        let mut m = Vec::new();
+        for (field, value) in [
+            ("malo_id (SG5 LOC+Z16)", &self.malo_id),
+            ("lieferbeginn_datum (SG4 DTM+92)", &self.lieferbeginn_datum),
+            ("bilanzkreis (SG8 SEQ+Z79)", &self.bilanzkreis),
+        ] {
+            if value.trim().is_empty() {
+                m.push(format!("{field} is empty"));
+            }
+        }
+        if !ENFG_GRUNDLAGEN
+            .iter()
+            .any(|(code, _)| *code == self.enfg_grundlage)
+        {
+            m.push(format!(
+                "enfg_grundlage {:?} (SG8 SEQ+Z75 CCI+Z61): one of ZF9, ZG0, ZG1",
+                self.enfg_grundlage
+            ));
+        }
+        match (
+            enfg_mit_grund(&self.enfg_grundlage),
+            self.enfg_grund.as_deref(),
+        ) {
+            (true, Some(g)) if ENFG_PRIVILEGIERUNGEN.iter().any(|(c, _)| *c == g) => {}
+            (true, _) => m.push(
+                "enfg_grund (SG10 CAV): Muss beside ZF9 — one of ZU5 … ZV3 (Bedingung [463])"
+                    .to_owned(),
+            ),
+            (false, Some(g)) => m.push(format!(
+                "enfg_grund {g:?} (SG10 CAV) is listed beside ZF9 only"
+            )),
+            (false, None) => {}
+        }
+        m.extend(
+            self.kunde
+                .anmeldung_maengel()
+                .into_iter()
+                .map(|f| format!("kunde (SG12 NAD+Z09/Z04): {f}")),
+        );
+        m
+    }
+}
+
 /// The `payload` of [`GELI_LIEFERBEGINN_ANMELDEN`] — the LF's Anmeldung NN
 /// **44001** (UTILMD AHB Gas 1.2 Kap. 5.6, S. 43–66). See [`GpkeEogAnmelden`]
 /// for why it is shared.
@@ -563,6 +668,61 @@ pub struct GeliKuendigungAnmelden {
     pub process_date: String,
     /// The Altlieferant's MP-ID — `NAD+MR` and the UNB recipient.
     pub lfa_mp_id: String,
+}
+
+/// The body of [`GELI_STAMMDATEN_AENDERUNG_BEANTWORTEN`] — the Berechtigter's
+/// Antwort auf Änderung.
+///
+/// The process is found by the Marktlokation; the Änderung it answers fixes
+/// the Antwort PID and the Codeliste the code must come from — `G_0016` for
+/// the 44115, which publishes `E15` alone (EBD 4.3 Kap. 13.10).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeliStammdatenAenderungBeantworten {
+    /// The Marktlokation the Änderung named — `SG5 LOC+172`.
+    pub malo_id: String,
+    /// `SG4 STS+E01` DE 9013 — a code of the Antwort column's Codeliste.
+    pub antwort_code: String,
+}
+
+/// The body of [`GELI_STAMMDATEN_AENDERUNG_SENDEN`] — the Verantwortlicher's
+/// nicht bilanzierungsrelevante Änderung, one Stammdatum or several.
+///
+/// Every data group of the column is Soll `[92]` „Wenn Wert innerhalb SG bzw.
+/// Segment geändert wird" (UTILMD AHB Gas 1.2 Kap. 5.10.1, S. 97–110; Kap.
+/// 5.11.3, S. 120–123), so `gruppen` names what changed. The NB's 44112 reads
+/// each group from marktd on the Änderungsdatum; the LF's 44109 carries its
+/// own facts, stated here.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeliStammdatenAenderungSenden {
+    /// The Marktlokation — `SG5 LOC+172`.
+    pub malo_id: String,
+    /// `44109` (LF → NB) or `44112` (NB → LF).
+    pub pid: u32,
+    /// The Berechtigter's MP-ID — `NAD+MR` and the UNB recipient.
+    pub empfaenger_mp_id: String,
+    /// Änderungsdatum `SG4 DTM+157`, `YYYYMMDD`.
+    pub aenderungsdatum: String,
+    /// Datum Vertragsbeginn `SG4 DTM+92`, `YYYYMMDD`.
+    pub vertragsbeginn: String,
+    /// The changed groups, by name: on a 44112 `TERMIN_NETZNUTZUNGSABRECHNUNG`,
+    /// `NETZNUTZUNGSABRECHNUNGSINTERVALL`, `MARKTGEBIET`,
+    /// `DRUCKEBENE`, `NETZNUTZUNG`, `OBIS_DATEN`, `KONZESSIONSABGABE`,
+    /// `GEMEINDERABATT`, `ZUGEORDNETE_MARKTPARTNER`, `GASQUALITAET`,
+    /// `MARKTLOKATIONSANSCHRIFT`; on a 44109 `ABRECHNUNGSINTERVALL_LF`,
+    /// `GRUPPENZUORDNUNG`, `KUNDE_DES_LF`, `KORRESPONDENZANSCHRIFT_KUNDE_LF`.
+    pub gruppen: Vec<String>,
+    /// 44109: `SG6 DTM+Z20` Abrechnungsintervall des LF — 1, 3, 6 or 12.
+    #[serde(default)]
+    pub abrechnungsintervall_monate: Option<u8>,
+    /// 44109: `SG10 CCI+++Z15`/`Z18` Gruppenzuordnung nach `EnWG`.
+    #[serde(default)]
+    pub haushaltskunde: Option<bool>,
+    /// 44109: `SG12 NAD+Z09` Kunde des LF, and with its `anschrift` the
+    /// `NAD+Z04` Korrespondenzanschrift.
+    #[serde(default)]
+    pub kunde: Option<crate::utilmd_stammdaten::Kunde>,
 }
 
 impl GeliLieferbeginnAnmelden {

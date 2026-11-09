@@ -100,6 +100,7 @@ fn malo_identified_entry(
         attempt_count: 0,
         first_attempt_at: None,
         workflow_name: "".into(),
+        format_version: None,
         trace_context: mako_engine::trace_ctx::current().map(Into::into),
     }
 }

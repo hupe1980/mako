@@ -22,6 +22,7 @@
 //   "build-enfg-ledger"  — POST /api/v1/enfg/ledger/{year}/{month}
 //   "use-mcp"            — /mcp (Streamable HTTP MCP server)
 //   "read-policy"        — GET  /api/v1/policy (the operator policy report)
+//   "read-config"        — GET  /admin/einrichtung (the configuration findings)
 
 // ── Reads ─────────────────────────────────────────────────────────────────────
 // Any authenticated caller may read their own tenant's plants and settlements.
@@ -33,7 +34,8 @@ permit(
         Action::"read-settlement",
         Action::"read-marktdaten",
         Action::"use-mcp",
-        Action::"read-policy"
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

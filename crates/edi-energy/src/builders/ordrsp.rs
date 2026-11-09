@@ -35,6 +35,25 @@ struct OrdrespBuilderInner {
     adjustment_reason: Option<String>,
     item_description: bool,
     line_item: bool,
+    /// `DTM+203` Ausführungsdatum — a `303` instant.
+    execution_date: Option<String>,
+    /// `SG6 CTA+IC` name and its `COM`s as `(DE 3148 address, DE 3155 code)`.
+    contact: Option<(String, Vec<(String, String)>)>,
+    /// `SG3 NAD+VY` — the MP-ID of a beteiligter Marktpartner.
+    involved_party: Option<String>,
+    /// `SG3 NAD+Z22` — Name und Lieferadresse für Altgeräte.
+    delivery_address: Option<Lieferadresse>,
+}
+
+/// `SG3 NAD+Z22` „Lieferadresse für Altgeräte": a company name and a postal
+/// address, `NAD+Z22+++<Name>:::::Z02+<Straße>+<Ort>++<PLZ>+<Land>`.
+#[derive(Debug, Clone)]
+struct Lieferadresse {
+    name: String,
+    strasse: String,
+    ort: String,
+    plz: String,
+    land: String,
 }
 
 /// Fluent builder for `ORDRSP` (Purchase Order Response) messages.
@@ -92,6 +111,10 @@ impl OrdrespBuilder<Unset, Unset> {
                 adjustment_reason: None,
                 item_description: false,
                 line_item: false,
+                execution_date: None,
+                contact: None,
+                involved_party: None,
+                delivery_address: None,
             },
         }
     }
@@ -221,6 +244,111 @@ impl<S, R> OrdrespBuilder<S, R> {
         self
     }
 
+    /// Set `DTM+203` Ausführungsdatum — a UTC instant `CCYYMMDDHHMM` (format
+    /// `303`, optionally `+00`), Muss on the Geräteübernahme answers 19001/19002
+    /// (ORDRSP AHB 1.1b Kap. 4.9.2).
+    pub fn execution_date(mut self, instant: impl Into<String>) -> Self {
+        self.inner.execution_date = Some(instant.into());
+        self
+    }
+
+    /// Set the `SG6` Ansprechpartner of the sender — emits `CTA+IC+:<name>`
+    /// and one `COM+<address>:<code>` per channel (`EM`, `TE`, `FX`, `AJ`,
+    /// `AL`), after `NAD+MS`.
+    pub fn contact<I, A, C>(mut self, name: impl Into<String>, channels: I) -> Self
+    where
+        I: IntoIterator<Item = (A, C)>,
+        A: Into<String>,
+        C: Into<String>,
+    {
+        self.inner.contact = Some((
+            name.into(),
+            channels
+                .into_iter()
+                .map(|(a, c)| (a.into(), c.into()))
+                .collect(),
+        ));
+        self
+    }
+
+    /// Set `SG3 NAD+VY` „andere zugehörige Partei" — a beteiligter
+    /// Marktpartner named by MP-ID; DE 3055 follows the MP-ID.
+    pub fn involved_party(mut self, mp_id: impl Into<String>) -> Self {
+        self.inner.involved_party = Some(mp_id.into());
+        self
+    }
+
+    /// Set `SG3 NAD+Z22` „Lieferadresse für Altgeräte" — company name (DE 3045
+    /// `Z02`), street, city, postcode (empty where the country has none) and
+    /// ISO country code.
+    pub fn delivery_address(
+        mut self,
+        name: impl Into<String>,
+        strasse: impl Into<String>,
+        ort: impl Into<String>,
+        plz: impl Into<String>,
+        land: impl Into<String>,
+    ) -> Self {
+        self.inner.delivery_address = Some(Lieferadresse {
+            name: name.into(),
+            strasse: strasse.into(),
+            ort: ort.into(),
+            plz: plz.into(),
+            land: land.into(),
+        });
+        self
+    }
+
+    /// `SG3` — `NAD+MS` with its `SG6 CTA`/`COM`, `NAD+MR`, `NAD+VY` and
+    /// `NAD+Z22`, in the MIG's order.
+    fn emit_parties<W: std::io::Write>(&self, w: &mut Writer<W>) -> Result<(), Error> {
+        // ── SG3: parties ─────────────────────────────────────────────────────
+        if let Some(id) = &self.inner.sender_id {
+            emit_comp!(
+                w,
+                "NAD",
+                ["MS"],
+                [id, "", super::agency_for(self.inner.sender_agency, id)]
+            );
+        }
+        // `SG6 CTA`/`COM` belong to the sender's `SG3`.
+        if let Some((name, channels)) = &self.inner.contact {
+            emit_comp!(w, "CTA", ["IC"], ["", name]);
+            for (address, code) in channels {
+                emit_comp!(w, "COM", [address, code]);
+            }
+        }
+        if let Some(id) = &self.inner.receiver_id {
+            emit_comp!(
+                w,
+                "NAD",
+                ["MR"],
+                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+            );
+        }
+        if let Some(id) = &self.inner.involved_party {
+            emit_comp!(w, "NAD", ["VY"], [id, "", super::agency_for(None, id)]);
+        }
+        if let Some(a) = &self.inner.delivery_address {
+            w.write_composites(
+                "NAD",
+                &[
+                    &["Z22"][..],
+                    &[""][..],
+                    &[""][..],
+                    &[a.name.as_str(), "", "", "", "", "Z02"][..],
+                    &[a.strasse.as_str()][..],
+                    &[a.ort.as_str()][..],
+                    &[""][..],
+                    &[a.plz.as_str()][..],
+                    &[a.land.as_str()][..],
+                ],
+            )
+            .map_err(Error::Parse)?;
+        }
+        Ok(())
+    }
+
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = self
             .inner
@@ -263,6 +391,13 @@ impl<S, R> OrdrespBuilder<S, R> {
             "DTM",
             ["137", &super::ccyymmddhhmm_utc("137", &dtm_val)?, "303"]
         );
+        if let Some(instant) = &self.inner.execution_date {
+            emit_comp!(
+                w,
+                "DTM",
+                ["203", &super::ccyymmddhhmm_utc("203", instant)?, "303"]
+            );
+        }
         // Abonnement — `IMD++<7081>` (DE 7081 sits in C272, element 2).
         if let Some(code) = &self.inner.abonnement {
             emit_comp!(w, "IMD", [""], [code]);
@@ -297,23 +432,7 @@ impl<S, R> OrdrespBuilder<S, R> {
         if let Some(code) = &self.inner.adjustment_reason {
             emit_comp!(w, "FTX", [code]);
         }
-        // ── SG3: parties ─────────────────────────────────────────────────────
-        if let Some(id) = &self.inner.sender_id {
-            emit_comp!(
-                w,
-                "NAD",
-                ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
-            );
-        }
-        if let Some(id) = &self.inner.receiver_id {
-            emit_comp!(
-                w,
-                "NAD",
-                ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
-            );
-        }
+        self.emit_parties(&mut w)?;
         // ── SG27: line item ──────────────────────────────────────────────────
         if self.inner.line_item {
             emit_seg!(w, "LIN", "1");

@@ -103,11 +103,7 @@ pub(super) fn render_remadv(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Remadv, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Remadv, ReleaseTrack::Short)?;
 
     let mut builder = builders::RemadvBuilder::new(release)
         .sender(sender)

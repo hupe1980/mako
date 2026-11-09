@@ -317,7 +317,9 @@ VERTRAG_JSON=$(cat <<JSON
       "nb_mp_id": "${NB_MP_ID}",
       "product_code": "${PRODUCT_CODE}",
       "lieferbeginn": "2026-01-01",
-      "jahresverbrauch_kwh": "3000"
+      "jahresverbrauch_kwh": "3000",
+      "lieferbeginn_anlass": "WECHSEL",
+      "enfg_grundlage": "ZG1"
     }
   ]
 }

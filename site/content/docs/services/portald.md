@@ -73,6 +73,11 @@ compares the record's `malo_id` with the
 authorised one. Starting without `vertragd_url` is refused unless
 `allow_insecure_no_auth = true`.
 
+portald serves neither `GET /api/v1/policy` nor `GET /admin/einrichtung`: it
+holds no operator verifier — the only token it sees is a customer's, relayed to
+`vertragd` — so an operator report here would be readable by any portal
+customer. `portald --check-config --json` prints the same findings.
+
 ---
 
 ## Endpoints

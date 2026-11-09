@@ -122,6 +122,7 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
         .as_str()
         .or_else(|| data["error_code"].as_str())
         .map(str::to_owned);
+    let (antwort_code, antwort_codeliste) = antwort_of(data);
 
     // Look up existing projection to preserve started_at. A read failure is not
     // "no row": treating it as one re-anchors the deadline on this event.
@@ -181,6 +182,8 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
         started_at,
         last_event_at: event_time,
         erc_code,
+        antwort_code,
+        antwort_codeliste,
         initiator_is_affiliate,
         tenant: state.tenant.clone(),
     };
@@ -198,6 +201,24 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
     );
 
     Ok(Projected::Upserted)
+}
+
+/// The Antwortcode a counterparty's business answer carried, and the tree or
+/// Codeliste it named: `data.antwortcode` and `data.codeliste`, the keys makod
+/// writes on the `de.mako.process.completed` of an answered Lieferbeginn
+/// (55002/55003, 44002/44003 and the other `ANTWORT_PIDS_LF`).
+///
+/// A list without a code is no answer and yields neither: the pair is stored
+/// as one, so a list can never be read beside another answer's code.
+fn antwort_of(data: &serde_json::Value) -> (Option<String>, Option<String>) {
+    let Some(code) = data["antwortcode"].as_str().filter(|c| !c.is_empty()) else {
+        return (None, None);
+    };
+    let codeliste = data["codeliste"]
+        .as_str()
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned);
+    (Some(code.to_owned()), codeliste)
 }
 
 /// Whether this process belongs in the § 7a Abs. 5 EnWG parity comparison, and
@@ -438,6 +459,27 @@ pub fn compute_deadline(
 mod tests {
     use super::*;
     use time::macros::datetime;
+
+    // ── antwort_of ────────────────────────────────────────────────────────────
+
+    /// The answer's code and its list travel together, and a list alone is
+    /// no answer.
+    #[test]
+    fn the_answer_code_is_read_with_the_list_it_named() {
+        let both = serde_json::json!({ "antwortcode": "A02", "codeliste": "E_0622" });
+        assert_eq!(
+            antwort_of(&both),
+            (Some("A02".to_owned()), Some("E_0622".to_owned()))
+        );
+        let bare = serde_json::json!({ "antwortcode": "A02", "codeliste": null });
+        assert_eq!(antwort_of(&bare), (Some("A02".to_owned()), None));
+        let list_only = serde_json::json!({ "antwortcode": null, "codeliste": "E_0622" });
+        assert_eq!(antwort_of(&list_only), (None, None));
+        assert_eq!(
+            antwort_of(&serde_json::json!({ "pid": 55_001 })),
+            (None, None)
+        );
+    }
 
     // ── derive_family ─────────────────────────────────────────────────────────
 

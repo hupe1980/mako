@@ -111,6 +111,76 @@ fn the_removed_politik_key_is_refused_naming_the_policy_key() {
     assert!(err.contains("[policy] beihilfe_politik"), "{err}");
 }
 
+/// A config with two defects reports both, each at its path, not the first.
+#[test]
+fn two_defects_are_both_reported() {
+    use mako_service::Daemon as _;
+    let cfg: einsd::config::EinsdConfig = serde_json::from_value(serde_json::json!({
+        "database": {"url": "postgres://startup-test/einsd"},
+        "tenant": "9900357000004",
+        "beihilfevorbehalt": {"politik": "unter_vorbehalt"},
+    }))
+    .expect("the configuration parses");
+    let pfade: Vec<String> = einsd::Einsd::validate(&cfg)
+        .into_iter()
+        .map(|b| b.pfad)
+        .collect();
+    assert_eq!(pfade, ["beihilfevorbehalt.politik", "oidc"]);
+}
+
+/// A recorded approval names its scheme, and the configuration is refused
+/// where the gate could not read it: an extension of the EEG 2023 approval
+/// without its end, an extension and an EEG 2027 approval covering the same
+/// day, or the free-text `umfang` in place of the scheme.
+#[test]
+fn an_unreadable_approval_is_refused_at_load() {
+    let parse = |genehmigungen: serde_json::Value| {
+        serde_json::from_value::<einsd::config::EinsdConfig>(serde_json::json!({
+            "database": {"url": "postgres://startup-test/einsd"},
+            "tenant": "9900357000004",
+            "allow_insecure_no_auth": true,
+            "beihilfevorbehalt": {"genehmigungen": genehmigungen},
+        }))
+    };
+    let verlaengerung = serde_json::json!({
+        "regelung": "eeg2023_verlaengerung",
+        "eingang": "2026-12-18",
+        "gilt_ab": "2027-01-01",
+        "gilt_bis": "2027-06-30",
+        "bundesanzeiger": "BAnz AT (Fixture)",
+    });
+    let eeg2027 = serde_json::json!({
+        "regelung": "eeg2027",
+        "eingang": "2027-02-10",
+        "gilt_ab": "2027-01-01",
+        "bundesanzeiger": "BAnz AT (Fixture)",
+    });
+
+    let cfg = parse(serde_json::json!([verlaengerung])).expect("an extension parses");
+    assert_eq!(
+        cfg.beihilfevorbehalt.genehmigungen[0].regelung,
+        eeg_billing::Beihilferegelung::Eeg2023Verlaengerung
+    );
+
+    let mut ohne_ende = verlaengerung.clone();
+    ohne_ende.as_object_mut().unwrap().remove("gilt_bis");
+    let err = parse(serde_json::json!([ohne_ende]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("gilt_bis"), "{err}");
+
+    let err = parse(serde_json::json!([verlaengerung, eeg2027]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("2027-01-01"), "{err}");
+
+    let mut frei = eeg2027.clone();
+    let obj = frei.as_object_mut().unwrap();
+    obj.remove("regelung");
+    obj.insert("umfang".to_owned(), serde_json::json!("Teil 3"));
+    assert!(parse(serde_json::json!([frei])).is_err());
+}
+
 /// A database failure answers the problem shape with an `error_id`, never the
 /// driver's text — the pool here points at a port nothing listens on.
 #[tokio::test]

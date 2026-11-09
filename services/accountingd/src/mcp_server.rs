@@ -24,9 +24,7 @@ use rmcp::{
     },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
+    transport::streamable_http_server::StreamableHttpServerConfig,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -52,6 +50,8 @@ pub struct AccountingdMcpState {
     pub iban_key: Option<[u8; 32]>,
     /// pain.008 schema version to emit (validated from config at startup).
     pub pain008_schema: crate::sepa::DirectDebitSchema,
+    /// The posture report the runner built at boot, served by `get_policy`.
+    pub policy: Arc<mako_service::policy::PolicyReport>,
 }
 
 /// A tool that takes no arguments.
@@ -216,6 +216,16 @@ impl AccountingdMcpHandler {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    #[tool(
+        description = "The operator policy and posture this accountingd deployment runs under: each entry with its value and whether it was set or defaulted. Read-only; a setting changes only by editing the config and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_policy(&self) -> Result<CallToolResult, McpError> {
+        ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     #[tool(
@@ -1149,6 +1159,13 @@ impl AccountingdMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for AccountingdMcpHandler {
+    /// The revisions every mako MCP server speaks, not the SDK's set.
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        mako_service::mcp::supported_revisions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
             .with_server_info(Implementation::new("accountingd", env!("CARGO_PKG_VERSION")))
@@ -1213,6 +1230,8 @@ pub fn tool_action(tool: &str) -> Option<&'static str> {
         | "get_parked_booking" => "read-books",
         // The collection register: mandates, IBANs and the entries of a run.
         "list_sepa_collections" => "read-banking",
+        // The posture report the runner built at boot.
+        "get_policy" => "read-policy",
         // ── Writes ───────────────────────────────────────────────────────────
         "update_abschlag" => "write-account",
         "import_payments" => "import-payments",
@@ -1291,9 +1310,8 @@ async fn mcp_auth_middleware(
 
 pub fn router(state: Arc<AccountingdMcpState>, _shutdown: CancellationToken) -> Router {
     let handler = AccountingdMcpHandler::new(Arc::clone(&state));
-    let service = StreamableHttpService::new(
+    let service = mako_service::mcp::service(
         move || Ok(handler.clone()),
-        LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default(),
     );
     Router::new()

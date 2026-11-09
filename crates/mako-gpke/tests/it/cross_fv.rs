@@ -193,15 +193,21 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
     let lfn = lfn_process();
     lfn.run(
         LfAnmeldungCommand::InitiateAnmeldung {
-            transaktionsgrund_ergaenzung: None,
+            transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
             tranchengroesse: None,
             pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
             sender: MarktpartnerCode::new(LFN_ID),
             receiver: MarktpartnerCode::new(NB_ID),
             location_id: MaLo::new(MALO_ID),
             process_date: "20250201".to_owned(),
-            transaktionsgrund: None,
+            transaktionsgrund: Some("E03".to_owned()),
             bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+            kundendaten: Some(Box::new(mako_gpke::lf_anmeldung::Kundendaten {
+                haushaltskunde: true,
+                enfg_grundlage: "ZG1".to_owned(),
+                enfg_grund: None,
+                stammdaten: mako_engine::payload::Stammdaten::default(),
+            })),
         },
         RunOptions::new(),
     )
@@ -397,15 +403,21 @@ async fn cross_fv_rejection_also_terminates_cleanly() {
 
     lfn.run(
         LfAnmeldungCommand::InitiateAnmeldung {
-            transaktionsgrund_ergaenzung: None,
+            transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
             tranchengroesse: None,
             pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
             sender: MarktpartnerCode::new(LFN_ID),
             receiver: MarktpartnerCode::new(NB_ID),
             location_id: MaLo::new(MALO_ID),
             process_date: "20250201".to_owned(),
-            transaktionsgrund: None,
+            transaktionsgrund: Some("E03".to_owned()),
             bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+            kundendaten: Some(Box::new(mako_gpke::lf_anmeldung::Kundendaten {
+                haushaltskunde: true,
+                enfg_grundlage: "ZG1".to_owned(),
+                enfg_grund: None,
+                stammdaten: mako_engine::payload::Stammdaten::default(),
+            })),
         },
         RunOptions::new(),
     )
@@ -540,15 +552,21 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
     let lfn = lfn_process();
     lfn.run(
         LfAnmeldungCommand::InitiateAnmeldung {
-            transaktionsgrund_ergaenzung: None,
+            transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
             tranchengroesse: None,
             pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
             sender: MarktpartnerCode::new(LFN_ID),
             receiver: MarktpartnerCode::new(NB_ID),
             location_id: MaLo::new(MALO_ID),
             process_date: "20250201".to_owned(),
-            transaktionsgrund: None,
+            transaktionsgrund: Some("E03".to_owned()),
             bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+            kundendaten: Some(Box::new(mako_gpke::lf_anmeldung::Kundendaten {
+                haushaltskunde: true,
+                enfg_grundlage: "ZG1".to_owned(),
+                enfg_grund: None,
+                stammdaten: mako_engine::payload::Stammdaten::default(),
+            })),
         },
         RunOptions::new(),
     )

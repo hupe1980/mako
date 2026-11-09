@@ -1,0 +1,137 @@
+{
+  "command": "geli.lieferende.anmelden",
+  "marktrolle": "LFG",
+  "urteil": "abgelehnt",
+  "stufe": "pruefung",
+  "grund": "invalid_payload: the UTILMD violates its AHB profile: STS (Nr 00025): DE 9013 \u201eStatusanlass, Code\u201c is \"E03\"; the Pr\u00fcfschablone of 44004 admits E01, Z33, Z41, ZG9, ZH1, ZH2, ZT4, ZT5, ZZD",
+  "nachrichten": [
+    {
+      "nachrichtentyp": "UTILMD",
+      "pruefidentifikator": 44004,
+      "empfaenger": "9800357000005",
+      "formatversion": "FV2026-10-01",
+      "ahb_version": "1.2",
+      "wire": "UNB+UNOC:3+9805550000003:502+9800357000005:502+261109:1909+2DE1B9DC817540'UNH+bef193c4c2914e+UTILMD:D:11A:UN:G1.2'BGM+E02+bef193c4c2914e'DTM+137:202611091909?+00:303'NAD+MS+9805550000003::332'NAD+MR+9800357000005::332'IDE+24+bef193c4c2914e'DTM+93:202612310500?+00:303'STS+7++E03'LOC+172+51238696012'RFF+Z13:44004'UNT+11+bef193c4c2914e'UNZ+1+2DE1B9DC817540'",
+      "segmente": [
+        {
+          "position": 1,
+          "tag": "UNH",
+          "nr": "00003",
+          "gruppe": null,
+          "name": "Nachrichten-Kopfsegment",
+          "text": "UNH+bef193c4c2914e+UTILMD:D:11A:UN:G1.2'",
+          "elemente": ["bef193c4c2914e", "UTILMD:D:11A:UN:G1.2"],
+          "befunde": []
+        },
+        {
+          "position": 2,
+          "tag": "BGM",
+          "nr": "00004",
+          "gruppe": null,
+          "name": "Beginn der Nachricht",
+          "text": "BGM+E02+bef193c4c2914e'",
+          "elemente": ["E02", "bef193c4c2914e"],
+          "befunde": []
+        },
+        {
+          "position": 3,
+          "tag": "DTM",
+          "nr": "00005",
+          "gruppe": null,
+          "name": "Nachrichtendatum",
+          "text": "DTM+137:202611091909?+00:303'",
+          "elemente": ["137:202611091909+00:303"],
+          "befunde": []
+        },
+        {
+          "position": 4,
+          "tag": "NAD",
+          "nr": "00008",
+          "gruppe": "SG2",
+          "name": "MP-ID Absender",
+          "text": "NAD+MS+9805550000003::332'",
+          "elemente": ["MS", "9805550000003::332"],
+          "befunde": []
+        },
+        {
+          "position": 5,
+          "tag": "NAD",
+          "nr": "00009",
+          "gruppe": "SG2",
+          "name": "MP-ID Empf\u00e4nger",
+          "text": "NAD+MR+9800357000005::332'",
+          "elemente": ["MR", "9800357000005::332"],
+          "befunde": []
+        },
+        {
+          "position": 6,
+          "tag": "IDE",
+          "nr": "00010",
+          "gruppe": "SG4",
+          "name": "Vorgang",
+          "text": "IDE+24+bef193c4c2914e'",
+          "elemente": ["24", "bef193c4c2914e"],
+          "befunde": []
+        },
+        {
+          "position": 7,
+          "tag": "DTM",
+          "nr": "00015",
+          "gruppe": "SG4",
+          "name": "Ende zum",
+          "text": "DTM+93:202612310500?+00:303'",
+          "elemente": ["93:202612310500+00:303"],
+          "befunde": []
+        },
+        {
+          "position": 8,
+          "tag": "STS",
+          "nr": "00025",
+          "gruppe": "SG4",
+          "name": "Transaktionsgrund",
+          "text": "STS+7++E03'",
+          "elemente": ["7", "", "E03"],
+          "befunde": [
+            {
+              "text": "STS (Nr 00025): DE 9013 \u201eStatusanlass, Code\u201c is \"E03\"; the Pr\u00fcfschablone of 44004 admits E01, Z33, Z41, ZG9, ZH1, ZH2, ZT4, ZT5, ZZD",
+              "regel": "AHB-44004-00025-STS-9013-CODE",
+              "element": 2,
+              "komponente": 0
+            }
+          ]
+        },
+        {
+          "position": 9,
+          "tag": "LOC",
+          "nr": "00034",
+          "gruppe": "SG4/SG5",
+          "name": "Meldepunkt",
+          "text": "LOC+172+51238696012'",
+          "elemente": ["172", "51238696012"],
+          "befunde": []
+        },
+        {
+          "position": 10,
+          "tag": "RFF",
+          "nr": "00036",
+          "gruppe": "SG4/SG6",
+          "name": "Pr\u00fcfidentifikator",
+          "text": "RFF+Z13:44004'",
+          "elemente": ["Z13:44004"],
+          "befunde": []
+        },
+        {
+          "position": 11,
+          "tag": "UNT",
+          "nr": "00147",
+          "gruppe": null,
+          "name": "Nachrichten-Endesegment",
+          "text": "UNT+11+bef193c4c2914e'",
+          "elemente": ["11", "bef193c4c2914e"],
+          "befunde": []
+        }
+      ],
+      "befunde": []
+    }
+  ]
+}

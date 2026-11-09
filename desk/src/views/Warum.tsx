@@ -10,10 +10,11 @@ import {
   type Answer,
   fragen,
   type Schritt,
-  WARUM_FRAGE,
+  warumFrage,
 } from "../data/agent";
 import { useVerweigert, Verweigert } from "../data/verweigert";
 import { Icon } from "../design/Icon";
+import { useT } from "../i18n";
 import { Bewertung } from "./Bewertung";
 import { Lesen, Satz } from "./Fragen";
 import {
@@ -51,17 +52,19 @@ export function WarumAntwort({
   /** The live run, for its Stop. */
   stopp?: { run: string; lauf: Lauf | undefined } | undefined;
 }) {
+  const t = useT();
+  const f = t.fragen;
   const [oeffnen, aufSchritt] = useOeffnen();
   const spur = stand.kind === "fehler" ? undefined : stand.spur;
   return (
     <section
-      aria-label="Warum steht das hier?"
+      aria-label={t.warum.titel}
       className="squircle rounded-panel border border-ai-border bg-ai-fill p-4"
     >
       <div className="flex min-h-9 items-center gap-2">
         <p className="m-0 flex flex-1 items-center gap-1.5 text-caption font-semibold text-ai">
           <Icon name="sparkle" size={12} />
-          {WARUM_FRAGE}
+          {warumFrage()}
         </p>
         {stand.kind === "liest" && stopp && <StoppKnopf run={stopp.run} lauf={stopp.lauf} />}
       </div>
@@ -87,7 +90,7 @@ export function WarumAntwort({
           <p className="m-0 mb-2 text-caption font-semibold text-ai">{stand.a.disclosure}</p>
           {stand.a.status === "succeeded" ? (
             <>
-              <ul aria-label="Antwort" className="m-0 list-none divide-y divide-ai-border p-0">
+              <ul aria-label={f.antwort} className="m-0 list-none divide-y divide-ai-border p-0">
                 {stand.a.saetze.map((s) => (
                   <Satz
                     key={s.text}
@@ -98,7 +101,9 @@ export function WarumAntwort({
               </ul>
               {!spur && stand.a.schritte.length > 0 && (
                 <p className="m-0 mt-3 text-caption text-text-2">
-                  Gelesen: {[...new Set(stand.a.schritte.map((s) => quelle(s.quelle)))].join(", ")}
+                  {f.gelesen(
+                    [...new Set(stand.a.schritte.map((s) => quelle(s.quelle)))].join(", "),
+                  )}
                 </p>
               )}
               <div className="mt-3">
@@ -107,15 +112,13 @@ export function WarumAntwort({
             </>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
-              <p className="m-0 text-callout text-text-2">
-                Der Assistent hat keine Antwort gefunden ({stand.a.status}).
-              </p>
+              <p className="m-0 text-callout text-text-2">{f.keineAntwort(stand.a.status)}</p>
               {onNochmal && (
                 <AriaButton
                   onPress={onNochmal}
                   className="focus-ring h-7 rounded-full border border-ai-border bg-surface px-3 text-body text-text data-[hovered]:bg-fill"
                 >
-                  Nochmal fragen
+                  {f.nochmal}
                 </AriaButton>
               )}
             </div>
@@ -134,15 +137,17 @@ export function WarumAntwort({
  * nothing refetches it behind the person's back.
  */
 export function Warum({ anker }: { anker: Anker }) {
+  const t = useT();
+  const f = t.fragen;
   const { rolle } = useRolle();
   const router = useRouter({ warn: false }) as ReturnType<typeof useRouter> | undefined;
   const verweigert = useVerweigert({ dienst: "agentd", aktion: "fragen" });
   const start = useQuery({
     queryKey: [rolle, "agentd", "warum", anker],
     queryFn: async () => {
-      const run = await fragen(WARUM_FRAGE, anker);
+      const run = await fragen(warumFrage(), anker);
       folgen(run, {
-        frage: WARUM_FRAGE,
+        frage: warumFrage(),
         anker: `warum:${JSON.stringify(anker)}`,
         rolle,
         zurueck: router?.state.location.href ?? `${location.pathname}${location.search}`,
@@ -162,14 +167,14 @@ export function Warum({ anker }: { anker: Anker }) {
   const spur = lauf.gestreamt ? (lauf.lauf?.schritte ?? []) : undefined;
   const fehler = start.error ?? lauf.fehler;
   const stand: WarumStand = verweigert
-    ? { kind: "fehler", text: `Den Assistenten zu fragen ist Ihnen nicht erlaubt: ${verweigert}` }
+    ? { kind: "fehler", text: f.nichtErlaubt(verweigert) }
     : fehler && !(fehler instanceof Verweigert)
       ? {
           kind: "fehler",
           text:
             fehler instanceof AgentAbgelehnt
-              ? `Der Assistent hat die Frage nicht angenommen: ${fehler.message}`
-              : "Der Assistent ist nicht erreichbar. Alles andere im Desk funktioniert weiter.",
+              ? f.nichtAngenommen(fehler.message)
+              : f.nichtErreichbar,
         }
       : spur && spurStand(lauf) === "abgebrochen"
         ? { kind: "abgebrochen", spur }

@@ -177,11 +177,7 @@ pub(super) fn render_mscons(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Mscons, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Mscons, ReleaseTrack::Short)?;
 
     // `QTY` DE 6411 goes out where the column lists it (13023 admits `KWH`,
     // 13003 lists none — the unit is the OBIS-Kennzahl's).
@@ -312,11 +308,7 @@ pub(super) fn render_mscons_arbeit_leistungsmax(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Mscons, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Mscons, ReleaseTrack::Short)?;
 
     // DE 6063 distinguishes a measured value from a substitute one. Reporting a
     // substitute as measured would assert a reading that was never taken.
@@ -513,11 +505,7 @@ pub(super) fn render_mscons_typ2(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Mscons, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Mscons, ReleaseTrack::Short)?;
 
     let qualifier = |r: &serde_json::Value| {
         if r.get("ersatzwert").and_then(serde_json::Value::as_bool) == Some(true) {

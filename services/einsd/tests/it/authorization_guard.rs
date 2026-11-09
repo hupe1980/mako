@@ -40,9 +40,10 @@ const HANDLERS: &str = include_str!("../../src/handlers.rs");
 /// redundant, so its absence from `handlers.rs` is correct and not a dead
 /// grant.
 ///
-/// `read-policy` is checked by `mako_service::policy::router`, which serves
-/// `GET /api/v1/policy` for every daemon from one handler.
-const ENFORCED_BY_MIDDLEWARE: [&str; 2] = ["use-mcp", "read-policy"];
+/// `read-policy` and `read-config` are checked by
+/// `mako_service::einrichtung::router`, which serves `GET /api/v1/policy` and
+/// `GET /admin/einrichtung` for every daemon from one handler each.
+const ENFORCED_BY_MIDDLEWARE: [&str; 3] = ["use-mcp", "read-policy", "read-config"];
 
 /// Every handler the router actually mounts.
 fn routed_handlers() -> BTreeSet<String> {

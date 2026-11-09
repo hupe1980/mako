@@ -50,7 +50,8 @@ Every `/api/v1/*` route needs a JWT and a Cedar action (paths under `/api/v1`):
 | `GET /disputes` | `read-disputes` | any caller in the tenant |
 | `GET /overdue-remadv` | `read-overdue-remadv` | any caller in the tenant |
 | `POST /receipts/{id}/confirm-payment`, `/dispatch-answer`, `/resolve-dispute` | `write-receipt` | **LF role** |
-| `POST\|GET /mcp` | `use-mcp` | any caller in the tenant (OIDC or `[mcp]` key) |
+| `POST /mcp` | `use-mcp` | any caller in the tenant (OIDC or `[mcp]` key) |
+| `GET /api/v1/policy`, `GET /admin/einrichtung` | `read-policy`, `read-config` | any caller in the tenant |
 
 The runner adds `/health/live`, `/health/ready` and `/metrics`; invoicd's own
 gauges are at `GET /invoicd/metrics`. `tests/it/cedar_actions.rs` holds the
@@ -441,6 +442,7 @@ hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
 
 | Tool | Description |
 |------|-------------|
+| `get_policy` | The operator policy and posture, as `GET /api/v1/policy` serves it |
 | `get_receipt` | Get a single INVOIC receipt by process UUID |
 | `list_disputes` | Receipts with outcome `Dispute`, typed (`Disput`); `frist` is the end of the Zahlungsziel's Berlin day, `rechnungsnummer`, `abgesendet` whether the refusal (REMADV) went out, `befunde` the disputing checker findings, each with its German `bezeichnung` beside the `art` identifier |
 | `get_check_result` | Get the full invoic-checker findings for a process |

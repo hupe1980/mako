@@ -43,6 +43,8 @@
 //   "record-aufrechnung" — POST an Aufrechnung against an EEG claim (§ 13 Abs. 1 Satz 2 EnFG)
 //   "record-rueckzahlung" — POST a plant operator's repayment of an EEG overpayment
 //   "erase-pii"          — POST the GDPR Art. 17 anonymization
+//   "read-policy"        — GET  /api/v1/policy, MCP `get_policy` — the posture report
+//   "read-config"        — GET  /admin/einrichtung — the configuration findings
 //   "use-mcp"            — permission to speak MCP at all. The gate the shared
 //                          middleware applies to every frame; what a frame may
 //                          then *do* is decided per tool, below.
@@ -77,7 +79,11 @@
 // Any authenticated caller may read their own tenant's customer accounts.
 permit(
     principal,
-    action == Action::"read-account",
+    action in [
+        Action::"read-account",
+        Action::"read-policy",
+        Action::"read-config"
+    ],
     resource
 ) when {
     context.principal_tenant == context.resource_tenant
@@ -216,7 +222,8 @@ permit(
 // keeps the reads its roles grant.
 //
 // The action list is every action of this file except the reads
-// (`read-account`, `read-banking`, `read-books`, `read-enfg`) and `use-mcp`;
+// (`read-account`, `read-banking`, `read-books`, `read-enfg`, `read-policy`,
+// `read-config`) and `use-mcp`;
 // `the_advisory_forbid_names_every_mutating_action` pins it to the actions the
 // handlers check.
 @id("advisory-is-read-only")

@@ -36,6 +36,7 @@ import { EmptyState, Notice, Panel } from "../design/Panel";
 import type { Instant } from "../format/brands";
 import { formatCount } from "../format/count";
 import { formatInstant } from "../format/date";
+import { eintrag, useT } from "../i18n";
 import { useVorschlaege } from "../inbox/quellen";
 import { Fragen, VorschlagKarte } from "./Fragen";
 import { Gehalten } from "./Rechnungen";
@@ -43,11 +44,6 @@ import { Verlauf } from "./Verlauf";
 
 const ROW =
   "focus-ring flex cursor-default items-center gap-3 border-b border-separator px-4 py-3 outline-none last:border-b-0 data-[focused]:bg-fill data-[hovered]:bg-fill data-[selected]:bg-fill-strong";
-
-const ART: Record<string, string> = {
-  gehalten: "Antwort steht fest",
-  eskaliert: "Antwort offen",
-};
 
 function useFreigaben() {
   const { rolle } = useRolle();
@@ -85,6 +81,8 @@ export function Entscheiden({
   /** Take the waiting proposal into the form as soon as it is there (`U` on a Heute row). */
   sofort?: boolean;
 }) {
+  const t = useT();
+  const k = t.freigabenAnsicht;
   const [gewaehlt, setAktion] = useState<"freigeben" | "ablehnen" | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [bemerkung, setBemerkung] = useState("");
@@ -172,8 +170,8 @@ export function Entscheiden({
     return (
       <>
         <Panel className="flex flex-col gap-4 p-5">
-          <h3 className="m-0 text-callout font-semibold">Entscheidung</h3>
-          <Notice tone="refusal" title="Die Prozessüberwachung lässt Sie hier nicht entscheiden">
+          <h3 className="m-0 text-callout font-semibold">{k.entscheidung}</h3>
+          <Notice tone="refusal" title={k.verweigert(DIENST.processd)}>
             {verweigert}
           </Notice>
         </Panel>
@@ -185,7 +183,7 @@ export function Entscheiden({
   return (
     <>
       <Panel className="flex flex-col gap-4 p-5">
-        <h3 className="m-0 text-callout font-semibold">Entscheidung</h3>
+        <h3 className="m-0 text-callout font-semibold">{k.entscheidung}</h3>
         {wartet && !herkunft && wartend && (
           <VorschlagKarte
             v={wartet.v}
@@ -196,12 +194,12 @@ export function Entscheiden({
         )}
         {!wartet && wartend?.status === "running" && (
           <p className="m-0 flex items-center gap-2 text-caption text-ai">
-            <Icon name="sparkle" size={12} /> Der Assistent bereitet einen Vorschlag vor …
+            <Icon name="sparkle" size={12} /> {t.heute.bereitetVor}
           </p>
         )}
         {herkunft && (
           <p className="m-0 flex items-center gap-2 text-caption text-ai">
-            <Icon name="sparkle" size={12} /> Vom Assistenten vorgeschlagen — prüfen, dann senden.
+            <Icon name="sparkle" size={12} /> {k.vorgeschlagen}
           </p>
         )}
         {gehalten && gewaehlteAktion ? (
@@ -209,7 +207,7 @@ export function Entscheiden({
         ) : (
           <>
             <RadioGroup
-              aria-label="Entscheidung"
+              aria-label={k.entscheidung}
               value={gewaehlt}
               onChange={(v) => {
                 setAktion(v as "freigeben" | "ablehnen");
@@ -225,15 +223,14 @@ export function Entscheiden({
                   isDisabled={a === "freigeben" ? !f.kann_freigeben : !f.kann_ablehnen}
                   className="focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body font-medium text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent"
                 >
-                  {a === "freigeben" ? "Freigeben" : "Ablehnen"}
+                  {a === "freigeben" ? k.freigeben : k.ablehnen}
                 </Radio>
               ))}
             </RadioGroup>
 
             {gewaehlt === "freigeben" && f.art === "gehalten" && f.antwort && (
               <p className="m-0 text-callout text-text">
-                Gesendet wird die festgehaltene Antwort:{" "}
-                <span className="font-mono">{f.antwort.code}</span>
+                {k.festgehalten} <span className="font-mono">{f.antwort.code}</span>
                 {f.antwort.bedeutung && <> — {f.antwort.bedeutung}</>}
               </p>
             )}
@@ -241,7 +238,7 @@ export function Entscheiden({
             {brauchtCode && codes && (
               <RadioGroup value={code} onChange={setCode} className="flex flex-col gap-1.5">
                 <Label className="text-caption text-text-2">
-                  Antwortcode aus <span className="font-mono">{codes.ebd}</span>
+                  {k.antwortcodeAus} <span className="font-mono">{codes.ebd}</span>
                 </Label>
                 {codes.codes.map((c) => (
                   <Radio
@@ -266,7 +263,7 @@ export function Entscheiden({
 
             {gewaehlt && (
               <TextField value={bemerkung} onChange={setBemerkung} className="flex flex-col gap-1">
-                <Label className="text-caption text-text-2">Bemerkung (optional)</Label>
+                <Label className="text-caption text-text-2">{k.bemerkung}</Label>
                 <TextArea
                   rows={2}
                   maxLength={512}
@@ -278,17 +275,15 @@ export function Entscheiden({
             {fehler &&
               !(fehler instanceof Verweigert) &&
               (fehler instanceof SchonEntschieden ? (
-                <Notice tone="info" title="Schon entschieden">
-                  {fehler.decidedBy ?? "Jemand"} hat diese Freigabe
-                  {fehler.decidedAt ? ` am ${formatInstant(fehler.decidedAt as Instant)} Uhr` : ""}{" "}
-                  {fehler.status === "Rejected" ? "abgelehnt" : "freigegeben"}. Ihre Entscheidung
-                  wurde nicht gesendet.
+                <Notice tone="info" title={k.schonEntschieden}>
+                  {k.schonText(
+                    fehler.decidedBy ?? t.halten.jemand,
+                    fehler.decidedAt ? formatInstant(fehler.decidedAt as Instant) : null,
+                    fehler.status === "Rejected",
+                  )}
                 </Notice>
               ) : (
-                <Notice
-                  tone="refusal"
-                  title="Die Prozessüberwachung hat die Entscheidung nicht angenommen"
-                >
+                <Notice tone="refusal" title={k.nichtAngenommen(DIENST.processd)}>
                   {fehler instanceof Abgelehnt ? fehler.message : nichtErreichbar("processd")}
                 </Notice>
               ))}
@@ -302,7 +297,7 @@ export function Entscheiden({
                 onPress={senden}
                 className="focus-ring h-9 rounded-control bg-accent px-4 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
               >
-                {gewaehlt === "ablehnen" ? "Ablehnen" : "Freigeben"}
+                {gewaehlt === "ablehnen" ? k.ablehnen : k.freigeben}
               </AriaButton>
             </div>
           </>
@@ -314,14 +309,16 @@ export function Entscheiden({
 }
 
 function Detail({ f }: { f: Freigabe }) {
+  const t = useT();
+  const k = t.freigabenAnsicht;
   const client = useQueryClient();
   const router = useRouter();
   const [erledigt, setErledigt] = useState(false);
   if (erledigt) {
     return (
       <Panel>
-        <EmptyState title="Entschieden.">
-          Die Prozessüberwachung hat die Antwort an die Marktkommunikation gegeben.
+        <EmptyState title={k.entschieden}>
+          {k.entschiedenText(DIENST.processd, DIENST.makod)}
         </EmptyState>
       </Panel>
     );
@@ -332,12 +329,12 @@ function Detail({ f }: { f: Freigabe }) {
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <p className="m-0 text-caption font-semibold tracking-wide text-text-2 uppercase">
-              {ART[f.art] ?? f.art} · PID <span className="font-mono">{f.pid}</span>
+              {eintrag(k.art, f.art)} · PID <span className="font-mono">{f.pid}</span>
             </p>
             <h2 className="m-0 mt-1 text-title font-semibold">{f.grund}</h2>
           </div>
           <span className="flex flex-col items-end gap-1 text-caption text-text-2">
-            entscheiden bis
+            {k.entscheidenBis}
             <span className="flex items-center gap-2">
               <Entscheidungsstand ding={{ art: "freigabe", f }} fehlschlag={false} />
               <FristUhr due={f.expires_at} />
@@ -376,6 +373,8 @@ function Detail({ f }: { f: Freigabe }) {
  * decision is held for undo before it is sent, the market message included.
  */
 export function FreigabenView() {
+  const t = useT();
+  const k = t.freigabenAnsicht;
   const router = useRouter();
   const { id } = useSearch({ from: "/freigaben" });
   const list = useFreigaben();
@@ -388,7 +387,7 @@ export function FreigabenView() {
     fokussieren(
       selected
         ? {
-            titel: selected.malo_id ?? `Prozess ${selected.process_id}`,
+            titel: selected.malo_id ?? k.prozess(selected.process_id),
             kennung: true,
             grund: selected.grund,
             frist: selected.expires_at,
@@ -417,13 +416,10 @@ export function FreigabenView() {
   }, [rows, selected?.id, router]);
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6 px-8 py-10">
+    <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
       <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">Freigaben</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">
-          Was die {DIENST.processd} einer Person zur Entscheidung vorlegt — die nächste Frist
-          zuerst.
-        </p>
+        <h1 className="m-0 text-large font-bold tracking-tight">{k.titel}</h1>
+        <p className="m-0 mt-1 text-callout text-text-2">{k.untertitel(DIENST.processd)}</p>
       </header>
       {list.isError && (
         <Notice
@@ -431,7 +427,7 @@ export function FreigabenView() {
           title={
             list.error instanceof ServiceUnavailable
               ? nichtErreichbar(list.error.service)
-              : "Die Freigaben ließen sich nicht lesen"
+              : k.fehler
           }
         >
           {list.error.message}
@@ -440,20 +436,18 @@ export function FreigabenView() {
       {list.isPending && <div className="skeleton h-40" />}
       {list.data && rows.length === 0 && (
         <Panel>
-          <EmptyState title="Nichts zu entscheiden.">
-            Die {DIENST.processd} hat alles selbst beantwortet.
-          </EmptyState>
+          <EmptyState title={k.leer}>{k.leerText(DIENST.processd)}</EmptyState>
         </Panel>
       )}
       {selected && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
           <section
-            aria-label="Offene Freigaben"
+            aria-label={k.offene}
             className="flex flex-col gap-2 lg:sticky lg:top-20 lg:self-start"
           >
             <Panel className="overflow-hidden">
               <GridList
-                aria-label="Offene Freigaben"
+                aria-label={k.offene}
                 selectionMode="single"
                 disallowEmptySelection
                 selectedKeys={[selected.id]}
@@ -470,7 +464,7 @@ export function FreigabenView() {
                         {f.grund}
                       </span>
                       <span className="block text-caption text-text-2">
-                        {ART[f.art] ?? f.art} · PID <span className="font-mono">{f.pid}</span>
+                        {eintrag(k.art, f.art)} · PID <span className="font-mono">{f.pid}</span>
                         {f.malo_id && (
                           <>
                             {" · "}
@@ -480,9 +474,9 @@ export function FreigabenView() {
                       </span>
                     </span>
                     {vorschlaege.get(f.id)?.vorschlag && (
-                      <span title="Vorschlag des Assistenten bereit" className="text-ai">
+                      <span title={k.vorschlagBereitTitel} className="text-ai">
                         <Icon name="sparkle" size={14} />
-                        <span className="sr-only">Vorschlag bereit</span>
+                        <span className="sr-only">{k.vorschlagBereit}</span>
                       </span>
                     )}
                     <FristUhr due={f.expires_at} />
@@ -492,7 +486,7 @@ export function FreigabenView() {
             </Panel>
             {list.data?.saturated && (
               <p className="m-0 px-1 text-caption text-text-2">
-                Die ersten {formatCount(rows.length)} — mehr liegen an.
+                {k.ersten(formatCount(rows.length))}
               </p>
             )}
           </section>

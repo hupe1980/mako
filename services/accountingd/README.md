@@ -25,7 +25,7 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 | **Bank import** | camt.052/053/054 and a flat JSON import; only `BOOK` entries post, deduplicated on the bank reference |
 | **Dunning** | Mahnstufe 1→3, then Sperrandrohung → Sperrankündigung → Sperrauftrag (ORDERS 17115 via `makod`) → Entsperrauftrag (17117); Mahnsperren and Forderungseinwände are recorded acts; an EEG plant account is never dunned — its Rückforderung is served by `GET /api/v1/eeg/rueckforderungen` |
 | **Events** | `de.accounting.*` through the transactional outbox to `erp_webhook_url` |
-| **MCP** | 16 tools at `/mcp`, each authorized as its REST twin; the contract is pinned by `mcp.snapshot.json` |
+| **MCP** | 17 tools at `/mcp`, each authorized as its REST twin; the contract is pinned by `mcp.snapshot.json` |
 | **Metrics** | `GET /accountingd/metrics` (the runner owns `/metrics`) |
 
 ## Routes
@@ -48,7 +48,11 @@ Top-level: `tenant`, `creditor_iban`, `creditor_id` (Gläubiger-ID),
 `erp_hmac_secret`, `makod_url` / `makod_api_key` (without them the Sperr-Sequenz
 does not run), `sperrkosten_ct` / `entsperrkosten_ct`, `dunning_auto_enabled`,
 `dunning_grace_days`. Tables: `[http]` (`addr`), `[database]`, `[oidc]`, `[creditor_address]`,
-`[eeg]`. DB-backed scenario tests: `just test-accountingd-db`.
+`[eeg]`. `accountingd --check-config [--json]` prints every configuration
+finding (path, severity, source) and exits non-zero on a blocking one; the same
+findings are served at `GET /admin/einrichtung`, the posture at
+`GET /api/v1/policy` and by the MCP tool `get_policy`. DB-backed scenario tests:
+`just test-accountingd-db`.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/accountingd/)
 covers the ledger model, SEPA, dunning, the emitted events and the full

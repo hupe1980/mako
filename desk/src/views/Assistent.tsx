@@ -11,6 +11,7 @@ import {
   vorschlagText,
 } from "../format/bilanz";
 import { formatCount } from "../format/count";
+import { katalog, useT } from "../i18n";
 import { useKatalog } from "./Bilanz";
 
 function Merkmal({ ok, children }: { ok: boolean; children: ReactNode }) {
@@ -38,7 +39,7 @@ function dienste(liest: Faehigkeit["liest"]): { dienst: string; wozu: string[] }
 
 /** `anthropic/claude-sonnet-5` → `claude-sonnet-5 · anthropic`, as configured. */
 function modell(m: string | null): string {
-  if (!m) return "regelbasiert, kein Modell";
+  if (!m) return katalog().assistent.regelbasiert;
   const [anbieter, name] = m.split("/");
   return name ? `${name} · ${anbieter}` : m;
 }
@@ -49,21 +50,27 @@ function modell(m: string | null): string {
  * record a person weighs a proposal by, as agentd counted it.
  */
 function Record({ b }: { b: Bilanz }) {
+  const a = useT().assistent;
   const n = entschieden(b.vorschlag);
   return (
-    <section aria-label={`Bilanz der letzten ${formatCount(b.tage)} Tage`}>
+    <section aria-label={a.bilanz(formatCount(b.tage))}>
       <h3 className="m-0 mb-1.5 text-caption font-semibold tracking-wide text-text-2 uppercase">
-        In {formatCount(b.tage)} Tagen
+        {a.inTagen(formatCount(b.tage))}
       </h3>
       <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-body">
-        <dt className="text-text-2">Läufe</dt>
+        <dt className="text-text-2">{a.laeufe}</dt>
         <dd className="m-0 text-text tabular-nums">
           {formatCount(b.laeufe)}
-          {b.offen > 0 && <span className="text-text-2"> · {formatCount(b.offen)} laufen</span>}
+          {b.offen > 0 && (
+            <span className="text-text-2">
+              {" · "}
+              {a.laufen(formatCount(b.offen))}
+            </span>
+          )}
         </dd>
-        <dt className="text-text-2">Hilfreich</dt>
+        <dt className="text-text-2">{a.hilfreich}</dt>
         <dd className="m-0 text-text">{hilfreichText(b.hilfreich)}</dd>
-        <dt className="text-text-2">Vorschläge</dt>
+        <dt className="text-text-2">{a.vorschlaege}</dt>
         <dd className="m-0 text-text">
           {vorschlagText(b.vorschlag)}
           {n > 0 && (
@@ -78,6 +85,7 @@ function Record({ b }: { b: Bilanz }) {
 }
 
 function Karte({ f }: { f: Faehigkeit }) {
+  const a = useT().assistent;
   return (
     <Panel className={`flex flex-col gap-3 p-5 ${f.aktiv ? "" : "opacity-70"}`}>
       <header>
@@ -85,21 +93,21 @@ function Karte({ f }: { f: Faehigkeit }) {
         {f.zweck && <p className="m-0 mt-1 text-body text-text-2">{f.zweck}</p>}
       </header>
       <div className="flex flex-wrap gap-1.5">
-        <Merkmal ok={f.aktiv}>{f.aktiv ? "aktiv" : "nicht aktiviert"}</Merkmal>
-        {f.nur_lesend && <Merkmal ok>liest nur</Merkmal>}
+        <Merkmal ok={f.aktiv}>{f.aktiv ? a.aktiv : a.nichtAktiviert}</Merkmal>
+        {f.nur_lesend && <Merkmal ok>{a.nurLesend}</Merkmal>}
         <Merkmal ok={false}>
           {f.ausloeser.length === 0
-            ? "startet auf Ihre Frage"
-            : `startet bei ${formatCount(f.ausloeser.length)} Ereignisart${f.ausloeser.length === 1 ? "" : "en"}`}
+            ? a.aufFrage
+            : a.beiEreignis(f.ausloeser.length, formatCount(f.ausloeser.length))}
         </Merkmal>
       </div>
       <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-body">
-        <dt className="text-text-2">Modell</dt>
+        <dt className="text-text-2">{a.modell}</dt>
         <dd className="m-0 font-mono text-text">{modell(f.modell)}</dd>
-        <dt className="text-text-2">Liest</dt>
+        <dt className="text-text-2">{a.liest}</dt>
         <dd className="m-0 flex flex-wrap gap-1.5">
           {f.liest.length === 0 ? (
-            <span className="text-text-2">nichts</span>
+            <span className="text-text-2">{a.nichts}</span>
           ) : (
             dienste(f.liest).map(({ dienst, wozu }) => (
               <span
@@ -115,10 +123,9 @@ function Karte({ f }: { f: Faehigkeit }) {
         </dd>
         {f.mit_freigabe > 0 && (
           <>
-            <dt className="text-text-2">Freigabe</dt>
+            <dt className="text-text-2">{a.freigabe}</dt>
             <dd className="m-0 text-text">
-              {formatCount(f.mit_freigabe)} Werkzeug{f.mit_freigabe === 1 ? "" : "e"} nur nach
-              Freigabe
+              {a.mitFreigabe(f.mit_freigabe, formatCount(f.mit_freigabe))}
             </dd>
           </>
         )}
@@ -129,7 +136,7 @@ function Karte({ f }: { f: Faehigkeit }) {
         </div>
       )}
       <p className="m-0 mt-auto font-mono text-caption text-text-2">
-        {f.name} · v{f.version ?? "?"}
+        {a.version(f.name, f.version ?? "?")}
       </p>
     </Panel>
   );
@@ -142,20 +149,18 @@ function Karte({ f }: { f: Faehigkeit }) {
  * keeps, so the page cannot disagree with them.
  */
 export function AssistentView() {
+  const a = useT().assistent;
   const [nurAktive, setNurAktive] = useState(true);
   const list = useKatalog();
   const shown = (list.data ?? []).filter((f) => !nurAktive || f.aktiv);
   const alleLesen = (list.data ?? []).every((f) => f.nur_lesend);
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6 px-8 py-10">
+    <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
       <header className="flex items-end gap-4">
         <div className="flex-1">
-          <h1 className="m-0 text-large font-bold tracking-tight">Assistent</h1>
-          <p className="m-0 mt-1 text-callout text-text-2">
-            Was jede Fähigkeit liest, womit sie denkt, was sie tun darf und wie oft sie half — aus
-            ihrer geprüften Beschreibung und dem, was der {DIENST.agentd} über ihre Läufe festhält.
-          </p>
+          <h1 className="m-0 text-large font-bold tracking-tight">{a.titel}</h1>
+          <p className="m-0 mt-1 text-callout text-text-2">{a.untertitel(DIENST.agentd)}</p>
         </div>
         <Switch
           isSelected={nurAktive}
@@ -165,26 +170,21 @@ export function AssistentView() {
           <span className="flex h-5 w-9 items-center rounded-full bg-fill-strong p-0.5 transition-colors group-data-[selected]:bg-accent">
             <span className="size-4 rounded-full bg-surface shadow transition-transform group-data-[selected]:translate-x-4" />
           </span>
-          Nur aktive
+          {a.nurAktive}
         </Switch>
       </header>
 
       {list.data && alleLesen && (
-        <Notice tone="info" title="Der Assistent liest nur.">
-          Keine Fähigkeit kann eine Marktnachricht senden, buchen oder Stammdaten ändern — was er
-          vorschlägt, entscheidet und sendet ein Mensch.
+        <Notice tone="info" title={a.liestNur}>
+          {a.liestNurText}
         </Notice>
       )}
       {list.isError && (
-        <Notice tone="failure" title="Assistent ist nicht erreichbar">
+        <Notice tone="failure" title={a.nichtErreichbar}>
           {list.error.message}
         </Notice>
       )}
-      {list.data && shown.length === 0 && (
-        <EmptyState title="Keine Fähigkeit ist aktiviert.">
-          Der Betrieb aktiviert sie in der Konfiguration des Assistenten.
-        </EmptyState>
-      )}
+      {list.data && shown.length === 0 && <EmptyState title={a.keine}>{a.keineText}</EmptyState>}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3">
         {shown.map((f) => (
           <Karte key={f.name} f={f} />

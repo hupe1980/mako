@@ -9,9 +9,7 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
+    transport::streamable_http_server::StreamableHttpServerConfig,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -1001,6 +999,13 @@ impl VertragdMcpHandler {
 #[prompt_handler]
 #[tool_handler]
 impl ServerHandler for VertragdMcpHandler {
+    /// The revisions every mako MCP server speaks, not the SDK's set.
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        mako_service::mcp::supported_revisions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
@@ -1048,9 +1053,8 @@ async fn mcp_auth_middleware(
 
 pub fn router(state: Arc<VertragdMcpState>, _shutdown: CancellationToken) -> Router {
     let handler = VertragdMcpHandler::new(Arc::clone(&state));
-    let service = StreamableHttpService::new(
+    let service = mako_service::mcp::service(
         move || Ok(handler.clone()),
-        LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default(),
     );
     Router::new()

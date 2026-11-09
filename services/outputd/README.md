@@ -36,6 +36,8 @@ just dev outputd       # dev/config/outputd.toml against the dev PostgreSQL
 
 ## Configuration
 
+`outputd --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one; `--json` prints the body `GET /admin/einrichtung` serves.
+
 ```toml
 # outputd.toml
 tenant = "9900357000004"   # the operator's MP-ID; every template row is scoped to it

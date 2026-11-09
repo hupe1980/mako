@@ -360,10 +360,17 @@ impl ProcessdMcpHandler {
     /// Read a process projection by UUID.
     ///
     /// The full read-model entry: PID, family, state, counterparty, timestamps,
-    /// the business Antwortfrist and the Festlegung it came from.
+    /// the business Antwortfrist and the Festlegung it came from, and the
+    /// Antwortcode the counterparty answered with, worded within its list.
     #[tool(
-        description = "Read a process projection by UUID",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Read a process projection by UUID. `antwort_code` is the Antwortcode the \
+                       counterparty's answer carried and `antwort_codeliste` the tree or \
+                       Codeliste it named; `bedeutung` is the BDEW's wording of that code in \
+                       that list, absent when the list is unknown. Quote `bedeutung`; never \
+                       translate a code yourself. `erc_code` is the APERAK error code, not the \
+                       answer's.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ProcessProjectionView>()
     )]
     async fn get_process(
         &self,
@@ -381,9 +388,10 @@ impl ProcessdMcpHandler {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         match found {
-            Some(r) => ContentBlock::json(projection_json(&r))
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
+            Some(r) => Ok(CallToolResult::structured(
+                serde_json::to_value(ProcessProjectionView::from(&r))
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+            )),
             None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "process_not_found: No process projection for id '{}'.",
                 p.process_id
@@ -797,7 +805,8 @@ impl ProcessdMcpHandler {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let saturated = u32::try_from(rows.len()).unwrap_or(u32::MAX) >= limit;
-        let processes: Vec<serde_json::Value> = rows.iter().map(projection_json).collect();
+        let processes: Vec<ProcessProjectionView> =
+            rows.iter().map(ProcessProjectionView::from).collect();
 
         ContentBlock::json(serde_json::json!({
             "family": p.family,
@@ -814,26 +823,69 @@ impl ProcessdMcpHandler {
 
 /// One projection, as every tool on this surface renders it.
 ///
-/// One function so a field added to the read-model reaches all of them, and so
+/// One type so a field added to the read-model reaches all of them, and so
 /// two tools cannot disagree about what `state` is called.
-fn projection_json(p: &crate::obs::domain::ProcessProjection) -> serde_json::Value {
-    serde_json::json!({
-        "process_id": p.process_id.to_string(),
-        "pid": p.pid,
-        "family": p.family,
-        "workflow_name": p.workflow_name,
-        "state": p.state.as_str(),
-        "malo_id": p.malo_id,
-        "partner_mp_id": p.partner_mp_id,
-        "mdm_role": p.mdm_role,
-        "deadline_at": rfc3339_opt(p.deadline_at),
-        "deadline_source": p.deadline_source,
-        "deadline_risk": p.deadline_risk.as_str(),
-        "started_at": rfc3339(p.started_at),
-        "last_event_at": rfc3339(p.last_event_at),
-        "erc_code": p.erc_code,
-        "initiator_is_affiliate": p.initiator_is_affiliate,
-    })
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct ProcessProjectionView {
+    pub process_id: String,
+    /// BDEW Prüfidentifikator.
+    pub pid: u32,
+    pub family: String,
+    pub workflow_name: String,
+    pub state: String,
+    pub malo_id: Option<String>,
+    /// The counterparty's MP-ID.
+    pub partner_mp_id: Option<String>,
+    pub mdm_role: Option<String>,
+    /// When the business Antwortfrist ends, RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub deadline_at: Option<String>,
+    /// The Festlegung the deadline came from.
+    pub deadline_source: Option<String>,
+    pub deadline_risk: String,
+    /// RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub started_at: Option<String>,
+    /// RFC 3339 in UTC.
+    #[schemars(extend("format" = "date-time"))]
+    pub last_event_at: Option<String>,
+    /// The APERAK error code, set only when an APERAK refused a message.
+    pub erc_code: Option<String>,
+    /// The Antwortcode the counterparty's business answer carried
+    /// (`STS+E01` on a UTILMD, `AJT` on an ORDRSP).
+    pub antwort_code: Option<String>,
+    /// The tree or Codeliste that answer named for its code.
+    pub antwort_codeliste: Option<String>,
+    /// The BDEW's wording of `antwort_code` within `antwort_codeliste`;
+    /// absent when the answer named no list or the list does not publish the
+    /// code. Quote it — a code means something only within its tree.
+    pub bedeutung: Option<String>,
+    pub initiator_is_affiliate: bool,
+}
+
+impl From<&crate::obs::domain::ProcessProjection> for ProcessProjectionView {
+    fn from(p: &crate::obs::domain::ProcessProjection) -> Self {
+        Self {
+            process_id: p.process_id.to_string(),
+            pid: p.pid,
+            family: p.family.clone(),
+            workflow_name: p.workflow_name.clone(),
+            state: p.state.as_str().to_owned(),
+            malo_id: p.malo_id.clone(),
+            partner_mp_id: p.partner_mp_id.clone(),
+            mdm_role: p.mdm_role.clone(),
+            deadline_at: rfc3339_opt(p.deadline_at),
+            deadline_source: p.deadline_source.clone(),
+            deadline_risk: p.deadline_risk.as_str().to_owned(),
+            started_at: rfc3339(p.started_at),
+            last_event_at: rfc3339(p.last_event_at),
+            erc_code: p.erc_code.clone(),
+            antwort_code: p.antwort_code.clone(),
+            antwort_codeliste: p.antwort_codeliste.clone(),
+            bedeutung: p.bedeutung().map(str::to_owned),
+            initiator_is_affiliate: p.initiator_is_affiliate,
+        }
+    }
 }
 
 /// First and last day of a `YYYY-MM` period, or of the current month.
@@ -1137,6 +1189,56 @@ mod instruction_tests {
 mod schema_tests {
     use super::*;
     use crate::obs::domain::ProcessState;
+
+    /// `get_process` states the counterparty's code, the list it named and
+    /// the wording read in that list — and no wording without the list.
+    #[test]
+    fn get_process_states_the_answer_and_its_wording() {
+        use crate::obs::domain::{DeadlineRisk, ProcessProjection};
+        let projection = |codeliste: Option<&str>| ProcessProjection {
+            process_id: uuid::Uuid::nil(),
+            pid: 55_003,
+            family: "gpke".into(),
+            workflow_name: "gpke-lf-anmeldung".into(),
+            state: ProcessState::Completed,
+            malo_id: None,
+            partner_mp_id: None,
+            mdm_role: None,
+            deadline_at: None,
+            deadline_source: None,
+            deadline_risk: DeadlineRisk::Unknown,
+            started_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_event_at: time::OffsetDateTime::UNIX_EPOCH,
+            erc_code: None,
+            antwort_code: Some("A02".into()),
+            antwort_codeliste: codeliste.map(str::to_owned),
+            initiator_is_affiliate: false,
+            tenant: "t".into(),
+        };
+        let worded = serde_json::to_value(ProcessProjectionView::from(&projection(Some("E_0622"))))
+            .expect("serialises");
+        assert_eq!(worded["antwort_code"], "A02");
+        assert_eq!(worded["antwort_codeliste"], "E_0622");
+        assert_eq!(
+            worded["bedeutung"].as_str(),
+            mako_pruefung::codes::lookup("E_0622", "A02").map(|c| c.bedeutung)
+        );
+        assert_eq!(worded["erc_code"], serde_json::Value::Null);
+
+        let bare = serde_json::to_value(ProcessProjectionView::from(&projection(None)))
+            .expect("serialises");
+        assert_eq!(bare["antwort_code"], "A02");
+        assert_eq!(bare["bedeutung"], serde_json::Value::Null);
+
+        let schema = serde_json::to_value(schemars::schema_for!(ProcessProjectionView))
+            .expect("schema serialises");
+        for field in ["antwort_code", "antwort_codeliste", "bedeutung", "erc_code"] {
+            assert!(
+                schema["properties"].get(field).is_some(),
+                "`{field}` in the schema"
+            );
+        }
+    }
 
     fn params_schema() -> serde_json::Value {
         serde_json::to_value(schemars::schema_for!(ListByFamilyParams)).expect("schema serialises")

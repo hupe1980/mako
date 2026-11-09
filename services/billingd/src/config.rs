@@ -1,5 +1,6 @@
 //! Configuration for `billingd`.
 
+use mako_service::befund::Befund;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -61,14 +62,19 @@ impl RatesConfig {
     /// silently ignored or preferred. A BEHG row is checked against `regime`,
     /// the configured `[policy] behg_regime`.
     ///
-    /// # Errors
-    ///
-    /// Names the key, the row and what is wrong with it.
-    pub fn validate(&self, regime: energy_billing::BehgRegime) -> anyhow::Result<()> {
+    /// Every finding names the key, the row and what is wrong with it.
+    pub fn validate(&self, regime: energy_billing::BehgRegime) -> Vec<Befund> {
+        let mut out = Vec::new();
         if let Some(old) = &self.behg_regime {
-            anyhow::bail!(
-                "`[rates] behg_regime = {old:?}` is not read; the regime is \
-                 `[policy] behg_regime` (rvo_bezugspreis | korridor). Move the value there."
+            out.push(
+                Befund::blockiert(
+                    "rates.behg_regime",
+                    format!(
+                        "`[rates] behg_regime = {old:?}` is not read; the regime is \
+                         `[policy] behg_regime` (rvo_bezugspreis | korridor). Move the value there."
+                    ),
+                )
+                .referenz_auf::<BehgRegimeWahl>(),
             );
         }
         let statutory_strom = |y| energy_billing::stromsteuer_for_year(y).is_some();
@@ -92,38 +98,48 @@ impl RatesConfig {
             ("behg_eur_per_t", &self.behg_eur_per_t, &statutory_behg),
         ] {
             for (i, z) in rows.iter().enumerate() {
+                let pfad = format!("rates.{key}[{i}]");
                 let at = format!("[rates] {key}[{i}] ({}..{})", z.von, z.bis);
-                anyhow::ensure!(
-                    !z.quelle.trim().is_empty(),
-                    "{at}: `quelle` must name the provision or publication the value was read from"
-                );
-                anyhow::ensure!(
-                    z.von <= z.bis && z.von.year() == z.bis.year(),
-                    "{at}: `von`..`bis` must be a non-empty range inside one calendar year"
-                );
-                anyhow::ensure!(z.wert > Decimal::ZERO, "{at}: `wert` must be positive");
-                anyhow::ensure!(
-                    !statutory(z.von.year()),
-                    "{at}: {} is covered by the statutory series; a supplied row may only \
-                     fill a year the series does not cover",
-                    z.von.year()
-                );
-                if key == "behg_eur_per_t" {
-                    regime
-                        .pruefe(z.wert, z.von.year())
-                        .map_err(|e| anyhow::anyhow!("{at}: {e}"))?;
+                let mut refuse = |text: String| out.push(Befund::blockiert(pfad.clone(), text));
+                if z.quelle.trim().is_empty() {
+                    refuse(format!(
+                        "{at}: `quelle` must name the provision or publication the value was read from"
+                    ));
+                }
+                if !(z.von <= z.bis && z.von.year() == z.bis.year()) {
+                    refuse(format!(
+                        "{at}: `von`..`bis` must be a non-empty range inside one calendar year"
+                    ));
+                }
+                if z.wert <= Decimal::ZERO {
+                    refuse(format!("{at}: `wert` must be positive"));
+                }
+                if statutory(z.von.year()) {
+                    refuse(format!(
+                        "{at}: {} is covered by the statutory series; a supplied row may only \
+                         fill a year the series does not cover",
+                        z.von.year()
+                    ));
                 }
                 for (j, other) in rows.iter().enumerate().skip(i + 1) {
-                    anyhow::ensure!(
-                        z.bis < other.von || other.bis < z.von,
-                        "{at} overlaps [rates] {key}[{j}] ({}..{})",
-                        other.von,
-                        other.bis
+                    if !(z.bis < other.von || other.bis < z.von) {
+                        refuse(format!(
+                            "{at} overlaps [rates] {key}[{j}] ({}..{})",
+                            other.von, other.bis
+                        ));
+                    }
+                }
+                if key == "behg_eur_per_t"
+                    && let Err(e) = regime.pruefe(z.wert, z.von.year())
+                {
+                    out.push(
+                        Befund::blockiert(pfad.clone(), format!("{at}: {e}"))
+                            .referenz_auf::<BehgRegimeWahl>(),
                     );
                 }
             }
         }
-        Ok(())
+        out
     }
 }
 
@@ -222,34 +238,48 @@ impl ERechnungConfig {
     /// two, a second, corrected figure would be ignored without notice, and
     /// the § 27 Abs. 38 Nr. 2 UStG test would run on whichever came first.
     ///
-    /// # Errors
-    ///
-    /// Names the offending entry.
-    pub fn validate(&self) -> anyhow::Result<()> {
+    /// Every finding names the offending entry.
+    pub fn validate(&self) -> Vec<Befund> {
+        let mut out = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
-        for g in &self.gesamtumsatz {
+        for (i, g) in self.gesamtumsatz.iter().enumerate() {
+            let pfad = format!("e_rechnung.gesamtumsatz[{i}]");
             let Some((art, wert)) = g.identitaet().filter(|(_, w)| !w.trim().is_empty()) else {
-                anyhow::bail!(
-                    "[e_rechnung] gesamtumsatz {}: name exactly one of `ust_id` and \
-                     `steuernummer` — the Gesamtumsatz is the Rechnungsaussteller's",
-                    g.jahr
-                );
+                out.push(Befund::blockiert(
+                    pfad,
+                    format!(
+                        "[e_rechnung] gesamtumsatz {}: name exactly one of `ust_id` and \
+                         `steuernummer` — the Gesamtumsatz is the Rechnungsaussteller's",
+                        g.jahr
+                    ),
+                ));
+                continue;
             };
-            anyhow::ensure!(
-                seen.insert((art, wert.to_owned(), g.jahr)),
-                "[e_rechnung] gesamtumsatz names {art} {wert} for {} twice — one Gesamtumsatz \
-                 per Rechnungsaussteller and calendar year (§ 19 Abs. 2 UStG); remove the \
-                 superseded entry",
-                g.jahr
-            );
-            anyhow::ensure!(
-                g.eur >= Decimal::ZERO,
-                "[e_rechnung] gesamtumsatz {art} {wert} {}: {} EUR is not a Gesamtumsatz",
-                g.jahr,
-                g.eur
-            );
+            if !seen.insert((art, wert.to_owned(), g.jahr)) {
+                out.push(
+                    Befund::blockiert(
+                        pfad.clone(),
+                        format!(
+                            "[e_rechnung] gesamtumsatz names {art} {wert} for {} twice — one \
+                             Gesamtumsatz per Rechnungsaussteller and calendar year; remove the \
+                             superseded entry",
+                            g.jahr
+                        ),
+                    )
+                    .quelle("§ 19 Abs. 2 UStG"),
+                );
+            }
+            if g.eur < Decimal::ZERO {
+                out.push(Befund::blockiert(
+                    pfad,
+                    format!(
+                        "[e_rechnung] gesamtumsatz {art} {wert} {}: {} EUR is not a Gesamtumsatz",
+                        g.jahr, g.eur
+                    ),
+                ));
+            }
         }
-        Ok(())
+        out
     }
 
     /// The recorded Gesamtumsatz of `aussteller` in `jahr`, if any.
@@ -595,43 +625,50 @@ impl BillingdConfig {
             .or(self.seller_tax_number.as_deref())
     }
 
-    /// # Errors
-    ///
-    /// Refuses a configuration that cannot produce a lawful invoice.
-    pub fn validate(&self) -> anyhow::Result<()> {
-        self.reject_removed_keys()?;
-        self.risk.validate()?;
+    /// Every finding that keeps this configuration from producing a lawful
+    /// invoice.
+    pub fn validate(&self) -> Vec<Befund> {
+        let mut out = self.reject_removed_keys();
+        out.extend(self.risk.validate());
         // Neither identifier means every document this service issues omits a
         // § 14 Abs. 4 Nr. 2 UStG Pflichtangabe. Fail at startup, like [oidc],
         // not per invoice at 02:00 on the first of the month.
-        anyhow::ensure!(
-            self.seller_tax_identifier().is_some(),
-            "refusing to start without a seller tax identifier: § 14 Abs. 4 Nr. 2 UStG \
-             requires every Rechnung to carry the seller's USt-IdNr. or Steuernummer. \
-             Set `seller_vat_id` (BT-31) or `seller_tax_number` (BT-32)."
-        );
-        anyhow::ensure!(
-            self.billing_runs.run_hour_utc < 24,
-            "[billing_runs] run_hour_utc must be an hour of the day (0–23), got {}",
-            self.billing_runs.run_hour_utc
-        );
-        anyhow::ensure!(
-            self.billing_runs.catch_up_periods > 0,
-            "[billing_runs] catch_up_periods must be at least 1, or the sweep bills nothing"
-        );
-        if let Some(rates) = &self.rates {
-            rates.validate(self.behg_regime())?;
+        if self.seller_tax_identifier().is_none() {
+            out.push(
+                Befund::blockiert(
+                    "seller_vat_id",
+                    "refusing to start without a seller tax identifier: every Rechnung must \
+                     carry the seller's USt-IdNr. or Steuernummer. Set `seller_vat_id` (BT-31) \
+                     or `seller_tax_number` (BT-32).",
+                )
+                .quelle("§ 14 Abs. 4 Nr. 2 UStG"),
+            );
         }
-        self.e_rechnung.validate()?;
-        Ok(())
+        if self.billing_runs.run_hour_utc >= 24 {
+            out.push(Befund::blockiert(
+                "billing_runs.run_hour_utc",
+                format!(
+                    "[billing_runs] run_hour_utc must be an hour of the day (0–23), got {}",
+                    self.billing_runs.run_hour_utc
+                ),
+            ));
+        }
+        if self.billing_runs.catch_up_periods == 0 {
+            out.push(Befund::blockiert(
+                "billing_runs.catch_up_periods",
+                "[billing_runs] catch_up_periods must be at least 1, or the sweep bills nothing",
+            ));
+        }
+        if let Some(rates) = &self.rates {
+            out.extend(rates.validate(self.behg_regime()));
+        }
+        out.extend(self.e_rechnung.validate());
+        out
     }
 
-    /// Refuse to start on configuration keys that have been replaced.
-    ///
-    /// # Errors
-    ///
-    /// Names each removed key and what replaced it.
-    pub fn reject_removed_keys(&self) -> anyhow::Result<()> {
+    /// A finding per configuration key that has been replaced, naming what
+    /// replaced it.
+    pub fn reject_removed_keys(&self) -> Vec<Befund> {
         let removed = [
             (
                 self.seller_address.is_some(),
@@ -645,24 +682,25 @@ impl BillingdConfig {
             ),
             (
                 self.billing.is_some(),
-                "[billing]",
+                "billing",
                 "[policy] settlement_form",
             ),
         ];
-        let found: Vec<String> = removed
+        removed
             .iter()
             .filter(|(present, _, _)| *present)
-            .map(|(_, key, replacement)| format!("`{key}` → `{replacement}`"))
-            .collect();
-        anyhow::ensure!(
-            found.is_empty(),
-            "billingd.toml uses configuration keys that are not read: {}. Move each \
-             value to the key named after the arrow; running on without it would bill \
-             under a default the operator did not choose, or ship invoices without the \
-             § 40 Abs. 2 Nr. 1 EnWG supplier address.",
-            found.join(", ")
-        );
-        Ok(())
+            .map(|(_, key, replacement)| {
+                Befund::blockiert(
+                    *key,
+                    format!(
+                        "billingd.toml uses `{key}`, which is not read: move the value to \
+                         `{replacement}`. Running on without it would bill under a default the \
+                         operator did not choose, or ship invoices without the § 40 Abs. 2 Nr. 1 \
+                         EnWG supplier address."
+                    ),
+                )
+            })
+            .collect()
     }
 }
 
@@ -1296,6 +1334,7 @@ mod straddle_tests {
 #[cfg(test)]
 mod dated_rate_tests {
     use super::*;
+    use mako_service::befund::als_ergebnis;
     use rust_decimal::dec;
     use time::macros::date;
 
@@ -1418,7 +1457,7 @@ mod dated_rate_tests {
         let rvo = cfg(serde_json::json!({
             "behg_eur_per_t": [row("2027-01-01", "2027-03-31", "70")]
         }));
-        rvo.validate().expect("the RVO regime has no corridor");
+        als_ergebnis(rvo.validate()).expect("the RVO regime has no corridor");
         let r = rvo
             .try_regulatory_rates_for_period("GAS", from, to, None)
             .expect("uniform period");
@@ -1434,7 +1473,10 @@ mod dated_rate_tests {
         let korridor = cfg_korridor(serde_json::json!({
             "behg_eur_per_t": [row("2027-01-01", "2027-03-31", "70")]
         }));
-        assert!(korridor.validate().is_err(), "70 EUR/t is outside 55–65");
+        assert!(
+            als_ergebnis(korridor.validate()).is_err(),
+            "70 EUR/t is outside 55–65"
+        );
         assert!(
             korridor
                 .try_regulatory_rates_for_period("GAS", from, to, None)
@@ -1446,7 +1488,7 @@ mod dated_rate_tests {
         let ok = cfg_korridor(serde_json::json!({
             "behg_eur_per_t": [row("2027-01-01", "2027-12-31", "60")]
         }));
-        ok.validate().expect("60 lies inside the corridor");
+        als_ergebnis(ok.validate()).expect("60 lies inside the corridor");
         let r = ok
             .try_regulatory_rates_for_period("GAS", from, to, None)
             .expect("uniform period");
@@ -1629,7 +1671,7 @@ mod dated_rate_tests {
                 "quelle": "§ 3 StromStG, gelesen 2027-12-01"
             }]
         }));
-        filled.validate().expect("a gap-filling row with a source");
+        als_ergebnis(filled.validate()).expect("a gap-filling row with a source");
         assert_eq!(
             filled
                 .try_regulatory_rates_for_period("STROM", from, to, None)
@@ -1649,7 +1691,9 @@ mod dated_rate_tests {
                 "quelle": "x"
             }]
         }));
-        let err = c.validate().expect_err("2026 is statutory").to_string();
+        let err = als_ergebnis(c.validate())
+            .expect_err("2026 is statutory")
+            .to_string();
         assert!(err.contains("statutory series"), "{err}");
     }
 }
@@ -1657,6 +1701,7 @@ mod dated_rate_tests {
 #[cfg(test)]
 mod seller_identity_tests {
     use super::*;
+    use mako_service::befund::als_ergebnis;
 
     /// Build a config from JSON, optionally naming each tax identifier.
     fn cfg(vat_id: Option<&str>, tax_number: Option<&str>) -> BillingdConfig {
@@ -1701,7 +1746,7 @@ mod seller_identity_tests {
         });
         v["e_rechnung"] = serde_json::json!({ "gesamtumsatz": gesamtumsatz });
         let c: BillingdConfig = serde_json::from_value(v)?;
-        c.validate()?;
+        als_ergebnis(c.validate())?;
         Ok(c)
     }
 
@@ -1805,8 +1850,7 @@ mod seller_identity_tests {
     /// start. Failing here beats discovering it in a customer's post.
     #[test]
     fn a_seller_with_neither_identifier_is_refused_at_startup() {
-        let err = cfg(None, None)
-            .validate()
+        let err = als_ergebnis(cfg(None, None).validate())
             .expect_err("no tax identifier means no lawful Rechnung");
         let msg = err.to_string();
         assert!(msg.contains("§ 14 Abs. 4 Nr. 2 UStG"), "{msg}");
@@ -1816,6 +1860,6 @@ mod seller_identity_tests {
     /// The ordinary case still starts.
     #[test]
     fn a_configured_seller_validates() {
-        assert!(cfg(Some("DE123456789"), None).validate().is_ok());
+        assert!(als_ergebnis(cfg(Some("DE123456789"), None).validate()).is_ok());
     }
 }

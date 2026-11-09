@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
+import { GridList } from "react-aria-components";
 import { LaufPill } from "../app/LaufPills";
 import type { Lauf } from "../app/laeufe";
 import { ROLLEN, type Rolle } from "../app/rollen";
@@ -10,13 +11,17 @@ import { Button } from "../design/Button";
 import { FristUhr } from "../design/FristUhr";
 import { Icon } from "../design/Icon";
 import { Kbd } from "../design/Kbd";
+import { Angabe, ListDetail } from "../design/ListDetail";
+import { ListRow } from "../design/ListRow";
 import { EmptyState, Notice, Panel } from "../design/Panel";
 import { SearchField } from "../design/SearchField";
 import { SourceChip } from "../design/SourceChip";
+import { Table } from "../design/Table";
 import { Tile } from "../design/Tile";
 import type { BusinessDate, Instant } from "../format/brands";
 import { epochMs } from "../format/date";
 import { GeparktEntscheiden } from "../views/Buchungen";
+import { AmpelZeichen, BefundZeile, DienstChip } from "../views/Einrichtung";
 import { SpurAnsicht } from "../views/Spur";
 import { WarumAntwort } from "../views/Warum";
 import { AktionenVorschau } from "./Aktionen";
@@ -162,6 +167,43 @@ function Specimen({ title, children }: { title: string; children: ReactNode }) {
       </h2>
       <div className="flex flex-wrap items-center gap-3">{children}</div>
     </section>
+  );
+}
+
+/** The layout at the width the gallery gives it: one pane, or two. */
+function ListeDetailProbe() {
+  const [gewaehlt, setGewaehlt] = useState<string | null>("b");
+  const zeilen = [
+    { id: "a", malo: "51238696012", zustand: "läuft" },
+    { id: "b", malo: "41203768152", zustand: "ohne Bestätigung" },
+  ];
+  const z = zeilen.find((r) => r.id === gewaehlt);
+  return (
+    <ListDetail
+      hoehe="h-96"
+      label="Beispiel"
+      kopf={<h3 className="m-0 text-title font-semibold">Fristen überschritten</h3>}
+      selected={gewaehlt}
+      onSelect={setGewaehlt}
+      liste={zeilen.map((r) => (
+        <ListRow key={r.id} id={r.id} textValue={r.malo} title={r.malo} subtitle={r.zustand} />
+      ))}
+      detail={
+        z ? (
+          <div className="px-6 py-6">
+            <h2 className="m-0 font-mono text-title font-semibold">{z.malo}</h2>
+          </div>
+        ) : null
+      }
+      angaben={
+        z ? (
+          <dl className="m-0">
+            <Angabe name="MaLo">{z.malo}</Angabe>
+            <Angabe name="Zustand">{z.zustand}</Angabe>
+          </dl>
+        ) : null
+      }
+    />
   );
 }
 
@@ -404,6 +446,86 @@ function Specimens() {
         </div>
       </Specimen>
 
+      <Specimen title="Zeilen">
+        <Panel className="w-full overflow-hidden">
+          <GridList
+            aria-label="Zeilen"
+            selectionMode="single"
+            selectionBehavior="replace"
+            defaultSelectedKeys={["gewaehlt"]}
+          >
+            <ListRow
+              id="ruhe"
+              textValue="51238696012"
+              title="51238696012"
+              subtitle="PID 55001 · läuft"
+            />
+            <ListRow
+              id="gewaehlt"
+              textValue="41203768152"
+              title="41203768152"
+              subtitle="PID 55004 · ohne Bestätigung"
+              trailing={<FristUhr due={at("2026-11-03T08:00:00Z")} now={NOW} />}
+            />
+            <ListRow
+              id="fuehrend"
+              textValue="Erika Mustermann"
+              leading={
+                <span className="flex size-9 items-center justify-center rounded-full bg-fill-strong text-body font-semibold">
+                  EM
+                </span>
+              }
+              title="Erika Mustermann"
+              subtitle="K-10001 · 2 Lieferstellen"
+              trailing={<Icon name="chevron" size={16} className="text-text-2" />}
+            />
+          </GridList>
+        </Panel>
+      </Specimen>
+
+      <Specimen title="Tabelle">
+        <Panel className="w-full overflow-hidden">
+          <Table
+            label="Dead Letters"
+            spalten={[
+              {
+                id: "z",
+                titel: "Zeitpunkt",
+                zelle: (r: string[]) => r[0],
+                className: "w-36 text-text-2",
+              },
+              { id: "w", titel: "Was geschah", rowHeader: true, zelle: (r: string[]) => r[1] },
+              {
+                id: "k",
+                titel: "Kategorie",
+                zelle: (r: string[]) => r[2],
+                className: "font-mono text-text-2",
+              },
+            ]}
+            zeilen={[
+              ["07.11.2026, 10:15", "PID 99999 is not registered", "unknown_pid"],
+              ["06.11.2026, 18:02", "delivery failed after 12 attempts", "delivery"],
+            ]}
+            zeilenId={(_, i) => `${i}`}
+          />
+        </Panel>
+        <Panel className="w-full overflow-hidden">
+          <Table
+            label="Leere Tabelle"
+            spalten={[{ id: "w", titel: "Was geschah", rowHeader: true, zelle: (r: string) => r }]}
+            zeilen={[]}
+            zeilenId={(r) => r}
+            leer={<p className="m-0 px-5 py-6 text-body text-text-2">Keine Zeilen.</p>}
+          />
+        </Panel>
+      </Specimen>
+
+      <Specimen title="Liste, Detail, Angaben">
+        <Panel className="w-full overflow-hidden">
+          <ListeDetailProbe />
+        </Panel>
+      </Specimen>
+
       <Specimen title="Zustände">
         <div className="grid w-full gap-3">
           <Notice tone="refusal" title="Kein Prozess für „51238696012“">
@@ -423,6 +545,55 @@ function Specimens() {
         </div>
       </Specimen>
 
+      <Specimen title="Einrichtung">
+        <div className="flex w-full flex-col gap-3">
+          <div className="flex flex-wrap gap-4">
+            {["gruen", "gelb", "rot", "unbekannt"].map((a) => (
+              <AmpelZeichen key={a} ampel={a} />
+            ))}
+          </div>
+          <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
+            <DienstChip zeile={{ dienst: "makod", url: "", status: "bereit", version: "0.31.0" }} />
+            <DienstChip
+              zeile={{ dienst: "processd", url: "", status: "blockiert", version: "0.31.0" }}
+            />
+            <DienstChip zeile={{ dienst: "edmd", url: "", status: "unerreichbar" }} />
+            <DienstChip zeile={{ dienst: "billingd", url: "", status: "unlesbar" }} />
+          </ul>
+          <ul className="m-0 flex list-none flex-col gap-2 p-0">
+            <BefundZeile
+              befund={{
+                dienst: "makod",
+                schwere: "blockiert",
+                bereich: "identitaeten",
+                text: '"9900001000001" ist eine BDEW-Codenummer (Strom), aber die Rollen ["GNB"] gehören zur anderen Sparte',
+                pfad: "party[0].mp_id",
+                quelle: "BDEW-AWH Identifikatoren V1.2 Kap. 2.2",
+              }}
+            />
+            <BefundZeile
+              befund={{
+                dienst: "makod",
+                schwere: "warnung",
+                bereich: "konfiguration",
+                text: "as4.unbekannte_absender steht auf bdew_ou_zulassen",
+                pfad: "policy.as4.unbekannte_absender",
+                referenz: "@/docs/services/makod.md#policy-as4-unbekannte-absender",
+              }}
+            />
+            <BefundZeile
+              befund={{
+                dienst: "edmd",
+                schwere: "warnung",
+                bereich: "erreichbarkeit",
+                text: "nicht erreichbar: connection refused",
+                pfad: "",
+              }}
+            />
+          </ul>
+        </div>
+      </Specimen>
+
       <Specimen title="Symbole">
         {(
           [
@@ -438,6 +609,10 @@ function Specimens() {
             "warn",
             "lock",
             "stop",
+            "menu",
+            "blockiert",
+            "unbekannt",
+            "erneuern",
           ] as const
         ).map((n) => (
           <Icon key={n} name={n} size={20} />

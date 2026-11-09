@@ -10,6 +10,7 @@ import { type Answer, antwort, type Schritt } from "../data/agent";
 import { Icon } from "../design/Icon";
 import { SourceChip } from "../design/SourceChip";
 import { formatCount } from "../format/count";
+import { katalog, useT } from "../i18n";
 
 /** Where a run stands for its view: what its stream said, or its answer read. */
 export interface LaufStand {
@@ -71,6 +72,7 @@ export function useStoppTaste(run: string | undefined, live: boolean): void {
 
 /** Stop, in the place Send stood. */
 export function StoppKnopf({ lauf, run }: { lauf: Lauf | undefined; run: string }) {
+  const s = useT().spur;
   const stoppt = Boolean(lauf?.stoppt);
   return (
     <AriaButton
@@ -80,10 +82,10 @@ export function StoppKnopf({ lauf, run }: { lauf: Lauf | undefined; run: string 
       className="morph focus-ring inline-flex h-9 items-center gap-2 rounded-control border border-ai bg-surface px-3 text-body font-semibold text-ai data-[hovered]:bg-ai-fill data-[disabled]:opacity-60"
     >
       <Icon name="stop" size={12} />
-      {stoppt ? "Wird gestoppt …" : "Stoppen"}
+      {stoppt ? s.wirdGestoppt : s.stoppen}
       {!stoppt && (
         <kbd aria-hidden className="font-sans text-caption font-medium">
-          esc
+          {s.esc}
         </kbd>
       )}
     </AriaButton>
@@ -101,6 +103,7 @@ function chipQuelle(s: Schritt) {
 }
 
 function SchrittZeile({ s, nr, abgebrochen }: { s: Schritt; nr: number; abgebrochen: boolean }) {
+  const k = useT().spur;
   const ziel = useBelegZiel(s.quelle ? belegSchluessel(s.quelle) : null);
   const chip = chipQuelle(s);
   // A call that did not answer — one the stop refused, say — stays, muted.
@@ -122,21 +125,21 @@ function SchrittZeile({ s, nr, abgebrochen }: { s: Schritt; nr: number; abgebroc
         <SourceChip quelle={chip} />
       ) : (
         <span
-          title="Diese Quelle dürfen Sie nicht lesen; der Schritt bleibt sichtbar, ihr Inhalt nicht."
+          title={k.verborgenTitel}
           className="inline-flex h-5 items-center gap-1 rounded-full border border-separator px-2 text-caption font-medium text-text-2"
         >
           <Icon name="lock" size={11} />
-          Quelle für Sie verborgen
+          {k.verborgen}
         </span>
       )}
       {fehlgeschlagen && (
         <span className="inline-flex h-5 items-center rounded-full bg-fill px-2 text-caption font-medium text-text-2">
-          nicht beantwortet
+          {k.nichtBeantwortet}
         </span>
       )}
       {abgebrochen && (
         <span className="inline-flex h-5 items-center rounded-full bg-fill px-2 text-caption font-semibold text-text-2">
-          abgebrochen
+          {k.abgebrochen}
         </span>
       )}
     </li>
@@ -150,7 +153,7 @@ function SchrittZeile({ s, nr, abgebrochen }: { s: Schritt; nr: number; abgebroc
  */
 function quittung(schritte: Schritt[]): string {
   const n = schritte.filter((s) => s.quelle).length;
-  return `${formatCount(n)} ${n === 1 ? "Quelle" : "Quellen"} gelesen`;
+  return katalog().spur.quittung(n, formatCount(n));
 }
 
 /**
@@ -172,6 +175,7 @@ export function SpurAnsicht({
   /** A citation asks for this step: the trail opens and focuses it. */
   oeffnen?: { seq: number; mal: number } | null | undefined;
 }) {
+  const t = useT();
   const [offen, setOffen] = useState(anfangsOffen);
   const liste = useRef<HTMLOListElement>(null);
   useEffect(() => {
@@ -190,7 +194,7 @@ export function SpurAnsicht({
   return (
     <div className="mt-3">
       {stand === "live" && (
-        <div role="status" aria-label="Der Assistent liest" className="haarlinie mb-3" />
+        <div role="status" aria-label={t.fragen.liest} className="haarlinie mb-3" />
       )}
       {stand === "beantwortet" && schritte.length > 0 && (
         <AriaButton
@@ -205,12 +209,12 @@ export function SpurAnsicht({
         </AriaButton>
       )}
       {stand === "live" && schritte.length === 0 && (
-        <p className="m-0 text-callout text-text-2">Der Assistent überlegt, was er lesen muss …</p>
+        <p className="m-0 text-callout text-text-2">{t.fragen.ueberlegt}</p>
       )}
       {zeigen && schritte.length > 0 && (
         <ol
           ref={liste}
-          aria-label="Was der Assistent gelesen hat"
+          aria-label={t.spur.gelesenListe}
           className={`einblenden m-0 flex list-none flex-col gap-1.5 p-0 ${stand === "beantwortet" ? "mt-2" : ""}`}
         >
           {schritte.map((s, i) => (
@@ -219,9 +223,7 @@ export function SpurAnsicht({
         </ol>
       )}
       {stand === "abgebrochen" && (
-        <p className="m-0 mt-2 text-callout text-text-2">
-          Gestoppt — der Assistent liest nicht weiter. Was er schon gelesen hat, bleibt hier.
-        </p>
+        <p className="m-0 mt-2 text-callout text-text-2">{t.spur.gestoppt}</p>
       )}
     </div>
   );
@@ -241,6 +243,7 @@ export function Belege({
   schritte: Schritt[];
   onOeffnen: (seq: number) => void;
 }) {
+  const t = useT();
   if (!satz.quelle) return null;
   const zitiert = schritte.flatMap((s, i) =>
     s.quelle && `${s.quelle.dienst}/${s.quelle.werkzeug}` === satz.quelle
@@ -253,7 +256,7 @@ export function Belege({
       {zitiert.map(({ s, nr, key }) => (
         <AriaButton
           key={s.seq}
-          aria-label={`Beleg ${nr}`}
+          aria-label={t.spur.beleg(formatCount(nr))}
           onFocus={() => markieren(key)}
           onBlur={() => entmarkieren(key)}
           onHoverStart={() => markieren(key)}

@@ -115,7 +115,7 @@ pub trait TighteningDefault: PolicyChoice {
 // ── The resolved value ───────────────────────────────────────────────────────
 
 /// Whether the operator set a value or the tightening default applied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Origin {
     /// The tightening default — the operator set nothing.
@@ -327,7 +327,7 @@ impl<T: PolicyChoice> Visitor<'_> for NameVisitor<T> {
 // ── The report ───────────────────────────────────────────────────────────────
 
 /// What an entry describes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyClass {
     /// An operator reading under `[policy]`.
@@ -349,7 +349,7 @@ impl PolicyClass {
 }
 
 /// One line of a [`PolicyReport`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PolicyEntry {
     /// The key, e.g. `beihilfe_politik` or `allow_insecure_no_auth`.
     pub key: String,
@@ -366,13 +366,14 @@ pub struct PolicyEntry {
     /// A posture in its insecure state.
     pub insecure: bool,
     /// The review date of a setting that represents law not yet enacted.
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
     pub review_by: Option<time::Date>,
     /// What the review checks.
     pub review_grund: Option<String>,
 }
 
 /// The policy and posture a daemon runs under.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PolicyReport {
     /// One entry per setting, in the order the daemon reports them.
     pub entries: Vec<PolicyEntry>,

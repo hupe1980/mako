@@ -23,7 +23,7 @@
 //
 // Roles (add further specialised principals as needed)
 // ─────────────────────────────────────────────────────
-//   erp-operator    — full ERP integration: submit commands + read/write MaLo
+//   erp-operator    — full ERP integration: submit and rehearse commands + read/write MaLo
 //   edifact-ingest  — AS4 gateway: ingest EDIFACT messages only
 //   admin-readonly  — read-only admin: MaLo stats + partner list
 //   mcp-agent       — LLM / MCP access: submit commands + MaLo read + MCP tools
@@ -71,6 +71,16 @@ permit(
   principal == MaKo::Principal::"erp-operator",
   action    in MaKo::Action::"AdminPartner",
   resource  is MaKo::AdminPartnerRecord
+);
+
+// ── erp-operator: rehearse a command before go-live — the door up to its
+// pre-send check, nothing written (`POST /api/v1/probe/{command}`). Setup is
+// the operator administrator's, so the grant sits with the principal that
+// already administers the MaLo cache and the partner directory.
+permit(
+  principal == MaKo::Principal::"erp-operator",
+  action    == MaKo::Action::"RehearseCommand",
+  resource  is MaKo::Command
 );
 
 // ── edifact-ingest: EDIFACT ingest only (AS4 gateway service account) ─────────
@@ -129,6 +139,21 @@ permit(
   principal == MaKo::Principal::"admin-readonly",
   action    == MaKo::Action::"ReadRechnung",
   resource  is MaKo::RechnungEndpoint
+);
+
+// ── Einrichtung: the configuration findings, the deployment checklist and the
+// policy report (`GET /admin/einrichtung[/deployment]`, `GET /api/v1/policy`).
+// Read-only; setup is the operator administrator's, and monitoring reads it.
+permit(
+  principal == MaKo::Principal::"erp-operator",
+  action    == MaKo::Action::"AdminEinrichtung",
+  resource  is MaKo::EinrichtungEndpoint
+);
+
+permit(
+  principal == MaKo::Principal::"admin-readonly",
+  action    == MaKo::Action::"AdminEinrichtung",
+  resource  is MaKo::EinrichtungEndpoint
 );
 
 // ── Migrations: a deliberate operator action, granted to no standing principal.

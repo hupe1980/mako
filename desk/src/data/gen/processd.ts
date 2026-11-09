@@ -94,6 +94,67 @@ export interface ProcessdTools {
       note: string;
     };
   };
+  get_process: {
+    input: {
+      /**
+       * UUID of the process projection.
+       */
+      process_id: string;
+    };
+    output: {
+      process_id: string;
+      /**
+       * BDEW Prüfidentifikator.
+       */
+      pid: number;
+      family: string;
+      workflow_name: string;
+      state: string;
+      malo_id: string | null;
+      /**
+       * The counterparty's MP-ID.
+       */
+      partner_mp_id: string | null;
+      mdm_role: string | null;
+      /**
+       * When the business Antwortfrist ends, RFC 3339 in UTC.
+       */
+      deadline_at: Instant | null;
+      /**
+       * The Festlegung the deadline came from.
+       */
+      deadline_source: string | null;
+      deadline_risk: string;
+      /**
+       * RFC 3339 in UTC.
+       */
+      started_at: Instant | null;
+      /**
+       * RFC 3339 in UTC.
+       */
+      last_event_at: Instant | null;
+      /**
+       * The APERAK error code, set only when an APERAK refused a message.
+       */
+      erc_code: string | null;
+      /**
+       * The Antwortcode the counterparty's business answer carried
+       * (`STS+E01` on a UTILMD, `AJT` on an ORDRSP).
+       */
+      antwort_code: string | null;
+      /**
+       * The tree or Codeliste that answer named for its code.
+       */
+      antwort_codeliste: string | null;
+      /**
+       * The BDEW's wording of `antwort_code` within `antwort_codeliste`;
+       * absent when the answer named no list or the list does not publish the
+       * code. Quote it — a code means something only within its tree.
+       */
+      bedeutung: string | null;
+      initiator_is_affiliate: boolean;
+    };
+  };
   get_process_stp_rate: {
     input: {
       /**
@@ -519,4 +580,4 @@ export interface Freigabe {
 }
 
 /** Tools processd serves without an output schema: no view may read them. */
-export const processdUntyped = ["approve_queue_entry","get_decision","get_parity_report","get_process","get_stp_breakdown_by_erc","list_affiliate_decisions","list_decisions","list_processes_by_family","reject_queue_entry"] as const;
+export const processdUntyped = ["approve_queue_entry","get_decision","get_parity_report","get_policy","get_stp_breakdown_by_erc","list_affiliate_decisions","list_decisions","list_processes_by_family","reject_queue_entry"] as const;

@@ -54,6 +54,7 @@ administrative APIs for MaLo cache and partner directory management.",
     paths(
         // ERP command gateway
         crate::commands_api::handle_command,
+        crate::commands_api::probe::handle_probe,
         // EDIFACT ingest
         crate::edifact_api::ingest_edifact,
         // MaLo admin
@@ -76,6 +77,13 @@ administrative APIs for MaLo cache and partner directory management.",
             // commands
             crate::commands_api::ErpCommand,
             crate::commands_api::CommandAccepted,
+            crate::commands_api::probe::ProbeRequest,
+            crate::commands_api::probe::Probe,
+            crate::commands_api::probe::ProbeNachricht,
+            crate::commands_api::probe::ProbeSegment,
+            crate::commands_api::probe::ProbeBefund,
+            crate::commands_api::probe::Urteil,
+            crate::commands_api::probe::Stufe,
             // edifact
             crate::edifact_api::IngestResponse,
             crate::edifact_api::MessageResult,

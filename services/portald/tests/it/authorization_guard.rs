@@ -216,7 +216,7 @@ async fn a_deployment_without_an_authorization_authority_refuses_to_start() {
     let err = mako_service::build_for_test::<portald::server::Portald>(cfg)
         .await
         .expect_err("must refuse to start");
-    let msg = err.to_string();
+    let msg = format!("{err:#}");
     assert!(msg.contains("vertragd_url"), "{msg}");
     assert!(
         msg.contains("allow_insecure_no_auth"),

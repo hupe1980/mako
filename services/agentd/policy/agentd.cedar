@@ -102,7 +102,8 @@ permit(principal, action == Action::"effect:perform", resource);
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing
 // at somebody else's endpoint is a configuration error this refuses rather than
 // calls. `context.args.server` is what makes this expressible without naming the
-// 159 granted tools one by one.
+// 161 granted tools one by one. `agentd` is the plane's own, compiled-in
+// `quote_source` and `find_source`, which read the local passage index.
 //
 // **This list must cover every server the manifests grant.** A granted server
 // missing from it is not a narrower policy — it is a specialist that boots, runs
@@ -116,7 +117,7 @@ permit(principal, action == Action::"effect:perform", resource);
 forbid(principal, action == Action::"effect:perform", resource == Resource::"tool.call")
 unless {
   ["makod", "marktd", "processd", "billingd", "invoicd", "accountingd",
-   "edmd", "einsd", "netzbilanzd", "productd", "vertragd"]
+   "edmd", "einsd", "netzbilanzd", "productd", "vertragd", "agentd"]
   .contains(context.args.server)
 };
 

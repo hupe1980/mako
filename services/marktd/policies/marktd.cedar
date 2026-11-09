@@ -61,7 +61,9 @@ permit(
         Action::"read-pricat",
         Action::"read-mmma-preis",
         Action::"read-utilmd-stammdaten",
-        Action::"use-mcp"
+        Action::"use-mcp",
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

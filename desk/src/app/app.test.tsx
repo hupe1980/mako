@@ -582,10 +582,17 @@ describe("the Desk", () => {
       }),
     );
     await open("/fristen");
-    const malo = await screen.findByRole("link", { name: "51238696012" });
-    expect(malo.getAttribute("href")).toBe("/prozess?key=51238696012");
-    expect(screen.getByRole("button", { name: "Quelle: BK6-24-174 GPKE Teil 2" })).toBeTruthy();
-    expect(screen.getByText(/^abgelaufen vor /)).toBeTruthy();
+    const row = await screen.findByRole("row", { name: /51238696012/ });
+    expect(within(row).getByText(/^abgelaufen vor /)).toBeTruthy();
+    // Selecting the row opens it beside the list: the Fundstelle among its
+    // Angaben, and every process of its MaLo one link away.
+    fireEvent.click(row);
+    const link = await screen.findByRole("link", { name: "Alle Prozesse der MaLo öffnen" });
+    expect(link.getAttribute("href")).toBe("/prozess?key=51238696012");
+    const angaben = screen.getByRole("complementary", { name: "Angaben" });
+    expect(
+      within(angaben).getByRole("button", { name: "Quelle: BK6-24-174 GPKE Teil 2" }),
+    ).toBeTruthy();
   });
 
   it("threads a process's messages by direction, with its pending Frist at the end", async () => {
@@ -2297,10 +2304,14 @@ describe("the Desk", () => {
 
   it("sets the appearance from the account menu and back to the system", async () => {
     await open("/prozess");
-    fireEvent.click(await screen.findByRole("button", { name: /Konto und Erscheinungsbild/ }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Konto, Erscheinungsbild und Sprache/ }),
+    );
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Dunkel" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
-    fireEvent.click(await screen.findByRole("button", { name: /Konto und Erscheinungsbild/ }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Konto, Erscheinungsbild und Sprache/ }),
+    );
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "System" }));
     expect(document.documentElement.dataset.theme).toBeUndefined();
   });

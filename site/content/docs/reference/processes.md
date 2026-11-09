@@ -76,7 +76,7 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GPKE Zuordnungs-Meldungen** | ⚡ | `mako-gpke` `gpke-zuordnungsmeldung` | UTILMD 55036/55037/55038 | — Meldepflicht, **keine Antwortnachricht** (Sendefrist in `mako_fristen::meldung`) | BK6-24-174 Teil 2 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
 | **WiM MSB-Wechsel** | ⚡ 🔥 | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 resp. 44039/44042/44051/44168 (out+in) und ihre Antworten | 3/5/7/1 WT — see below | BK6-24-174 · AWH WiM Gas 2.0 |
-| **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17002 · 17009 · ORDRSP 19001/19002 · 19003/19004 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · Gerätewechseltermin frühestens am 4. WT, Antwort 2 WT davor | BK6-24-174 Kap. 3.1.2 / 3.2.2 |
+| **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17009 · ORDRSP 19001/19002 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · Gerätewechseltermin frühestens am 4. WT, Antwort 2 WT davor | BK6-24-174 Kap. 3.1.2 / 3.2.2 |
 | **WiM Abrechnung** | ⚡ 🔥 | `mako-wim` `wim-invoic` | INVOIC 31009 · 31003 · 31004 · REMADV 33001–33004 · COMDIS 29001 | zum Zahlungsziel; NB bei 31009: 4. WT davor | BK6-24-174 Kap. 3.6.3.8 / 3.7 / 6 |
 | **WiM Rechnungsabwicklung MSB über LF** | ⚡ | `mako-wim` `wim-rechnungsabwicklung` | REQOTE 35002 → QUOTES 15002 · ORDERS 17005/17006 · ORDRSP 19009/19010 | 5 WT Angebot · **8 WT** Antwort/Beendigung | BK6-24-174 Kap. 3.6.3.4–3.6.3.7 |
 | **WiM Weiterverpflichtung** | ⚡🔥 | `mako-wim` `wim-weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 | **1 WT** (MSBA antwortet) | BK6-24-174 |
@@ -544,9 +544,35 @@ on a 55040 Bestätigung.
 
 | Process | Initiator → Responder | ORDERS PID | Antwort | Crate |
 |---|---|---|---|---|
-| Anzeige Gerätewechselabsicht | MSBN → MSBA | ORDERS **17009** | ORDRSP 19015/19016 | `mako-wim` ✅ |
+| Anzeige Gerätewechselabsicht | MSBN → MSBA | ORDERS **17009** | ORDRSP 19015 (`ZB4`/`ZB5`) / 19016 (`E17`/`Z07`) | `mako-wim` ✅ |
 | Bestellung Angebot Änderung Technik | NB/LF → MSB | ORDERS **17011** | — | `mako-wim` ✅ |
-| Geräteübernahme Bestellung | MSBN → MSBA | ORDERS **17001/17002** | ORDRSP | `mako-wim` ✅ |
+| Geräteübernahme Bestellung | MSBN → MSBA | ORDERS **17001** | ORDRSP 19001 / 19002 | `mako-wim` ✅ |
+
+The answer to a Gerätewechselabsicht is chosen by its code, not its
+Codeliste: `ZB4` („Eigenausbau wird erfolgen") and `ZB5` („Kein Eigenausbau
+des MSBA") both let the Gerätewechsel go ahead and ride 19015; the refusals
+`E17` and `Z07` ride 19016 (ORDRSP AHB 1.1b Kap. 4.10, S. 46, Bedingungen
+`[38]`/`[39]`). A Gerätewechseltermin earlier than the 4. Werktag after the
+Anzeige (WiM Teil 1 Kap. 3.1.2 Nr. 1; AWH WiM Gas 2.0 Kap. 4.1.2 Nr. 1) is
+answered at once with a 19016 carrying `E17` „Ablehnung wg.
+Fristüberschreitung" (EBD 4.3 Kap. 8.4.1 / 14.4.1); the ORDERS is processable,
+so the APERAK beside it is the Anerkennungsmeldung. Every answer names the
+ORDERS by its `BGM` DE 1004 in `SG1 RFF+ON` (Hinweise `[518]`, `[535]`).
+
+Beyond the code, a column asks for facts only the MSBA holds, and the
+answer command (`AntwortAngaben`) supplies them; a missing one is refused by
+name, as is one the column does not list:
+
+| Answer | Segment | Source |
+|---|---|---|
+| 19001 / 19002 | `DTM+203` Ausführungsdatum | the ORDERS 17001's own `DTM+203`, as a day boundary of the Sparte (ORDRSP AHB 1.1b Kap. 4.9.2, S. 43) |
+| 19001 / 19002 | `SG6 CTA`/`COM` technischer Ansprechpartner | the MSBA (Hinweis `[500]`, S. 44) |
+| 19015 with `ZB5` | `SG3 NAD+Z22` Lieferadresse für Altgeräte | the MSBA (`[41]`, S. 48) |
+| 19016 with `Z07` | `SG3 NAD+VY` MP-ID des Eigentümers | the MSBA (`[42]`, Hinweis `[536]`, S. 47) |
+
+mako is the MSBA here. The MSBN side — sending 17001/17009 and receiving the
+answer — is not built, so an inbound 19001/19002/19015/19016 reaches no process
+and is dead-lettered as not dispatchable.
 
 ### WiM-Abrechnung
 
@@ -1601,7 +1627,7 @@ name one Sparte loads no crate of the other.
 | 19116 (Bestätigung Sperrung) | Inbound LF receives from NB (`mako-gpke`) | Inbound LF receives from GNB (`mako-geli-gas`) | `DeploymentRoles` / `Marktrolle` |
 | 19117 (Ablehnung Sperrung) | Inbound LF receives from NB (`mako-gpke`) | Inbound LF receives from GNB (`mako-geli-gas`) | `DeploymentRoles` / `Marktrolle` |
 | 19128/19129 (Storno ORDRSP) | `mako-gpke` | `mako-geli-gas` | `DeploymentRoles` / `Marktrolle` |
-| 19001/19002 (ORDRSP Bestätigung/Ablehnung) | `mako-gpke` (NB-role only) + `mako-wim` | `mako-wim` (same workflow) | ORDERS correlation ID; the Sparte picks `E_0247` vs `E_2011` |
+| 19001/19002 (ORDRSP Bestätigung/Ablehnung) | `mako-gpke` (NB role); `mako-wim` registers them at an Nmsb deployment, where no MSBN process receives them | `mako-wim` (Nmsb, same) | `DeploymentRoles` |
 | 23001–23012 (INSRPT) | `mako-wim` `wim-insrpt` | `mako-wim` `wim-insrpt` | one workflow; the Sparte picks the Frist |
 
 > **Inbound disambiguation in a combined Strom+Gas instance:**

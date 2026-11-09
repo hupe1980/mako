@@ -11,8 +11,10 @@
 //! - `payload`:       domain-intent JSON (sender/receiver MP-IDs, process dates, …)
 //!
 //! This module maps those JSON fields to the appropriate `edi-energy` builder
-//! and serialises the result to wire bytes. The active BDEW release (e.g. `"S2.2"`)
-//! is resolved from the global [`ReleaseRegistry`] based on today's UTC date.
+//! and serialises the result to wire bytes. The BDEW release is resolved from
+//! the global [`ReleaseRegistry`] by `release_for`: the release of the
+//! message's process, or today's for an APERAK, a CONTRL and a message no
+//! process owns.
 //!
 //! ## Renderable message types
 //!
@@ -67,7 +69,8 @@ pub enum RenderError {
         message_type: Box<str>,
         field: Box<str>,
     },
-    /// No active BDEW profile is registered for this message type on today's date.
+    /// No BDEW profile is registered for this message type on the date
+    /// `release_for` renders it under.
     NoActiveProfile { message_type: Box<str> },
     /// The `edi-energy` builder returned a serialization error.
     BuilderError(String),
@@ -98,7 +101,7 @@ impl std::fmt::Display for RenderError {
             ),
             RenderError::NoActiveProfile { message_type } => write!(
                 f,
-                "EDIFACT render [{message_type}]: no active BDEW profile registered for today's date"
+                "EDIFACT render [{message_type}]: no BDEW profile registered for the release it is rendered under"
             ),
             RenderError::BuilderError(e) => write!(f, "EDIFACT render: builder error: {e}"),
             RenderError::Suppressed { reason } => {
@@ -393,6 +396,8 @@ mod invoic;
 mod mscons;
 mod orders;
 mod utilmd;
+#[cfg(test)]
+mod wim_geraetewechsel_antwort_tests;
 
 use aperak::*;
 use contrl::*;
@@ -402,16 +407,45 @@ use insrpt::*;
 use invoic::*;
 use mscons::*;
 use orders::*;
-pub(crate) use utilmd::utilmd_ahb_findings;
 use utilmd::*;
+pub(crate) use utilmd::{utilmd_ahb_findings, utilmd_gate_check};
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Resolve the active `Release` for `(message_type, track)` from today's registry.
-fn active_release(message_type: MessageType, track: ReleaseTrack) -> Option<Release> {
-    let today = mako_fristen::heute();
+/// The `Release` `msg` is rendered under — the one rule every renderer asks.
+///
+/// **A process step goes out in the release of its process.** A process keeps
+/// the format version it started under until it completes (AGENTS.md
+/// *Format-version coexistence*), so its UTILMD, ORDERS, ORDRSP, REQOTE,
+/// QUOTES, ORDCHG, INVOIC, REMADV, MSCONS, IFTSTA and INSRPT go out in the
+/// release in force on the Anwendungszeitpunkt of that format version
+/// (`OutboxMessage::format_version`), not in the one in force on the day they
+/// are sent. A process whose release is not mirrored is a refusal
+/// ([`RenderError::NoActiveProfile`]), never a substitution.
+///
+/// **An APERAK or CONTRL goes out in the release in force on the day it is
+/// sent.** It acknowledges an interchange, not a process step: the process's
+/// format version says nothing about the message it answers, whose own format
+/// version may be newer — a process started under FV2026-04-01 accepts a
+/// counterparty's FV2026-10-01 message. The same holds for a message no
+/// process owns, which carries no format version.
+fn release_for(
+    msg: &OutboxMessage,
+    message_type: MessageType,
+    track: ReleaseTrack,
+) -> Result<Release, RenderError> {
+    let quittung = matches!(message_type, MessageType::Aperak | MessageType::Contrl);
+    let date = msg
+        .format_version
+        .as_ref()
+        .and_then(mako_engine::version::FormatVersion::date)
+        .filter(|_| !quittung)
+        .unwrap_or_else(mako_fristen::heute);
     ReleaseRegistry::global()
-        .profile_for_date_and_track(message_type, today, track)
+        .profile_for_date_and_track(message_type, date, track)
         .map(|p| p.release().clone())
+        .ok_or_else(|| RenderError::NoActiveProfile {
+            message_type: message_type.as_str().into(),
+        })
 }
 
 /// Return a `RenderError::InsufficientPayload` for a message type with no
@@ -633,6 +667,40 @@ pub(crate) fn msg_ref_from_uuid(uuid_str: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::PartyConfig;
+
+    /// `release_for` is the one place a renderer's release is decided: a
+    /// renderer that looks a profile up by date itself — today's or any other —
+    /// is how a process step comes to go out in a release its process never
+    /// ran under. The per-type renderers name neither the date lookup nor the
+    /// clock; `utilmd.rs`'s `validate_on_date(heute())` is the pre-send gate's
+    /// judgement day, not a release choice.
+    #[test]
+    fn only_release_for_picks_a_release() {
+        for (file, text) in [
+            ("aperak.rs", include_str!("aperak.rs")),
+            ("contrl.rs", include_str!("contrl.rs")),
+            ("dvgw.rs", include_str!("dvgw.rs")),
+            ("iftsta.rs", include_str!("iftsta.rs")),
+            ("insrpt.rs", include_str!("insrpt.rs")),
+            ("invoic.rs", include_str!("invoic.rs")),
+            ("mscons.rs", include_str!("mscons.rs")),
+            ("orders.rs", include_str!("orders.rs")),
+            ("utilmd.rs", include_str!("utilmd.rs")),
+        ] {
+            for forbidden in ["profile_for_date", "active_release", "process_release"] {
+                assert!(
+                    !text.contains(forbidden),
+                    "{file} picks its release with `{forbidden}` — use `release_for`"
+                );
+            }
+            let clocks = text.matches("heute()").count();
+            let gate = usize::from(file == "utilmd.rs");
+            assert_eq!(
+                clocks, gate,
+                "{file} reads the clock outside the pre-send gate"
+            );
+        }
+    }
     use crate::party_registry::MpIdRegistry;
     use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId};
     use mako_engine::outbox::OutboxMessage;

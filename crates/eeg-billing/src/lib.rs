@@ -156,9 +156,10 @@ pub use technology::{
     RepoweringScope,
 };
 pub use version::{
-    Beihilfegenehmigung, Beihilfevorbehalt, EEG2023_BEIHILFEGENEHMIGUNG_BIS, EegGesetz, Fassung,
-    InvalidEegGesetz, LETZTE_TABELLIERTE_INBETRIEBNAHME, SECT100_ABS47_GENEHMIGT_AB,
-    beihilfevorbehalt, sect100_abs47_anwendbar, sect100_abs47_anwendbar_ab,
+    Beihilfegenehmigung, BeihilfegenehmigungUngueltig, Beihilferegelung, Beihilfevorbehalt,
+    EEG2023_BEIHILFEGENEHMIGUNG_BIS, EegGesetz, Fassung, InvalidEegGesetz,
+    LETZTE_TABELLIERTE_INBETRIEBNAHME, SECT100_ABS47_GENEHMIGT_AB, beihilfevorbehalt,
+    genehmigungen_pruefen, sect100_abs47_anwendbar, sect100_abs47_anwendbar_ab,
 };
 pub use zusammenfassung::{
     AnlageFuerZusammenfassung, SolarMontage, Steckersolar, ZusammenfassungErgebnis,

@@ -37,16 +37,24 @@ impl Daemon for Netzbilanzd {
         Ok(())
     }
 
-    async fn build(cfg: Arc<NetzbilanzConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
-        // Fail closed before anything is bound. Every route below moves money
-        // or discloses the § 147 AO record, and the REMADV webhook closes a
-        // receivable on an inbound event, so an unauthenticated deployment is
-        // a posture the operator has to ask for by name.
-        cfg.check_auth_posture()?;
-        // Refuses an unimplemented submission target and a Bilanzierungsgebiet
-        // that is not one, while the window is still open.
-        cfg.check_mabis()?;
+    /// Fail closed before anything is bound. Every route moves money or
+    /// discloses the § 147 AO record, and the REMADV webhook closes a
+    /// receivable on an inbound event, so an unauthenticated deployment is a
+    /// posture the operator has to ask for by name. An unimplemented submission
+    /// target and a Bilanzierungsgebiet that is not one are refused while the
+    /// window is still open.
+    fn validate(cfg: &NetzbilanzConfig) -> Vec<mako_service::Befund> {
+        let mut out = cfg.mabis_befunde();
+        if let Err(e) = cfg.check_auth_posture() {
+            out.push(
+                mako_service::Befund::aus_fehler("oidc", e)
+                    .bereich(mako_service::befund::Bereich::Zugriff),
+            );
+        }
+        out
+    }
 
+    async fn build(cfg: Arc<NetzbilanzConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
         let pool = ctx.pool().clone();
         let shutdown = ctx.shutdown.clone();
         let http = Arc::new(ctx.http.clone());
@@ -96,6 +104,7 @@ impl Daemon for Netzbilanzd {
                 Some(Arc::clone(&cedar)),
                 &cfg.tenant,
             ),
+            policy: ctx.einrichtung.policy.clone(),
         });
 
         spawn_workers(&pool, &cfg, &shutdown);
@@ -111,6 +120,9 @@ impl Daemon for Netzbilanzd {
                 "/api/v1/webhooks/remadv",
                 post(handlers::post_remadv_webhook),
             )
+            // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
+            // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
+            .merge(mako_service::einrichtung::router(ctx.einrichtung.clone()))
             .merge(mcp_server::router(mcp_state, shutdown))
             .layer(Extension(mako_service::oidc::ExpectedTenant(
                 cfg.tenant.clone(),

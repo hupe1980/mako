@@ -40,7 +40,7 @@ impl Daemon for Edmd {
         Ok(())
     }
 
-    fn validate(cfg: &Config) -> anyhow::Result<()> {
+    fn validate(cfg: &Config) -> Vec<mako_service::Befund> {
         cfg.validate()
     }
 
@@ -124,7 +124,7 @@ impl Daemon for Edmd {
             confirmation: cfg.confirmation.clone(),
             archive,
             erasure_keys,
-            policy: cfg.policy_report(),
+            einrichtung: Arc::clone(&ctx.einrichtung),
             physische_loeschung: cfg.policy.physische_loeschung.triple(),
         })
         .await

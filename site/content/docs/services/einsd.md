@@ -234,15 +234,28 @@ end of the Förderung.
 ## Beihilfevorbehalt from 01.01.2027
 
 The Commission's state-aid approval of the EEG 2023 „bis zum 31. Dezember 2026
-befristet ist" (BT-Drs. 21/7867, Begründung zu § 104 EEG 2027). The Entwurf's §
-104 Abs. 1 lets the Bestimmungen des Teils 3 „erst nach der beihilferechtlichen
-Genehmigung durch die Europäische Kommission und nur nach Maßgabe dieser
-Genehmigung" be applied;
+befristet ist" (BT-Drs. 21/7867, Begründung zu § 104 EEG 2027); the decision
+itself — C(2022) 9900 final, SA.102084, recital (211) — has the measures apply
+„between 1 January 2023 and 31 December 2026". The Entwurf's § 104 Abs. 1 lets
+the Bestimmungen des Teils 3 „erst nach der beihilferechtlichen Genehmigung
+durch die Europäische Kommission und nur nach Maßgabe dieser Genehmigung" be
+applied; Abs. 2 has the BMWE announce it in the Bundesanzeiger. Every EEG
+payment for a supply period from **01.01.2027** — including a Marktprämie for
+an existing plant — therefore has no approval behind it until one is recorded.
+KWKG plants are outside it.
 
-Abs. 2 has the BMWE announce it in the Bundesanzeiger. Every EEG payment for a
-supply period from **01.01.2027** — including a Marktprämie for an existing
-plant — therefore has no approval behind it until one is recorded. KWKG plants
-are outside it.
+The gate answers each supply period with one of four states
+(`eeg_billing::Beihilfevorbehalt`), keyed on the period, not the invoice date:
+
+| State | When | Fassung of the period |
+|---|---|---|
+| `Eeg2023Genehmigt` | supply period up to 31.12.2026 | EEG 2023 |
+| `Eeg2023Verlaengert` | a recorded `regelung = "eeg2023_verlaengerung"` covers it | EEG 2023, to the extension's `gilt_bis` |
+| `Eeg2027Genehmigt` | a recorded `regelung = "eeg2027"` covers it | none tabled |
+| `Offen` | nothing covers it, the period is unknown, or records of both schemes claim it | none — `[policy] beihilfe_politik` decides |
+
+No extension of the EEG 2023 approval is published. A recorded one settles
+the periods it covers under the EEG 2023 rather than a statute not in force.
 
 ### `[policy] beihilfe_politik` {#policy-beihilfe-politik}
 
@@ -262,26 +275,34 @@ as `policy`. The batch endpoint counts held plants under `gehalten`. The
 setting changes only by editing `einsd.toml` and restarting;
 `[beihilfevorbehalt] politik` is refused at startup, naming this one.
 
-A recorded approval opens the supply periods it covers under every policy:
+A recorded approval opens the supply periods it covers under every policy. It
+names its scheme — the two are never read for each other, because each selects
+a different statute for the same month:
 
 ```toml
 [policy]
 beihilfe_politik = "verweigern"
 
 [[beihilfevorbehalt.genehmigungen]]
-eingang        = "2027-…"   # Eingang bei der Bundesregierung
+regelung       = "eeg2027"    # or "eeg2023_verlaengerung"
+eingang        = "2027-…"     # Eingang bei der Bundesregierung
 gilt_ab        = "2027-01-01"
-# gilt_bis     = "…"         # when the decision is limited
-bundesanzeiger = "BAnz AT …"
-umfang         = "…"         # scheme and scope as the decision states them
+# gilt_bis     = "…"           # when the decision is limited; required for an extension
+bundesanzeiger = "BAnz AT …"  # for an extension without a notice: SA number and „C(…) final"
 ```
 
+einsd refuses to start on an extension without `gilt_bis`, a `gilt_bis` before
+`gilt_ab`, or an extension and an EEG 2027 approval covering the same day.
+
 **Reductions follow the Fassung of the payment period.** §§ 53b–54 reduce the AW
-under the EEG Fassung of the supply period (`eeg_billing::Fassung`), not the
-plant's vintage — the EEG 2027 Entwurf renumbers the § 53c Stromsteuer
-reduction as § 53b. Only the EEG 2023 is tabled, for supply periods 01.01.2023
-to 31.12.2026. A period outside it with a recorded reduction settles as
-`fassung_nicht_tabelliert` — nothing paid, retried by the sweep.
+under the EEG Fassung of the supply period (`eeg_billing::Fassung::fuer_periode`),
+not the plant's vintage — the EEG 2027 Entwurf renumbers the § 53c Stromsteuer
+reduction as § 53b. Only the EEG 2023 is tabled: for supply periods 01.01.2023
+to 31.12.2026, and beyond that to the end of a recorded extension of its
+approval, where a reduction is labelled „§53c EEG 2023". A period
+outside it with a recorded reduction — including one an EEG 2027 approval
+opens — settles as `fassung_nicht_tabelliert`: nothing paid, retried by the
+sweep.
 
 **A plant keeps the Fassung of its commissioning.** A plant commissioned on or
 before 31.12.2026 settles every later period under its own Fassung. For one
@@ -985,7 +1006,8 @@ Mitteilung is mako's JSON shape.
 | `GET` | `/api/v1/marktwert/{year}/nachbewertung` | Months on a provisional Jahresmarktwert |
 | `POST` | `/api/v1/verguetungssatz-lookup` | Rate lookup |
 | `GET` | `/api/v1/policy` | Operator policy report (`read-policy`) |
-| `GET/POST` | `/mcp` | MCP (Streamable HTTP 2025-11-25) |
+| `GET` | `/admin/einrichtung` | Configuration findings and policy (`read-config`) |
+| `POST` | `/mcp` | MCP (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session) |
 | `GET` | `/health/live` · `/health/ready` | Liveness; readiness |
 
 ---
@@ -993,14 +1015,14 @@ Mitteilung is mako's JSON shape.
 ## Authentication and authorization
 
 einsd refuses to boot without `[oidc]` unless `allow_insecure_no_auth = true`.
-`policies/einsd.cedar` states **14 actions** in four grants; every handler checks
+`policies/einsd.cedar` states **15 actions** in four grants; every handler checks
 one before touching the database, and a refusal is `403` with the Cedar decision
 in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 `mako_roles`, `resource_tenant` from the row's owner.
 
 | Grant | Actions | Requires |
 |---|---|---|
-| Reads | `read-anlage`, `read-einspeiser`, `read-settlement`, `read-marktdaten`, `use-mcp`, `read-policy` | matching tenant |
+| Reads | `read-anlage`, `read-einspeiser`, `read-settlement`, `read-marktdaten`, `use-mcp`, `read-policy`, `read-config` | matching tenant |
 | Writes | `write-anlage`, `write-einspeiser`, `run-settlement`, `manage-lifecycle`, `write-marktdaten` | `NB`, `LF` or `UENB` |
 | Corrections | `correct-settlement` | `NB` or `UENB` |
 | EnFG | `read-enfg`, `build-enfg-ledger` | `NB` |
@@ -1162,7 +1184,7 @@ they are null for `EIGENVERBRAUCH`. Deliveries are
 
 ## MCP server
 
-At `/mcp` (Streamable HTTP 2025-11-25), authenticated by `[mcp]`.
+At `/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session), authenticated by `[mcp]`.
 
 **20 tools:**
 `get_policy` · `list_plants` · `get_plant` · `list_expiring` · `list_settlements` ·

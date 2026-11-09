@@ -77,6 +77,10 @@ pub struct ServiceContext {
     pub http: reqwest::Client,
     /// Cancelled on SIGINT/SIGTERM — pass `.clone()` to every worker.
     pub shutdown: CancellationToken,
+    /// The report the runner built from the loaded config at boot — the
+    /// findings, the policy and the identities. Serve it with
+    /// [`crate::einrichtung::router`].
+    pub einrichtung: Arc<crate::einrichtung::Einrichtung>,
 }
 
 impl ServiceContext {
@@ -161,19 +165,30 @@ pub trait Daemon: Send + 'static {
         None
     }
 
-    /// Refuse a config that loads but cannot behave as documented — values
-    /// that contradict each other, a removed key, a posture that must be asked
-    /// for by name. Default: nothing to refuse.
+    /// Every finding about a config that loads but cannot behave as
+    /// documented — values that contradict each other, a removed key, a posture
+    /// that must be asked for by name, a certificate about to expire. Default:
+    /// none.
     ///
-    /// The runner calls it from `--print-config` and before [`Daemon::build`]
-    /// at boot, from one place, so a config `--print-config` accepts is a
-    /// config the daemon starts on.
-    ///
-    /// # Errors
-    ///
-    /// Name every problem; the runner refuses to start.
-    fn validate(_cfg: &Self::Config) -> anyhow::Result<()> {
-        Ok(())
+    /// Return **every** finding, not the first: a config with two defects
+    /// reports both. Each names the setting's path, and where a document fixes
+    /// the rule, the document ([`crate::befund::Befund`]). A
+    /// [`crate::befund::Schwere::Blockiert`] refuses the boot; a
+    /// [`crate::befund::Schwere::Warnung`] is logged at every boot. The runner
+    /// calls it from `--check-config`, `--print-config` and before
+    /// [`Daemon::build`] at boot, from one place, and serves the same list at
+    /// `GET /admin/einrichtung`, so what refuses a boot and what an operator is
+    /// shown cannot disagree. Never refuse with an error value here —
+    /// `cargo xtask check-config-findings` refuses a `bail!` or `anyhow!` in a
+    /// `validate`.
+    fn validate(_cfg: &Self::Config) -> Vec<crate::befund::Befund> {
+        Vec::new()
+    }
+
+    /// The identities this config acts as, for the deployment checklist's
+    /// cross-daemon comparison. Default: none.
+    fn parteien(_cfg: &Self::Config) -> Vec<crate::einrichtung::Partei> {
+        Vec::new()
     }
 
     /// The operator policy and posture this config runs under. Default: none.
@@ -232,6 +247,12 @@ pub async fn run<D: Daemon>() -> anyhow::Result<()> {
             return Ok(());
         }
         Ok(Mode::PrintConfig) => return print_config::<D>(),
+        Ok(Mode::CheckConfig { json }) => {
+            let (out, bereit) = check_config::<D>(crate::load_config(D::NAME), json);
+            print!("{out}");
+            anyhow::ensure!(bereit, "{} config has blocking findings", D::NAME);
+            return Ok(());
+        }
         Ok(Mode::Check) => return health_check::<D>().await,
         Ok(Mode::Serve) => {}
         Err(arg) => {
@@ -318,9 +339,10 @@ fn public_grants(role: &str) -> [String; 4] {
 ///
 /// As [`run`].
 pub async fn serve<D: Daemon>(cfg: D::Config, shutdown: CancellationToken) -> anyhow::Result<()> {
-    let report = validate_config::<D>(&cfg)?;
+    let einrichtung = Arc::new(validate_config::<D>(&cfg)?);
+    let report = &einrichtung.policy;
     report.log(D::NAME, time::OffsetDateTime::now_utc());
-    crate::policy::export_metric(D::NAME, &report);
+    crate::policy::export_metric(D::NAME, report);
     let cfg = Arc::new(cfg);
 
     // Stateless daemons have no `[database]`: skip pool + migrations entirely.
@@ -332,7 +354,7 @@ pub async fn serve<D: Daemon>(cfg: D::Config, shutdown: CancellationToken) -> an
             .context("connect database pool")?;
         migrate_as_owner::<D>(&cfg, db, &pool, !report.is_empty()).await?;
         if !report.is_empty() {
-            let changes = crate::policy::record(&pool, D::NAME, &report)
+            let changes = crate::policy::record(&pool, D::NAME, report)
                 .await
                 .context("record the policy report in service_policy_log")?;
             crate::policy::log_changes(D::NAME, &changes);
@@ -346,6 +368,7 @@ pub async fn serve<D: Daemon>(cfg: D::Config, shutdown: CancellationToken) -> an
         pool,
         http: crate::http::default_client(),
         shutdown: shutdown.clone(),
+        einrichtung: Arc::clone(&einrichtung),
     };
     // Keep a clone for the readiness probe and the further ports; `build`
     // consumes `ctx`.
@@ -413,15 +436,74 @@ async fn serve_all(
     first_err.map_or(Ok(()), Err)
 }
 
-/// [`Daemon::validate`], then [`Daemon::policy`] — what `--print-config` and
-/// boot both run, from this one function, so the two cannot disagree.
+/// The report of `cfg`: [`Daemon::validate`], [`Daemon::policy`] and
+/// [`Daemon::parteien`] — what `--check-config`, `GET /admin/einrichtung`,
+/// `--print-config` and boot all read, from this one function.
+#[must_use]
+pub fn einrichtung<D: Daemon>(cfg: &D::Config) -> crate::einrichtung::Einrichtung {
+    crate::einrichtung::Einrichtung::neu(
+        D::NAME,
+        D::validate(cfg),
+        D::policy(cfg),
+        D::parteien(cfg),
+    )
+}
+
+/// [`einrichtung`], refused when a finding blocks and with every warning
+/// logged — what `--print-config` and boot both run, so the two cannot
+/// disagree.
 ///
 /// # Errors
 ///
-/// Whatever [`Daemon::validate`] refuses.
-pub fn validate_config<D: Daemon>(cfg: &D::Config) -> anyhow::Result<crate::policy::PolicyReport> {
-    D::validate(cfg).with_context(|| format!("{} config is invalid", D::NAME))?;
-    Ok(D::policy(cfg))
+/// Every blocking finding, as a [`crate::befund::Verweigerung`].
+pub fn validate_config<D: Daemon>(
+    cfg: &D::Config,
+) -> anyhow::Result<crate::einrichtung::Einrichtung> {
+    let e = einrichtung::<D>(cfg);
+    crate::befund::log(D::NAME, &e.befunde);
+    if e.bereit {
+        Ok(e)
+    } else {
+        let blockiert = e
+            .befunde
+            .into_iter()
+            .filter(crate::befund::Befund::ist_blockiert)
+            .collect();
+        Err(anyhow::Error::new(crate::befund::Verweigerung(blockiert))
+            .context(format!("{} config is invalid", D::NAME)))
+    }
+}
+
+/// The `--check-config` output for a load result, and whether it is ready.
+///
+/// A config that does not load reports each loader problem as a blocking
+/// finding at its path, so the check names everything at once either way.
+/// With `json`, the output is exactly what `GET /admin/einrichtung` serves.
+#[must_use]
+pub fn check_config<D: Daemon>(
+    geladen: Result<D::Config, crate::ConfigError>,
+    json: bool,
+) -> (String, bool) {
+    let e = match geladen {
+        Ok(cfg) => einrichtung::<D>(&cfg),
+        Err(err) => crate::einrichtung::Einrichtung::neu(
+            D::NAME,
+            err.problems()
+                .iter()
+                .map(crate::befund::Befund::aus_config_problem)
+                .collect(),
+            crate::policy::PolicyReport::default(),
+            Vec::new(),
+        ),
+    };
+    let out = if json {
+        let mut s = serde_json::to_string_pretty(&e).unwrap_or_default();
+        s.push('\n');
+        s
+    } else {
+        e.text()
+    };
+    (out, e.bereit)
 }
 
 /// A further port as [`run`] serves it: `/health/*` merged before the
@@ -487,8 +569,8 @@ fn mount<D: Daemon>(domain: axum::Router, ready_ctx: ServiceContext) -> axum::Ro
 /// Whatever [`Daemon::build`] refuses — a config that must not start.
 #[cfg(feature = "testing")]
 pub async fn build_for_test<D: Daemon>(cfg: D::Config) -> anyhow::Result<axum::Router> {
-    let report = validate_config::<D>(&cfg)?;
-    crate::policy::export_metric(D::NAME, &report);
+    let einrichtung = validate_config::<D>(&cfg)?;
+    crate::policy::export_metric(D::NAME, &einrichtung.policy);
     let pool = match cfg.database() {
         Some(_) => Some(
             sqlx::postgres::PgPoolOptions::new()
@@ -498,7 +580,7 @@ pub async fn build_for_test<D: Daemon>(cfg: D::Config) -> anyhow::Result<axum::R
         ),
         None => None,
     };
-    build_with::<D>(cfg, pool).await
+    build_with::<D>(cfg, pool, einrichtung).await
 }
 
 /// [`build_for_test`] against a real database: [`Daemon::migrate`] runs on
@@ -516,25 +598,27 @@ pub async fn build_for_test_on<D: Daemon>(
     cfg: D::Config,
     pool: PgPool,
 ) -> anyhow::Result<axum::Router> {
-    let report = validate_config::<D>(&cfg)?;
-    crate::policy::export_metric(D::NAME, &report);
+    let einrichtung = validate_config::<D>(&cfg)?;
+    crate::policy::export_metric(D::NAME, &einrichtung.policy);
     let db = cfg
         .database()
         .context("build_for_test_on needs a [database] block")?;
     migrate_as_owner::<D>(&cfg, db, &pool, true).await?;
-    build_with::<D>(cfg, Some(pool)).await
+    build_with::<D>(cfg, Some(pool), einrichtung).await
 }
 
 #[cfg(feature = "testing")]
 async fn build_with<D: Daemon>(
     cfg: D::Config,
     pool: Option<PgPool>,
+    einrichtung: crate::einrichtung::Einrichtung,
 ) -> anyhow::Result<axum::Router> {
     let shutdown = CancellationToken::new();
     let ctx = ServiceContext {
         pool,
         http: crate::http::default_client(),
         shutdown: shutdown.clone(),
+        einrichtung: Arc::new(einrichtung),
     };
     let ready_ctx = ctx.clone();
     let domain = D::build(Arc::new(cfg), ctx).await;
@@ -554,25 +638,42 @@ enum Mode {
     /// `--print-config`: print the merged config layers, secrets redacted, check
     /// them as boot does, and print the policy report.
     PrintConfig,
+    /// `--check-config [--json]`: print every finding, exit non-zero on a
+    /// blocking one.
+    CheckConfig {
+        /// `--json`: the `GET /admin/einrichtung` body.
+        json: bool,
+    },
 }
 
 impl Mode {
     /// The first recognised flag wins; an unrecognised one is refused rather
-    /// than ignored, so `--chek` does not start a daemon.
+    /// than ignored, so `--chek` does not start a daemon. `--json` is a
+    /// modifier of `--check-config` and refused anywhere else.
     fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut mode = Self::Serve;
+        let mut json = false;
         for arg in args {
             let next = match arg.as_str() {
                 "-h" | "--help" => Self::Help,
                 "--check" => Self::Check,
                 "--print-config" => Self::PrintConfig,
+                "--check-config" => Self::CheckConfig { json: false },
+                "--json" => {
+                    json = true;
+                    continue;
+                }
                 _ => return Err(arg),
             };
             if mode == Self::Serve {
                 mode = next;
             }
         }
-        Ok(mode)
+        match mode {
+            Self::CheckConfig { .. } => Ok(Self::CheckConfig { json }),
+            _ if json => Err("--json".to_owned()),
+            m => Ok(m),
+        }
     }
 }
 
@@ -583,11 +684,14 @@ fn usage(name: &str) -> String {
     format!(
         "{name} — a mako service daemon
 
-Usage: {name} [--check | --print-config | --help]
+Usage: {name} [--check | --check-config [--json] | --print-config | --help]
 
 Options:
   (none)          start the daemon
   --check         probe the running instance's /health/ready and exit 0 when ready
+  --check-config  print every configuration finding — path, severity, source —
+                  and exit non-zero on a blocking one; --json prints the body
+                  GET /admin/einrichtung serves
   --print-config  print the merged file + environment config (secrets redacted),
                   report every missing, unknown or invalid key, run the
                   daemon's own validation and print the policy it runs under
@@ -615,7 +719,11 @@ Configuration:
 fn print_config<D: Daemon>() -> anyhow::Result<()> {
     print!("{}", crate::config::render_config(D::NAME, None)?);
     let cfg: D::Config = crate::load_config(D::NAME)?;
-    let report = validate_config::<D>(&cfg)?;
+    let einrichtung = validate_config::<D>(&cfg)?;
+    for b in &einrichtung.befunde {
+        println!("# {}: {b}", b.schwere.as_str());
+    }
+    let report = &einrichtung.policy;
     if !report.is_empty() {
         println!("\n# The policy and posture this config runs under:");
         for line in report.lines(D::NAME) {
@@ -689,6 +797,18 @@ mod mode_tests {
     fn check_and_print_config_are_recognised() {
         assert_eq!(parse(&["--check"]), Ok(Mode::Check));
         assert_eq!(parse(&["--print-config"]), Ok(Mode::PrintConfig));
+        assert_eq!(
+            parse(&["--check-config"]),
+            Ok(Mode::CheckConfig { json: false })
+        );
+        assert_eq!(
+            parse(&["--json", "--check-config"]),
+            Ok(Mode::CheckConfig { json: true })
+        );
+        assert_eq!(
+            parse(&["--print-config", "--json"]),
+            Err("--json".to_owned())
+        );
     }
 
     /// A typo must not start the daemon as though no flag were given.
@@ -792,5 +912,169 @@ mod listener_tests {
         assert_eq!(get(main, "/health/live").await, 200);
         ct.cancel();
         task.await.unwrap().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod einrichtung_tests {
+    use std::sync::Arc;
+
+    use axum::Router;
+
+    use super::{Daemon, ServiceConfig, ServiceContext};
+    use crate::befund::{Befund, Schwere};
+
+    #[derive(serde::Deserialize)]
+    struct Cfg {
+        von: u32,
+        bis: u32,
+        quelle: String,
+    }
+    impl ServiceConfig for Cfg {
+        fn database(&self) -> Option<&crate::config::DatabaseConfig> {
+            None
+        }
+        fn bind_addr(&self) -> String {
+            "127.0.0.1:0".to_owned()
+        }
+    }
+
+    /// Two independent rules, each reporting its own finding.
+    struct Zwei;
+    impl Daemon for Zwei {
+        type Config = Cfg;
+        const NAME: &'static str = "zwei";
+        fn validate(cfg: &Cfg) -> Vec<Befund> {
+            let mut out = Vec::new();
+            if cfg.von > cfg.bis {
+                out.push(Befund::blockiert("bis", "`bis` liegt vor `von`"));
+            }
+            if cfg.quelle.trim().is_empty() {
+                out.push(Befund::blockiert("quelle", "`quelle` ist leer"));
+            }
+            out
+        }
+        async fn build(_cfg: Arc<Cfg>, _ctx: ServiceContext) -> anyhow::Result<Router> {
+            Ok(Router::new())
+        }
+    }
+
+    fn zwei_defekte() -> Cfg {
+        Cfg {
+            von: 2,
+            bis: 1,
+            quelle: " ".to_owned(),
+        }
+    }
+
+    /// A config with two defects reports both, not the first — in the
+    /// boot refusal, in the report and in `--check-config`.
+    #[test]
+    fn a_config_with_two_defects_reports_both() {
+        let e = super::einrichtung::<Zwei>(&zwei_defekte());
+        assert!(!e.bereit);
+        let pfade: Vec<&str> = e.befunde.iter().map(|b| b.pfad.as_str()).collect();
+        assert_eq!(pfade, ["bis", "quelle"]);
+        let err = super::validate_config::<Zwei>(&zwei_defekte())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("zwei config is invalid"), "{err}");
+        let chain = format!(
+            "{:#}",
+            super::validate_config::<Zwei>(&zwei_defekte()).unwrap_err()
+        );
+        assert!(
+            chain.contains("[bis]") && chain.contains("[quelle]"),
+            "{chain}"
+        );
+        let (text, bereit) = super::check_config::<Zwei>(Ok(zwei_defekte()), false);
+        assert!(!bereit);
+        assert!(
+            text.contains("[bis]") && text.contains("[quelle]"),
+            "{text}"
+        );
+    }
+
+    /// A warning starts the daemon and is still reported.
+    #[test]
+    fn a_warning_does_not_block() {
+        struct Warnt;
+        impl Daemon for Warnt {
+            type Config = Cfg;
+            const NAME: &'static str = "warnt";
+            fn validate(_cfg: &Cfg) -> Vec<Befund> {
+                vec![Befund::warnung("x", "bald")]
+            }
+            async fn build(_cfg: Arc<Cfg>, _ctx: ServiceContext) -> anyhow::Result<Router> {
+                Ok(Router::new())
+            }
+        }
+        let e = super::validate_config::<Warnt>(&zwei_defekte()).expect("a warning starts");
+        assert_eq!(e.befunde[0].schwere, Schwere::Warnung);
+    }
+
+    /// A config that does not load reports every loader problem as a
+    /// finding at its path.
+    #[test]
+    fn a_config_that_does_not_load_reports_its_problems_as_findings() {
+        let dir = std::env::temp_dir().join(format!("check-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("zwei.toml");
+        std::fs::write(&file, "von = 1\nbis = \"x\"\nquelle = \"q\"\n").unwrap();
+        let geladen = crate::load_config_file::<Cfg>("zwei", &file);
+        std::fs::remove_dir_all(&dir).ok();
+        let (json, bereit) = super::check_config::<Zwei>(geladen, true);
+        assert!(!bereit);
+        let e: crate::einrichtung::Einrichtung = serde_json::from_str(&json).unwrap();
+        assert!(e.befunde.iter().any(|b| b.pfad == "bis"), "{json}");
+    }
+
+    /// `--check-config --json` and `GET /admin/einrichtung` return the same
+    /// findings for the same config.
+    #[cfg(all(feature = "cedar", feature = "oidc"))]
+    #[tokio::test]
+    async fn check_config_json_and_the_route_agree() {
+        use axum::Extension;
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt as _;
+
+        let verifier = crate::oidc::OidcVerifier::from_jwks_for_testing(
+            "https://idp.example",
+            "svc",
+            jsonwebtoken::jwk::JwkSet { keys: vec![] },
+        )
+        .with_service_keys(vec![crate::oidc::ServiceKey::new(
+            secrecy::SecretString::from("k-1".to_owned()),
+            "caller",
+            "t1",
+            vec![],
+            vec![],
+        )]);
+        let cedar = crate::cedar::CedarEnforcer::from_policy_str(
+            r#"permit(principal, action == Action::"read-config", resource)
+               when { context.principal_tenant == context.resource_tenant };"#,
+        )
+        .unwrap();
+        let app = crate::einrichtung::router(Arc::new(super::einrichtung::<Zwei>(&zwei_defekte())))
+            .layer(Extension(crate::oidc::ExpectedTenant("t1".to_owned())))
+            .layer(Extension(Arc::new(cedar)))
+            .layer(Extension(verifier));
+        let call = |auth: Option<&str>| {
+            let mut req = Request::get("/admin/einrichtung");
+            if let Some(a) = auth {
+                req = req.header("authorization", format!("Bearer {a}"));
+            }
+            app.clone().oneshot(req.body(Body::empty()).unwrap())
+        };
+        assert_eq!(call(None).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        let ok = call(Some("k-1")).await.unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(ok.into_body(), 1 << 16).await.unwrap();
+        let served: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let (json, _) = super::check_config::<Zwei>(Ok(zwei_defekte()), true);
+        let printed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(served, printed);
+        assert_eq!(printed["befunde"].as_array().map(Vec::len), Some(2));
     }
 }

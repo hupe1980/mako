@@ -177,6 +177,18 @@
     "outputSchema": null
   },
   {
+    "name": "get_policy",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
     "name": "get_preisblatt",
     "annotations": {
       "readOnlyHint": true,

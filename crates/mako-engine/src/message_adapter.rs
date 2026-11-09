@@ -418,7 +418,7 @@ mod tests {
     /// An empty `known_fvs` cannot fail, which is why the caller — not this
     /// function — is responsible for supplying the real profile list.
     ///
-    /// `makod::startup::validate_adapter_coverage` refuses an empty
+    /// `makod::startup::adapter_befunde` refuses an empty
     /// `known_fvs()` for exactly this reason: a coverage check whose input is
     /// empty reports "covered" for a registry with no adapters at all.
     #[test]

@@ -31,6 +31,7 @@ import { FristUhr } from "../design/FristUhr";
 import { Icon, type IconName } from "../design/Icon";
 import { Kbd } from "../design/Kbd";
 import { Notice } from "../design/Panel";
+import { useT } from "../i18n";
 import type { QuelleId } from "../inbox/model";
 import { useQuellen, useVorschlaege } from "../inbox/quellen";
 import { VorschlagBilanz } from "../views/Bilanz";
@@ -54,7 +55,7 @@ import {
 import { DIENST } from "./dienste";
 import { FaktFelder } from "./FaktFelder";
 import { frageMoeglich, frageStellen } from "./frage";
-import { PALETTE } from "./keys";
+import { PALETTE, STOPP } from "./keys";
 import { ROLLEN, type Rolle, useRolle } from "./rollen";
 
 interface Command {
@@ -107,6 +108,8 @@ export function CommandPalette({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
+  const p = t.palette;
   const [input, setInput] = useState("");
   const [stufe, setStufe] = useState<Stufe>(SUCHE);
   const navigate = useNavigate();
@@ -179,7 +182,7 @@ export function CommandPalette({
       ? [
           {
             id: "open-key",
-            label: `Prozess ${typed} öffnen`,
+            label: p.oeffnen(typed),
             icon: "flow",
             hint: keyKind(typed),
             run: () => navigate({ to: "/prozess", search: { key: typed } }),
@@ -193,13 +196,10 @@ export function CommandPalette({
     rolle === "lieferant" && typed.length >= 3
       ? (suche.data?.treffer ?? []).map((k) => ({
           id: `kunde-${k.id}`,
-          label: k.name ?? "Ohne Namen",
+          label: k.name ?? t.kundenAnsicht.ohneNamen,
           icon: "person" as const,
           monogram: monogram(k.name),
-          hint: [
-            k.kunden_nr,
-            k.lieferstellen === 1 ? "1 Lieferstelle" : `${k.lieferstellen} Lieferstellen`,
-          ]
+          hint: [k.kunden_nr, t.kundenAnsicht.lieferstellen(k.lieferstellen, `${k.lieferstellen}`)]
             .filter(Boolean)
             .join(" · "),
           direct: true,
@@ -213,9 +213,9 @@ export function CommandPalette({
       ? [
           {
             id: "fragen",
-            label: `„${typed}"`,
+            label: p.zitat(typed),
             icon: "sparkle",
-            hint: "Den Assistenten fragen",
+            hint: t.tasten.fragen,
             direct: true,
             run: () => frageStellen(typed),
           },
@@ -225,19 +225,19 @@ export function CommandPalette({
   const views: Command[] = [
     {
       id: "ueberblick",
-      label: "Überblick",
+      label: t.shell.ueberblick,
       icon: "bars",
       run: () => navigate({ to: "/ueberblick", search: {} }),
     },
     {
       id: "assistent",
-      label: "Assistent",
+      label: t.shell.assistent,
       icon: "sparkle",
       run: () => navigate({ to: "/assistent", search: {} }),
     },
     {
       id: "fristen",
-      label: "Fristen überschritten",
+      label: t.fristen.titel,
       icon: "clock",
       run: () => navigate({ to: "/fristen", search: {} }),
     },
@@ -245,7 +245,7 @@ export function CommandPalette({
       ? [
           {
             id: "kunden",
-            label: "Kunden",
+            label: t.shell.kunden,
             icon: "person" as const,
             run: () => navigate({ to: "/kunden", search: {} }),
           },
@@ -253,7 +253,7 @@ export function CommandPalette({
       : []),
     {
       id: "prozesse",
-      label: "Prozesse",
+      label: t.shell.prozesse,
       icon: "flow",
       run: () => navigate({ to: "/prozess", search: {} }),
     },
@@ -261,9 +261,9 @@ export function CommandPalette({
       ? [
           {
             id: "gallery",
-            label: "Gallery",
+            label: t.shell.gallery,
             icon: "grid" as const,
-            hint: "Entwicklung",
+            hint: p.entwicklung,
             run: () => navigate({ to: "/dev/gallery" }),
           },
         ]
@@ -274,7 +274,7 @@ export function CommandPalette({
     .filter((r) => r !== rolle)
     .map((r: Rolle) => ({
       id: `rolle-${r}`,
-      label: `Rolle: ${ROLLEN[r].label}`,
+      label: p.rolle(ROLLEN[r].label),
       icon: "tray",
       hint: `⌃${ROLLEN[r].key}`,
       run: () => wear(r),
@@ -282,12 +282,12 @@ export function CommandPalette({
 
   const sections: [string, Command[]][] = (
     [
-      ["Entscheiden", entscheiden],
-      ["Kunden", kunden],
-      ["Öffnen", direct],
-      ["Assistent", fragen],
-      ["Ansichten", views],
-      ["Rolle wechseln", rollen],
+      [p.abschnitt.entscheiden, entscheiden],
+      [p.abschnitt.kunden, kunden],
+      [p.abschnitt.oeffnen, direct],
+      [p.abschnitt.assistent, fragen],
+      [p.abschnitt.ansichten, views],
+      [p.abschnitt.rolle, rollen],
     ] as [string, Command[]][]
   ).filter(([, items]) => items.length > 0);
 
@@ -304,7 +304,7 @@ export function CommandPalette({
     >
       <Modal className="mx-auto mt-[14vh] w-[min(600px,calc(100vw-32px))] outline-none">
         <Dialog
-          aria-label="Befehle"
+          aria-label={p.befehle}
           className="squircle overflow-hidden rounded-panel bg-surface-raised shadow-popover outline-none"
         >
           {stufe.art === "aktionen" && (
@@ -335,22 +335,18 @@ export function CommandPalette({
               onInputChange={setInput}
               filter={(text, query) => text === "__direct__" || contains(text, query)}
             >
-              <SearchField
-                aria-label="Befehl oder Geschäftsschlüssel"
-                autoFocus
-                className="border-b border-separator"
-              >
+              <SearchField aria-label={p.feld} autoFocus className="border-b border-separator">
                 <div className="flex items-center gap-3 px-4">
                   <Icon name="search" size={18} className="text-text-2" />
                   <Input
-                    placeholder="Befehl oder Geschäftsschlüssel …"
+                    placeholder={p.platzhalter}
                     className="h-14 flex-1 bg-transparent text-[17px] text-text outline-none placeholder:text-text-2 [&::-webkit-search-cancel-button]:hidden"
                   />
-                  <Kbd>esc</Kbd>
+                  <Kbd>{STOPP.keys}</Kbd>
                 </div>
               </SearchField>
               <Menu
-                aria-label="Befehle"
+                aria-label={p.befehle}
                 onAction={(id) => {
                   const c = all.find((x) => x.id === id);
                   c?.run();
@@ -358,7 +354,7 @@ export function CommandPalette({
                 }}
                 renderEmptyState={() => (
                   <p className="m-0 px-4 py-6 text-center text-body text-text-2">
-                    Kein Befehl passt zu „{input}“.
+                    {p.keinBefehl(input)}
                   </p>
                 )}
                 className="max-h-[50vh] overflow-auto p-2 outline-none"
@@ -399,6 +395,7 @@ export function CommandPalette({
 
 /** The entry the palette acts on, above its actions or its parameters. */
 function Kopf({ g, zusatz }: { g: Gefunden; zusatz?: string }) {
+  const t = useT();
   return (
     <div className="flex items-start gap-3 border-b border-separator px-4 py-3">
       <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-accent">
@@ -418,7 +415,7 @@ function Kopf({ g, zusatz }: { g: Gefunden; zusatz?: string }) {
       </span>
       {g.frist && (
         <span className="flex shrink-0 flex-col items-end gap-1 text-caption text-text-2">
-          Frist
+          {t.palette.frist}
           <FristUhr due={g.frist} />
         </span>
       )}
@@ -452,6 +449,7 @@ export function AktionPanel({
   /** The gallery's still: no focus taken, and a refusal to show. */
   vorschau?: { verweigert?: string };
 }) {
+  const t = useT();
   const [filter, setFilter] = useState("");
   const [markiert, setMarkiert] = useState(0);
   const { contains } = useFilter({ sensitivity: "base" });
@@ -488,7 +486,7 @@ export function AktionPanel({
         <Input
           autoFocus={!vorschau}
           role="combobox"
-          aria-label="Aktion filtern"
+          aria-label={t.palette.aktionFiltern}
           aria-expanded
           aria-controls={liste}
           aria-activedescendant={
@@ -500,12 +498,12 @@ export function AktionPanel({
             setMarkiert(0);
           }}
           onKeyDown={onKeyDown}
-          placeholder="Aktion …"
+          placeholder={t.palette.aktionPlatzhalter}
           className="h-12 flex-1 bg-transparent text-[17px] text-text outline-none placeholder:text-text-2"
         />
-        <Kbd>esc</Kbd>
+        <Kbd>{STOPP.keys}</Kbd>
       </div>
-      <div id={liste} role="listbox" aria-label="Aktionen" className="p-2">
+      <div id={liste} role="listbox" aria-label={t.palette.aktionen} className="p-2">
         {sichtbar.map((a, i) => {
           const grund = verweigert(a.handlung);
           const vorgeschlagen = vorbelegt(a, wartend) !== null;
@@ -530,7 +528,7 @@ export function AktionPanel({
               {vorgeschlagen && (
                 <span className="inline-flex h-5 items-center gap-1 rounded-full border border-ai-border bg-ai-fill px-2 text-caption font-semibold text-ai">
                   <Icon name="sparkle" size={11} />
-                  Vorschlag
+                  {t.palette.vorschlag}
                 </span>
               )}
               <Kbd>{a.rang === "primaer" ? "↵" : "⌘↵"}</Kbd>
@@ -540,7 +538,7 @@ export function AktionPanel({
       </div>
       {sichtbar.length === 0 && (
         <p className="m-0 px-4 pb-4 text-center text-body text-text-2">
-          Keine Aktion passt zu „{filter}“.
+          {t.palette.keineAktion(filter)}
         </p>
       )}
     </div>
@@ -574,6 +572,7 @@ export function AktionForm({
   /** The gallery's still: no focus taken, the record given, a refusal to show. */
   vorschau?: { verweigert?: string; bilanz?: Bilanz | null };
 }) {
+  const t = useT();
   const halte = useHalten();
   const gespeichert = useVerweigert(a.handlung);
   const verweigert = vorschau?.verweigert ?? gespeichert;
@@ -635,24 +634,20 @@ export function AktionForm({
       <Kopf g={g} zusatz={a.verb} />
       <fieldset
         ref={gruppe}
-        aria-label={`Parameter: ${a.verb}`}
+        aria-label={t.palette.parameter(a.verb)}
         // In the capture phase: a focused code's radio group stops ↵ and esc
         // from bubbling, so the form takes them before the field does.
         onKeyDownCapture={onKeyDown}
         className="m-0 flex min-w-0 flex-col gap-4 border-0 p-4"
       >
         {verweigert && (
-          <Notice
-            tone="refusal"
-            title={`${DIENST[a.handlung.dienst]} lässt Sie hier nicht entscheiden`}
-          >
+          <Notice tone="refusal" title={t.palette.verweigert(DIENST[a.handlung.dienst])}>
             {verweigert}
           </Notice>
         )}
         {a.id === "freigeben" && f?.art === "gehalten" && f.antwort && (
           <p className="m-0 text-callout text-text">
-            Gesendet wird die festgehaltene Antwort:{" "}
-            <span className="font-mono">{f.antwort.code}</span>
+            {t.freigabenAnsicht.festgehalten} <span className="font-mono">{f.antwort.code}</span>
             {f.antwort.bedeutung && <> — {f.antwort.bedeutung}</>}
           </p>
         )}
@@ -669,7 +664,7 @@ export function AktionForm({
           >
             <Label className="flex items-center gap-1.5 text-caption text-text-2">
               {codeMarke && <Icon name="sparkle" size={11} className="text-ai" />}
-              Antwortcode aus <span className="font-mono">{a.codes.ebd}</span>
+              {t.freigabenAnsicht.antwortcodeAus} <span className="font-mono">{a.codes.ebd}</span>
             </Label>
             {a.codes.codes.map((c) => (
               <Radio
@@ -723,9 +718,7 @@ export function AktionForm({
             text={`${wartend.disclosure} ${wartend.vorschlag.begruendung}`}
             footer={
               <>
-                <p className="m-0 text-caption text-text-2">
-                  Vom Assistenten vorgeschlagen — Tab übernimmt, Tippen ersetzt.
-                </p>
+                <p className="m-0 text-caption text-text-2">{t.palette.vorgeschlagen}</p>
                 <VorschlagBilanz bilanz={vorschau?.bilanz} />
               </>
             }
@@ -734,7 +727,7 @@ export function AktionForm({
         <p className="m-0 text-caption text-text-2">{a.was}</p>
         <div className="flex items-center gap-2">
           <span className="flex-1 text-caption text-text-2">
-            <Kbd>esc</Kbd> zurück
+            <Kbd>{STOPP.keys}</Kbd> {t.palette.zurueck}
           </span>
           <Button
             variant={a.destruktiv ? "destructive" : "primary"}

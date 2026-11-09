@@ -41,6 +41,7 @@ use mako_engine::{
     types::Sparte,
     version::{FormatVersion, WorkflowId},
 };
+use mako_wim::geraeteubernahme::{Ansprechpartner, AntwortAngaben, Kommunikationsweg};
 use mako_wim::{
     GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL, GeraeteubernahmeCommand, GeraeteubernahmeState,
     WimGeraeteubernahmeWorkflow,
@@ -122,6 +123,7 @@ impl MockMsba {
                 document_date,
                 termin,
                 message_ref,
+                orders_nummer,
                 sparte,
                 received_at,
                 ..
@@ -136,6 +138,8 @@ impl MockMsba {
                     unh_ref.as_str(),
                     "adapter must preserve the UNH message_ref",
                 );
+                // `BGM` DE 1004 — what the ORDRSP's `SG1 RFF+ON` names.
+                assert_eq!(orders_nummer, "00017001", "BGM DE 1004 of the ORDERS");
                 GeraeteubernahmeCommand::ReceiveOrders {
                     pid,
                     sender,
@@ -145,6 +149,7 @@ impl MockMsba {
                     document_date,
                     termin,
                     message_ref,
+                    orders_nummer,
                     validation_passed,
                     validation_errors: if validation_passed {
                         vec![]
@@ -173,6 +178,17 @@ impl MockMsba {
                 GeraeteubernahmeCommand::DispatchAntwort {
                     antwort_code: code.to_owned(),
                     bemerkung: None,
+                    // `SG6 CTA`/`COM` is Muss on 19001 and 19002 (ORDRSP AHB
+                    // 1.1b Kap. 4.9.2, Hinweis `[500]`).
+                    angaben: AntwortAngaben {
+                        ansprechpartner: Some(Ansprechpartner {
+                            name: "Technik MSBA".to_owned(),
+                            kommunikation: vec![Kommunikationsweg::Email(
+                                "technik@msba.example".to_owned(),
+                            )],
+                        }),
+                        ..AntwortAngaben::default()
+                    },
                 },
                 RunOptions::new(),
             )
@@ -252,6 +268,7 @@ async fn wim_geraeteubernahme_refuses_a_foreign_code() {
             GeraeteubernahmeCommand::DispatchAntwort {
                 antwort_code: "ZB4".to_owned(),
                 bemerkung: None,
+                angaben: AntwortAngaben::default(),
             },
             RunOptions::new(),
         )
@@ -336,4 +353,60 @@ fn wim_geraeteubernahme_deadline_label_is_canonical() {
         GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL, "wim-geraeteubernahme-ordrsp-deadline",
         "deadline label must match the canonical form expected by deadline_dispatch.rs",
     );
+}
+
+/// An ORDRSP answering a Gerätewechselabsicht or a Bestellung reaches no
+/// process at the MSBN: makod sends no ORDERS 17001 or 17009, so nothing waits
+/// for the 19001/19002/19015/19016 that answers one. The answer is therefore a
+/// registered-but-not-received PID — `pid_not_in_*`, which the door
+/// dead-letters as `NotDispatchable` — and not an adapter error claiming the
+/// message has the wrong type.
+#[tokio::test]
+async fn an_inbound_geraetewechselabsicht_answer_is_recorded_as_not_received() {
+    use std::sync::Arc;
+
+    use mako_engine::store_slatedb::SlateDbStore;
+    use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
+
+    let store = SlateDbStore::open_in_memory()
+        .await
+        .expect("in-memory store");
+    let dispatcher = EdifactIngestDispatcher::new(
+        Arc::new(store.clone()),
+        store.as_snapshot_store(),
+        100,
+        TenantId::from_party_id(MSBN_ID),
+    );
+    for pid in [19_001_u32, 19_002, 19_015, 19_016] {
+        let code = edi_energy::Pruefidentifikator::new(pid).expect("a Prüfidentifikator");
+        let profile = edi_energy::ReleaseRegistry::global()
+            .all_profiles()
+            .iter()
+            .filter(|p| p.has_anwendungsfall(code))
+            .max_by_key(|p| p.valid_from())
+            .expect("an ORDRSP profile carries the PID");
+        let wire = profile
+            .skeleton_interchange(
+                profile.anwendungsfall(pid).expect("the column"),
+                &edi_energy::profile::SkeletonParties {
+                    sender: MSBA_ID.to_owned(),
+                    receiver: MSBN_ID.to_owned(),
+                },
+            )
+            .expect("skeleton");
+        let msg = edi_energy::parse(&wire).expect("the ORDRSP parses");
+        let outcome = dispatcher
+            .dispatch(
+                &msg,
+                "wim-geraeteubernahme",
+                pid,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{pid}: {e}"));
+        assert!(
+            matches!(outcome, IngestOutcome::Skipped { .. }) && outcome.coverage_gap().is_some(),
+            "{pid}: {outcome:?}"
+        );
+    }
 }

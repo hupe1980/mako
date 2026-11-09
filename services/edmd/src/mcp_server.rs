@@ -48,9 +48,7 @@ use rmcp::{
     },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
+    transport::streamable_http_server::StreamableHttpServerConfig,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1925,6 +1923,13 @@ impl EdmdMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for EdmdMcpHandler {
+    /// The revisions every mako MCP server speaks, not the SDK's set.
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        mako_service::mcp::supported_revisions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
@@ -2020,18 +2025,16 @@ async fn mcp_auth_middleware(
 }
 // ── Router ────────────────────────────────────────────────────────────────────
 
-pub fn router(state: Arc<EdmdMcpState>, shutdown: CancellationToken) -> Router {
+pub fn router(state: Arc<EdmdMcpState>, _shutdown: CancellationToken) -> Router {
     let config = StreamableHttpServerConfig::default()
         .disable_allowed_hosts()
-        .with_sse_keep_alive(Some(std::time::Duration::from_secs(30)))
-        .with_cancellation_token(shutdown);
+        .with_sse_keep_alive(Some(std::time::Duration::from_secs(30)));
 
-    let mcp_service = StreamableHttpService::new(
+    let mcp_service = mako_service::mcp::service(
         {
             let state = state.clone();
             move || Ok(EdmdMcpHandler::new(state.clone()))
         },
-        Arc::new(LocalSessionManager::default()),
         config,
     );
 

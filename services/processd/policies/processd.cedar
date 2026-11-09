@@ -26,7 +26,10 @@
 // be readable by whoever is answering for them. The process read model —
 // `read-process` (`/obs/processes`), `read-kpi` (`/obs/kpis` and the § 7a Abs. 5
 // EnWG Gleichbehandlung report), `read-overdue` (`/obs/overdue`) — is the same
-// kind of evidence, read by the same callers.
+// kind of evidence, read by the same callers. `read-policy` (`/api/v1/policy`)
+// and `read-config` (`/admin/einrichtung`) are the operator policy and the
+// configuration findings the runner built at boot — read-only, secrets never
+// in them.
 
 permit(
     principal,
@@ -38,7 +41,9 @@ permit(
         Action::"read-process",
         Action::"read-kpi",
         Action::"read-overdue",
-        Action::"use-mcp"
+        Action::"use-mcp",
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

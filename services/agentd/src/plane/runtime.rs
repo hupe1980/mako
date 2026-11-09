@@ -1172,8 +1172,9 @@ impl Plane {
     }
 
     /// A run's answer as the Desk shows it: each sentence with the tool call
-    /// it cites and whether that call's output carries its figures
-    /// ([`super::beleg::belegt`]).
+    /// it cites and whether that call's output carries its figures — and, for
+    /// a sentence naming a § or a chapter, whether a quote of that address
+    /// does ([`super::beleg::belegt_im_lauf`]).
     ///
     /// The answer is not stored — a declarative run's output is reconstructed
     /// by replay — so a concluded run is replayed strictly, which performs no
@@ -1229,6 +1230,14 @@ impl Plane {
                 .filter_map(|c| Some((c.tool()?, c.output()?)))
                 .map(|(t, o)| (format!("{}/{}", t.server, t.tool), o))
                 .collect();
+            // Every quote the run took, not only the last: a sentence naming
+            // a rule is held to the quote of its own address.
+            let zitate: Vec<&Value> = calls
+                .iter()
+                .filter_map(|c| Some((c.tool()?, c.output()?)))
+                .filter(|(t, _)| format!("{}/{}", t.server, t.tool) == super::beleg::ZITAT_QUELLE)
+                .map(|(_, o)| o)
+                .collect();
             let output = self
                 .runtime
                 .output(id)
@@ -1246,7 +1255,7 @@ impl Plane {
                         cites: s["quelle"].as_str().map(str::to_owned),
                     };
                     let step = satz.cites.as_ref().and_then(|q| outputs.get(q).copied());
-                    let belegt = super::beleg::belegt(&satz, step);
+                    let belegt = super::beleg::belegt_im_lauf(&satz, step, &zitate);
                     AnswerSentence {
                         text: satz.text,
                         quelle: satz.cites,

@@ -12,7 +12,7 @@
 //! killed the real boot — the pipeline had already promoted the release.
 //!
 //! Everything that can be judged from the configuration alone now lives here.
-//! `main` runs [`preflight`] before the `--check` exit and hands the resolved
+//! `main` runs [`pruefe`] before the `--check` exit and hands the resolved
 //! values to the workers, so the check and the boot cannot diverge: they run the
 //! same code and the boot consumes the check's own output.
 //!
@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 
 use crate::as4_clients::{As4Clients, As4Setup};
-use anyhow::Context as _;
+use mako_service::befund::{Befund, Bereich};
 
 use crate::cedar_authz::{CedarAuthorizer, DefaultPolicy, NamedKey};
 
@@ -152,26 +152,63 @@ pub struct Preflight {
 ///
 /// # Errors
 ///
-/// Returns the first fatal configuration error. Every error here is one that
-/// would otherwise abort the real boot, which is precisely why the check runs
-/// them all before `--check` reports success.
+/// Every fatal configuration error [`pruefe`] finds, one per line.
+///
+/// The tests' view of [`pruefe`]; startup reads the findings.
+#[cfg(test)]
 pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
+    pruefe(input).map_err(|befunde| {
+        anyhow::anyhow!(
+            "{}",
+            befunde
+                .iter()
+                .map(|b| b.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    })
+}
+
+/// Validate the configuration and resolve it into ready-to-use values,
+/// reporting **every** fatal error as a [`Befund`] at its `makod.toml` path
+/// rather than stopping at the first.
+///
+/// # Errors
+///
+/// Every finding, when there is one. Each would otherwise abort the real
+/// boot, which is precisely why the check runs them all before `--check`
+/// reports success.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one check per door, in boot order; splitting it scatters the order the module doc describes"
+)]
+pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
+    let mut out: Vec<Befund> = Vec::new();
+    let zugriff =
+        |pfad: &str, text: String| Befund::blockiert(pfad, text).bereich(Bereich::Zugriff);
+
     // ── Ingest transport ─────────────────────────────────────────────────────
     //
     // A daemon that can receive nothing is a misconfiguration, not a quiet
     // idle process — and it is caught here, before the workers are spawned.
     // Discovered afterwards the failure is racy and unreportable by `--check`.
-    anyhow::ensure!(
-        input.as4_inbound_enabled || input.http_enabled,
-        "No ingest transport configured: neither --as4-addr nor --http-addr is set. \
-         The engine could not receive any inbound message. Set at least one."
-    );
+    if !(input.as4_inbound_enabled || input.http_enabled) {
+        out.push(
+            Befund::blockiert(
+                "http.addr",
+                "No ingest transport configured: neither --as4-addr nor --http-addr is set. \
+                 The engine could not receive any inbound message. Set at least one.",
+            )
+            .bereich(Bereich::Erreichbarkeit),
+        );
+    }
 
     // ── Authenticated ports need credentials ─────────────────────────────────
     let needs_auth =
         input.http_enabled || (input.webdienste_enabled && !input.webdienste_allow_unauthenticated);
     if needs_auth && input.auth_keys.is_empty() && input.oidc_issuer.is_none() {
-        anyhow::bail!(
+        out.push(zugriff(
+            "authz.auth_keys",
             "--auth-key / MAKOD_AUTH_KEYS or --oidc-issuer / MAKOD_OIDC_ISSUER is \
              required when --http-addr or --api-webdienste-addr is set.\n\
              These ports perform privileged operations (submitting commands, \
@@ -180,25 +217,36 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
              Provide at least one named API key with --auth-key NAME=TOKEN \
              (e.g. --auth-key erp-prod=$(openssl rand -hex 32)), or configure \
              an OIDC issuer with --oidc-issuer <URL> --oidc-audience <AUD>."
-        );
+                .to_owned(),
+        ));
     }
 
     // ── OIDC arguments (no network round-trip) ───────────────────────────────
-    if input.oidc_issuer.is_some() {
-        anyhow::ensure!(
-            input.oidc_audience.is_some(),
+    if input.oidc_issuer.is_some() && input.oidc_audience.is_none() {
+        out.push(zugriff(
+            "oidc.audience",
             "--oidc-audience / MAKOD_OIDC_AUDIENCE is required when \
              --oidc-issuer / MAKOD_OIDC_ISSUER is set"
-        );
+                .to_owned(),
+        ));
     }
     if let Some(issuer) = input.oidc_issuer {
-        let url = reqwest::Url::parse(issuer)
-            .with_context(|| format!("--oidc-issuer: invalid URL {issuer:?}"))?;
-        anyhow::ensure!(
-            url.scheme() == "https" || url.host_str() == Some("localhost"),
-            "--oidc-issuer must use HTTPS (got {issuer:?}); bearer tokens would \
-             otherwise be validated against keys fetched over plaintext"
-        );
+        match reqwest::Url::parse(issuer) {
+            Err(e) => out.push(zugriff(
+                "oidc.issuer",
+                format!("--oidc-issuer: invalid URL {issuer:?}: {e}"),
+            )),
+            Ok(url) if !(url.scheme() == "https" || url.host_str() == Some("localhost")) => {
+                out.push(zugriff(
+                    "oidc.issuer",
+                    format!(
+                        "--oidc-issuer must use HTTPS (got {issuer:?}); bearer tokens would \
+                         otherwise be validated against keys fetched over plaintext"
+                    ),
+                ));
+            }
+            Ok(_) => {}
+        }
     }
 
     // ── Cedar ────────────────────────────────────────────────────────────────
@@ -208,9 +256,14 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
             .iter()
             .map(|s| NamedKey::from_arg(s))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!("{e}"))
     };
-    let auth_keys = parse_keys()?;
+    let auth_keys = match parse_keys() {
+        Ok(keys) => Some(keys),
+        Err(e) => {
+            out.push(zugriff("authz.auth_keys", e.to_string()));
+            None
+        }
+    };
     // Default-deny, like every other service in the platform. The permit-all
     // baseline is an explicit development opt-in, because an operator's own
     // `permit` statements cannot narrow it — beside it, a least-privilege policy
@@ -222,31 +275,41 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     };
     // Deny with no grants authorises nothing: every route answers 403 and the
     // deployment reads as broken rather than as unconfigured.
-    anyhow::ensure!(
-        input.cedar_permit_all
-            || input
-                .cedar_policies
-                .as_ref()
-                .is_some_and(|p| !p.trim().is_empty()),
-        "authorization is default-deny and no Cedar policies are configured, so every \
-         request would be refused. Point --cedar-policy-dir (authz.cedar_policy_dir) at \
-         a policy set — `services/makod/src/cedar/conservative.cedar` is the \
-         least-privilege starting point — or pass --cedar-permit-all to run without \
-         authorization (development only)."
-    );
+    if !(input.cedar_permit_all
+        || input
+            .cedar_policies
+            .as_ref()
+            .is_some_and(|p| !p.trim().is_empty()))
+    {
+        out.push(zugriff(
+            "authz.cedar_policy_dir",
+            "authorization is default-deny and no Cedar policies are configured, so every \
+             request would be refused. Point --cedar-policy-dir (authz.cedar_policy_dir) at \
+             a policy set — `services/makod/src/cedar/conservative.cedar` is the \
+             least-privilege starting point — or pass --cedar-permit-all to run without \
+             authorization (development only)."
+                .to_owned(),
+        ));
+    }
     // Compile the policy set now. Building the real authorizer later needs an
     // OIDC verifier, which needs the network; the policy text does not, and a
     // policy that fails to parse is the failure this catches. `NamedKey` holds a
     // `SecretString` and is deliberately not `Clone`, so the throw-away
     // authorizer gets its own parse of the same arguments.
-    CedarAuthorizer::new(
-        parse_keys()?,
-        input.cedar_policies.clone(),
-        None,
-        Some(input.primary_mp_id.to_owned()),
-        cedar_default_policy,
-    )
-    .map_err(|e| anyhow::anyhow!("Cedar policy set is invalid: {e}"))?;
+    if let Ok(keys) = parse_keys()
+        && let Err(e) = CedarAuthorizer::new(
+            keys,
+            input.cedar_policies.clone(),
+            None,
+            Some(input.primary_mp_id.to_owned()),
+            cedar_default_policy,
+        )
+    {
+        out.push(zugriff(
+            "authz.cedar_policy_dir",
+            format!("Cedar policy set is invalid: {e}"),
+        ));
+    }
 
     // ── AS4 clients ──────────────────────────────────────────────────────────
     //
@@ -257,21 +320,37 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     // partner endpoint without an encryption certificate, a missing decrypter,
     // a TLS key equal to a signing or encryption key. Running it here is what
     // makes `--check` report the refusal instead of the first delivery.
+    let as4_configured = input.parties.iter().any(|p| p.as4.is_some());
     let as4 = match As4Setup::from_config(
         input.as4,
         input.parties,
         input.registry,
         input.policy.as4.unbekannte_absender.get(),
-    )? {
-        Some(setup) => Some(As4Clients::build(setup)?),
-        None => None,
+    ) {
+        Err(e) => {
+            out.push(Befund::aus_fehler("as4", e).bereich(Bereich::Zertifikate));
+            None
+        }
+        Ok(None) => None,
+        Ok(Some(setup)) => match As4Clients::build(setup) {
+            Ok(clients) => Some(clients),
+            Err(e) => {
+                out.push(Befund::aus_fehler("party.as4", e).bereich(Bereich::Zertifikate));
+                None
+            }
+        },
     };
-    anyhow::ensure!(
-        !input.as4_inbound_enabled || as4.is_some(),
-        "--as4-addr is set but no [[party]] has [party.as4] key material, so there is no \
-         local MP-ID to serve: each MP-ID's inbox is /as4/inbox/<MP-ID>, served with its own \
-         signing, encryption and TLS key pairs"
-    );
+    if input.as4_inbound_enabled && !as4_configured {
+        out.push(
+            Befund::blockiert(
+                "as4.addr",
+                "--as4-addr is set but no [[party]] has [party.as4] key material, so there is no \
+                 local MP-ID to serve: each MP-ID's inbox is /as4/inbox/<MP-ID>, served with its own \
+                 signing, encryption and TLS key pairs",
+            )
+            .bereich(Bereich::Zertifikate),
+        );
+    }
 
     // ── API-Webdienste outbound: the identity this daemon calls under ────────
     //
@@ -285,14 +364,18 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
         && !input.webdienste_client_identity
         && !input.allow_unauthenticated_webdienste_client
     {
-        anyhow::bail!(
-            "an API-Webdienst is configured (--verzeichnisdienst-url / --maloid-partner) but no \
-             mTLS client identity is: the EDI-Energy API-Webdienste authenticate callers by \
-             mutual TLS with an EMT.API certificate from the BSI SM-PKI, so every call would be \
-             refused by the counterparty.\n\
-             Set --webdienste-client-cert-pem and --webdienste-client-key-pem (or \
-             webdienste.client_cert_pem_file / client_key_pem_file in makod.toml), or pass \
-             --allow-unauthenticated-webdienste-client for dev/test."
+        out.push(
+            Befund::blockiert(
+                "webdienste.client_cert_pem_file",
+                "an API-Webdienst is configured (--verzeichnisdienst-url / --maloid-partner) but no \
+                 mTLS client identity is: the EDI-Energy API-Webdienste authenticate callers by \
+                 mutual TLS with an EMT.API certificate from the BSI SM-PKI, so every call would be \
+                 refused by the counterparty.\n\
+                 Set --webdienste-client-cert-pem and --webdienste-client-key-pem (or \
+                 webdienste.client_cert_pem_file / client_key_pem_file in makod.toml), or pass \
+                 --allow-unauthenticated-webdienste-client for dev/test.",
+            )
+            .bereich(Bereich::Zertifikate),
         );
     }
 
@@ -311,14 +394,19 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
         && !input.webdienste_signing_key
         && !input.allow_unauthenticated_webdienste_client
     {
-        anyhow::bail!(
-            "an API-Webdienst is configured (--api-webdienste-addr / --maloid-partner / \
-             --verzeichnisdienst-url) but no content signing key is: every API-Webdienste \
-             interaction is signed (Regelungen zum Übertragungsweg für API-Webdienste 1.2, \
-             Kap. 3.3), and a request without the signature is one the counterparty may refuse.\n\
-             Set --webdienste-signing-key-pem (or webdienste.signing_key_pem_file in \
-             makod.toml) to the EMT.API key, or pass --allow-unauthenticated-webdienste-client \
-             for dev/test."
+        out.push(
+            Befund::blockiert(
+                "webdienste.signing_key_pem_file",
+                "an API-Webdienst is configured (--api-webdienste-addr / --maloid-partner / \
+                 --verzeichnisdienst-url) but no content signing key is: every API-Webdienste \
+                 interaction is signed (Regelungen zum Übertragungsweg für API-Webdienste 1.2, \
+                 Kap. 3.3), and a request without the signature is one the counterparty may refuse.\n\
+                 Set --webdienste-signing-key-pem (or webdienste.signing_key_pem_file in \
+                 makod.toml) to the EMT.API key, or pass --allow-unauthenticated-webdienste-client \
+                 for dev/test.",
+            )
+            .bereich(Bereich::Zertifikate)
+            .quelle("Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3"),
         );
     }
 
@@ -327,14 +415,20 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     // Signing material drives the AS4 sender; the EDIFACT webhook is the
     // development substitute. With neither, outbound EDIFACT is logged and
     // rescheduled forever, which is a silent regulatory failure.
-    anyhow::ensure!(
-        as4.is_some() || input.edifact_outbox_webhook_url.is_some() || input.allow_no_as4_signing,
-        "AS4 is not configured (no [party.as4] key material) and no \
-         --edifact-outbox-webhook-url fallback is configured. \
-         Outbound EDIFACT delivery would silently fail for all messages. \
-         To suppress this error in non-production environments, pass \
-         --allow-no-as4-signing."
-    );
+    if !(as4_configured || input.edifact_outbox_webhook_url.is_some() || input.allow_no_as4_signing)
+    {
+        out.push(
+            Befund::blockiert(
+                "party.as4",
+                "AS4 is not configured (no [party.as4] key material) and no \
+                 --edifact-outbox-webhook-url fallback is configured. \
+                 Outbound EDIFACT delivery would silently fail for all messages. \
+                 To suppress this error in non-production environments, pass \
+                 --allow-no-as4-signing.",
+            )
+            .bereich(Bereich::Erreichbarkeit),
+        );
+    }
 
     // ── Outbound callback URLs ───────────────────────────────────────────────
     //
@@ -342,108 +436,155 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     // discovered until the first message is due, and by then the failure shows
     // up as a delivery error on a regulated message rather than as the
     // configuration typo it is.
-    for (flag, value) in [
+    for (flag, pfad, value) in [
         (
             "--edifact-outbox-webhook-url",
+            "erp.edifact_outbox_webhook_url",
             input.edifact_outbox_webhook_url,
         ),
-        ("--erp-webhook-url", input.erp_webhook_url),
-        ("--netzzugang-endpoint-url", input.netzzugang_endpoint_url),
-        ("--marktd-url", input.marktd_url),
+        (
+            "--erp-webhook-url",
+            "erp.webhook_url",
+            input.erp_webhook_url,
+        ),
+        (
+            "--netzzugang-endpoint-url",
+            "netzzugang.endpoint_url",
+            input.netzzugang_endpoint_url,
+        ),
+        ("--marktd-url", "marktd.url", input.marktd_url),
     ] {
         let Some(raw) = value else { continue };
-        let url =
-            reqwest::Url::parse(raw).with_context(|| format!("{flag}: invalid URL {raw:?}"))?;
-        anyhow::ensure!(
-            matches!(url.scheme(), "http" | "https"),
-            "{flag}: expected an http(s) URL, got scheme {:?} in {raw:?}",
-            url.scheme()
-        );
-        anyhow::ensure!(url.host_str().is_some(), "{flag}: URL has no host: {raw:?}");
+        let fehler = match reqwest::Url::parse(raw) {
+            Err(e) => Some(format!("{flag}: invalid URL {raw:?}: {e}")),
+            Ok(url) if !matches!(url.scheme(), "http" | "https") => Some(format!(
+                "{flag}: expected an http(s) URL, got scheme {:?} in {raw:?}",
+                url.scheme()
+            )),
+            Ok(url) if url.host_str().is_none() => {
+                Some(format!("{flag}: URL has no host: {raw:?}"))
+            }
+            Ok(_) => None,
+        };
+        if let Some(text) = fehler {
+            out.push(Befund::blockiert(pfad, text).bereich(Bereich::Erreichbarkeit));
+        }
     }
 
     // ── MaLo-ID partner directory ────────────────────────────────────────────
     let mut maloid_partners = HashMap::new();
     for pair in input.maloid_partner {
-        let (mp_id, url_str) = pair
-            .split_once('=')
-            .ok_or_else(|| anyhow::anyhow!("--maloid-partner: expected MP-ID=URL, got {pair:?}"))?;
-        let url = reqwest::Url::parse(url_str.trim())
-            .map_err(|e| anyhow::anyhow!("--maloid-partner: invalid URL {url_str:?}: {e}"))?;
-        // An AS4 partner endpoint has to be HTTPS; this one carries the Marktlokation's postal address and its NB/MSB
-        // assignment, and was only checked for parseability.
-        anyhow::ensure!(
-            is_secure_endpoint(&url),
-            "--maloid-partner: the callback URL for {} must use HTTPS (got {url_str:?}). \
-             A MaLo-ID callback carries the Marktlokation's address and its NB/MSB \
-             assignment; it is not sent in the clear.",
-            mp_id.trim(),
-        );
-        maloid_partners.insert(mp_id.trim().to_owned(), url);
+        let Some((mp_id, url_str)) = pair.split_once('=') else {
+            out.push(
+                Befund::blockiert(
+                    "maloid.partner",
+                    format!("--maloid-partner: expected MP-ID=URL, got {pair:?}"),
+                )
+                .bereich(Bereich::Erreichbarkeit),
+            );
+            continue;
+        };
+        match reqwest::Url::parse(url_str.trim()) {
+            Err(e) => out.push(
+                Befund::blockiert(
+                    "maloid.partner",
+                    format!("--maloid-partner: invalid URL {url_str:?}: {e}"),
+                )
+                .bereich(Bereich::Erreichbarkeit),
+            ),
+            // An AS4 partner endpoint has to be HTTPS; this one carries the
+            // Marktlokation's postal address and its NB/MSB assignment.
+            Ok(url) if !is_secure_endpoint(&url) => out.push(
+                Befund::blockiert(
+                    "maloid.partner",
+                    format!(
+                        "--maloid-partner: the callback URL for {} must use HTTPS (got {url_str:?}). \
+                         A MaLo-ID callback carries the Marktlokation's address and its NB/MSB \
+                         assignment; it is not sent in the clear.",
+                        mp_id.trim(),
+                    ),
+                )
+                .bereich(Bereich::Erreichbarkeit),
+            ),
+            Ok(url) => {
+                maloid_partners.insert(mp_id.trim().to_owned(), url);
+            }
+        }
     }
 
-    let verzeichnisdienst_url = input
-        .verzeichnisdienst_url
-        .map(|s| {
-            reqwest::Url::parse(s)
-                .map_err(|e| anyhow::anyhow!("--verzeichnisdienst-url: invalid URL {s:?}: {e}"))
-        })
-        .transpose()?;
+    let verzeichnisdienst_url = match input.verzeichnisdienst_url.map(reqwest::Url::parse) {
+        None => None,
+        Some(Ok(url)) => Some(url),
+        Some(Err(e)) => {
+            out.push(
+                Befund::blockiert(
+                    "webdienste.verzeichnisdienst_url",
+                    format!(
+                        "--verzeichnisdienst-url: invalid URL {:?}: {e}",
+                        input.verzeichnisdienst_url.unwrap_or_default()
+                    ),
+                )
+                .bereich(Bereich::Erreichbarkeit),
+            );
+            None
+        }
+    };
 
-    if input.edifact_outbox_webhook_url.is_some() {
+    if input.edifact_outbox_webhook_url.is_some() && !input.erp_webhook_secret_set {
         // The body is the rendered market message — the MaLo-IDs, the
         // counterparty and the customer data the Vorgang is about. Unsigned,
         // the receiver cannot tell a mako delivery from anything else that can
         // reach the URL, and mako cannot tell that it was read by the ERP it
         // meant. This is the AS4 substitute: the real transport authenticates
         // both ends, so the substitute has to authenticate one.
-        anyhow::ensure!(
-            input.erp_webhook_secret_set,
+        out.push(zugriff(
+            "erp.webhook_secret_file",
             "--edifact-outbox-webhook-url is set but no webhook signing secret is \
              configured. Outbound EDIFACT would be POSTed unsigned, carrying the \
              rendered market message and the customer data in it. Set \
              erp.webhook_secret_file in makod.toml (preferred), erp.webhook_secret, \
              or --erp-webhook-secret."
-        );
+                .to_owned(),
+        ));
     }
 
-    if input.marktd_url.is_some() {
+    if input.marktd_url.is_some() && input.marktd_api_key.is_none_or(|k| k.trim().is_empty()) {
         // An empty key is worse than no marktd at all. The ESA consent gate and
         // the Konfigurationsprodukt guard both **fail open** on a lookup
         // error — deliberately, because a marktd outage must not reject
         // regulated traffic — so an unauthenticated client turns every check
         // into a silent pass while the operator sees marktd configured and
         // believes the gate is on.
-        anyhow::ensure!(
-            input.marktd_api_key.is_some_and(|k| !k.trim().is_empty()),
+        out.push(zugriff(
+            "marktd.api_key",
             "--marktd-url is set but no API key is configured. \
              marktd would reject every request, and the ESA consent gate and the \
              Konfigurationsprodukt guard fail open on a lookup error — both would \
              silently pass everything. Set marktd.api_key_file in makod.toml \
              (preferred), marktd.api_key, or --marktd-api-key."
-        );
+                .to_owned(),
+        ));
     }
 
-    Ok(Preflight {
-        as4,
-        maloid_partners,
-        verzeichnisdienst_url,
-        auth_keys,
-        cedar_policies: input.cedar_policies.clone(),
-        cedar_default_policy,
-    })
+    match auth_keys {
+        Some(auth_keys) if out.is_empty() => Ok(Preflight {
+            as4,
+            maloid_partners,
+            verzeichnisdienst_url,
+            auth_keys,
+            cedar_policies: input.cedar_policies.clone(),
+            cedar_default_policy,
+        }),
+        _ => Err(out),
+    }
 }
 
 /// Emit the non-fatal configuration warnings.
 ///
-/// Separate from [`preflight`] because these describe a *degraded* deployment
+/// Separate from [`pruefe`] because these describe a *degraded* deployment
 /// rather than an unstartable one — and because `--check` should report them
 /// too, which is why they are not buried in the server-start branches.
 pub fn warn_on_degraded_config(input: &PreflightInput<'_>, durable_store: bool) {
-    input
-        .policy
-        .report()
-        .log("makod", time::OffsetDateTime::now_utc());
     if input.as4_inbound_enabled {
         if !durable_store {
             tracing::warn!(
@@ -620,6 +761,7 @@ mod tests {
                 }],
                 allow_no_signing: false,
                 lenient_receipts: None,
+                zertifikat_warnfenster_tage: None,
             }
         }
 

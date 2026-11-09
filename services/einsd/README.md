@@ -19,6 +19,7 @@ just dev einsd         # dev/config/einsd.toml against the dev PostgreSQL
 | **Database** | PostgreSQL — `einspeiser`, `eeg_anlagen`, `settlement_receipts`, `eeg_pflichtverstoesse`, `marktwert_preise`, `eeg_verguetungssaetze`, `enfg_ledger` |
 | **Auth** | OIDC + Cedar [`policies/einsd.cedar`](policies/einsd.cedar): reads for the tenant, writes and settlement for `NB`/`LF`/`UENB`, corrections for `NB`/`UENB`, the EnFG ledger and Mitteilung for `NB`. Refuses to start without `[oidc]` unless `allow_insecure_no_auth` |
 | **Settlement** | 12 models (VERGUETUNG … FLEXIBILITAET_ZUSCHLAG), 18 `erzeugungsart` values; REST, batch, MCP and the monthly worker all call `settle::settle_plant`. `Decimal` only |
+| **Beihilfevorbehalt** | every Teil-3 payment for a supply period from 01.01.2027 passes the gate before anything is fetched: the EEG 2023 approval (SA.102084) ends 31.12.2026, so a month is open only under a recorded `[beihilfevorbehalt]` approval or by `[policy] beihilfe_politik`. §§ 53b–54 reductions are read from the **Fassung of the payment period**, not the plant's vintage — EEG 2023 to 31.12.2026 and to the end of a recorded extension; none tabled otherwise (`fassung_nicht_tabelliert`) |
 | **Inputs** | `arbeitsmenge_kwh` and the § 51 ¼h feed-in fetched from `edmd` when not supplied; Marktwert series per Anlage 1 Nr. 2 — a miss is `PriceMissing`, never a substitute |
 | **Events** | `de.eeg.*` through the transactional outbox to `erp_webhook_url`, HMAC-signed |
 
@@ -44,12 +45,17 @@ Top-level: `tenant`, `edmd_url` / `edmd_api_key`, `accountingd_url` /
 `accountingd_api_key` and `marktd_url` / `marktd_api_key` (EnFG ledger),
 `auto_settle_catchup_months`, `auto_settle_from_day`, `jahresmarktwert_url`,
 `erp_webhook_url` / `erp_hmac_secret`. Tables: `[http]` (`addr`), `[database]`, `[oidc]`,
-`[beihilfevorbehalt]` (recorded state-aid approvals), `[policy]`
+`[beihilfevorbehalt]` (recorded state-aid approvals, each naming its
+`regelung`: `eeg2027`, or `eeg2023_verlaengerung` — a short-term extension of
+the EEG 2023 approval, under which the periods to its `gilt_bis` settle on the
+EEG 2023 Fassung), `[policy]`
 (`beihilfe_politik = "verweigern"`, `"unter_vorbehalt"` or `"halten"` for an
 uncovered payment from 01.01.2027; `halten` stores a `gehalten` receipt with no
 Gutschrift and no payout until an approval releases it). The policy report is
 logged at startup, served at `GET /api/v1/policy` and by the MCP tool
-`get_policy`. DB suite: `just test-einsd-db`.
+`get_policy`. `einsd --check-config [--json]` prints every configuration
+finding (path, severity, source) and exits non-zero on a blocking one; the same
+findings are served at `GET /admin/einrichtung`. DB suite: `just test-einsd-db`.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/einsd/)
 carries every statutory rule with its Fundstelle, the settlement formulas and

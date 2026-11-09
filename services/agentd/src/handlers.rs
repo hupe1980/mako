@@ -1168,7 +1168,13 @@ mod tests {
         );
         assert!(desk.nur_lesend);
         assert!(desk.modell.is_some());
-        assert_eq!(desk.liest.len(), 9);
+        assert_eq!(desk.liest.len(), 11);
+        assert!(
+            desk.liest
+                .iter()
+                .any(|l| l.werkzeug == "agentd/quote_source"),
+            "a rule is stated only as a quote"
+        );
         assert!(
             desk.liest
                 .iter()

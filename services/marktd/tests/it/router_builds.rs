@@ -56,3 +56,31 @@ async fn a_database_failure_answers_with_an_error_id_and_no_driver_text() {
         assert!(!text.contains(leak), "the body leaks {leak:?}: {text}");
     }
 }
+
+/// The operator policy and the configuration findings the runner built at
+/// boot are served read-only, through marktd's own authentication and Cedar.
+#[tokio::test]
+async fn the_policy_and_the_findings_are_served() {
+    let app = mako_service::build_for_test::<Marktd>(load("../../dev/config/marktd.toml"))
+        .await
+        .expect("the router builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    for path in ["/api/v1/policy", "/admin/einrichtung"] {
+        let resp = reqwest::get(format!("http://{addr}{path}"))
+            .await
+            .expect("the request is answered");
+        assert_eq!(resp.status(), 200, "{path}");
+    }
+    let e: mako_service::einrichtung::Einrichtung =
+        reqwest::get(format!("http://{addr}/admin/einrichtung"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .expect("an Einrichtung body");
+    assert_eq!(e.dienst, "marktd");
+}

@@ -1,4 +1,5 @@
 import { HaltRing } from "../design/HaltRing";
+import { katalog, useT } from "../i18n";
 import { type Entscheidbar, schluessel, useFehlschlag } from "./aktionen";
 import { nichtErreichbar } from "./dienste";
 import { useGehalten } from "./Holds";
@@ -8,7 +9,8 @@ import { UNDO } from "./keys";
 function warum(dienst: Parameters<typeof nichtErreichbar>[0], error: unknown): string {
   if (error instanceof Error && error.name === "SchonEntschieden") {
     const by = (error as Error & { decidedBy?: string | null }).decidedBy;
-    return `${by ?? "Jemand"} hat schon entschieden.`;
+    const k = katalog().halten;
+    return k.schonEntschieden(by ?? k.jemand);
   }
   // Every refusal the decision doors raise carries the service's sentence.
   const eigene = ["Abgelehnt", "SchonErledigt", "ErneutGeparkt", "Verweigert"];
@@ -29,20 +31,16 @@ export function Entscheidungsstand({
   /** Say a refusal here; false where the entry's open form says it. */
   fehlschlag?: boolean;
 }) {
+  const t = useT();
   const key = schluessel(ding);
   const gehalten = useGehalten(key);
   const fehlschlag = useFehlschlag(key);
   if (gehalten)
-    return (
-      <HaltRing
-        ms={gehalten.ms}
-        label={`Gleich gesendet: ${gehalten.hold.label} — ${UNDO.keys} nimmt es zurück`}
-      />
-    );
+    return <HaltRing ms={gehalten.ms} label={t.halten.ring(gehalten.hold.label, UNDO.keys)} />;
   if (fehlschlag && zeigen)
     return (
       <span role="status" className="max-w-56 text-caption text-critical">
-        Nicht gesendet: {warum(fehlschlag.dienst, fehlschlag.error)}
+        {t.halten.nichtGesendet(warum(fehlschlag.dienst, fehlschlag.error))}
       </span>
     );
   return null;

@@ -3,7 +3,20 @@ title = "Getting Started"
 description = "Run the mako NB straight-through-processing demo in about five minutes: submit a UTILMD 55001 Anmeldung and receive the 55002 confirmation back."
 weight = 2
 +++
-This guide runs the NB STP demo stack locally: UTILMD 55001 → automatic NB
+Start with the configuration check — it needs no database and no running
+service:
+
+```bash
+just setup
+```
+
+It runs every daemon's `--check-config` against its dev config and prints one
+checklist — identities, certificates, Bilanzkreise, access, reachability, format
+coverage — each finding with its setting path and source, and exits non-zero
+while anything is red. [Einrichtung](@/docs/guide/einrichtung.md) explains the
+checklist and how to ask a running deployment.
+
+This guide then runs the NB STP demo stack locally: UTILMD 55001 → automatic NB
 decision → UTILMD 55002.
 
 ## What you're running
@@ -390,6 +403,7 @@ key. Two flags help before a first start:
 ```bash
 cargo run -p marktd -- --help          # usage and config conventions, reads no config
 cargo run -p marktd -- --print-config  # the merged file + environment, secrets redacted
+cargo run -p marktd -- --check-config  # every finding with its path; exit 1 on a blocking one
 ```
 
 `just smoke-dev` boots every service this way and waits for `/health/ready`.
@@ -402,6 +416,7 @@ covers building, testing one crate and running the gate.
 
 | Topic | Guide |
 |---|---|
+| Configuration findings and the deployment checklist | [Einrichtung](@/docs/guide/einrichtung.md) |
 | EDIFACT parsing and validation | [Parsing guide](@/docs/reference/parsing.md) |
 | ERP integration — CloudEvents, HMAC | [ERP integration](@/docs/architecture/erp-integration.md) |
 | makod operator reference | [makod guide](@/docs/services/makod.md) |

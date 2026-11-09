@@ -8,11 +8,12 @@ use mako_service::{ApiError, Json};
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-/// Build the ERP commands router.
+/// Build the ERP commands router: the command door and its rehearsal.
 pub fn router(state: Arc<CommandsApiState>) -> Router {
     let max_body = state.max_body_bytes;
     Router::new()
         .route("/api/v1/commands", post(handle_command))
+        .route("/api/v1/probe/{command}", post(super::probe::handle_probe))
         .layer(DefaultBodyLimit::max(max_body))
         .with_state(state)
 }
@@ -363,6 +364,13 @@ pub(crate) async fn handle_command(
             ))
             .with_code("stammdaten_unvollstaendig")
             .with_fields(serde_json::json!({ "malo_id": malo_id, "fehlend": fehlend }))
+            .into_response();
+        }
+        Err(DispatchError::Geprobt) => {
+            // Raised only inside a rehearsal scope, which this door never opens.
+            return ApiError::internal(anyhow::anyhow!(
+                "ERP dispatch of {cmd_lower}: a rehearsal halt outside a rehearsal"
+            ))
             .into_response();
         }
         Err(DispatchError::NotImplemented(cmd)) => {

@@ -25,7 +25,7 @@ overrides any key, and a `*_FILE` variable reads a value from a file.
 | **Supply status** | `de.mako.process.*` events drive `lf_zuordnung` (one row per assignment: supplier, share, Tranche, `Angekuendigt`/`Aktiv`); every transition writes history (`?at=YYYY-MM-DD`) and emits `de.markt.versorgung.changed` |
 | **Events** | CloudEvents 1.0 from `urn:mako:marktd:tenant:{tenant}`, HMAC-signed, durable two-phase fan-out ordered per aggregate |
 | **API spec** | OpenAPI 3.1 at `/api/v1/openapi.json` — open it in any Swagger UI or Redoc |
-| **MCP** | 17 read-only tools and 4 prompts at `/mcp` |
+| **MCP** | 19 read-only tools and 4 prompts at `/mcp` |
 
 Startup refuses a missing `[oidc]` or `webhook.inbound_secret` unless
 `allow_insecure_no_auth = true`.
@@ -45,6 +45,8 @@ A `404` from `/bilanzierungsgebiete/{eic}/mabis-zp` means *refuse the
 submission*, never *substitute the EIC*.
 
 ## Configuration
+
+`marktd --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one; `--json` prints the body `GET /admin/einrichtung` serves.
 
 Sections: `[database]`, `[http]`, `[markt] tenant`, `[oidc]`, `[makod]`,
 `[webhook]` (`inbound_path`, `inbound_secret`, delivery timeouts),

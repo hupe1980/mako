@@ -22,9 +22,10 @@ a model-backed specialist.
 | | |
 |---|---|
 | **Specialists** | 29 manifests in [`agents/`](agents/) — 26 `tool-calling`, 2 model-free coded skills ([`src/skills/`](src/skills/)) |
-| **Grants** | read-only only: 159 grants across 29 manifests, each named by its procedure (`cargo xtask check-tool-grants`, `check-prompt-tools`) |
+| **Grants** | read-only only: 161 grants across 29 manifests, each named by its procedure (`cargo xtask check-tool-grants`, `check-prompt-tools`) |
 | **Prompts** | mako's MCP servers publish 54 step-by-step prompts across 11 servers; specialists reference them through `context.prompts` |
 | **Answers** | All 29 specialists declare a closed `output.schema`; coded finding codes are enums |
+| **Quotes** | agentd's own read-only `quote_source` / `find_source` (`tool://agentd/…`) answer a passage by address — document, edition, chapter or § — from the operator's passage index (`[quellen] index`); a desk-assistant sentence naming a § or a chapter is belegt only beside the quote of that address |
 | **Oversight** | triage rules open worklist rows under `/api/v1/oversight/*`; rows escalate, never expire. Mounted only with `[oidc]` |
 | **Journal** | `redb` (single instance) or Postgres; optional sealing (`[keyring]`), workload signatures (`[attestation]`) and C2SP `tlog-witness` cosigning (`[witness]`) |
 | **Erasure** | every run joins a case keyed on its MaLo; `POST /api/v1/erasure` crypto-shreds the case key or forgets a memory subject (GDPR Art. 17) |
@@ -53,6 +54,8 @@ chain_head}`, plus `reason` on failure — to `audit_webhook_url`, signed with
 Standard Webhooks.
 
 ## Configuration
+
+`agentd --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one; `--json` prints the body `GET /admin/einrichtung` serves.
 
 ```toml
 # agentd.toml
@@ -117,6 +120,11 @@ token   = "env:VAULT_TOKEN"
 
 [policy]
 # path = "/etc/agentd/policy.cedar"
+
+[quellen]
+# The passage index `cargo xtask index-sources` builds from your regulatories/
+# mirror; quote_source and find_source read it. Absent, both refuse every call.
+index = "/var/lib/agentd/quellen-index.json"
 
 [mcp_servers]
 makod       = "http://makod:8080/mcp"

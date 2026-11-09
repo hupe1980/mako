@@ -169,6 +169,19 @@ fn an_aenderung_carries_both_dates() {
             location_id: MaLo::new(MALO),
             aenderungsdatum: "20261215".to_owned(),
             vertragsbeginn: "20250101".to_owned(),
+            stammdaten: mako_engine::payload::Stammdaten {
+                sg6: vec![
+                    mako_engine::payload::StammdatenSegment {
+                        tag: "RFF".to_owned(),
+                        elemente: vec![vec!["Z18".to_owned(), MALO.to_owned()]],
+                    },
+                    mako_engine::payload::StammdatenSegment {
+                        tag: "DTM".to_owned(),
+                        elemente: vec![vec!["Z20".to_owned(), "12".to_owned(), "802".to_owned()]],
+                    },
+                ],
+                ..mako_engine::payload::Stammdaten::default()
+            },
         },
     )
     .expect("the Änderung is queued");

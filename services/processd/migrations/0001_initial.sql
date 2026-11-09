@@ -347,8 +347,16 @@ CREATE TABLE process_projections (
     -- Terminal state timestamp for cycle-time KPI reporting
     completed_at        TIMESTAMPTZ,
     erc_code            TEXT,
+    -- The Antwortcode of the counterparty's business answer (SG4 STS+E01 on a
+    -- UTILMD, SG2 AJT on an ORDRSP) and the tree or Codeliste it named. Not
+    -- erc_code: an APERAK refuses the message, this answers the request. The
+    -- two move as one pair; a list never stands without its code.
+    antwort_code        TEXT,
+    antwort_codeliste   TEXT,
     tenant              TEXT        NOT NULL,
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT pp_antwort_codeliste_has_code
+        CHECK (antwort_codeliste IS NULL OR antwort_code IS NOT NULL)
 );
 
 COMMENT ON TABLE process_projections IS

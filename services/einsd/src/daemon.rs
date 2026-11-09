@@ -73,7 +73,7 @@ impl Daemon for Einsd {
         Ok(())
     }
 
-    fn validate(cfg: &config::EinsdConfig) -> anyhow::Result<()> {
+    fn validate(cfg: &config::EinsdConfig) -> Vec<mako_service::Befund> {
         cfg.validate()
     }
 
@@ -365,15 +365,16 @@ impl Daemon for Einsd {
             });
         }
 
-        Ok(crate::routes::build_router(
-            Arc::clone(&cfg),
-            Arc::clone(&http_client),
+        Ok(crate::routes::build_router(crate::routes::RouterDeps {
+            cfg: Arc::clone(&cfg),
+            http_client: Arc::clone(&http_client),
             cedar,
             oidc,
             pool,
             mcp_state,
-            ct,
-        ))
+            shutdown: ct,
+            einrichtung: Arc::clone(&ctx.einrichtung),
+        }))
     }
 }
 

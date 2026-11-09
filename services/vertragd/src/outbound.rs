@@ -110,16 +110,18 @@ pub struct Task {
 ///
 /// Refuses a gas component without its [`GasAnmeldung`]: `start-supply-gas`
 /// carries the Lieferant's contract facts the Anmeldung NN 44001 makes Muss,
-/// and a task without them is a 422 on every attempt.
+/// and a task without them is a 422 on every attempt. Refuses any other
+/// component without its [`StromAnmeldung`], for the same reason.
 pub fn lieferbeginn(
     komp_id: Uuid,
     sparte: &str,
     malo_id: &str,
     bilanzkreis: Option<&str>,
     lieferbeginn: Date,
+    strom: Option<&StromAnmeldung>,
     gas: Option<&GasAnmeldung>,
 ) -> Result<Task> {
-    let payload = lieferbeginn_body(sparte, malo_id, bilanzkreis, lieferbeginn, gas)?;
+    let payload = lieferbeginn_body(sparte, malo_id, bilanzkreis, lieferbeginn, strom, gas)?;
     Ok(Task {
         kind: TaskKind::Lieferbeginn,
         komp_id: Some(komp_id),
@@ -139,6 +141,67 @@ fn processd_call(endpoint: &str, body: serde_json::Value) -> serde_json::Value {
 /// (gesetzliche deutsche Zeit).
 fn compact_date(d: Date) -> String {
     format!("{:04}{:02}{:02}", d.year(), u8::from(d.month()), d.day())
+}
+
+/// The Lieferant's contract facts a Strom Anmeldung 55001 carries beside the
+/// Marktlokation, the date and the Bilanzkreis (UTILMD AHB Strom 2.2 Kap. 8.2)
+/// — each one the contract's, each Muss in the column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StromAnmeldung {
+    /// `SG4 STS+7` — `E03` Wechsel or `E01` Ein-/Auszug (Umzug), from the
+    /// component's [`Lieferbeginnanlass`] (S. 73).
+    pub transaktionsgrund: &'static str,
+    /// `SG10 CCI+++Z15`/`Z18` — the Kunde's `haushaltskunde` (S. 83).
+    pub haushaltskunde: bool,
+    /// `SG8 SEQ+Z75 CCI+Z61` — `ZF9`, `ZG0` or `ZG1` (S. 85).
+    pub enfg_grundlage: String,
+    /// `SG10 CAV` — beside `ZF9` only.
+    pub enfg_grund: Option<String>,
+    /// `SG12 NAD+Z09`/`Z04` — the contract's Kunde (S. 86).
+    pub kunde: Kunde,
+}
+
+impl StromAnmeldung {
+    /// Assemble the facts, or name every one the contract does not state.
+    ///
+    /// # Errors
+    ///
+    /// Each missing or unusable fact, named with the segment it fills.
+    pub fn aus_vertrag(
+        anlass: Option<Lieferbeginnanlass>,
+        haushaltskunde: bool,
+        enfg_grundlage: Option<&str>,
+        enfg_grund: Option<&str>,
+        kunde: Kunde,
+    ) -> std::result::Result<Self, Vec<String>> {
+        let mut fehlend = Vec::new();
+        let grund = anlass.and_then(Lieferbeginnanlass::anmeldung_strom_transaktionsgrund);
+        if grund.is_none() {
+            fehlend.push(format!(
+                "lieferbeginn_anlass {anlass:?} (SG4 STS+7 Transaktionsgrund): the 55001 admits \
+                 E01 Ein-/Auszug (Umzug) and E03 Wechsel — UMZUG or WECHSEL"
+            ));
+        }
+        if enfg_grundlage.is_none() {
+            fehlend.push("enfg_grundlage (SG8 SEQ+Z75 CCI+Z61 Grundlage nach EnFG)".to_owned());
+        }
+        fehlend.extend(
+            kunde
+                .anmeldung_maengel()
+                .into_iter()
+                .map(|m| format!("the Kunde (SG12 NAD+Z09/Z04): {m}")),
+        );
+        match (grund, enfg_grundlage) {
+            (Some(transaktionsgrund), Some(enfg_grundlage)) if fehlend.is_empty() => Ok(Self {
+                transaktionsgrund,
+                haushaltskunde,
+                enfg_grundlage: enfg_grundlage.to_owned(),
+                enfg_grund: enfg_grund.map(str::to_owned),
+                kunde,
+            }),
+            _ => Err(fehlend),
+        }
+    }
 }
 
 /// The Lieferant's contract facts a GeLi Gas Anmeldung NN 44001 carries
@@ -235,7 +298,8 @@ impl GasAnmeldung {
 /// The body is `processd`'s request type, field for field — the contract test
 /// reads it through `processd::server::StartSupplyRequest` and
 /// `processd::server::StartSupplyGasRequest` as the handler does:
-/// - `start-supply` (Strom et al.) takes `lieferbeginn_datum` (ISO-8601);
+/// - `start-supply` (Strom et al.) takes `lieferbeginn_datum` (ISO-8601) and
+///   the [`StromAnmeldung`];
 /// - `start-supply-gas` takes `process_date` (YYYYMMDD) and the
 ///   [`GasAnmeldung`].
 ///
@@ -245,12 +309,14 @@ impl GasAnmeldung {
 ///
 /// # Errors
 ///
-/// A gas supply point without its [`GasAnmeldung`].
+/// A gas supply point without its [`GasAnmeldung`]; any other without its
+/// [`StromAnmeldung`].
 pub fn lieferbeginn_body(
     sparte: &str,
     malo_id: &str,
     bilanzkreis: Option<&str>,
     lieferbeginn: Date,
+    strom: Option<&StromAnmeldung>,
     gas: Option<&GasAnmeldung>,
 ) -> Result<serde_json::Value> {
     let mut body = if sparte == "GAS" {
@@ -273,9 +339,20 @@ pub fn lieferbeginn_body(
             "ablesekarte": gas.kunde,
         })
     } else {
+        let strom = strom.ok_or_else(|| {
+            anyhow::anyhow!(
+                "supply point {malo_id}: start-supply carries the contract facts of the \
+                 Anmeldung 55001, and none were assembled"
+            )
+        })?;
         serde_json::json!({
             "malo_id": malo_id,
             "lieferbeginn_datum": lieferbeginn.to_string(),
+            "transaktionsgrund": strom.transaktionsgrund,
+            "haushaltskunde": strom.haushaltskunde,
+            "enfg_grundlage": strom.enfg_grundlage,
+            "enfg_grund": strom.enfg_grund,
+            "kunde": strom.kunde,
         })
     };
     if let Some(bk) = bilanzkreis.filter(|b| !b.is_empty()) {
@@ -989,12 +1066,89 @@ mod tests {
         .expect("a full contract")
     }
 
+    fn strom() -> StromAnmeldung {
+        StromAnmeldung::aus_vertrag(
+            Some(Lieferbeginnanlass::Wechsel),
+            true,
+            Some("ZG1"),
+            None,
+            kunde(),
+        )
+        .expect("a full contract")
+    }
+
     #[test]
     fn strom_carries_lieferbeginn_datum() {
-        let b =
-            lieferbeginn_body("STROM", "51238696012", None, date!(2026 - 04 - 01), None).unwrap();
+        let b = lieferbeginn_body(
+            "STROM",
+            "51238696012",
+            None,
+            date!(2026 - 04 - 01),
+            Some(&strom()),
+            None,
+        )
+        .unwrap();
         assert_eq!(b["endpoint"], "start-supply");
         assert_eq!(b["body"]["lieferbeginn_datum"], "2026-04-01");
+        assert_eq!(b["body"]["haushaltskunde"], true);
+        assert_eq!(b["body"]["enfg_grundlage"], "ZG1");
+        assert_eq!(b["body"]["kunde"]["nachname"], "Mustermann");
+    }
+
+    /// The 55001's `SG4 STS+7` is the contract's Anlass — `E03` Wechsel, `E01`
+    /// Umzug (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73). A contract that states
+    /// none, or one the 55001 cannot carry, is refused rather than defaulted,
+    /// and so is one without its Grundlage nach EnFG or a Kunde with an
+    /// address.
+    #[test]
+    fn a_strom_anmeldung_carries_the_contracts_grund() {
+        for (anlass, grund) in [
+            (Lieferbeginnanlass::Wechsel, "E03"),
+            (Lieferbeginnanlass::Umzug, "E01"),
+        ] {
+            let a = StromAnmeldung::aus_vertrag(Some(anlass), true, Some("ZG0"), None, kunde())
+                .unwrap();
+            assert_eq!(a.transaktionsgrund, grund, "{anlass:?}");
+        }
+        for anlass in [
+            None,
+            Some(Lieferbeginnanlass::Neuanlage),
+            Some(Lieferbeginnanlass::EndeErsatzversorgung),
+        ] {
+            let fehlend =
+                StromAnmeldung::aus_vertrag(anlass, true, Some("ZG0"), None, kunde()).unwrap_err();
+            assert!(
+                fehlend.join(" ").contains("STS+7"),
+                "{anlass:?}: {fehlend:?}"
+            );
+        }
+        let fehlend = StromAnmeldung::aus_vertrag(
+            Some(Lieferbeginnanlass::Wechsel),
+            true,
+            None,
+            None,
+            Kunde {
+                nachname: None,
+                vorname: None,
+                organisationsname: None,
+                anschrift: None,
+            },
+        )
+        .unwrap_err();
+        let fehlend = fehlend.join(" ");
+        for named in ["enfg_grundlage", "NAD+Z09"] {
+            assert!(fehlend.contains(named), "{named}: {fehlend}");
+        }
+        let err = lieferbeginn_body(
+            "STROM",
+            "51238696012",
+            None,
+            date!(2026 - 04 - 01),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("55001"), "{err}");
     }
 
     #[test]
@@ -1004,6 +1158,7 @@ mod tests {
             "51238696012",
             None,
             date!(2026 - 04 - 01),
+            None,
             Some(&gas()),
         )
         .unwrap();
@@ -1022,12 +1177,21 @@ mod tests {
     #[test]
     fn the_body_carries_no_key_beside_the_request_fields() {
         for b in [
-            lieferbeginn_body("STROM", "51238696012", None, date!(2026 - 04 - 01), None).unwrap(),
+            lieferbeginn_body(
+                "STROM",
+                "51238696012",
+                None,
+                date!(2026 - 04 - 01),
+                Some(&strom()),
+                None,
+            )
+            .unwrap(),
             lieferbeginn_body(
                 "GAS",
                 "51238696012",
                 None,
                 date!(2026 - 04 - 01),
+                None,
                 Some(&gas()),
             )
             .unwrap(),
@@ -1046,19 +1210,34 @@ mod tests {
             "51238696012",
             Some("11XBK-STANDARD-4"),
             date!(2026 - 04 - 01),
+            Some(&strom()),
             None,
         )
         .unwrap();
         assert_eq!(with["body"]["bilanzkreis"], "11XBK-STANDARD-4");
-        let without =
-            lieferbeginn_body("STROM", "51238696012", None, date!(2026 - 04 - 01), None).unwrap();
+        let without = lieferbeginn_body(
+            "STROM",
+            "51238696012",
+            None,
+            date!(2026 - 04 - 01),
+            Some(&strom()),
+            None,
+        )
+        .unwrap();
         assert!(without["body"].get("bilanzkreis").is_none());
     }
 
     #[test]
     fn gas_without_its_contract_facts_is_refused() {
-        let err =
-            lieferbeginn_body("GAS", "51238696012", None, date!(2026 - 04 - 01), None).unwrap_err();
+        let err = lieferbeginn_body(
+            "GAS",
+            "51238696012",
+            None,
+            date!(2026 - 04 - 01),
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("44001"), "{err}");
     }
 

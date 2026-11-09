@@ -36,8 +36,8 @@ use tracing::info;
 
 use crate::{
     api::{
-        edifact_api, invoic_api, malo_admin_api, mcp_server, metrics_api, migration_api, openapi,
-        partner_api,
+        edifact_api, einrichtung_api, invoic_api, malo_admin_api, mcp_server, metrics_api,
+        migration_api, openapi, partner_api,
     },
     cedar_authz::CedarAuthorizer,
     commands_api, contrl_ack, health, ingest_dispatcher, malo_cache, malo_sync,
@@ -149,6 +149,10 @@ pub(crate) struct HttpServerConfig<'a> {
     /// Surfaced by the metrics API so an operator can tell a volatile
     /// development instance from a durable one.
     pub volatile_mode: bool,
+    /// The configuration findings and policy report built at boot.
+    pub einrichtung: Arc<mako_service::einrichtung::Einrichtung>,
+    /// `[[einrichtung.dienst]]`, asked by `GET /admin/einrichtung/deployment`.
+    pub einrichtung_dienste: Vec<mako_service::einrichtung::Dienst>,
 }
 
 /// Build and start the HTTP REST API server.
@@ -216,6 +220,14 @@ pub(crate) async fn serve_http(
         tenant: primary_mp_id.clone(),
     });
 
+    let einrichtung_state = Arc::new(einrichtung_api::EinrichtungState {
+        einrichtung: cfg.einrichtung,
+        dienste: cfg.einrichtung_dienste,
+        http: mako_service::http::default_client(),
+        cedar: Arc::clone(&deps.cedar),
+        tenant: deps.mp_id_registry.primary_mp_id().to_owned(),
+    });
+
     let mcp_state = Arc::new(mcp_server::MakodMcpState {
         tenant: primary_mp_id.clone(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -225,6 +237,8 @@ pub(crate) async fn serve_http(
         partner_store: Arc::new(deps.store.as_partner_store()),
         process_store: Arc::new(deps.store.clone()),
         deadline_store: deps.store.as_deadline_store(),
+        policy: Arc::new(einrichtung_state.einrichtung.policy.clone()),
+        einrichtung: Arc::clone(&einrichtung_state),
     });
 
     let invoic_api_state = Arc::new(invoic_api::InvoicApiState {
@@ -247,6 +261,7 @@ pub(crate) async fn serve_http(
         .merge(invoic_api::router(invoic_api_state))
         .merge(metrics_api::router(metrics_state))
         .merge(migration_api::router(migration_state))
+        .merge(einrichtung_api::router(einrichtung_state))
         .merge(mcp_server::router(mcp_state, deps.shutdown_token.clone()))
         .merge(health::router(deps.health_state.clone()))
         .merge(openapi::router())

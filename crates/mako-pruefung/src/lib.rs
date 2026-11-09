@@ -149,7 +149,7 @@ pub use lf::{
 #[cfg(feature = "role-msb")]
 pub use msb::{
     Abmeldegrund, AbmeldungMsb, AnmeldungMsb, Einrichtungsart, KuendigungMsb, Kuendigungstermin,
-    MsbEntscheidung, Vertragslage, WeiterverpflichtungAuftrag,
+    MsbEntscheidung, RahmenvertragBefund, Vertragslage, WeiterverpflichtungAuftrag,
     pruefe_abmeldung as pruefe_abmeldung_msb, pruefe_anmeldung as pruefe_anmeldung_msb,
     pruefe_kuendigung as pruefe_kuendigung_msb, pruefe_weiterverpflichtung,
 };

@@ -22,6 +22,8 @@ Commands:
   bump-version        Bump workspace version in root Cargo.toml (usage: bump-version X.Y.Z)
   validate-profiles   Validate the committed profiles: sources, dates, Prüfidentifikatoren
   sync-regulatories   Mirror and audit the BDEW document set behind the profiles
+  index-sources       Cut the regulatories/ mirror into addressed passages for agentd's
+                        quote_source / find_source (--download: fetch EnWG and MsbG first)
   validate-ebd-codes  Hold the mako-pruefung Antwortcode catalogue against the published EBD
   check-bo4e-coverage  Count distinct rubo4e::current types used across crates/ and services/ and
                         verify the count matches the claim in README.md exactly. A tolerance
@@ -116,13 +118,22 @@ Commands:
   check-answer-commands  Refuse an invoicd PID route naming a makod command that does not exist
   check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
                         agrees with that server's own `read_only_hint`
+  check-mcp-surface   Every MCP server speaks the declared revisions through
+                        `mako_service::mcp`, holds no session and enables no deprecated
+                        capability; agentd's client connects on 2026-07-28
   check-clippy-bans   Every clippy.toml ban fires on its planted use in xtask/clippy-fixtures
   check-sts-codes     Refuse an adapter reading an STS code from DE 4405 (`status_code`) or a
                         raw STS segment outside the admitted IFTSTA readers — codes ride C556
+  check-config-findings Refuse a `bail!`/`anyhow!`/`ensure!` in a `Daemon::validate` or any
+                        function that collects `Befund`s — every finding is reported, with its path
+  setup               The deployment checklist: every dev/config daemon's --check-config --json
+                        folded across daemons (--url <makod> [--token-env VAR] asks a running
+                        makod's /admin/einrichtung/deployment instead); non-zero while not ready
   check-thin-main     Refuse a services/*/src/main.rs that is more than
                         `mako_service::run::<D>().await` — the daemon lives in the library
-  check-desk          The Desk's npm licences are within deny.toml's allow list, and
-                        desk/src computes no date or number outside src/format/
+  check-desk          The Desk's npm licences are within deny.toml's allow list,
+                        desk/src computes no date or number outside src/format/, and
+                        no view outside the untranslated list writes its own words
   check-error-tuples  Refuse any hand-built `(StatusCode::<non-2xx>, …)` tuple outside
                         `#[cfg(test)]` items under services/*/src — fail with an `ApiError`
   dep-age             Report each direct dependency's pin against crates.io (network; a
@@ -159,6 +170,7 @@ mod check_ci_guards;
 mod check_citations;
 mod check_clippy_bans;
 mod check_command_constructors;
+mod check_config_findings;
 mod check_controls_consulted;
 mod check_crate_lints;
 mod check_db_suites;
@@ -172,6 +184,7 @@ mod check_frist_literals;
 mod check_known_wrong;
 mod check_ledger_drafts;
 mod check_malo_ids;
+mod check_mcp_surface;
 mod check_occupancy;
 mod check_outbox_notify;
 mod check_policy_settings;
@@ -200,10 +213,12 @@ mod dep_age;
 mod dev_configs;
 mod evidence_pack;
 mod import_profiles;
+mod index_sources;
 mod pid_overview;
 mod policy_inventory;
 mod profile_diff;
 mod profile_expressions;
+mod setup;
 mod sync_regulatories;
 #[cfg(test)]
 mod test_layout;
@@ -235,6 +250,13 @@ fn main() {
         Some("check-bo4e-examples") => check_bo4e_examples(),
         Some("check-malo-ids") => check_malo_ids(),
         Some("sync-regulatories") => sync_regulatories(),
+        Some("index-sources") => {
+            let (workspace_root, _) = workspace_info();
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            if !index_sources::run(std::path::Path::new(&workspace_root), &args) {
+                std::process::exit(1);
+            }
+        }
         Some("check-business-dates") => check_business_dates(),
         Some("check-citations") => check_citations(),
         Some("check-known-wrong") => check_known_wrong(),
@@ -278,8 +300,11 @@ fn main() {
         Some("check-as4-controls") => check_as4_controls(),
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
+        Some("check-mcp-surface") => root_task(check_mcp_surface::run),
         Some("check-clippy-bans") => root_task(check_clippy_bans::run),
         Some("check-thin-main") => root_task(check_thin_main::run),
+        Some("check-config-findings") => root_task(check_config_findings::run),
+        Some("setup") => root_task(setup::run),
         Some("check-sts-codes") => root_task(check_sts_codes::run),
         Some("check-desk") => root_task(check_desk::run),
         Some("check-error-tuples") => root_task(check_error_tuples::run),

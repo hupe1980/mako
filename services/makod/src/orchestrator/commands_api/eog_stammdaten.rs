@@ -137,7 +137,23 @@ pub(super) fn stichtag(process_date: &str) -> Result<time::Date, DispatchError> 
 /// outbox entries the spawn writes; each UTILMD among them is rendered and
 /// checked against its profile as `transport::as4_sender` checks it before
 /// delivery. A refusal names every finding.
+///
+/// It is also where a rehearsal stops: inside [`super::probe::rehearse`] the
+/// door's outbox is handed to the probe and the door ends here with
+/// [`DispatchError::Geprobt`], before its duplicate guard and its spawn.
 pub(super) fn refuse_what_the_gate_refuses(
+    state: &CommandsApiState,
+    outbox: &[PendingOutbox],
+) -> Result<(), DispatchError> {
+    if super::probe::halt(outbox) {
+        return Err(DispatchError::Geprobt);
+    }
+    gate_verdict(state, outbox)
+}
+
+/// The gate's own answer on `outbox` — the refusal a door returns, word for
+/// word, and the verdict a rehearsal reports.
+pub(super) fn gate_verdict(
     state: &CommandsApiState,
     outbox: &[PendingOutbox],
 ) -> Result<(), DispatchError> {
@@ -740,6 +756,34 @@ pub(super) fn gas_44142(
     sd: &MaloUtilmdStammdaten,
     angefragt: &[mako_geli_gas::AngefragteGruppe],
 ) -> Result<Stammdaten, DispatchError> {
+    gas_marktlokation_gruppen(sd, angefragt, true)
+}
+
+/// The Stammdaten of the GNB's nicht bilanzierungsrelevante Änderung
+/// **44112** (UTILMD AHB Gas 1.2 Kap. 5.10.1, S. 97–110, NB → LF): the groups
+/// of [`gas_44142`] that changed, each Soll `[92]` „Wenn Wert innerhalb SG bzw.
+/// Segment geändert wird". Its `SEQ+Z01` lists Marktgebiet (`CCI+Z21`, S. 101),
+/// Druckebene (`CCI+++Y01`) and Netznutzung (`CCI+++Z88`, S. 102) and no
+/// Prognosegrundlage, which the 44142 restates as Muss.
+///
+/// # Errors
+///
+/// [`DispatchError::StammdatenUnvollstaendig`] naming every fact marktd does
+/// not hold.
+pub(super) fn gas_44112(
+    sd: &MaloUtilmdStammdaten,
+    geaendert: &[mako_geli_gas::AngefragteGruppe],
+) -> Result<Stammdaten, DispatchError> {
+    gas_marktlokation_gruppen(sd, geaendert, false)
+}
+
+/// [`gas_44142`] and [`gas_44112`]; `prognosegrundlage` says whether the
+/// column's `SEQ+Z01` carries the `CCI+++ZB0`/`ZB1`.
+fn gas_marktlokation_gruppen(
+    sd: &MaloUtilmdStammdaten,
+    angefragt: &[mako_geli_gas::AngefragteGruppe],
+    prognosegrundlage: bool,
+) -> Result<Stammdaten, DispatchError> {
     use mako_geli_gas::AngefragteGruppe as G;
     let hat = |g: G| angefragt.contains(&g);
     let mut f = Fehlend::default();
@@ -839,8 +883,9 @@ pub(super) fn gas_44142(
             }
         }
         // `SG10 CCI+++ZB0`/`ZB1` „Bereits ausgetauschte Prognosegrundlage der
-        // Marktlokation" — Muss in the group.
+        // Marktlokation" — Muss in the 44142's group.
         match sd.bilanzierung.as_ref().and_then(|b| b.prognosegrundlage) {
+            _ if !prognosegrundlage => {}
             Some(Prognosegrundlage::Werte) => {
                 z01.push(seg("CCI", vec![vec![], vec![], vec!["ZB0"]]));
             }

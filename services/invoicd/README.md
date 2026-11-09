@@ -15,7 +15,7 @@ just dev invoicd       # dev/config/invoicd.toml against the dev PostgreSQL
 | **Inbound** | `de.mako.process.initiated` from `marktd` (HMAC-signed `POST /webhook`) |
 | **Outbound** | answer commands to `makod`; `de.invoic.*` CloudEvents to the ERP |
 | **Invariants** | the receipt is persisted before the answer is sent; an event that cannot become a receipt goes to `invoic_dlq` with its reason |
-| **MCP** | 7 read-only tools and 4 prompts at `/mcp` |
+| **MCP** | 8 read-only tools and 4 prompts at `/mcp` |
 
 ## PID routing
 
@@ -79,6 +79,8 @@ Mehr-/Mindermengenpreise, ESA-Angebot) could not be read from `marktd`, so the
 sender redelivers.
 
 ## Configuration
+
+`invoicd --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one; `--json` prints the body `GET /admin/einrichtung` serves.
 
 ```toml
 # invoicd.toml

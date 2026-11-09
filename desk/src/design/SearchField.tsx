@@ -4,6 +4,7 @@ import {
   Input,
   type SearchFieldProps,
 } from "react-aria-components";
+import { useT } from "../i18n";
 import { Icon } from "./Icon";
 
 /** The search field: large on a view's top, compact in chrome. */
@@ -12,6 +13,7 @@ export function SearchField({
   size = "large",
   ...props
 }: SearchFieldProps & { placeholder: string; size?: "large" | "compact" }) {
+  const t = useT();
   const large = size === "large";
   return (
     <AriaSearchField {...props} className="group relative flex items-center">
@@ -27,7 +29,7 @@ export function SearchField({
         }`}
       />
       <Button
-        aria-label="Leeren"
+        aria-label={t.steuer.leeren}
         className="focus-ring absolute right-2 hidden size-6 items-center justify-center rounded-full text-text-2 group-data-[empty=false]:flex data-[hovered]:bg-fill"
       >
         ×

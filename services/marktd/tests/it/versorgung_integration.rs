@@ -1300,6 +1300,147 @@ async fn fall_b_announces_the_uncovered_interval() {
     assert_eq!(after.lf_mp_id(), Some("9911111111111"));
 }
 
+/// The events the NB's own workflow queues for an Anmeldung 55001 it answers
+/// with a Bestätigung 55002, `lfa_lieferende` the Lieferende the Altlieferant
+/// answered its Anfrage zur Beendigung der Zuordnung with — as makod's ERP
+/// worker delivers them: `(type, makopid, data)`.
+fn nb_answers_an_anmeldung(
+    lfa_lieferende: Option<&str>,
+) -> Vec<(&'static str, u32, serde_json::Value)> {
+    use mako_engine::types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow as _;
+    use mako_gpke::{
+        GpkeSupplierChangeWorkflow as W, LfAntwort, SupplierChangeCommand, SupplierChangeState,
+    };
+    let received = W::handle(
+        &SupplierChangeState::default(),
+        SupplierChangeCommand::ReceiveUtilmd {
+            pid: Pruefidentifikator::new(55_001).expect("pid"),
+            sender: MarktpartnerCode::new("9911111111111"),
+            receiver: MarktpartnerCode::new(NB),
+            location_id: MaLo::new(MALO),
+            document_date: "20260920".to_owned(),
+            process_date: "20261001".to_owned(),
+            bilanzierungsgebiet: None,
+            bilanzierungsmethode: None,
+            fallgruppe: None,
+            transaktionsgrund: Some("E01".to_owned()),
+            transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
+            veraeusserungsform: None,
+            tranchengroesse_prozent: None,
+            vorgangsnummer: None,
+            produktpaket_id: Some("1".to_owned()),
+            kunde_name: None,
+            kunde_namensformat: None,
+            message_ref: MessageRef::new("ANM-FALL-B"),
+            validation_passed: true,
+            validation_errors: vec![],
+        },
+    )
+    .expect("the 55001 is received");
+    let state = received
+        .events
+        .iter()
+        .fold(SupplierChangeState::default(), W::apply);
+    let answered = W::handle(
+        &state,
+        SupplierChangeCommand::SendAntwort {
+            antwort: LfAntwort::zustimmung("A51", "E_0623"),
+            obligations: vec![],
+            lfa_lieferende: lfa_lieferende.map(ToOwned::to_owned),
+        },
+    )
+    .expect("the 55002 is queued");
+    received
+        .outbox
+        .into_iter()
+        .chain(answered.outbox)
+        .filter_map(|o| {
+            let ce_type = match o.message_type.as_ref() {
+                "ProcessInitiated" => mako_events::mako::PROCESS_INITIATED,
+                "ProcessCompleted" => mako_events::mako::PROCESS_COMPLETED,
+                _ => return None,
+            };
+            let pid = o.payload["pid"].as_u64().map(|p| p as u32)?;
+            Some((ce_type, pid, o.payload))
+        })
+        .collect()
+}
+
+/// **Fall b, end to end.** The NB confirms the LFN's Zuordnungsbeginn
+/// 01.10.2026 after the LFA released on 15.09.2026 (`E_0624` `A34`, EBD 4.3
+/// Kap. 6.6.3, S. 82; GPKE Teil 2 Kap. 2.1.2 Nr. 4, S. 21): the completion the
+/// NB's own workflow queues for its 55002 opens the § 38 gap 16.09.–01.10.
+/// The date reaches marktd only through that notification — the 55002 has no
+/// segment for it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_nbs_55002_in_fall_b_opens_the_gap() {
+    use marktd::handlers::event_ingest::derive_supply_state;
+
+    let Some((pool, _pg)) = test_pool("fall_b_workflow").await else {
+        return;
+    };
+    let mut tx = pool.begin().await.expect("begin");
+    let mut gaps = Vec::new();
+    let events = nb_answers_an_anmeldung(Some("20260915"));
+    assert!(
+        events
+            .iter()
+            .any(|(t, pid, _)| *t == mako_events::mako::PROCESS_COMPLETED && *pid == 55_002),
+        "the 55002 queues its completion: {events:#?}"
+    );
+    for (ce_type, pid, data) in events {
+        let evts = derive_supply_state(
+            &mut tx,
+            TENANT,
+            ce_type,
+            Some(pid),
+            &data,
+            Some(uuid::Uuid::new_v4()),
+        )
+        .await
+        .expect("derive");
+        gaps.extend(
+            evts.into_iter()
+                .filter(|e| e.ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED),
+        );
+    }
+    tx.commit().await.expect("commit");
+    assert_eq!(gaps.len(), 1, "one interval, announced once");
+    assert_eq!(gaps[0].data["gap_from"], "2026-09-16");
+    assert_eq!(gaps[0].data["gap_until"], "2026-10-01");
+
+    // The Bestätigung made the LFN the supplier of record.
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    let after = vs.find(&malo(), TENANT).await.expect("find").expect("row");
+    assert_eq!(after.lf_mp_id(), Some("9911111111111"));
+}
+
+/// Without a Fall-b date the same answer opens no gap.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_nbs_ordinary_55002_opens_no_gap() {
+    use marktd::handlers::event_ingest::derive_supply_state;
+
+    let Some((pool, _pg)) = test_pool("fall_a_workflow").await else {
+        return;
+    };
+    let mut tx = pool.begin().await.expect("begin");
+    for (ce_type, pid, data) in nb_answers_an_anmeldung(None) {
+        let evts = derive_supply_state(&mut tx, TENANT, ce_type, Some(pid), &data, None)
+            .await
+            .expect("derive");
+        assert!(
+            !evts
+                .iter()
+                .any(|e| e.ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED),
+            "{pid}"
+        );
+    }
+    tx.commit().await.expect("commit");
+}
+
 /// An ordinary confirmation announces no gap: the LFA released exactly at the
 /// Zuordnungsbeginn, so there is no uncovered day to open a § 38 case for.
 #[tokio::test]

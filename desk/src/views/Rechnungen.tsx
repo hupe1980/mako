@@ -25,6 +25,7 @@ import { useVerweigert, Verweigert } from "../data/verweigert";
 import { Icon } from "../design/Icon";
 import { Notice, Panel } from "../design/Panel";
 import { formatCount } from "../format/count";
+import { useT } from "../i18n";
 import { useVorschlaege } from "../inbox/quellen";
 import { Fragen, VorschlagKarte } from "./Fragen";
 
@@ -35,15 +36,16 @@ const PRIMAER =
 
 /** The service's answer to a decision it did not take, in its words. */
 function Fehler({ error, dienst }: { error: unknown; dienst: "invoicd" | "billingd" }) {
+  const t = useT();
   if (!error || error instanceof Verweigert) return null;
   if (error instanceof SchonErledigt)
     return (
-      <Notice tone="info" title="Schon erledigt">
-        {error.message} Ihre Entscheidung wurde nicht gesendet.
+      <Notice tone="info" title={t.entscheidung.schonErledigt}>
+        {t.rechnungen.nichtGesendet(error.message)}
       </Notice>
     );
   return (
-    <Notice tone="refusal" title={`${DIENST[dienst]} hat die Entscheidung nicht angenommen`}>
+    <Notice tone="refusal" title={t.rechnungen.nichtAngenommen(DIENST[dienst])}>
       {error instanceof Abgelehnt ? error.message : nichtErreichbar(dienst)}
     </Notice>
   );
@@ -51,10 +53,11 @@ function Fehler({ error, dienst }: { error: unknown; dienst: "invoicd" | "billin
 
 /** A held decision, until it is sent or taken back. */
 export function Gehalten({ text }: { text: string }) {
+  const t = useT();
   return (
     <p role="status" className="m-0 flex items-center gap-2 text-callout text-text">
       <Icon name="check" size={14} className="text-accent" />
-      {text} — „Rückgängig" oder {UNDO.keys} nimmt es zurück, bevor etwas gesendet wird.
+      {t.entscheidung.gehalten(text, UNDO.keys)}
     </p>
   );
 }
@@ -77,6 +80,8 @@ export function DisputEntscheiden({
   /** Take the waiting proposal into the form as soon as it is there (`U` on a Heute row). */
   sofort?: boolean;
 }) {
+  const t = useT();
+  const k = t.rechnungen;
   const [aktion, setAktion] = useState<DisputAktion | null>(null);
   const [bemerkung, setBemerkung] = useState("");
   const [gehalten, setGehalten] = useState(false);
@@ -151,8 +156,8 @@ export function DisputEntscheiden({
   if (verweigert) {
     return (
       <Panel className="flex flex-col gap-4 p-5">
-        <h3 className="m-0 text-callout font-semibold">Entscheidung</h3>
-        <Notice tone="refusal" title="Der Rechnungseingang lässt Sie hier nicht entscheiden">
+        <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
+        <Notice tone="refusal" title={k.disputVerweigert}>
           {verweigert}
         </Notice>
       </Panel>
@@ -162,9 +167,9 @@ export function DisputEntscheiden({
   return (
     <>
       <Panel className="flex flex-col gap-4 p-5">
-        <h3 className="m-0 text-callout font-semibold">Entscheidung</h3>
+        <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
         {d.befunde.length > 0 && (
-          <ul aria-label="Befunde" className="m-0 flex list-none flex-col gap-1.5 p-0">
+          <ul aria-label={k.befunde} className="m-0 flex list-none flex-col gap-1.5 p-0">
             {d.befunde.map((b) => (
               <li key={`${b.art}:${b.text}`} className="flex flex-col gap-0.5">
                 <span className="text-body font-medium text-text">{b.bezeichnung}</span>
@@ -174,9 +179,7 @@ export function DisputEntscheiden({
           </ul>
         )}
         <p className="m-0 text-caption text-text-2">
-          {d.abgesendet
-            ? "Die Ablehnung (REMADV) ist beim Rechnungssteller."
-            : "Die Ablehnung (REMADV) ist noch nicht versandt."}
+          {d.abgesendet ? k.abgesendet : k.nichtAbgesendet}
         </p>
         {wartet && !herkunft && wartend && (
           <VorschlagKarte
@@ -185,21 +188,17 @@ export function DisputEntscheiden({
             disclosure={wartend.disclosure}
             befund={d.befunde.find((b) => b.art === wartet.v.befund)?.bezeichnung}
             onUebernehmen={fuer(wartet.v) ? uebernehmen : undefined}
-            hinweis={
-              fuer(wartet.v)
-                ? undefined
-                : "Die Ablehnung ist versandt — bis eine korrigierte Rechnung kommt, ist nichts zu senden."
-            }
+            hinweis={fuer(wartet.v) ? undefined : k.nichtsZuSenden}
           />
         )}
         {!wartet && wartend?.status === "running" && (
           <p className="m-0 flex items-center gap-2 text-caption text-ai">
-            <Icon name="sparkle" size={12} /> Der Assistent bereitet einen Vorschlag vor …
+            <Icon name="sparkle" size={12} /> {k.bereitetVor}
           </p>
         )}
         {herkunft && (
           <p className="m-0 flex items-center gap-2 text-caption text-ai">
-            <Icon name="sparkle" size={12} /> Vom Assistenten vorgeschlagen — prüfen, dann senden.
+            <Icon name="sparkle" size={12} /> {t.entscheidung.vorgeschlagen}
           </p>
         )}
 
@@ -208,25 +207,23 @@ export function DisputEntscheiden({
         ) : (
           <>
             <RadioGroup
-              aria-label="Entscheidung"
+              aria-label={t.entscheidung.titel}
               value={aktion}
               onChange={(v) => setAktion(v as DisputAktion)}
               orientation="horizontal"
               className="flex gap-2"
             >
               <Radio value="beilegen" className={WAHL}>
-                Beilegen
+                {k.beilegen}
               </Radio>
               <Radio value="ablehnung" isDisabled={d.abgesendet} className={WAHL}>
-                Ablehnung senden
+                {k.ablehnungSenden}
               </Radio>
             </RadioGroup>
 
             {aktion === "beilegen" && (
               <TextField value={bemerkung} onChange={setBemerkung} className="flex flex-col gap-1">
-                <Label className="text-caption text-text-2">
-                  Wie wurde er geklärt? (Bemerkung, optional)
-                </Label>
+                <Label className="text-caption text-text-2">{k.wieGeklaert}</Label>
                 <TextArea
                   rows={2}
                   maxLength={512}
@@ -240,7 +237,7 @@ export function DisputEntscheiden({
             <div className="flex flex-wrap items-center justify-end gap-3">
               {gewaehlt && <p className="m-0 flex-1 text-caption text-text-2">{gewaehlt.was}</p>}
               <AriaButton isDisabled={!gewaehlt} onPress={senden} className={PRIMAER}>
-                {aktion === "ablehnung" ? "Ablehnung senden" : "Beilegen"}
+                {aktion === "ablehnung" ? k.ablehnungSenden : k.beilegen}
               </AriaButton>
             </div>
           </>
@@ -258,6 +255,8 @@ export function DisputEntscheiden({
  * assistant proposes neither: the risk gate's findings are already the evidence.
  */
 export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: () => void }) {
+  const t = useT();
+  const k = t.rechnungen;
   const gehaltenBand = r.risk_band === "HELD";
   const verweigert = useVerweigert({
     dienst: "billingd",
@@ -298,9 +297,9 @@ export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: 
 
   return (
     <Panel className="flex flex-col gap-4 p-5">
-      <h3 className="m-0 text-callout font-semibold">Entscheidung</h3>
+      <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
       {r.risk_findings.length > 0 && (
-        <ul aria-label="Befunde" className="m-0 flex list-none flex-col gap-1.5 p-0">
+        <ul aria-label={k.befunde} className="m-0 flex list-none flex-col gap-1.5 p-0">
           {r.risk_findings.map((f) => (
             <li key={f.code} className="flex items-baseline gap-3 text-body">
               <span className="font-mono text-caption text-text-2">{f.code}</span>
@@ -310,13 +309,9 @@ export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: 
           ))}
         </ul>
       )}
-      <p className="m-0 text-caption text-text-2">
-        {gehaltenBand
-          ? "Angehalten: die Rechnung ist nicht ausgestellt, bis sie freigegeben wird."
-          : "Ausgestellt und zur Prüfung vorgelegt; eine Korrektur geht als Stornorechnung."}
-      </p>
+      <p className="m-0 text-caption text-text-2">{gehaltenBand ? k.angehalten : k.ausgestellt}</p>
       {verweigert ? (
-        <Notice tone="refusal" title="Die Abrechnung lässt Sie hier nicht entscheiden">
+        <Notice tone="refusal" title={k.pruefungVerweigert}>
           {verweigert}
         </Notice>
       ) : gehalten && a ? (
@@ -327,7 +322,7 @@ export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: 
           <div className="flex flex-wrap items-center justify-end gap-3">
             {a && <p className="m-0 flex-1 text-caption text-text-2">{a.was}</p>}
             <AriaButton onPress={senden} aria-keyshortcuts="A" className={PRIMAER}>
-              {gehaltenBand ? "Freigeben" : "Geprüft"}
+              {gehaltenBand ? k.freigeben : k.geprueft}
             </AriaButton>
           </div>
         </>

@@ -17,7 +17,7 @@
 //! |---|---|
 //! | [`lock_data_dir`] | Refuse a second writer on the same SlateDB path |
 //! | [`build_engine`] | Register the domain modules of `[deployment] rollen`; build the [`EngineContext`] |
-//! | [`validate_adapter_coverage`] | Every adapter registry covers every active format version |
+//! | [`adapter_befunde`] | Every adapter registry covers every active format version |
 //! | [`validate_dispatch_completeness`] | Every routed workflow has an ingest arm |
 //! | [`servers`] | Bind and spawn the HTTP, AS4 and API-Webdienste ports |
 //! | [`spawn_workers`] | Outbox, ERP webhook, deadlines, projections, retention purge |
@@ -201,7 +201,7 @@ impl ModuleRow {
 ///
 /// The roles are `[deployment] rollen` tokens ([`Rolle`]); which ones a
 /// deployment plays is a runtime declaration, checked against `[[party]]` by
-/// [`crate::deployment::validate_rollen`]. `tests/it/startup_smoke.rs` pins
+/// [`crate::deployment::pruefe_rollen`]. `tests/it/startup_smoke.rs` pins
 /// each role's module set.
 pub const MODULE_TABLE: &[ModuleRow] = &[
     // GpkeModule — GPKE 55001–55018/55022–55024/55555/55600–55609 +
@@ -314,7 +314,7 @@ pub fn modules_for(rollen: &BTreeSet<Rolle>) -> Vec<Box<dyn mako_engine::builder
 ///
 /// # Panics
 ///
-/// When `rollen` selects no module — [`crate::deployment::validate_rollen`]
+/// When `rollen` selects no module — [`crate::deployment::pruefe_rollen`]
 /// refuses an empty declaration first, and every role registers at least one
 /// module. `EngineBuilder::build` additionally panics when a registered module
 /// declares a message type with no active `edi-energy` profile.
@@ -367,57 +367,62 @@ pub(crate) fn build_engine(
     .build()
 }
 
-// ── validate_adapter_coverage ─────────────────────────────────────────────────
+// ── adapter_befunde ─────────────────────────────────────────────────
 
-/// Validate that every domain adapter registry covers every active BDEW format
-/// version.
+/// Every domain adapter registry's gaps against the active BDEW format
+/// versions, as findings.
 ///
 /// Called once during startup, before any worker is spawned and before the
-/// `--check` early exit.
+/// `--check` early exit; a finding blocks the boot, because inbound messages
+/// would otherwise be silently dead-lettered rather than dispatched.
 ///
 /// The registry list is derived from [`adapters::coverage`], not maintained
 /// here. The previous version of this function was a hand-written table of
 /// workflow names, and it had drifted: twenty of the seventy-two registries
 /// were absent from it and were therefore never checked at all.
-///
-/// # Panics
-///
-/// Panics when a registry holds no adapter for one or more active format
-/// versions, or when the compiled `edi-energy` profile registry declares no
-/// format version at all. Both are hard fail-fast conditions: inbound messages
-/// would otherwise be silently dead-lettered rather than dispatched.
-pub(crate) fn validate_adapter_coverage() {
+pub(crate) fn adapter_befunde() -> Vec<mako_service::Befund> {
+    use mako_service::befund::{Befund, Bereich};
     let known = adapters::known_fvs();
-    assert!(
-        !known.is_empty(),
-        "startup failure: the compiled edi-energy profile registry declares no \
-         BDEW format version. Every adapter accepts only known format versions, \
-         so nothing would parse. Check the edi-energy feature set."
-    );
+    if known.is_empty() {
+        return vec![
+            Befund::blockiert(
+                "",
+                "the compiled edi-energy profile registry declares no BDEW format version. \
+                 Every adapter accepts only known format versions, so nothing would parse. \
+                 Check the edi-energy feature set.",
+            )
+            .bereich(Bereich::Formatabdeckung),
+        ];
+    }
     let fv_names: Vec<&str> = known.iter().map(|fv| fv.as_str()).collect();
 
     let report = adapters::coverage();
-    let gaps: Vec<String> = report
+    let gaps: Vec<Befund> = report
         .iter()
         .filter(|c| !c.uncovered.is_empty())
         .map(|c| {
             let missing: Vec<&str> = c.uncovered.iter().map(|fv| fv.as_str()).collect();
-            format!("{} has no adapter for {missing:?}", c.registry)
+            Befund::blockiert(
+                "",
+                format!(
+                    "{} has no adapter for {missing:?}: register the missing adapters in \
+                     orchestrator/adapters/",
+                    c.registry
+                ),
+            )
+            .bereich(Bereich::Formatabdeckung)
         })
         .collect();
-    assert!(
-        gaps.is_empty(),
-        "startup failure: adapter coverage is incomplete:\n  {}\n\
-         Register the missing adapters in orchestrator/adapters/.",
-        gaps.join("\n  ")
-    );
 
-    info!(
-        registries = report.len(),
-        adapters = report.iter().map(|c| c.adapters).sum::<usize>(),
-        format_versions = ?fv_names,
-        "adapter coverage validated"
-    );
+    if gaps.is_empty() {
+        info!(
+            registries = report.len(),
+            adapters = report.iter().map(|c| c.adapters).sum::<usize>(),
+            format_versions = ?fv_names,
+            "adapter coverage validated"
+        );
+    }
+    gaps
 }
 
 // ── validate_dispatch_completeness ───────────────────────────────────────────
@@ -1016,9 +1021,8 @@ mod tests {
     /// breakage here means `adapters.rs` needs a new adapter entry.
     #[test]
     fn all_workflows_have_adapter_coverage() {
-        // validate_adapter_coverage panics on missing coverage — the panic
-        // itself is the assertion.
-        validate_adapter_coverage();
+        let gaps = adapter_befunde();
+        assert!(gaps.is_empty(), "{gaps:?}");
     }
 
     /// Every name `KNOWN_WORKFLOW_NAMES` certifies must actually have a

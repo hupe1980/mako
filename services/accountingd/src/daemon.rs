@@ -88,21 +88,48 @@ impl Daemon for Accountingd {
     /// so the account it pays from and the pain.001 version it writes must be
     /// usable before the first receipt does: a payout owed is never skipped
     /// for want of either.
-    fn validate(cfg: &config::AccountingdConfig) -> anyhow::Result<()> {
-        crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref())
-            .context("SEPA pain.001 schema config")?;
+    fn validate(cfg: &config::AccountingdConfig) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = Vec::new();
+        if let Err(e) = cfg.check_auth_posture() {
+            out.push(Befund::aus_fehler("oidc", e).bereich(Bereich::Zugriff));
+        }
+        if let Err(e) = crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
+            out.push(Befund::aus_fehler(
+                "pain001_schema",
+                format!("SEPA pain.001 schema config: {e:#}"),
+            ));
+        }
+        if let Err(e) = crate::sepa::resolve_pain008_schema(cfg.pain008_schema.as_deref()) {
+            out.push(Befund::aus_fehler(
+                "pain008_schema",
+                format!("SEPA pain.008 schema config: {e:#}"),
+            ));
+        }
         match cfg.eeg.debtor_iban.as_deref() {
             Some(iban) => {
-                crate::sepa::validate_iban(iban)
-                    .map_err(|e| anyhow::anyhow!("[eeg].debtor_iban is not a valid IBAN: {e}"))?;
+                if let Err(e) = crate::sepa::validate_iban(iban) {
+                    out.push(Befund::blockiert(
+                        "eeg.debtor_iban",
+                        format!("[eeg].debtor_iban is not a valid IBAN: {e}"),
+                    ));
+                }
             }
-            None if cfg.eeg.auto_payout => anyhow::bail!(
+            None if cfg.eeg.auto_payout => out.push(Befund::blockiert(
+                "eeg.debtor_iban",
                 "[eeg] auto_payout = true needs [eeg].debtor_iban — the account EEG payouts \
-                 are debited from"
-            ),
+                 are debited from",
+            )),
             None => {}
         }
-        Ok(())
+        out
+    }
+
+    fn policy(cfg: &config::AccountingdConfig) -> mako_service::policy::PolicyReport {
+        mako_service::policy::PolicyReport::new()
+            .posture_flag("allow_insecure_no_auth", cfg.allow_insecure_no_auth)
+            .posture_presence("oidc", cfg.oidc.is_some(), true)
+            .posture_presence("erp_hmac_secret", cfg.erp_hmac_secret.is_some(), true)
     }
 
     async fn build(
@@ -204,6 +231,11 @@ impl Daemon for Accountingd {
         }
 
         let app = Router::new()
+            // ── Readiness and operator posture: GET /admin/einrichtung (Cedar
+            // `read-config`) and GET /api/v1/policy (Cedar `read-policy`) ──────
+            .merge(mako_service::einrichtung::router(Arc::clone(
+                &ctx.einrichtung,
+            )))
             // ── CloudEvent ingest ──────────────────────────────────────────────────
             .route("/webhook", post(handlers::ingest_webhook))
             // ── Account endpoints ──────────────────────────────────────────────────
@@ -514,6 +546,7 @@ impl Daemon for Accountingd {
             creditor_address: cfg.creditor_address.clone(),
             iban_key: iban_hash_key,
             pain008_schema,
+            policy: Arc::new(ctx.einrichtung.policy.clone()),
         });
         let app = app.merge(mcp_server::router(mcp_state, ct.clone()));
 

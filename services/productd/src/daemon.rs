@@ -85,8 +85,12 @@ impl Daemon for Productd {
         Ok(())
     }
 
-    fn validate(cfg: &Self::Config) -> anyhow::Result<()> {
+    fn validate(cfg: &Self::Config) -> Vec<mako_service::Befund> {
         cfg.validate()
+    }
+
+    fn policy(cfg: &Self::Config) -> mako_service::policy::PolicyReport {
+        cfg.policy_report()
     }
 
     async fn build(
@@ -133,6 +137,7 @@ impl Daemon for Productd {
                 Some(Arc::clone(&cedar)),
                 &cfg.tenant,
             ),
+            policy: Arc::new(ctx.einrichtung.policy.clone()),
         });
 
         // ── The 2027 BEHG regime: billingd's `[policy] behg_regime` ──────────
@@ -153,6 +158,11 @@ impl Daemon for Productd {
 
         let app = Router::new()
             .merge(mcp_server::router(mcp_state, ctx.shutdown.clone()))
+            // ── Readiness and operator posture: GET /admin/einrichtung (Cedar
+            // `read-config`) and GET /api/v1/policy (Cedar `read-policy`) ──────
+            .merge(mako_service::einrichtung::router(Arc::clone(
+                &ctx.einrichtung,
+            )))
             // ── Product CRUD ────────────────────────────────────────────────
             .route(
                 "/api/v1/products/{lf_mp_id}/{product_code}",

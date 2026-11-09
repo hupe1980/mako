@@ -52,7 +52,9 @@ fn the_demo_configs_start() {
         let Ok(cfg) = toml::from_str::<processd::config::Config>(&src) else {
             continue;
         };
-        if let Err(e) = <processd::Processd as mako_service::Daemon>::validate(&cfg) {
+        if let Err(e) = mako_service::befund::als_ergebnis(
+            <processd::Processd as mako_service::Daemon>::validate(&cfg),
+        ) {
             panic!("{rel} parses but `processd` refuses to start with it:\n{e:#}");
         }
         if let Err(e) = cfg.check_auth_posture() {

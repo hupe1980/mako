@@ -32,15 +32,21 @@ fn make_lf_anmeldung() -> Process<GpkeLfAnmeldungWorkflow, InMemoryEventStore> {
 /// Helper to build an `LfAnmeldungCommand::InitiateAnmeldung` with minimal valid data.
 fn initiate_cmd() -> LfAnmeldungCommand {
     LfAnmeldungCommand::InitiateAnmeldung {
-        transaktionsgrund_ergaenzung: None,
+        transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
         tranchengroesse: None,
         pid: Pruefidentifikator::new(55001).unwrap(),
         sender: MarktpartnerCode::new("4012345000023"),
         receiver: MarktpartnerCode::new("9900357000004"),
         location_id: MaLo::new("DE00123456789012345678901234567890"),
         process_date: "2025-10-01".to_owned(),
-        transaktionsgrund: None,
+        transaktionsgrund: Some("E03".to_owned()),
         bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+        kundendaten: Some(Box::new(mako_gpke::lf_anmeldung::Kundendaten {
+            haushaltskunde: true,
+            enfg_grundlage: "ZG1".to_owned(),
+            enfg_grund: None,
+            stammdaten: mako_engine::payload::Stammdaten::default(),
+        })),
     }
 }
 

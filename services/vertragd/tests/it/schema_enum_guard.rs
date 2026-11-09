@@ -160,3 +160,29 @@ fn the_guard_reads_the_lists_it_names() {
     assert_eq!(check_values(&sql, "kuendigung_grund").len(), 4);
     assert_eq!(check_values(&sql, "vertragsart").len(), 3);
 }
+
+/// The Grundlage and the Grund der Privilegierung nach EnFG are `mako_markt`'s
+/// code lists, which the 55001 body carries as they are stored (UTILMD AHB
+/// Strom 2.2 Kap. 8.2, S. 85).
+#[test]
+fn enfg_matches_its_check_lists() {
+    for (column, codes) in [
+        (
+            "enfg_grundlage",
+            mako_markt::commands::ENFG_GRUNDLAGEN
+                .iter()
+                .map(|(c, _)| *c)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "enfg_grund",
+            mako_markt::commands::ENFG_PRIVILEGIERUNGEN
+                .iter()
+                .map(|(c, _)| *c)
+                .collect(),
+        ),
+    ] {
+        let listed = check_values(&migration_sql(), column);
+        assert_eq!(listed, codes, "`{column}` CHECK and its code list disagree");
+    }
+}

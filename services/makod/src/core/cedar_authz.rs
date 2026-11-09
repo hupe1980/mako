@@ -78,6 +78,9 @@ const SCHEMA_SRC: &str = include_str!("../cedar/mako.cedarschema");
 pub enum MakoAction {
     /// Submit an ERP command — `POST /api/v1/commands`.
     SubmitCommand,
+    /// Rehearse an ERP command up to its pre-send check, writing nothing —
+    /// `POST /api/v1/probe/{command}`.
+    RehearseCommand,
     /// Ingest a raw EDIFACT interchange — `POST /edifact`.
     IngestEdifact,
     /// Read a MaLo record — `GET /admin/malo/{malo_id}`.
@@ -108,12 +111,16 @@ pub enum MakoAction {
     ReadProcess,
     /// Trigger a process migration — `POST /admin/migrations`.
     AdminMigrations,
+    /// Read the configuration findings — `GET /admin/einrichtung`,
+    /// `GET /admin/einrichtung/deployment`, `GET /api/v1/policy`.
+    AdminEinrichtung,
 }
 
 impl MakoAction {
     fn cedar_id(self) -> &'static str {
         match self {
             Self::SubmitCommand => "SubmitCommand",
+            Self::RehearseCommand => "RehearseCommand",
             Self::IngestEdifact => "IngestEdifact",
             Self::AdminMaloRead => "AdminMaloRead",
             Self::AdminMaloWrite => "AdminMaloWrite",
@@ -129,6 +136,7 @@ impl MakoAction {
             Self::UseWebdienste => "UseWebdienste",
             Self::ReadProcess => "ReadProcess",
             Self::AdminMigrations => "AdminMigrations",
+            Self::AdminEinrichtung => "AdminEinrichtung",
         }
     }
 }
@@ -355,6 +363,29 @@ impl CedarAuthorizer {
     /// populated from the resolved command so that operator policies can
     /// restrict specific principals to specific commands, Marktrollen, or PIDs.
     pub fn authorize_command(&self, identity: &CallerIdentity, res: &CommandResource<'_>) -> bool {
+        self.authorize_on_command(identity, MakoAction::SubmitCommand, res)
+    }
+
+    /// Evaluate authorization for a rehearsal of an ERP command
+    /// (`RehearseCommand`) — the same `Command` resource as a submission, so a
+    /// policy scopes rehearsals by command, Marktrolle and PID as it scopes
+    /// submissions. A rehearsal writes nothing, but it reads the Marktlokation
+    /// and marktd's Stammdaten the message carries, so it is an action of its
+    /// own rather than a free read.
+    pub fn authorize_rehearsal(
+        &self,
+        identity: &CallerIdentity,
+        res: &CommandResource<'_>,
+    ) -> bool {
+        self.authorize_on_command(identity, MakoAction::RehearseCommand, res)
+    }
+
+    fn authorize_on_command(
+        &self,
+        identity: &CallerIdentity,
+        action: MakoAction,
+        res: &CommandResource<'_>,
+    ) -> bool {
         let resource_uid = entity_uid("MaKo::Command", res.name);
         let resource = match Entity::new(
             resource_uid.clone(),
@@ -377,7 +408,7 @@ impl CedarAuthorizer {
         };
         self.eval(
             identity,
-            MakoAction::SubmitCommand,
+            action,
             resource_uid,
             vec![principal_entity(identity), resource],
             serde_json::json!({
@@ -659,6 +690,33 @@ impl CedarAuthorizer {
             resource_uid,
             vec![principal_entity(identity), resource],
             serde_json::json!({ "tenant": res.tenant }),
+        )
+    }
+
+    /// Evaluate authorization for reading the configuration findings and the
+    /// policy report of `tenant`.
+    pub fn authorize_einrichtung(&self, identity: &CallerIdentity, tenant: &str) -> bool {
+        let resource_uid = entity_uid("MaKo::EinrichtungEndpoint", tenant);
+        let resource = match Entity::new(
+            resource_uid.clone(),
+            std::collections::HashMap::from([("tenant".to_owned(), cedar_str(tenant))]),
+            std::collections::HashSet::new(),
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(
+                    principal = %identity.name,
+                    "cedar: failed to build EinrichtungEndpoint entity: {e}"
+                );
+                return false;
+            }
+        };
+        self.eval(
+            identity,
+            MakoAction::AdminEinrichtung,
+            resource_uid,
+            vec![principal_entity(identity), resource],
+            serde_json::json!({ "tenant": tenant }),
         )
     }
 

@@ -101,6 +101,9 @@ pub struct Config {
     /// `[sperr]` — the Sperr-/Entsperrauftrag queue's ERP notices (NB role).
     #[serde(default)]
     pub sperr: SperrConfig,
+    /// `[policy]` — processd's operator readings.
+    #[serde(default)]
+    pub policy: ProcessdPolicy,
     /// OIDC token verification for the HTTP API. Without it every request is
     /// admitted with synthetic dev-admin claims, which is a posture
     /// [`Self::check_auth_posture`] refuses to start in.
@@ -548,6 +551,50 @@ pub struct SperrConfig {
     pub erp_hmac_secret: Option<String>,
 }
 
+// ── [policy] ──────────────────────────────────────────────────────────────────
+
+/// `[policy]` — processd's operator settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessdPolicy {
+    /// How far out the NB sets a Sperrtermin when the MSB has given no
+    /// generelle Zustimmung.
+    #[serde(default)]
+    pub msb_vorlauf_lesart: mako_service::policy::Policy<MsbVorlaufLesart>,
+}
+
+impl ProcessdPolicy {
+    /// The policy processd runs under.
+    #[must_use]
+    pub fn report(&self) -> mako_service::policy::PolicyReport {
+        mako_service::policy::PolicyReport::new().with(&self.msb_vorlauf_lesart)
+    }
+}
+
+mako_service::policy_choice! {
+    /// How many Werktage out the NB sets a Sperrtermin when the MSB has given no
+    /// generelle Zustimmung to Sperrung/Entsperrung by the NB.
+    ///
+    /// GPKE Teil 2 Kap. 3.5.1.2 Nr. 2 asks for a Sperrtermin that leaves the MSB
+    /// „noch eine fristgerechte Antwort auf Anfrage vor dem Sperrtermin" and
+    /// points at the Fristen of Nr. 3 and Nr. 4 without saying whether they add
+    /// up. The six Werktage of `additiv` are that reading, not a figure the
+    /// Festlegung states.
+    pub enum MsbVorlaufLesart {
+        key: "msb_vorlauf_lesart",
+        doc: "@/docs/services/processd.md#policy-msb-vorlauf-lesart",
+        default: tightening(Additiv, "the later of the two dates: it never cuts into the MSB's answer window, and a Sperrtermin set later than necessary delays a disconnection without breaching anyone's Frist"),
+        options: {
+            /// The Anfrage's 3 WT before the Sperrtermin (Nr. 3) and the MSB's
+            /// 3 WT to answer it (Nr. 4) run one after the other: six Werktage.
+            Additiv = "additiv" => "BK6-24-174 Anlage 1b (GPKE Teil 2) Kap. 3.5.1.2 Nr. 2 (S. 106): so festzulegen, dass dem MSB noch eine fristgerechte Antwort auf Anfrage vor dem Sperrtermin möglich ist (s. dazu Fristen der SD-Schritte 3 und 4) — the Fristen of Nr. 3 (S. 106) and Nr. 4 (S. 107) run one after the other",
+            /// The Anfrage leaves by the 3. WT before the Sperrtermin (Nr. 3),
+            /// and the MSB's answer has to fall before it: three Werktage.
+            Wortlaut = "wortlaut" => "BK6-24-174 Anlage 1b (GPKE Teil 2) Kap. 3.5.1.2 Nr. 3 (S. 106), the Anfrage's own Frist before the Sperrtermin; Nr. 2 (S. 106): eine fristgerechte Antwort auf Anfrage vor dem Sperrtermin",
+        }
+    }
+}
+
 // ── LF module ─────────────────────────────────────────────────────────────────
 
 /// The Bilanzkreise this supplier may assign generation to in one
@@ -617,7 +664,7 @@ fn sparte_von_text<'de, D: serde::Deserializer<'de>>(
     })
 }
 
-/// Refuse a `[[lf.bilanzkreise]]` table a lookup could not read unambiguously.
+/// Every `[[lf.bilanzkreise]]` row a lookup could not read unambiguously.
 ///
 /// - Two rows for the same Sparte and Bilanzierungsgebiet (or two fallback rows
 ///   of one Sparte): the lookup takes the first, so the second is a setting
@@ -625,34 +672,48 @@ fn sparte_von_text<'de, D: serde::Deserializer<'de>>(
 /// - An `eeg` or `kwkg` list on a Gas row: the EEG and the KWKG remunerate
 ///   electricity, and the 55607 that reads those regimes is a Strom process.
 ///
-/// # Errors
-///
-/// The first offending row, named by its position and key.
-pub fn validate_bilanzkreise(rows: &[BilanzkreisEintrag]) -> anyhow::Result<()> {
+/// Each offending row is its own finding at `lf.bilanzkreise[<i>]`.
+#[must_use]
+pub fn validate_bilanzkreise(rows: &[BilanzkreisEintrag]) -> Vec<mako_service::Befund> {
     use mako_markt::domain::Sparte;
+    use mako_service::befund::{Befund, Bereich};
+    let mut out = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         let bg = row.bilanzierungsgebiet.as_deref().unwrap_or("(Fallback)");
+        let pfad = format!("lf.bilanzkreise[{i}]");
         if let Some(j) = rows[..i].iter().position(|r| {
             r.sparte == row.sparte && r.bilanzierungsgebiet == row.bilanzierungsgebiet
         }) {
-            anyhow::bail!(
-                "[[lf.bilanzkreise]] rows {} and {} both name sparte {} and \
-                 bilanzierungsgebiet {bg}: one row per Sparte and Bilanzierungsgebiet",
-                j + 1,
-                i + 1,
-                row.sparte
+            out.push(
+                Befund::blockiert(
+                    pfad.clone(),
+                    format!(
+                        "[[lf.bilanzkreise]] rows {} and {} both name sparte {} and \
+                         bilanzierungsgebiet {bg}: one row per Sparte and Bilanzierungsgebiet",
+                        j + 1,
+                        i + 1,
+                        row.sparte
+                    ),
+                )
+                .bereich(Bereich::Bilanzierung),
             );
         }
         if row.sparte == Sparte::Gas && !(row.eeg.is_empty() && row.kwkg.is_empty()) {
-            anyhow::bail!(
-                "[[lf.bilanzkreise]] row {} (sparte GAS, bilanzierungsgebiet {bg}) lists \
-                 eeg or kwkg Bilanzkreise: those regimes remunerate electricity and are \
-                 read by the Strom 55607 only — a Gas row lists `standard`",
-                i + 1
+            out.push(
+                Befund::blockiert(
+                    pfad,
+                    format!(
+                        "[[lf.bilanzkreise]] row {} (sparte GAS, bilanzierungsgebiet {bg}) lists \
+                         eeg or kwkg Bilanzkreise: those regimes remunerate electricity and are \
+                         read by the Strom 55607 only — a Gas row lists `standard`",
+                        i + 1
+                    ),
+                )
+                .bereich(Bereich::Bilanzierung),
             );
         }
     }
-    Ok(())
+    out
 }
 
 // The lookup is LF logic on a config type: `[[lf.bilanzkreise]]` is parsed in
@@ -758,37 +819,49 @@ pub struct LfConfig {
 }
 
 impl LfConfig {
-    /// Refuse an `[lf]` section the LF answer path cannot run on.
-    ///
-    /// # Errors
-    ///
-    /// `[[lf.bilanzkreise]]` is ambiguous ([`validate_bilanzkreise`]),
-    /// `eog_versorgungsart` is not a DE 7037 code `CCI+Z36` admits, or
-    /// `eog_abrechnungsintervall_monate` is outside the MIG's four entries or
+    /// Every finding about an `[lf]` section the LF answer path cannot run on:
+    /// an ambiguous `[[lf.bilanzkreise]]` ([`validate_bilanzkreise`]), an
+    /// `eog_versorgungsart` that is not a DE 7037 code `CCI+Z36` admits, an
+    /// `eog_abrechnungsintervall_monate` outside the MIG's four entries or
     /// absent where `eog_auto_respond` would send a Gas 44014.
-    pub fn validate(&self) -> anyhow::Result<()> {
+    #[must_use]
+    pub fn validate(&self) -> Vec<mako_service::Befund> {
         use mako_markt::commands::ABRECHNUNGSINTERVALLE_MONATE;
-        validate_bilanzkreise(&self.bilanzkreise)?;
+        use mako_service::Befund;
+        let mut out = validate_bilanzkreise(&self.bilanzkreise);
         if let Some(code) = &self.eog_versorgungsart
             && mako_gpke::Versorgungsart::from_code(code).is_none()
         {
-            anyhow::bail!(
-                "[lf] eog_versorgungsart = {code:?} is not one of ZC9, ZD0, ZE3 — the DE 7037 \
-                 codes SG10 CCI+Z36 admits on a 55014"
-            );
+            out.push(Befund::blockiert(
+                "lf.eog_versorgungsart",
+                format!(
+                    "[lf] eog_versorgungsart = {code:?} is not one of ZC9, ZD0, ZE3 — the DE 7037 \
+                     codes SG10 CCI+Z36 admits on a 55014"
+                ),
+            ));
         }
         match self.eog_abrechnungsintervall_monate {
-            Some(n) if !ABRECHNUNGSINTERVALLE_MONATE.contains(&n) => anyhow::bail!(
-                "[lf] eog_abrechnungsintervall_monate = {n} is not one of 1, 3, 6, 12 — \
-                 the Abrechnungsintervall des LF in SG6 DTM+Z20 (UTILMD MIG Gas G1.2 S. 55)"
+            Some(n) if !ABRECHNUNGSINTERVALLE_MONATE.contains(&n) => out.push(
+                Befund::blockiert(
+                    "lf.eog_abrechnungsintervall_monate",
+                    format!(
+                        "[lf] eog_abrechnungsintervall_monate = {n} is not one of 1, 3, 6, 12 — \
+                         the Abrechnungsintervall des LF in SG6 DTM+Z20"
+                    ),
+                )
+                .quelle("UTILMD MIG Gas G1.2 S. 55"),
             ),
-            None if self.eog_auto_respond && cfg!(feature = "role-lf-gas") => anyhow::bail!(
-                "[lf] eog_auto_respond = true needs [lf] eog_abrechnungsintervall_monate \
-                 (1, 3, 6 or 12): every Gas Bestätigung EoG 44014 states it in SG6 DTM+Z20 \
-                 (UTILMD AHB Gas 1.2 Kap. 5.9)"
+            None if self.eog_auto_respond && cfg!(feature = "role-lf-gas") => out.push(
+                Befund::blockiert(
+                    "lf.eog_abrechnungsintervall_monate",
+                    "[lf] eog_auto_respond = true needs [lf] eog_abrechnungsintervall_monate \
+                     (1, 3, 6 or 12): every Gas Bestätigung EoG 44014 states it in SG6 DTM+Z20",
+                )
+                .quelle("UTILMD AHB Gas 1.2 Kap. 5.9"),
             ),
-            _ => Ok(()),
+            _ => {}
         }
+        out
     }
 }
 

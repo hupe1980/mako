@@ -227,6 +227,15 @@ pub struct ProcessProjection {
     pub last_event_at: OffsetDateTime,
     /// BDEW ERC error code when `state == Rejected` (e.g. `"E01"`, `"Z29"`).
     pub erc_code: Option<String>,
+    /// The Antwortcode the counterparty's business answer carried — `SG4
+    /// STS+E01` DE 9013 on a UTILMD, `SG2 AJT` DE 4465 on an ORDRSP — as makod states it
+    /// on `data.antwortcode`. Not the APERAK's `erc_code`: an APERAK refuses
+    /// the message, this answers the business request.
+    pub antwort_code: Option<String>,
+    /// The tree or Codeliste the answer named for its code (`data.codeliste`,
+    /// DE 1131 / DE 1082) — an `E_` tree or an `S_`/`G_` Codeliste. A code is
+    /// worded only within it.
+    pub antwort_codeliste: Option<String>,
     /// § 7a Abs. 5 EnWG parity flag: `true` when the initiating Lieferant is
     /// part of the same vertically integrated undertaking as this operator.
     ///
@@ -432,9 +441,82 @@ impl ParityComparison {
     }
 }
 
+impl ProcessProjection {
+    /// The BDEW's wording of [`Self::antwort_code`], read in the list the
+    /// answer named ([`mako_pruefung::codes::lies`]).
+    ///
+    /// `None` when the answer named no list or the list does not publish the
+    /// code: a code means something only within its tree — `A02` is four
+    /// unrelated refusals across `E_0607`, `E_0622`, `E_0249` and `E_0250` —
+    /// so a missing list is never answered from another one.
+    #[must_use]
+    pub fn bedeutung(&self) -> Option<&'static str> {
+        mako_pruefung::codes::lies(
+            self.antwort_codeliste.as_deref()?,
+            self.antwort_code.as_deref()?,
+        )
+        .map(|c| c.bedeutung)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn answered(code: Option<&str>, codeliste: Option<&str>) -> ProcessProjection {
+        ProcessProjection {
+            process_id: Uuid::nil(),
+            pid: 55_003,
+            family: "gpke".into(),
+            workflow_name: "gpke-lf-anmeldung".into(),
+            state: ProcessState::Completed,
+            malo_id: None,
+            partner_mp_id: None,
+            mdm_role: None,
+            deadline_at: None,
+            deadline_source: None,
+            deadline_risk: DeadlineRisk::Unknown,
+            started_at: OffsetDateTime::UNIX_EPOCH,
+            last_event_at: OffsetDateTime::UNIX_EPOCH,
+            erc_code: None,
+            antwort_code: code.map(str::to_owned),
+            antwort_codeliste: codeliste.map(str::to_owned),
+            initiator_is_affiliate: false,
+            tenant: "t".into(),
+        }
+    }
+
+    /// The counterparty's code is worded within the list its answer named,
+    /// and nowhere else.
+    #[test]
+    fn an_answer_code_is_worded_only_within_the_list_it_named() {
+        let anmeldung = answered(Some("A02"), Some("E_0622")).bedeutung();
+        assert_eq!(
+            anmeldung,
+            mako_pruefung::codes::lookup("E_0622", "A02").map(|c| c.bedeutung)
+        );
+        assert!(anmeldung.is_some(), "E_0622 publishes A02");
+        let abmeldung = answered(Some("A02"), Some("E_0607")).bedeutung();
+        assert!(abmeldung.is_some(), "E_0607 publishes A02");
+        assert_ne!(anmeldung, abmeldung, "one code, two trees, two meanings");
+
+        assert_eq!(
+            answered(Some("A02"), None).bedeutung(),
+            None,
+            "no list, no wording"
+        );
+        assert_eq!(answered(None, Some("E_0622")).bedeutung(), None);
+        assert_eq!(
+            answered(Some("Z99"), Some("E_0622")).bedeutung(),
+            None,
+            "unpublished code"
+        );
+        assert_eq!(
+            answered(Some("A02"), Some("E_9999")).bedeutung(),
+            None,
+            "unknown list"
+        );
+    }
 
     #[test]
     fn state_wire_spellings_round_trip() {

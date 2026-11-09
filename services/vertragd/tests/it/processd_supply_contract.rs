@@ -16,10 +16,33 @@ use processd::{
 use time::macros::date;
 use uuid::Uuid;
 use vertragd::domain::{Kuendigungsgrund, Lieferbeginnanlass};
-use vertragd::outbound::{GasAnmeldung, lieferbeginn, lieferende};
+use vertragd::outbound::{GasAnmeldung, StromAnmeldung, lieferbeginn, lieferende};
 
 const MALO: &str = "51238696012";
 const BK: &str = "11XBK-STANDARD-4";
+
+/// The Kunde as vertragd stores him.
+fn kunde() -> mako_markt::utilmd_stammdaten::Kunde {
+    vertragd::domain::utilmd_kunde(
+        Some(&serde_json::json!({
+            "_typ": "GESCHAEFTSPARTNER",
+            "vorname": "Erika",
+            "nachname": "Mustermann",
+            "adresse": {
+                "strasse": "Hauptstraße", "hausnummer": "1",
+                "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+            }
+        })),
+        None,
+        None,
+    )
+}
+
+/// A Strom supply contract's Anmeldung facts under `anlass`.
+fn strom_anmeldung(anlass: Lieferbeginnanlass) -> StromAnmeldung {
+    StromAnmeldung::aus_vertrag(Some(anlass), true, Some("ZG1"), None, kunde())
+        .expect("a full Strom contract")
+}
 
 /// A gas supply contract's Anmeldung facts, its Kunde as vertragd stores him.
 fn gas_anmeldung() -> GasAnmeldung {
@@ -65,13 +88,26 @@ fn the_fixture_bilanzkreis_is_one() {
 #[test]
 fn every_lieferbeginn_body_is_the_request_processd_reads() {
     let komp = Uuid::nil();
-    let strom = lieferbeginn(komp, "STROM", MALO, Some(BK), date!(2027 - 01 - 01), None).unwrap();
+    let strom = lieferbeginn(
+        komp,
+        "STROM",
+        MALO,
+        Some(BK),
+        date!(2027 - 01 - 01),
+        Some(&strom_anmeldung(Lieferbeginnanlass::Umzug)),
+        None,
+    )
+    .unwrap();
     let (endpoint, body) = call(&strom.payload);
     assert_eq!(endpoint, "start-supply");
     let req: StartSupplyRequest = mako_service::json_from_value(body).expect("start-supply body");
     assert_eq!(req.malo_id, MALO);
     assert_eq!(req.lieferbeginn_datum, "2027-01-01");
     assert_eq!(req.bilanzkreis.as_deref(), Some(BK));
+    assert_eq!(req.transaktionsgrund, "E01");
+    assert_eq!(req.haushaltskunde, Some(true));
+    assert_eq!(req.enfg_grundlage.as_deref(), Some("ZG1"));
+    assert_eq!(req.kunde.as_ref(), Some(&kunde()));
 
     let gas = lieferbeginn(
         komp,
@@ -79,6 +115,7 @@ fn every_lieferbeginn_body_is_the_request_processd_reads() {
         MALO,
         None,
         date!(2027 - 01 - 01),
+        None,
         Some(&gas_anmeldung()),
     )
     .unwrap();
@@ -120,6 +157,73 @@ fn every_lieferbeginn_body_is_the_request_processd_reads() {
             anlass.transaktionsgrund()
         );
     }
+}
+
+/// An activated Strom contract reaches processd with the `SG4 STS+7`
+/// Transaktionsgrund its Anlass decides — a code the 55001 column admits — and
+/// with every Kunde fact the column makes Muss, in the body makod's door reads;
+/// a contract whose Anlass the 55001 cannot state is never posted, because
+/// processd refuses a `start-supply` without one on every attempt.
+#[test]
+fn a_strom_activation_reaches_processd_with_its_grund() {
+    for anlass in Lieferbeginnanlass::ALL {
+        let Some(grund) = anlass.anmeldung_strom_transaktionsgrund() else {
+            assert!(
+                StromAnmeldung::aus_vertrag(Some(*anlass), true, Some("ZG1"), None, kunde())
+                    .is_err(),
+                "{anlass:?} cannot be a 55001"
+            );
+            continue;
+        };
+        let task = lieferbeginn(
+            Uuid::nil(),
+            "STROM",
+            MALO,
+            Some(BK),
+            date!(2027 - 01 - 01),
+            Some(&strom_anmeldung(*anlass)),
+            None,
+        )
+        .unwrap();
+        let req: StartSupplyRequest =
+            mako_service::json_from_value(call(&task.payload).1).expect("start-supply body");
+        assert_eq!(req.transaktionsgrund, grund, "{anlass:?}");
+        assert!(
+            processd::server::TRANSAKTIONSGRUENDE_55001.contains(&grund),
+            "{anlass:?} → {grund} is not a 55001 code"
+        );
+        // processd forwards these as makod's door type, which holds each one
+        // to what the column can carry.
+        let door = mako_markt::commands::GpkeLieferbeginnAnmelden {
+            malo_id: req.malo_id,
+            lieferbeginn_datum: req.lieferbeginn_datum,
+            transaktionsgrund: req.transaktionsgrund,
+            transaktionsgrund_ergaenzung: None,
+            bilanzkreis: req.bilanzkreis.expect("the contract's Bilanzkreis"),
+            haushaltskunde: req.haushaltskunde.expect("haushaltskunde"),
+            enfg_grundlage: req.enfg_grundlage.expect("enfg_grundlage"),
+            enfg_grund: req.enfg_grund,
+            kunde: req.kunde.expect("kunde"),
+        };
+        assert!(
+            door.maengel().is_empty(),
+            "{anlass:?}: {:?}",
+            door.maengel()
+        );
+    }
+    let unassembled = lieferbeginn(
+        Uuid::nil(),
+        "STROM",
+        MALO,
+        Some(BK),
+        date!(2027 - 01 - 01),
+        None,
+        None,
+    );
+    assert!(
+        unassembled.is_err(),
+        "a contract without its 55001 facts is posted"
+    );
 }
 
 #[test]
@@ -166,6 +270,7 @@ fn a_body_with_a_key_processd_does_not_declare_is_refused() {
             MALO,
             None,
             date!(2027 - 01 - 01),
+            Some(&strom_anmeldung(Lieferbeginnanlass::Wechsel)),
             None,
         )
         .unwrap()
@@ -192,7 +297,15 @@ fn standard(bks: &[&str]) -> Vec<BilanzkreisEintrag> {
 #[test]
 fn an_activation_reaches_the_nb_with_a_bilanzkreis_or_is_refused() {
     let body = |bk| {
-        let task = lieferbeginn(Uuid::nil(), "STROM", MALO, bk, date!(2027 - 01 - 01), None);
+        let task = lieferbeginn(
+            Uuid::nil(),
+            "STROM",
+            MALO,
+            bk,
+            date!(2027 - 01 - 01),
+            Some(&strom_anmeldung(Lieferbeginnanlass::Wechsel)),
+            None,
+        );
         mako_service::json_from_value::<StartSupplyRequest>(call(&task.unwrap().payload).1)
             .unwrap()
             .bilanzkreis

@@ -81,7 +81,7 @@ pub use technik::{
 };
 pub use types::{
     Abmeldegrund, AbmeldungMsb, AnmeldungMsb, Einrichtungsart, KuendigungMsb, Kuendigungstermin,
-    MsbEntscheidung, Vertragslage, WeiterverpflichtungAuftrag,
+    MsbEntscheidung, RahmenvertragBefund, Vertragslage, WeiterverpflichtungAuftrag,
 };
 pub use weiterverpflichtung::pruefe_weiterverpflichtung;
 

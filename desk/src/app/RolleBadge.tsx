@@ -1,5 +1,6 @@
 import { Button, Menu, MenuItem, MenuTrigger, Popover } from "react-aria-components";
 import { Kbd } from "../design/Kbd";
+import { useT } from "../i18n";
 import { ROLLEN, type Rolle, useRolle } from "./rollen";
 
 function Dot({ rolle }: { rolle: Rolle }) {
@@ -11,6 +12,7 @@ function Dot({ rolle }: { rolle: Rolle }) {
  * Rolle it is a label; with several, a menu (⌃1–⌃4).
  */
 export function RolleBadge() {
+  const t = useT();
   const { rolle, held, wear } = useRolle();
   const label = ROLLEN[rolle].label;
   const look =
@@ -26,7 +28,7 @@ export function RolleBadge() {
   }
   return (
     <MenuTrigger>
-      <Button aria-label={`Rolle: ${label}. Rolle wechseln`} className={`focus-ring ${look}`}>
+      <Button aria-label={t.rolleBadge.knopf(label)} className={`focus-ring ${look}`}>
         <Dot rolle={rolle} />
         {label}
         <span aria-hidden="true" className="text-caption opacity-70">
@@ -38,7 +40,7 @@ export function RolleBadge() {
         className="min-w-56 rounded-control bg-surface-raised p-1 shadow-popover outline-none"
       >
         <Menu
-          aria-label="Rolle wechseln"
+          aria-label={t.rolleBadge.wechseln}
           selectionMode="single"
           selectedKeys={[rolle]}
           onAction={(key) => wear(key as Rolle)}

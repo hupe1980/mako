@@ -103,7 +103,8 @@ impl std::fmt::Display for Rolle {
     }
 }
 
-/// Check `rollen` against the `[[party]]` table and return the declared set.
+/// Check `rollen` against the `[[party]]` table and return the declared set,
+/// refusing with every finding joined.
 ///
 /// # Errors
 ///
@@ -113,40 +114,90 @@ impl std::fmt::Display for Rolle {
 /// - a declared role with no MP-ID, or with more than one;
 /// - a `[[party]]` role whose deployment role is not declared;
 /// - a `[[party]]` role no engine module answers for.
+///
+/// The tests' view of [`pruefe_rollen`]; startup reads the findings.
+#[cfg(test)]
 pub fn validate_rollen(
     rollen: &[Rolle],
     parties: &[PartyConfig],
 ) -> anyhow::Result<BTreeSet<Rolle>> {
-    anyhow::ensure!(
-        !rollen.is_empty(),
-        "makod.toml declares no deployment role. Name the roles this instance plays:\n\
-         \n\
-         [deployment]\n\
-         rollen = [\"nb-strom\"]  # lf-strom, lf-gas, nb-strom, nb-gas, msb-strom, msb-gas, esa-strom\n\
-         \n\
-         A makod that registers no engine module routes nothing and dead-letters \
-         every inbound message."
-    );
+    let (declared, befunde) = pruefe_rollen(rollen, parties);
+    if !befunde.is_empty() {
+        anyhow::bail!(
+            "{}",
+            befunde
+                .iter()
+                .map(|b| b.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    Ok(declared)
+}
+
+/// The source of the one-MP-ID-per-role rule.
+const EINE_MP_ID: &str = "BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4)";
+
+/// The deployment's role checks as findings — every defect, each at its path —
+/// and the declared set.
+#[must_use]
+pub fn pruefe_rollen(
+    rollen: &[Rolle],
+    parties: &[PartyConfig],
+) -> (BTreeSet<Rolle>, Vec<mako_service::Befund>) {
+    use mako_service::befund::{Befund, Bereich};
+    let mut out = Vec::new();
+    if rollen.is_empty() {
+        out.push(
+            Befund::blockiert(
+                "deployment.rollen",
+                "makod.toml declares no deployment role. Name the roles this instance plays:\n\
+                 \n\
+                 [deployment]\n\
+                 rollen = [\"nb-strom\"]  # lf-strom, lf-gas, nb-strom, nb-gas, msb-strom, msb-gas, esa-strom\n\
+                 \n\
+                 A makod that registers no engine module routes nothing and dead-letters \
+                 every inbound message.",
+            )
+            .bereich(Bereich::Identitaeten),
+        );
+        return (BTreeSet::new(), out);
+    }
     let declared: BTreeSet<Rolle> = rollen.iter().copied().collect();
 
     // Each deployment role → the distinct MP-IDs the party table gives it.
     let mut mp_ids: BTreeMap<Rolle, BTreeSet<&str>> = BTreeMap::new();
-    for party in parties {
+    for (i, party) in parties.iter().enumerate() {
         for role in &party.roles {
             let Some(rolle) = Rolle::of_party_role(role) else {
-                anyhow::bail!(
-                    "[[party]] mp_id = {:?} declares the role {role:?}, which no engine \
-                     module answers for. Remove it from `roles`.",
-                    party.mp_id
+                out.push(
+                    Befund::blockiert(
+                        format!("party[{i}].roles"),
+                        format!(
+                            "[[party]] mp_id = {:?} declares the role {role:?}, which no engine \
+                             module answers for. Remove it from `roles`.",
+                            party.mp_id
+                        ),
+                    )
+                    .bereich(Bereich::Identitaeten),
                 );
+                continue;
             };
-            anyhow::ensure!(
-                declared.contains(&rolle),
-                "[[party]] mp_id = {:?} holds an MP-ID for {role:?} ({rolle}), but \
-                 [deployment] rollen does not declare {rolle}. Declare the role or \
-                 remove the MP-ID — a deployment names itself only for the roles it plays.",
-                party.mp_id
-            );
+            if !declared.contains(&rolle) {
+                out.push(
+                    Befund::blockiert(
+                        format!("party[{i}].roles"),
+                        format!(
+                            "[[party]] mp_id = {:?} holds an MP-ID for {role:?} ({rolle}), but \
+                             [deployment] rollen does not declare {rolle}. Declare the role or \
+                             remove the MP-ID — a deployment names itself only for the roles it plays.",
+                            party.mp_id
+                        ),
+                    )
+                    .bereich(Bereich::Identitaeten),
+                );
+                continue;
+            }
             mp_ids
                 .entry(rolle)
                 .or_default()
@@ -156,18 +207,26 @@ pub fn validate_rollen(
 
     for rolle in &declared {
         let ids = mp_ids.get(rolle).map(BTreeSet::len).unwrap_or(0);
-        anyhow::ensure!(
-            ids == 1,
-            "[deployment] rollen declares {rolle}, which has {ids} MP-IDs in [[party]] \
-             ({:?}); it needs exactly one (BDEW-AWH Identifikatoren V1.2 Kap. 2.1: „Für \
-             jede Sparte (Gas bzw. Strom) und jede Rolle hat ein Markteilnehmer genau \
-             eine MP-ID.\"). Party roles for {rolle}: {:?}.",
-            mp_ids.get(rolle).cloned().unwrap_or_default(),
-            rolle.party_roles(),
-        );
+        if ids != 1 {
+            out.push(
+                Befund::blockiert(
+                    "deployment.rollen",
+                    format!(
+                        "[deployment] rollen declares {rolle}, which has {ids} MP-IDs in [[party]] \
+                         ({:?}); it needs exactly one (BDEW-AWH Identifikatoren V1.2 Kap. 2.1: „Für \
+                         jede Sparte (Gas bzw. Strom) und jede Rolle hat ein Markteilnehmer genau \
+                         eine MP-ID.\"). Party roles for {rolle}: {:?}.",
+                        mp_ids.get(rolle).cloned().unwrap_or_default(),
+                        rolle.party_roles(),
+                    ),
+                )
+                .bereich(Bereich::Identitaeten)
+                .quelle(EINE_MP_ID),
+            );
+        }
     }
 
-    Ok(declared)
+    (declared, out)
 }
 
 #[cfg(test)]
@@ -259,6 +318,27 @@ mod tests {
     fn a_party_role_no_module_answers_for_is_refused() {
         let msg = err(&[Rolle::LfStrom], &[party("9900001000001", &["LF", "BKV"])]);
         assert!(msg.contains("BKV"), "{msg}");
+    }
+
+    /// Two defects are two findings, each at its path.
+    #[test]
+    fn every_defect_is_its_own_finding() {
+        let (_, befunde) = pruefe_rollen(
+            &[Rolle::LfStrom, Rolle::LfGas],
+            &[party("9900001000001", &["LF", "NB"])],
+        );
+        let pfade: Vec<&str> = befunde.iter().map(|b| b.pfad.as_str()).collect();
+        assert_eq!(
+            pfade,
+            ["party[0].roles", "deployment.rollen"],
+            "{befunde:?}"
+        );
+        assert!(
+            befunde[1]
+                .quelle
+                .as_deref()
+                .is_some_and(|q| q.contains("Kap. 2.1"))
+        );
     }
 
     #[test]

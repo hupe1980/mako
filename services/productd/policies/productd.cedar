@@ -45,6 +45,10 @@
 //                           an import is a price change for every customer on
 //                           those products at once
 //
+// Readiness (shared `mako_service::einrichtung::router`):
+//   "read-policy"         — GET  /api/v1/policy — the posture report
+//   "read-config"         — GET  /admin/einrichtung — the configuration findings
+//
 // Angebot (B2B quotation) lifecycle:
 //   "read-angebot"        — GET  /api/v1/angebote[/{id}[/comparison]]
 //   "write-angebot"       — POST /api/v1/angebote, PUT /api/v1/angebote/{id}
@@ -111,7 +115,9 @@ permit(
     principal,
     action in [
         Action::"read-product",
-        Action::"read-marktpreise"
+        Action::"read-marktpreise",
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

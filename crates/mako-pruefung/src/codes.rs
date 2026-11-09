@@ -2184,14 +2184,15 @@ const E_0204: Option<&'static str> = Some(EBD_GERAETEWECHSELABSICHT);
 /// `E_0204` — the outgoing MSB's answer to the incoming MSB's
 /// Gerätewechselabsicht.
 ///
-/// **Neither cluster refuses the Gerätewechsel.** The AHB names 19015
-/// „Bestätigung" and 19016 „Ablehnung Gerätewechselabsicht", but the codes say
-/// what the two actually decide: `ZB4` „Eigenausbau wird erfolgen" — the MSBA
-/// removes its own devices — versus `ZB5` „Kein Eigenausbau des MSBA", where
-/// the MSBN does. Reading 19016 as a refusal aborts a Gerätewechsel the
-/// counterparty has just agreed to carry out.
+/// **The cluster is the Codeliste axis, not the refusal axis.** `ZB4`
+/// „Eigenausbau wird erfolgen" (`S_0065`) — the MSBA removes its own devices —
+/// and `ZB5` „Kein Eigenausbau des MSBA" (`S_0066`), where the MSBN does, both
+/// let the Gerätewechsel go ahead and both ride the Bestätigung 19015 (ORDRSP
+/// AHB 1.1b Kap. 4.10, S. 46, Bedingung `[38]`). Reading `ZB5` as a refusal
+/// aborts a Gerätewechsel the counterparty has just agreed to carry out.
 ///
-/// `E17` and `Z07` are the genuine refusals, and the Codeliste marks both Kann.
+/// `E17` and `Z07` are the genuine refusals: they ride the Ablehnung 19016
+/// (Bedingung `[39]`), and the Codeliste marks both Kann.
 pub const E_0204_CODES: &[AntwortCode] = &[
     code!("ZB4", E_0204, Zustimmung, "Eigenausbau wird erfolgen"),
     code!("ZB5", E_0204, Ablehnung, "Kein Eigenausbau des MSBA"),
@@ -4065,8 +4066,9 @@ const E_2007: Option<&'static str> = Some(EBD_GERAETEWECHSELABSICHT_GAS);
 
 /// `E_2007` — the Gas twin of [`E_0204_CODES`] (`G_0059` / `G_0060`).
 ///
-/// As in Strom, **neither cluster refuses the Gerätewechsel**: `ZB4` says the
-/// MSBA removes its own devices and `ZB5` that the MSBN does.
+/// As in Strom, **the cluster is the Codeliste axis**: `ZB4` says the MSBA
+/// removes its own devices and `ZB5` that the MSBN does, and both ride 19015;
+/// `E17` and `Z07` refuse and ride 19016.
 pub const E_2007_CODES: &[AntwortCode] = &[
     code!("ZB4", E_2007, Zustimmung, "Eigenausbau wird erfolgen"),
     code!("ZB5", E_2007, Ablehnung, "Kein Eigenausbau des MSBA"),

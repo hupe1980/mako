@@ -166,9 +166,14 @@ fn the_policy_grants_no_action_the_code_never_checks() {
     let permitted = actions_permitted_in_policy();
     // `use-mcp` is the blanket gate the shared MCP middleware applies
     // (`mako_service::mcp_auth::McpAuth::authenticate`), one crate over;
-    // `read-policy` is checked by `mako_service::policy::router`.
-    let enforced_elsewhere: BTreeSet<String> =
-        ["use-mcp".to_owned(), "read-policy".to_owned()].into();
+    // `read-policy` and `read-config` are checked by
+    // `mako_service::einrichtung::router`.
+    let enforced_elsewhere: BTreeSet<String> = [
+        "use-mcp".to_owned(),
+        "read-policy".to_owned(),
+        "read-config".to_owned(),
+    ]
+    .into();
     let dead: Vec<_> = permitted
         .difference(&used)
         .filter(|a| !enforced_elsewhere.contains(*a))

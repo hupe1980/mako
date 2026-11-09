@@ -18,9 +18,22 @@
 //! and `1234.56` one number, and an instant a service returns in UTC also
 //! counts as its Berlin date and Berlin wall-clock time, which is how a
 //! sentence for a German reader states it.
+//!
+//! ## A rule is belegt only by its quote
+//!
+//! A sentence naming a § or a chapter — „§ 41f Abs. 5 EnWG", „APERAK AHB 1.1
+//! Kap. 2.4.1" — states a rule, and a rule is belegt only beside the passage
+//! that states it: the sentence cites `agentd/quote_source`, and one quote of
+//! the run holds every address the sentence names, document, edition where
+//! the sentence names one, and paragraph or chapter
+//! ([`belegt_im_lauf`]). A quote of Abs. 1 does not carry a sentence about
+//! Abs. 5, and a chapter whose document the sentence does not name has no
+//! address at all, so it is never belegt.
 
 use std::collections::BTreeSet;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use time::format_description::well_known::Rfc3339;
 use time::{Date, Month, OffsetDateTime};
 
@@ -58,6 +71,125 @@ pub fn belegt(satz: &Satz, step: Option<&serde_json::Value>) -> bool {
     let mut read = BTreeSet::new();
     collect_json(step, &mut read);
     figures(&satz.text).iter().all(|f| read.contains(f))
+}
+
+/// The cited call a sentence naming a rule must rest on.
+pub const ZITAT_QUELLE: &str = "agentd/quote_source";
+
+/// Whether `satz` is belegt within its run: `step` the output of the call it
+/// cites, `zitate` the output of every `quote_source` call the run made.
+///
+/// A sentence naming no § and no chapter is checked as [`belegt`] checks it.
+/// One naming any is belegt only when it cites [`ZITAT_QUELLE`] and a single
+/// quote holds every address it names and carries its figures.
+#[must_use]
+pub fn belegt_im_lauf(
+    satz: &Satz,
+    step: Option<&serde_json::Value>,
+    zitate: &[&serde_json::Value],
+) -> bool {
+    let adressen = adressen(&satz.text);
+    if adressen.is_empty() {
+        return belegt(satz, step);
+    }
+    if satz.cites.as_deref() != Some(ZITAT_QUELLE) {
+        return false;
+    }
+    zitate
+        .iter()
+        .any(|z| adressen.iter().all(|a| a.passt(z)) && belegt(satz, Some(z)))
+}
+
+/// A rule's address as a sentence names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Adresse {
+    /// The document, or none where the sentence does not name one.
+    pub doc: Option<String>,
+    /// The edition, where the sentence names one.
+    pub edition: Option<String>,
+    /// `§ 41f Abs. 5` or `2.4.1`, as the index spells it.
+    pub at: String,
+}
+
+impl Adresse {
+    /// Whether the quote `z` is the passage at this address.
+    fn passt(&self, z: &serde_json::Value) -> bool {
+        let Some(doc) = &self.doc else {
+            return false;
+        };
+        z["doc"]
+            .as_str()
+            .is_some_and(|d| d.eq_ignore_ascii_case(doc))
+            && z["at"].as_str() == Some(self.at.as_str())
+            && self
+                .edition
+                .as_deref()
+                .is_none_or(|e| z["edition"].as_str() == Some(e))
+    }
+}
+
+/// A chapter: `Kap. 2.4.1`, `Kapitel 3`, or an AHB's own `§ 2.4.1`.
+static KAPITEL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:Kap\.|Kapitel)\s*(\d+(?:\.\d+)*)|§\s*(\d+(?:\.\d+)+)").expect("chapter")
+});
+
+/// An EDI@Energy document with its edition: `APERAK AHB 1.1`,
+/// `UTILMD MIG Gas G1.2`.
+static DOKUMENT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b([A-Z][A-Za-z]+ (?:AHB|MIG)(?: (?:Gas|Strom))?) ([A-Z]?\d+\.\d+[a-z]?)\b")
+        .expect("document")
+});
+
+/// A statute's paragraph: `§ 41f Abs. 5 S. 1 EnWG`. The Absatz is kept, a
+/// Satz or Nummer is not — the index's passage is the Absatz that holds it.
+static PARAGRAPH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"§\s*(\d+[a-z]?)(?:\s*(?:Abs\.|Absatz)\s*(\d+[a-z]?))?(?:\s*(?:S\.|Satz)\s*\d+)?(?:\s*Nr\.\s*\d+[a-z]?)?(?:\s+([A-ZÄÖÜ][A-Za-zÄÖÜäöü]*[A-Z][A-Za-z]*))?",
+    )
+    .expect("paragraph")
+});
+
+/// Every rule address `text` names.
+#[must_use]
+pub fn adressen(text: &str) -> Vec<Adresse> {
+    let mut out = Vec::new();
+    let mut belegt_spans = Vec::new();
+    let docs: Vec<(usize, String, String)> = DOKUMENT
+        .captures_iter(text)
+        .filter_map(|c| Some((c.get(0)?.start(), c[1].to_owned(), c[2].to_owned())))
+        .collect();
+    for c in KAPITEL.captures_iter(text) {
+        let Some(m) = c.get(0) else { continue };
+        belegt_spans.push(m.range());
+        let at = c.get(1).or_else(|| c.get(2)).map_or("", |n| n.as_str());
+        // The document named last before the chapter, else the first after it.
+        let doc = docs
+            .iter()
+            .rev()
+            .find(|(at, ..)| *at < m.start())
+            .or_else(|| docs.iter().find(|(at, ..)| *at > m.start()));
+        out.push(Adresse {
+            doc: doc.map(|(_, d, _)| d.clone()),
+            edition: doc.map(|(_, _, e)| e.clone()),
+            at: at.to_owned(),
+        });
+    }
+    for c in PARAGRAPH.captures_iter(text) {
+        let Some(m) = c.get(0) else { continue };
+        if belegt_spans.iter().any(|r| r.contains(&m.start())) {
+            continue;
+        }
+        let at = match c.get(2) {
+            Some(abs) => format!("§ {} Abs. {}", &c[1], abs.as_str()),
+            None => format!("§ {}", &c[1]),
+        };
+        out.push(Adresse {
+            doc: c.get(3).map(|d| d.as_str().to_owned()),
+            edition: None,
+            at,
+        });
+    }
+    out
 }
 
 /// Every figure a JSON value carries: string values tokenised as text, an
@@ -292,6 +424,102 @@ mod tests {
         let step = json!({ "vorgang": "0042" });
         assert!(belegt(&satz("Vorgang 0042 ist offen."), Some(&step)));
         assert!(!belegt(&satz("Vorgang 42 ist offen."), Some(&step)));
+    }
+
+    fn zitat(doc: &str, edition: &str, at: &str, text: &str) -> serde_json::Value {
+        json!({ "doc": doc, "edition": edition, "at": at, "text": text, "sha256": "03b3" })
+    }
+
+    fn zitiert(text: &str) -> Satz {
+        Satz {
+            text: text.to_owned(),
+            cites: Some(ZITAT_QUELLE.to_owned()),
+        }
+    }
+
+    const ABS_5: &str = "(5) Der Beginn der Unterbrechung der Energieversorgung ist dem \
+        Haushaltskunden acht Werktage im Voraus durch briefliche Mitteilung anzukündigen.";
+
+    #[test]
+    fn a_rule_is_belegt_only_beside_the_quote_of_its_own_absatz() {
+        let s = zitiert(
+            "Die Unterbrechung ist acht Werktage im Voraus anzukündigen (§ 41f Abs. 5 EnWG).",
+        );
+        let abs1 = zitat(
+            "EnWG",
+            "Stand 2026-10-22",
+            "§ 41f Abs. 1",
+            "(1) Bei der Nichterfüllung …",
+        );
+        let abs5 = zitat("EnWG", "Stand 2026-10-22", "§ 41f Abs. 5", ABS_5);
+        assert!(
+            !belegt_im_lauf(&s, Some(&abs1), &[&abs1]),
+            "a quote of Abs. 1 carries no Abs. 5"
+        );
+        assert!(belegt_im_lauf(&s, Some(&abs5), &[&abs1, &abs5]));
+    }
+
+    #[test]
+    fn a_rule_cited_to_a_service_read_is_not_belegt() {
+        let abs5 = zitat("EnWG", "Stand 2026-10-22", "§ 41f Abs. 5", ABS_5);
+        let s = Satz {
+            text: "Nach § 41f Abs. 5 EnWG gilt das.".to_owned(),
+            cites: Some("makod/get_process".to_owned()),
+        };
+        assert!(!belegt_im_lauf(&s, Some(&step()), &[&abs5]));
+    }
+
+    #[test]
+    fn an_ahb_chapter_needs_its_edition() {
+        let s = zitiert("Laut APERAK AHB 1.1 Kap. 2.4.1 gilt die Frist von 45 Minuten.");
+        let z10 = zitat("APERAK AHB", "1.0", "2.4.1", "binnen 45 Minuten");
+        let z11 = zitat("APERAK AHB", "1.1", "2.4.1", "binnen 45 Minuten");
+        assert!(!belegt_im_lauf(&s, Some(&z10), &[&z10]), "1.0 is not 1.1");
+        assert!(belegt_im_lauf(&s, Some(&z11), &[&z10, &z11]));
+        // The AHB's own `§ 2.4.1` is the same chapter.
+        let s = zitiert("APERAK AHB 1.1 § 2.4.1 nennt 45 Minuten.");
+        assert!(belegt_im_lauf(&s, Some(&z11), &[&z11]));
+    }
+
+    #[test]
+    fn a_chapter_without_its_document_is_never_belegt() {
+        let z = zitat("APERAK AHB", "1.1", "2.4.1", "binnen 45 Minuten");
+        let s = zitiert("Nach Kap. 2.4.1 gilt die Frist von 45 Minuten.");
+        assert_eq!(adressen(&s.text)[0].doc, None);
+        assert!(!belegt_im_lauf(&s, Some(&z), &[&z]));
+    }
+
+    #[test]
+    fn a_sentence_naming_no_rule_is_checked_as_before() {
+        let s = satz("Die Anmeldung für 51238696012 läuft.");
+        assert!(belegt_im_lauf(&s, Some(&step()), &[]));
+    }
+
+    #[test]
+    fn the_addresses_a_sentence_names() {
+        assert_eq!(
+            adressen("§ 41f Abs. 5 S. 1 EnWG und § 34 MsbG"),
+            vec![
+                Adresse {
+                    doc: Some("EnWG".into()),
+                    edition: None,
+                    at: "§ 41f Abs. 5".into()
+                },
+                Adresse {
+                    doc: Some("MsbG".into()),
+                    edition: None,
+                    at: "§ 34".into()
+                },
+            ]
+        );
+        assert_eq!(
+            adressen("UTILMD MIG Gas G1.2 Kapitel 3"),
+            vec![Adresse {
+                doc: Some("UTILMD MIG Gas".into()),
+                edition: Some("G1.2".into()),
+                at: "3".into()
+            }]
+        );
     }
 
     #[test]

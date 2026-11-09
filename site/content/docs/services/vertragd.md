@@ -154,7 +154,8 @@ policy reads only `context.*`. A denial is a `403`.
 | `read-outbound-tasks` | `GET /outbound/dead` |
 | `retry-outbound-task` | `POST /outbound/dead/{id}/retry` |
 | `use-mcp` | the whole `/mcp` surface, gated once by the shared `McpAuth` middleware rather than per tool |
-| `read-policy` | `GET /api/v1/policy` — the operator policy report, checked by the shared `mako_service::policy` router |
+| `read-policy` | `GET /api/v1/policy` — the operator policy report, checked by the shared `mako_service::einrichtung` router |
+| `read-config` | `GET /admin/einrichtung` — the configuration findings, checked by the same router |
 
 ᶜ = customer-scoped: tenant equality only, no market role.
 
@@ -210,11 +211,24 @@ The Ablesekarte goes to the contract's Kunde: the contract names no other
 addressee. No Messlokation is asked for — the 44001 names the Marktlokation
 alone in `SG5 LOC+172`.
 
+**Every other component states what its Anmeldung 55001 carries.** A STROM
+(or other non-GAS) component registered at the NB goes out as `start-supply`,
+and UTILMD AHB Strom 2.2 Kap. 8.2 makes these Muss — refused on creation the
+same way, `422 anmeldedaten_unvollstaendig`, unless the contract states each:
+
+| Fact | Where vertragd holds it | Segment |
+|---|---|---|
+| Transaktionsgrund | component `lieferbeginn_anlass`: `WECHSEL` (`E03`) or `UMZUG` (`E01`) — the 55001 admits no other | `SG4 STS+7` (S. 73) |
+| Gruppenzuordnung | the Kunde's `haushaltskunde` | `SEQ+Z01 CCI+++Z15`/`Z18` (S. 83) |
+| Grundlage nach EnFG | component `enfg_grundlage` (`ZF9`, `ZG0`, `ZG1`) and, beside `ZF9` only, `enfg_grund` (`ZU5` … `ZV3`) | `SEQ+Z75 CCI+Z61`, `CAV` (S. 85) |
+| Kunde, Korrespondenzanschrift | the Kunde's name and address, as for the 44001 | `SG12 NAD+Z09`/`Z04` (S. 86) |
+
 The Lieferbeginn and Lieferende bodies are processd's request types field
 for field, pinned by `tests/it/processd_supply_contract.rs`. `vertragsart`,
 `kuendigung_grund`, `lieferbeginn_anlass`, `netznutzungsvertrag`,
-`netznutzung_zahler` and the outbound task `kind` are `CHECK`-constrained and
-held to their Rust enums in both directions by `tests/it/schema_enum_guard.rs`.
+`netznutzung_zahler`, `enfg_grundlage`, `enfg_grund` and the outbound task
+`kind` are `CHECK`-constrained and held to their Rust enums or code lists in
+both directions by `tests/it/schema_enum_guard.rs`.
 
 ### Contract status
 

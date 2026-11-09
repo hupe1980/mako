@@ -67,6 +67,9 @@ is recorded).
   `[e_rechnung]`, `[billing_runs]`, `[oidc]`, `[mcp]`. `--print-config` runs the
   same validation as startup and prints the policy report; the report is also
   served at `GET /api/v1/policy` and by the MCP tool `get_policy`.
+  `billingd --check-config [--json]` prints every configuration finding (path,
+  severity, source) and exits non-zero on a blocking one; the same findings are
+  served at `GET /admin/einrichtung`.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/billingd/)
 covers the billing arithmetic, § 40–§ 40c EnWG compliance, the risk gate,

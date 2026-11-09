@@ -154,6 +154,8 @@ fn verb(tool: &str) -> &'static str {
         "check" | "validate" => "geprüft",
         "explain" | "resolve" => "nachgeschlagen",
         "compute" | "preview" => "berechnet",
+        "quote" => "zitiert",
+        "find" => "gesucht",
         _ => "aufgerufen",
     }
 }
@@ -222,6 +224,8 @@ mod tests {
     #[test]
     fn the_verb_is_the_tool_names_first_word() {
         assert_eq!(verb("get_process_history"), "gelesen");
+        assert_eq!(verb("quote_source"), "zitiert");
+        assert_eq!(verb("find_source"), "gesucht");
         assert_eq!(verb("list_dead_letters"), "aufgelistet");
         assert_eq!(verb("submit_command"), "aufgerufen");
     }

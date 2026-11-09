@@ -25,8 +25,8 @@ use crate::sperr::{
     Tenant, events,
     model::OrderStatus,
     pg::{
-        CreateOrderRequest, Outcome, Reported, cancel_order_pg, create_order_pg, fetch_order_pg,
-        list_orders_pg, report_outcome, stats_pg,
+        CreateOrderRequest, Outcome, Reported, SperrOrderView, cancel_order_pg, create_order_pg,
+        fetch_order_pg, list_orders_pg, report_outcome, stats_pg,
     },
 };
 
@@ -77,6 +77,7 @@ pub async fn list_orders(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(Tenant(tenant)): Extension<Tenant>,
+    Extension(lesart): Extension<crate::sperr::Lesart>,
     Query(q): Query<OrdersQuery>,
 ) -> ApiResult<Response> {
     if let Err(e) = cedar.check(&claims.principal(), "read-sperr-order", &tenant) {
@@ -99,7 +100,11 @@ pub async fn list_orders(
         q.limit.unwrap_or(100).clamp(1, 1000),
     )
     .await?;
-    Ok(Json(rows).into_response())
+    let views: Vec<SperrOrderView> = rows
+        .into_iter()
+        .map(|r| SperrOrderView::new(r, &lesart.0))
+        .collect();
+    Ok(Json(views).into_response())
 }
 
 /// `GET /api/v1/sperr-orders/{id}`
@@ -108,6 +113,7 @@ pub async fn get_order(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(Tenant(tenant)): Extension<Tenant>,
+    Extension(lesart): Extension<crate::sperr::Lesart>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
     if let Err(e) = cedar.check(&claims.principal(), "read-sperr-order", &tenant) {
@@ -116,7 +122,7 @@ pub async fn get_order(
     let row = fetch_order_pg(&pool, id, &tenant)
         .await?
         .ok_or(ApiError::NotFound)?;
-    Ok(Json(row).into_response())
+    Ok(Json(SperrOrderView::new(row, &lesart.0)).into_response())
 }
 
 #[derive(Debug, Deserialize)]

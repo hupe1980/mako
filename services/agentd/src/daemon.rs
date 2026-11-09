@@ -58,8 +58,15 @@ impl Daemon for Agentd {
         crate::plane::readiness::journal_is_reachable().await
     }
 
+    fn validate(cfg: &AgentdConfig) -> Vec<mako_service::Befund> {
+        cfg.validate()
+    }
+
+    fn policy(cfg: &AgentdConfig) -> mako_service::policy::PolicyReport {
+        cfg.policy_report()
+    }
+
     async fn build(cfg: Arc<AgentdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
-        cfg.validate()?;
         if cfg.allow_insecure_no_auth {
             warn!(
                 "agentd: allow_insecure_no_auth is set — API authentication and inbound webhook verification may be degraded (dev mode)"
@@ -196,10 +203,26 @@ impl Daemon for Agentd {
         // startup rather than lazily is deliberate: an agent whose tools are
         // unreachable still answers, from the model alone and with no evidence
         // behind it, which is worse than a daemon that declines to start.
-        let tool_servers =
+        let mut tool_servers =
             crate::plane::tools::connect(&cfg.mcp_servers, &secrets.mcp_api_key, &ctx.http)
                 .await
                 .context("connect MCP tool transports")?;
+
+        // agentd's own `quote_source` / `find_source`, over the operator's
+        // passage index. Without one they refuse every call; that is a
+        // warning, not a refusal to start — the assistant still answers, and
+        // no sentence naming a rule is belegt.
+        let quellen = crate::plane::quellen::Quellen::aus(
+            cfg.quellen.index.as_deref().map(std::path::Path::new),
+        );
+        match quellen.bereit() {
+            Ok(()) => info!(index = ?cfg.quellen.index, "passage index loaded"),
+            Err(warum) => warn!("agentd: quote_source and find_source refuse every call: {warum}"),
+        }
+        tool_servers.push((
+            crate::plane::quellen::SERVER.to_owned(),
+            Arc::new(quellen) as Arc<dyn agentplane::tools::ToolClient>,
+        ));
 
         // The proposal tick reads processd's queue, invoicd's disputes and
         // accountingd's parked bookings over the transport the manifests'
@@ -221,6 +244,20 @@ impl Daemon for Agentd {
         // `enable` name that matches nothing compiled in refuses to boot rather
         // than presenting as an agent that never fires.
         let activated = Activation::from_config(&cfg.bundled_agents);
+
+        // `[policy] agent_posture` bounds what the registered specialists may
+        // be granted: checked over exactly the set the plane registers, before
+        // any of them can run.
+        crate::config::haltung_pruefen(
+            &cfg.policy.agent_posture,
+            crate::plane::manifests()
+                .iter()
+                .filter(|(name, _)| {
+                    crate::builtin::find(name).is_some() && activated.includes(name)
+                })
+                .flat_map(|(name, m)| m.spec.tools.iter().map(move |g| (name.as_str(), g))),
+        )
+        .map_err(|e| anyhow::anyhow!("agentd: {e}"))?;
 
         // Durable delivery of a completed run's decision, on the journal's own
         // cursor: registrations are made at admission so no run exists
@@ -537,6 +574,22 @@ impl Daemon for Agentd {
             ),
         }
 
+        // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
+        // GET /api/v1/policy (Cedar `read-policy`), from the boot report —
+        // behind the same verifier and tenant pin as every route below, and
+        // the Cedar policy that covers only these two reads.
+        let einrichtung = mako_service::einrichtung::router(ctx.einrichtung.clone())
+            .layer(Extension(Arc::new(
+                mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                    "../policies/agentd.cedar"
+                ))
+                .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
+            )))
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.tenant.clone(),
+            )))
+            .layer(Extension(oidc.clone()));
+
         let mut app = Router::new()
             // CloudEvent ingest
             .route("/webhook", post(handlers::webhook))
@@ -572,7 +625,8 @@ impl Daemon for Agentd {
             )))
             // OIDC verifier extension for the Claims Axum extractor
             .layer(Extension(oidc))
-            .with_state(state);
+            .with_state(state)
+            .merge(einrichtung);
 
         if let Some(surface) = oversight {
             info!(

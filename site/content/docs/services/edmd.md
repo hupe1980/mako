@@ -183,7 +183,7 @@ graph TB
 │  DELETE /api/v1/gdpr/erasure/{malo_id}                     ← Art. 17 DSGVO erasure            │
 │  GET  /api/v1/gdpr/erasures                                ← the erasure audit trail          │
 │                                                                                               │
-│  POST|GET /mcp                                             ← MCP Streamable HTTP              │
+│  POST /mcp                                                 ← MCP Streamable HTTP              │
 │  GET  /metrics                                             ← the runner's request metrics     │
 │  GET  /edmd/metrics                                        ← edmd's own gauges                │
 │  GET  /api/v1/policy                                       ← operator policy report           │
@@ -315,7 +315,7 @@ additionally require a market role (`mako_roles` claim). The policy is
 
 | Action group | Actions | Required role |
 |---|---|---|
-| Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp`, `read-policy` | any (tenant match) |
+| Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp`, `read-policy`, `read-config` | any (tenant match) |
 | Reading ingest | `write-meter-reads` (direct push, gas, IoT, ZSG, SMGW registry, virtual-meter configs) | `MSB`, `ADMIN` |
 | Series mutation | `write-timeseries` (bulk import, corrections, § 60 Abs. 1 Ersatzwerte), `write-quality-rescore` (rescore) | `MSB`, `NB`, `ADMIN` |
 | Field dispatch | `write-reading-order` (orders, §40b campaign) | `NB`, `MSB`, `ADMIN` |
@@ -1491,7 +1491,9 @@ as Buchungsbelege, which Art. 17 Abs. 3 lit. b DSGVO exempts.
 Every erasure response names the reading in `policy` (`{key, value, quelle}`).
 The startup report also states whether `[privacy] erasure_secret` is present —
 never its value — and logs its absence at `warn`. The report is served at
-`GET /api/v1/policy` (Cedar `read-policy`) and by the MCP tool `get_policy`;
+`GET /api/v1/policy` (Cedar `read-policy`) and by the MCP tool `get_policy`,
+and with the configuration findings at `GET /admin/einrichtung` (Cedar
+`read-config`);
 every operator setting is listed in
 [Operator policy](@/docs/reference/operator-policy.md).
 

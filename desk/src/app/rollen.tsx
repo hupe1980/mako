@@ -5,19 +5,37 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 import { flushSync } from "react-dom";
+import { katalog } from "../i18n";
 import { ROLLE } from "./keys";
 
 export type Rolle = "netz" | "lieferant" | "messstelle" | "energieservice";
 
+interface RolleInfo {
+  /** The Rolle's name in the Sprache in force, from the catalogue. */
+  readonly label: string;
+  marktrolle: string;
+  key: string;
+  home: "/heute" | "/kunden" | "/prozess";
+}
+
+/** A Rolle whose `label` is read from the catalogue each time it is shown. */
+function rolle(id: Rolle, marktrolle: string, key: string): RolleInfo {
+  return {
+    get label() {
+      return katalog().rollenNamen[id];
+    },
+    marktrolle,
+    key,
+    home: "/heute",
+  };
+}
+
 /** Each Rolle starts from its Anker; `home` is where the Desk opens for it. */
-export const ROLLEN: Record<
-  Rolle,
-  { label: string; marktrolle: string; key: string; home: "/heute" | "/kunden" | "/prozess" }
-> = {
-  netz: { label: "Netz", marktrolle: "NB", key: "1", home: "/heute" },
-  lieferant: { label: "Lieferant", marktrolle: "LF", key: "2", home: "/heute" },
-  messstelle: { label: "Messstelle", marktrolle: "MSB", key: "3", home: "/heute" },
-  energieservice: { label: "Energieservice", marktrolle: "ESA", key: "4", home: "/heute" },
+export const ROLLEN: Record<Rolle, RolleInfo> = {
+  netz: rolle("netz", "NB", "1"),
+  lieferant: rolle("lieferant", "LF", "2"),
+  messstelle: rolle("messstelle", "MSB", "3"),
+  energieservice: rolle("energieservice", "ESA", "4"),
 };
 
 const ORDER: Rolle[] = ["netz", "lieferant", "messstelle", "energieservice"];

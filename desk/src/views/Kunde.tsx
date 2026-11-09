@@ -12,16 +12,10 @@ import { Notice, Panel } from "../design/Panel";
 import type { Instant } from "../format/brands";
 import { formatCount } from "../format/count";
 import { formatBusinessDate } from "../format/date";
+import { eintrag, katalog, useT } from "../i18n";
 import { Fragen } from "./Fragen";
 import { Hinweise } from "./Hinweise";
 import { monogram } from "./kundenSuche";
-
-const KUNDENTYP: Record<string, string> = {
-  B2C: "Privatkunde",
-  B2B_SLP: "Gewerbe (SLP)",
-  B2B_RLM: "Gewerbe (RLM)",
-  B2B_HV: "Hochspannung",
-};
 
 type Tone = "calm" | "soon" | "done" | "critical" | "muted";
 
@@ -29,21 +23,22 @@ type Tone = "calm" | "soon" | "done" | "critical" | "muted";
 function supplyState(l: Lieferstelle): { text: string; tone: Tone } {
   const ab = formatBusinessDate(l.lieferbeginn);
   const bis = l.lieferende ? formatBusinessDate(l.lieferende) : null;
+  const k = katalog().kundeAnsicht;
   switch (l.status) {
     case "ANGEMELDET":
-      return { text: "Anmeldung läuft", tone: "soon" };
+      return { text: k.anmeldungLaeuft, tone: "soon" };
     case "BESTAETIGT":
-      return { text: `bestätigt ab ${ab}`, tone: "calm" };
+      return { text: k.bestaetigtAb(ab), tone: "calm" };
     case "AKTIV":
-      return { text: bis ? `beliefert bis ${bis}` : `beliefert seit ${ab}`, tone: "done" };
+      return { text: bis ? k.beliefertBis(bis) : k.beliefertSeit(ab), tone: "done" };
     case "BEENDET":
-      return { text: bis ? `beendet zum ${bis}` : "beendet", tone: "muted" };
+      return { text: bis ? k.beendetZum(bis) : k.beendet, tone: "muted" };
     case "ABGELEHNT":
-      return { text: "abgelehnt", tone: "critical" };
+      return { text: k.abgelehnt, tone: "critical" };
     case "STORNIERT":
-      return { text: "storniert", tone: "muted" };
+      return { text: k.storniert, tone: "muted" };
     case "ANGELEGT":
-      return { text: "angelegt", tone: "calm" };
+      return { text: k.angelegt, tone: "calm" };
     default:
       return { text: l.status, tone: "calm" };
   }
@@ -58,11 +53,12 @@ const TONE: Record<Tone, string> = {
 };
 
 function StelleCapsule({ stelle }: { stelle: Lieferstelle }) {
+  const t = useT();
   const { text, tone } = supplyState(stelle);
   return (
     <Link
       href={`/prozess?key=${stelle.malo_id}`}
-      aria-label={`${stelle.malo_id}: ${text} — Prozesse öffnen`}
+      aria-label={t.kundeAnsicht.stelleOeffnen(stelle.malo_id, text)}
       className={`focus-ring inline-flex h-8 items-center gap-2 rounded-full px-3 text-body no-underline data-[hovered]:brightness-95 ${TONE[tone]}`}
     >
       <span className="font-mono font-medium">{stelle.malo_id}</span>
@@ -88,15 +84,17 @@ function useFristen(malos: string[]): Map<string, Instant> {
 }
 
 function Stellen({ stellen, gesamt }: { stellen: Lieferstelle[]; gesamt: number }) {
+  const t = useT();
+  const k = t.kundeAnsicht;
   const fristen = useFristen([...new Set(stellen.map((s) => s.malo_id))]);
   return (
     <section aria-labelledby="stellen" className="border-t border-separator px-6 py-5">
       <h2 id="stellen" className="m-0 mb-3 text-callout font-semibold">
-        Lieferstellen{" "}
+        {k.lieferstellen}{" "}
         <span className="font-normal text-text-2">{gesamt ? formatCount(gesamt) : ""}</span>
       </h2>
       {stellen.length === 0 ? (
-        <p className="m-0 text-body text-text-2">Keine Lieferstelle mit MaLo.</p>
+        <p className="m-0 text-body text-text-2">{k.keineStelle}</p>
       ) : (
         <ul className="m-0 flex list-none flex-col p-0">
           {stellen.map((s) => (
@@ -109,7 +107,7 @@ function Stellen({ stellen, gesamt }: { stellen: Lieferstelle[]; gesamt: number 
                   {s.standort ?? s.sparte.toLowerCase()}
                 </span>
                 <span className="block text-caption text-text-2">
-                  {s.sparte} · Vertrag <span className="font-mono">{s.vertrags_nr}</span>
+                  {s.sparte} · {k.vertrag} <span className="font-mono">{s.vertrags_nr}</span>
                 </span>
               </span>
               {fristen.get(s.malo_id) && <FristUhr due={fristen.get(s.malo_id) as Instant} />}
@@ -120,8 +118,7 @@ function Stellen({ stellen, gesamt }: { stellen: Lieferstelle[]; gesamt: number 
       )}
       {gesamt > stellen.length && (
         <p className="m-0 mt-3 text-body text-text-2">
-          Die neuesten {formatCount(stellen.length)} von {formatCount(gesamt)} — eine MaLo-ID findet
-          jede über <Kbd>⌘K</Kbd>.
+          {k.neuesten(formatCount(stellen.length), formatCount(gesamt))} <Kbd>⌘K</Kbd>.
         </p>
       )}
     </section>
@@ -130,6 +127,8 @@ function Stellen({ stellen, gesamt }: { stellen: Lieferstelle[]; gesamt: number 
 
 /** Kunde: one customer as Marktkommunikation and Abrechnung see it. */
 export function KundeView() {
+  const t = useT();
+  const k = t.kundeAnsicht;
   const { id } = useParams({ from: "/kunde/$id" });
   const { rolle } = useRolle();
   const kunde = useQuery({
@@ -138,10 +137,10 @@ export function KundeView() {
   });
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
+    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
       {kunde.isPending && (
         <div role="status" aria-busy="true">
-          <span className="sr-only">Lädt …</span>
+          <span className="sr-only">{k.laedt}</span>
           <Panel className="p-6">
             <div className="flex items-center gap-4">
               <div className="skeleton size-14 rounded-full" />
@@ -158,10 +157,10 @@ export function KundeView() {
           tone={kunde.error instanceof ToolRefusal ? "refusal" : "failure"}
           title={
             kunde.error instanceof ToolRefusal
-              ? "Kunde nicht gefunden"
+              ? k.nichtGefunden
               : kunde.error instanceof ServiceUnavailable
                 ? nichtErreichbar(kunde.error.service)
-                : "Die Antwort war unerwartet"
+                : k.unerwartet
           }
         >
           {kunde.error.message}
@@ -175,7 +174,7 @@ export function KundeView() {
             </span>
             <div className="min-w-0 flex-1">
               <h1 className="m-0 truncate text-large font-bold tracking-tight">
-                {kunde.data.name ?? "Ohne Namen"}
+                {kunde.data.name ?? k.ohneNamen}
               </h1>
               <p className="m-0 mt-1 text-callout text-text-2">
                 {kunde.data.kunden_nr && (
@@ -184,8 +183,8 @@ export function KundeView() {
                     {" · "}
                   </>
                 )}
-                {KUNDENTYP[kunde.data.kundentyp] ?? kunde.data.kundentyp}
-                {kunde.data.haushaltskunde && " · Haushaltskunde"}
+                {eintrag(k.kundentyp, kunde.data.kundentyp)}
+                {kunde.data.haushaltskunde && ` · ${k.haushaltskunde}`}
               </p>
             </div>
           </div>
@@ -195,8 +194,7 @@ export function KundeView() {
       {kunde.data && <Hinweise nurFuer={kunde.data.lieferstellen.map((s) => s.malo_id)} />}
       {kunde.data && <Fragen anker={{ kunde: id }} />}
       <p className="m-0 flex items-center gap-1.5 text-caption text-text-2">
-        <Icon name="doc" size={12} /> Stammdaten aus der {DIENST.vertragd} · eine Lieferstelle
-        öffnet ihre Prozesse
+        <Icon name="doc" size={12} /> {k.quelle(DIENST.vertragd)}
       </p>
     </div>
   );

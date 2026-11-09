@@ -137,6 +137,34 @@ pub struct ConfigFile {
     /// `[policy]` — the operator readings this deployment runs under.
     #[serde(default)]
     pub policy: MakodPolicy,
+    /// `[einrichtung]` — the deployment's other daemons, whose
+    /// `GET /admin/einrichtung` `GET /admin/einrichtung/deployment` folds into
+    /// one checklist.
+    pub einrichtung: Option<EinrichtungConfig>,
+}
+
+/// `[einrichtung]` — the daemons of this deployment the readiness checklist
+/// asks.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EinrichtungConfig {
+    /// `[[einrichtung.dienst]]` — one entry per daemon.
+    #[serde(default)]
+    pub dienst: Vec<EinrichtungDienst>,
+}
+
+/// `[[einrichtung.dienst]]` — one daemon the checklist asks for its report.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EinrichtungDienst {
+    /// The daemon's name, e.g. `"processd"`.
+    pub name: String,
+    /// Its base URL, e.g. `"http://processd:8590"`.
+    pub url: String,
+    /// A bearer credential its Cedar `read-config` admits.
+    pub api_key: Option<String>,
+    /// A file holding `api_key`. Preferred over the inline form.
+    pub api_key_file: Option<PathBuf>,
 }
 
 /// `[policy]` — makod's operator settings.
@@ -308,7 +336,7 @@ pub struct PartyAs4Config {
 ///
 /// Selects the engine modules and is checked against `[[party]]`: each declared
 /// role has exactly one MP-ID, and no MP-ID names an undeclared role
-/// ([`crate::deployment::validate_rollen`]). Startup refuses without it.
+/// ([`crate::deployment::pruefe_rollen`]). Startup refuses without it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentConfig {
@@ -576,9 +604,6 @@ pub struct EngineConfig {
     /// Marktrollen allow-list for the ERP command API. Defaults to the union of
     /// all `[[party]]` roles.
     pub marktrollen: Option<Vec<String>>,
-    /// Engine deployment roles gating PID registration. Defaults to the union
-    /// of all `[[party]]` roles.
-    pub deployment_roles: Option<Vec<String>>,
 }
 
 /// `[as4]` — AS4 / ebMS3 inbound and outbound transport.
@@ -619,6 +644,12 @@ pub struct As4Config {
     /// Removed: refused at startup with the per-partner replacement named.
     #[serde(default)]
     pub lenient_receipts: Option<serde::de::IgnoredAny>,
+
+    /// How many days before a certificate's expiry the configuration check
+    /// warns about it — every `[party.as4]` and `[[as4.partner]]`
+    /// certificate. An expired one blocks the boot whatever is set here.
+    /// Default: 30.
+    pub zertifikat_warnfenster_tage: Option<u32>,
 }
 
 /// `[[as4.partner]]` — one AS4 counterparty.
@@ -942,6 +973,30 @@ unbekannte_absender = "bdew_ou_zulassen"
         std::fs::write(&path, "no-separator-here\n").expect("write");
         let err = read_pairs_file("http.auth_keys_file", &path).expect_err("must reject");
         assert!(err.to_string().contains("expected NAME=VALUE"), "{err}");
+    }
+
+    #[test]
+    fn the_removed_deployment_roles_key_is_refused() {
+        // A second role declaration beside `[deployment] rollen` could widen
+        // the PIDs registered inside the declared modules; there is none.
+        assert!(toml::from_str::<ConfigFile>("[engine]\ndeployment_roles = [\"NB\"]\n").is_err());
+    }
+
+    #[test]
+    fn an_einrichtung_dienst_and_the_warning_window_parse() {
+        let cfg: ConfigFile = toml::from_str(
+            "[as4]\nzertifikat_warnfenster_tage = 14\n\n\
+             [[einrichtung.dienst]]\nname = \"processd\"\nurl = \"http://processd:8590\"\n",
+        )
+        .expect("parses");
+        assert_eq!(
+            cfg.as4.and_then(|a| a.zertifikat_warnfenster_tage),
+            Some(14)
+        );
+        assert_eq!(
+            cfg.einrichtung.expect("einrichtung").dienst[0].name,
+            "processd"
+        );
     }
 
     /// The removed `as4.lenient_receipts` key still parses, so startup can

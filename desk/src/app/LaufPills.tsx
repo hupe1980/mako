@@ -1,16 +1,18 @@
 import { useRouter } from "@tanstack/react-router";
 import { Button } from "react-aria-components";
 import { Icon } from "../design/Icon";
+import { katalog, useT } from "../i18n";
 import { schrittZeile } from "./dienste";
 import { beendet, type Lauf, useLaeufe } from "./laeufe";
 import { useRolle } from "./rollen";
 
 /** What a pill says: the run's latest step, or how it ended. */
 function zuletzt(l: Lauf): string {
-  if (l.antwort) return "Antwort bereit";
-  if (l.abgebrochen) return "Gestoppt";
+  const k = katalog().laufPills;
+  if (l.antwort) return k.antwortBereit;
+  if (l.abgebrochen) return k.gestoppt;
   const s = l.schritte[l.schritte.length - 1];
-  return s ? schrittZeile(s) : "Der Assistent überlegt …";
+  return s ? schrittZeile(s) : k.ueberlegt;
 }
 
 /**
@@ -20,6 +22,7 @@ function zuletzt(l: Lauf): string {
  * been read there, the pill is gone. Only the Rolle's own runs are shown.
  */
 export function LaufPills() {
+  const t = useT();
   const { rolle } = useRolle();
   const router = useRouter();
   const pills = useLaeufe().filter(
@@ -28,7 +31,7 @@ export function LaufPills() {
   if (pills.length === 0) return null;
   return (
     <ul
-      aria-label="Laufende Fragen"
+      aria-label={t.laufPills.liste}
       className="m-0 flex min-w-0 list-none gap-2 overflow-hidden p-0"
     >
       {pills.map((l) => (
@@ -42,10 +45,11 @@ export function LaufPills() {
 
 /** One pill: a live hairline, or how the run ended, and its latest step. */
 export function LaufPill({ lauf, onPress }: { lauf: Lauf; onPress: () => void }) {
+  const t = useT();
   return (
     <Button
       onPress={onPress}
-      aria-description={`Frage: ${lauf.frage}`}
+      aria-description={t.laufPills.frage(lauf.frage)}
       className="morph focus-ring flex h-7 max-w-72 items-center gap-1.5 rounded-full border border-ai-border bg-ai-fill px-2.5 text-caption font-medium text-ai data-[hovered]:border-ai"
     >
       {beendet(lauf) ? (

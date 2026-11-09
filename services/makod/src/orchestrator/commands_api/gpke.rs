@@ -286,9 +286,13 @@ pub(super) fn cmd_gpke_abrechnung_ablehnen<'a>(
 
 /// Dispatch a GPKE LF-side Anmeldung (Lieferbeginn / Lieferende / Kündigung).
 ///
-/// 1. Extract `malo_id` and `process_date_field` from the ERP payload.
+/// 1. Extract `malo_id` and `process_date_field` from the ERP payload — on
+///    the Anmeldung 55001 the typed body
+///    [`mako_markt::commands::GpkeLieferbeginnAnmelden`], whose `SG4 STS+7`,
+///    Bilanzkreis and Kunde are Muss (UTILMD AHB Strom 2.2 Kap. 8.2).
 /// 2. Resolve the NB MP-ID from the MaLo cache.
-/// 3. Spawn a new `GpkeLfAnmeldungWorkflow` process.
+/// 3. Render the Anfrage and hold it against its profile — the pre-send
+///    gate's check — then spawn a new `GpkeLfAnmeldungWorkflow` process.
 /// 4. Execute `InitiateAnmeldung` — writes the `Initiated` event and enqueues
 ///    the outbound UTILMD outbox entry atomically.
 /// 5. Register the NB-response deadline the Prüfidentifikator publishes —
@@ -301,6 +305,30 @@ pub(super) async fn dispatch_lf_anmeldung(
     process_date_key: &str,
 ) -> Result<DispatchOutcome, DispatchError> {
     // ── Extract ERP-supplied fields ───────────────────────────────────────────
+    //
+    // The Anmeldung 55001 is read as its typed body: `SG4 STS+7` and the
+    // Bilanzkreis are Muss in its column, and a key the body does not declare
+    // is a typo, never a field read as absent.
+    use mako_gpke::lf_anmeldung::{ANMELDUNG_ERGAENZUNG, ANMELDUNG_PID};
+    let anmeldung = pid_code == ANMELDUNG_PID;
+    let kundendaten = if anmeldung {
+        let body: mako_markt::commands::GpkeLieferbeginnAnmelden =
+            mako_service::json_from_value(payload.clone()).map_err(|e| {
+                DispatchError::InvalidPayload(format!(
+                    "gpke.lieferbeginn.anmelden payload: {e} — `SG4 STS+7` (E01/E03), the \
+                     `SG8 SEQ+Z79` Bilanzkreis and the Kunde are Muss on the Anmeldung 55001 \
+                     (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73–86)"
+                ))
+            })?;
+        Some(Box::new(kundendaten_55001(&body).map_err(|fehlend| {
+            DispatchError::InvalidPayload(format!(
+                "gpke.lieferbeginn.anmelden: the Anmeldung 55001 cannot carry: {}",
+                fehlend.join("; ")
+            ))
+        })?))
+    } else {
+        None
+    };
     let malo_id = extract_malo_id(payload)?;
 
     let process_date = payload
@@ -373,7 +401,12 @@ pub(super) async fn dispatch_lf_anmeldung(
     } else {
         stated("transaktionsgrund")
     };
+    // The 55001's Ergänzung, where unstated, is `ZW4`: the LF names a ruhende
+    // Marktlokation with it too (UTILMD AHB Strom 2.2 Kap. 5.5.2.4, S. 49).
     let transaktionsgrund_ergaenzung = stated("transaktionsgrund_ergaenzung").or_else(|| {
+        if anmeldung {
+            return Some(ANMELDUNG_ERGAENZUNG.to_owned());
+        }
         (pid_code == ABMELDUNG_PID || kuendigung).then(|| {
             use energy_api::models::electricity::EnergyDirection;
             match malo_record.data_market_location.energy_direction {
@@ -392,7 +425,7 @@ pub(super) async fn dispatch_lf_anmeldung(
         receiver,
         location_id: malo_id.clone(),
         process_date,
-        // `SG4 STS+7` Transaktionsgrund — Muss on 55004/55016, checked
+        // `SG4 STS+7` Transaktionsgrund — Muss on every Anfrage, checked
         // against the column by the workflow and the profile below.
         transaktionsgrund,
         // `SG8 SEQ+Z79` Produktpaket — Muss on 55001 / 55077. The workflow
@@ -412,11 +445,13 @@ pub(super) async fn dispatch_lf_anmeldung(
         // (Codeliste der Konfigurationen 1.4 Kap. 6.1.1). A bare string is the
         // prozentuale Aufteilung; `{art, wert}` names one of the other two.
         tranchengroesse: payload.get("tranchengroesse").cloned(),
+        // `SG8 SEQ+Z01`, `SEQ+Z75` and the `SG12` Kunde — Muss on 55001.
+        kundendaten,
     };
 
-    // The Abmeldung and the Kündigung are rendered and held against their
-    // profile before anything is written — the check the pre-send gate runs.
-    if pid_code == ABMELDUNG_PID || kuendigung {
+    // Every Anfrage is rendered and held against its profile before anything
+    // is written — the check the pre-send gate runs.
+    {
         use mako_engine::workflow::Workflow as _;
         let out = GpkeLfAnmeldungWorkflow::handle(
             &mako_gpke::lf_anmeldung::LfAnmeldungState::New,
@@ -501,6 +536,50 @@ pub(super) async fn dispatch_lf_anmeldung(
     Ok(DispatchOutcome::Spawned { process_id })
 }
 
+/// The Kunde's facts a 55001 carries, from its body (UTILMD AHB Strom 2.2
+/// Kap. 8.2): the Gruppenzuordnung `SG8 SEQ+Z01` (S. 83), the Grundlage nach
+/// EnFG `SG8 SEQ+Z75` (S. 85), and `SG12 NAD+Z09` Kunde des Lieferanten with
+/// `NAD+Z04` his Korrespondenzanschrift (S. 86).
+///
+/// # Errors
+///
+/// Every defect, named with its segment.
+fn kundendaten_55001(
+    a: &mako_markt::commands::GpkeLieferbeginnAnmelden,
+) -> Result<mako_gpke::lf_anmeldung::Kundendaten, Vec<String>> {
+    use super::eog_stammdaten::{anschrift_elemente, c080, nad, name_of};
+    let maengel = a.maengel();
+    if !maengel.is_empty() {
+        return Err(maengel);
+    }
+    let (Some((parts, format)), Some(adresse)) = (
+        name_of(&a.kunde),
+        a.kunde.anschrift.as_ref().and_then(anschrift_elemente),
+    ) else {
+        return Err(vec![
+            "kunde (SG12 NAD+Z09/Z04): name and anschrift do not fill the NAD".to_owned(),
+        ]);
+    };
+    let name = c080(&parts, format);
+    let mut stammdaten = mako_engine::payload::Stammdaten::default();
+    use edi_energy::utilmd_codes::nad as q;
+    stammdaten
+        .sg12
+        .push(nad(q::KUNDE_DES_LF, vec![], name.clone(), None));
+    stammdaten.sg12.push(nad(
+        q::KORRESPONDENZANSCHRIFT_KUNDE,
+        vec![],
+        name,
+        Some(&adresse),
+    ));
+    Ok(mako_gpke::lf_anmeldung::Kundendaten {
+        haushaltskunde: a.haushaltskunde,
+        enfg_grundlage: a.enfg_grundlage.clone(),
+        enfg_grund: a.enfg_grund.clone(),
+        stammdaten,
+    })
+}
+
 /// Dispatch `maloid.lieferbeginn.fortsetzen` — auto-continue to GPKE PID 55001
 /// after a MaLo-ID identification has completed.
 ///
@@ -514,14 +593,20 @@ pub(super) async fn dispatch_lf_anmeldung(
 ///      "marktrolle": "LF",
 ///      "payload": {
 ///        "tx_id":              "<tx_id from the maloId request>",
-///        "lieferbeginn_datum": "2026-10-01"
+///        "lieferbeginn_datum": "2026-10-01",
+///        "transaktionsgrund":  "E03",
+///        "bilanzkreis":        "11XBK-LF-------9",
+///        "haushaltskunde":     true,
+///        "enfg_grundlage":     "ZG1",
+///        "kunde":              { "nachname": "…", "anschrift": { … } }
 ///      }
 ///    }
 ///    ```
 /// 3. `makod` looks up `(malo_id, nb_mp_id)` from the `mc_txres/` cache using
 ///    the `tx_id` — no need for the ERP to track the MaLo-ID.
 /// 4. Dispatches `LfAnmeldungCommand::InitiateAnmeldung` (PID 55001) with the
-///    resolved data, exactly like `gpke.lieferbeginn.anmelden`.
+///    resolved MaLo and the caller's contract facts, exactly like
+///    `gpke.lieferbeginn.anmelden` — the same typed body, the same refusals.
 ///
 /// ## Error cases
 ///
@@ -569,10 +654,27 @@ pub(super) async fn dispatch_maloid_lieferbeginn_fortsetzen(
         )))?;
 
     // ── Build the synthetic ERP payload for dispatch_lf_anmeldung ────────────
-    let synthetic_payload = serde_json::json!({
+    //
+    // The caller's contract facts — `SG4 STS+7`, the Bilanzkreis and the
+    // Kunde, Muss on the 55001 — travel with it; the typed 55001 body refuses
+    // an absent one.
+    let mut synthetic_payload = serde_json::json!({
         "malo_id":           resolved.malo_id,
         "lieferbeginn_datum": lieferbeginn_datum,
     });
+    for key in [
+        "transaktionsgrund",
+        "transaktionsgrund_ergaenzung",
+        "bilanzkreis",
+        "haushaltskunde",
+        "enfg_grundlage",
+        "enfg_grund",
+        "kunde",
+    ] {
+        if let Some(v) = payload.get(key) {
+            synthetic_payload[key] = v.clone();
+        }
+    }
 
     tracing::info!(
         tx_id            = %tx_id,

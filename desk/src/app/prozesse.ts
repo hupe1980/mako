@@ -1,6 +1,9 @@
 // What an operator calls each process, by the workflow makod runs it under.
 // Presentation only: a title decides nothing, and a workflow not listed shows
-// its own name. The workflow's name is never parsed for meaning.
+// its own name. The workflow's name is never parsed for meaning. The titles
+// are the market's own names and stay German in every Sprache.
+
+import { eintrag, katalog } from "../i18n";
 
 const TITEL: Record<string, string> = {
   "gpke-supplier-change": "Lieferantenwechsel · Strom",
@@ -78,27 +81,12 @@ export function prozessTitel(workflow: string): string {
   return TITEL[workflow] ?? workflow;
 }
 
-const ZUSTAND: Record<string, string> = {
-  initiated: "begonnen",
-  running: "läuft",
-  antwortfrist_abgelaufen: "ohne Bestätigung",
-  completed: "abgeschlossen",
-  rejected: "abgelehnt",
-  failed: "fehlgeschlagen",
-};
-
 /** A process state as processd names it, in the operator's words. */
 export function zustand(state: string): string {
-  return ZUSTAND[state] ?? state;
+  return eintrag(katalog().prozess.zustand, state);
 }
-
-const FRIST_ART: Record<string, string> = {
-  aperak: "Eingangsbestätigung (APERAK)",
-  contrl: "Syntaxquittung (CONTRL)",
-  prozess: "Frist des Prozesses",
-};
 
 /** What a pending deadline is for, by the kind makod states; the kind itself where it is unknown. */
 export function fristArt(art: string): string {
-  return FRIST_ART[art] ?? art;
+  return eintrag(katalog().prozess.fristArt, art);
 }

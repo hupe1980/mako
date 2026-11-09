@@ -270,12 +270,17 @@ reads clap flags with its TOML file as an overlay — none of which `run()` host
   `Daemon::listeners` (`Listener { name, addr, router }`); the runner binds each, merges
   `/health/*` into it outside the daemon's own layers, serves it on the shared shutdown token and
   joins it with the main port.
-- **Validation and policy.** Put every check a loaded config must pass in `Daemon::validate` —
-  the runner calls it from `--print-config` and before `build`, so the two cannot disagree. An
+- **Validation and policy.** Put every check a loaded config must pass in `Daemon::validate`,
+  which returns **every** `mako_service::Befund` (severity, TOML path, optional source and
+  operator-policy anchor), never the first as an error (`check-config-findings`). The runner
+  refuses the boot on a blocking one and logs each warning, and reads the same list for
+  `--check-config [--json]`, `--print-config` and `GET /admin/einrichtung` (Cedar `read-config`),
+  so they cannot disagree. An
   operator reading is a `mako_service::policy_choice!` enum under the service's `[policy]`
   section, reported by `Daemon::policy`: the runner logs it, exports `mako_policy_info`, records
-  each change in `service_policy_log`, and the daemon merges `mako_service::policy::router` (Cedar
-  `read-policy`) and a read-only `get_policy` MCP tool. `cargo xtask policy-inventory` generates
+  each change in `service_policy_log`, and the daemon merges `mako_service::einrichtung::router`
+  (`/admin/einrichtung` and `/api/v1/policy`, Cedar `read-policy`) and a read-only `get_policy`
+  MCP tool. `cargo xtask policy-inventory` generates
   `site/content/docs/reference/operator-policy.md`; `check-policy-settings` holds it together.
 - **Config shape.** Embed a `[database]` block (`pub database: DatabaseConfig`) and implement
   `ServiceConfig` (`database() -> Option<&DatabaseConfig>`, `bind_addr()`), never a
@@ -525,8 +530,9 @@ created with, while the **inbound message's own** FV selects the
 `MessageAdapter` that parses it. So a process started under `FV2026-04-01`
 accepts a counterparty's `FV2026-10-01` APERAK without anything being declared:
 there is no per-workflow acceptance policy, because every known FV must be
-covered by an adapter anyway. `makod::startup::validate_adapter_coverage`
-refuses to boot on a registry that leaves one uncovered.
+covered by an adapter anyway. `makod::startup::adapter_befunde` reports a
+registry that leaves one uncovered as a blocking finding, and makod refuses to
+boot on it.
 
 ### Dual-write atomicity
 Events, outbox entries, deadlines and correlation keys are written in a single

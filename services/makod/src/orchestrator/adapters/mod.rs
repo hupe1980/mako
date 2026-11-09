@@ -947,7 +947,7 @@ macro_rules! coverage_table {
         ///
         /// A registry is covered when some adapter in it accepts every format
         /// version in [`known_fvs`]. Consumed by
-        /// `startup::validate_adapter_coverage`, which refuses to boot on a gap.
+        /// `startup::adapter_befunde`, which refuses to boot on a gap.
         #[must_use]
         pub fn coverage() -> Vec<RegistryCoverage> {
             let known = known_fvs();

@@ -122,6 +122,7 @@ check-sql:
 test-edmd-db:
     {{ just_executable() }} suite edmd meterstore_integration --include-ignored --test-threads=1
     {{ just_executable() }} suite edmd router_builds --include-ignored
+    {{ just_executable() }} suite edmd mcp_round_trips --include-ignored
     {{ just_executable() }} suite edmd kafka_ingest --include-ignored --test-threads=1
 
 # Handler + SQL integration tests for einsd (EEG settlement).
@@ -135,6 +136,7 @@ test-accountingd-db:
     {{ just_executable() }} suite accountingd db_scenarios --include-ignored --test-threads=1
     {{ just_executable() }} suite accountingd eeg_payout --include-ignored --test-threads=1
     {{ just_executable() }} suite accountingd router_builds --include-ignored
+    {{ just_executable() }} suite accountingd mcp_round_trips --include-ignored
 
 # Records integration tests for billingd.
 test-billingd-db:
@@ -495,7 +497,7 @@ ci:
     RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
 
 [private]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-sts-codes check-desk desk-check check-error-tuples check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-prompt-tools check-tool-grants check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -1030,6 +1032,33 @@ check-request-bodies:
 check-thin-main:
     cargo xtask check-thin-main
 
+# A configuration check returns every finding as a `Befund` with its path; a
+# `bail!`/`anyhow!`/`ensure!` in a `Daemon::validate`, or in any function that
+# collects findings, stops at the first defect and names no setting.
+check-config-findings:
+    cargo xtask check-config-findings
+
+# The deployment checklist: every dev/config daemon's `--check-config --json`,
+# folded across daemons — identities, certificates, Bilanzkreise, access,
+# reachability, format coverage. Exits non-zero while anything is red.
+# `just setup --url http://makod:8080 --token-env MAKOD_TOKEN` asks a running
+# makod's /admin/einrichtung/deployment instead.
+setup *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{ args }}" ]; then
+        exec cargo xtask setup {{ args }}
+    fi
+    services=$(ls dev/config | sed 's/\.toml$//')
+    cargo build --quiet $(for s in $services; do printf -- '-p %s ' "$s"; done)
+    out="$(mktemp -d)"
+    trap 'rm -rf "$out"' EXIT
+    target="${CARGO_TARGET_DIR:-target}"
+    for s in $services; do
+        ( . dev/env.sh "$s"; "$target/debug/$s" --check-config --json >"$out/$s.json" 2>"$out/$s.err" ) || true
+    done
+    cargo xtask setup --berichte "$out"
+
 # An adapter reads a UTILMD STS code from C556 DE 9013 — `transaktionsgrund()`,
 # `antwort()` — never from DE 4405, which a conformant message leaves empty.
 check-sts-codes:
@@ -1086,6 +1115,12 @@ check-publish-order:
 # a mutation declared read-only is dispatched unattended.
 check-tool-grants:
     cargo xtask check-tool-grants
+
+# Every MCP server speaks the declared revisions (`mako_service::mcp`), holds no
+# session and enables no capability MCP 2026-07-28 deprecates; agentd's client
+# connects on 2026-07-28 and pins the servers' set to the one it speaks.
+check-mcp-surface:
+    cargo xtask check-mcp-surface
 
 # Refuse an invoicd PID route naming a makod command that does not exist.
 #

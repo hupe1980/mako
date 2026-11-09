@@ -25,4 +25,4 @@ export interface PartnerName {
 }
 
 /** Tools marktd serves without an output schema: no view may read them. */
-export const marktdUntyped = ["get_correlation","get_malo","get_melo","get_melo_standorteigenschaften","get_nb_contract","get_nb_energiemix","get_partner","get_preisblatt","get_rollenzuordnung","get_steuerbare_ressource","get_technische_ressource","get_versorgung_at","get_versorgungsstatus","get_versorgungsstatus_history","list_malo","list_partners","list_pricat_versions"] as const;
+export const marktdUntyped = ["get_correlation","get_malo","get_melo","get_melo_standorteigenschaften","get_nb_contract","get_nb_energiemix","get_partner","get_policy","get_preisblatt","get_rollenzuordnung","get_steuerbare_ressource","get_technische_ressource","get_versorgung_at","get_versorgungsstatus","get_versorgungsstatus_history","list_malo","list_partners","list_pricat_versions"] as const;

@@ -235,6 +235,9 @@ pub struct RunConfig {
     /// `[sperr]` — the ERP webhook the `de.sperr.*` notices are delivered to.
     pub sperr_erp_webhook_url: Option<String>,
     pub sperr_erp_hmac_secret: Option<SecretString>,
+    /// `[policy] msb_vorlauf_lesart` — the Sperrtermin reading an order view
+    /// states its earliest date under.
+    pub sperr_msb_vorlauf_lesart: mako_service::policy::Policy<crate::config::MsbVorlaufLesart>,
     pub oidc: OidcVerifier,
     pub cedar: Arc<CedarEnforcer>,
     /// MCP server auth config (API-key fallback + optional per-named-key identity).
@@ -541,7 +544,11 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
                  accumulate in event_outbox undelivered"
             );
         }
-        crate::sperr::router(sperr_makod, cfg.tenant.clone())
+        crate::sperr::router(
+            sperr_makod,
+            cfg.tenant.clone(),
+            crate::sperr::Lesart(cfg.sperr_msb_vorlauf_lesart),
+        )
     };
     #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
     let sperr_router = Router::new();
@@ -691,6 +698,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         ),
         makod_url: cfg.makod_url.clone(),
         makod_api_key: cfg.makod_api_key.clone(),
+        policy: ctx.einrichtung.policy.clone(),
     });
 
     // ── Router ─────────────────────────────────────────────────────────────
@@ -718,6 +726,9 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         .with_state(state)
         .merge(crate::obs::router(obs_state))
         .merge(sperr_router)
+        // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
+        // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
+        .merge(mako_service::einrichtung::router(ctx.einrichtung.clone()))
         .layer(axum::Extension(mako_service::oidc::ExpectedTenant(
             cfg.tenant.clone(),
         )))
@@ -739,6 +750,10 @@ pub use rest::{
     EndSupplyGasRequest, EndSupplyRequest, StartSupplyGasRequest, StartSupplyRequest,
     transaktionsgruende_44001,
 };
+
+/// The `SG4 STS+7` DE 9013 codes `start-supply` admits — the 55001 column's
+/// `E01` and `E03` (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73).
+pub const TRANSAKTIONSGRUENDE_55001: &[&str] = mako_gpke::lf_anmeldung::ANMELDUNG_GRUENDE;
 
 mod rest {
     use std::sync::Arc;
@@ -775,19 +790,39 @@ mod rest {
     }
 
     /// `POST /api/v1/start-supply` — GPKE Lieferbeginn (Strom, 55001).
+    ///
+    /// The Lieferant's contract facts the Anmeldung carries (UTILMD AHB Strom
+    /// 2.2 Kap. 8.2), each Muss there. The Kunde's are `Option` so that the
+    /// handler names every missing one in one `422`
+    /// (`ANMELDEDATEN_UNVOLLSTAENDIG`) instead of serde naming the first.
     #[derive(Debug, serde::Deserialize)]
     pub struct StartSupplyRequest {
         /// 11-digit Strom Marktlokations-ID.
         pub malo_id: String,
         /// Lieferbeginn, ISO-8601 date (`YYYY-MM-DD`).
         pub lieferbeginn_datum: String,
-        /// SG4 STS Transaktionsgrund, forwarded onto the outbound UTILMD.
-        #[serde(default)]
-        pub transaktionsgrund: Option<String>,
+        /// `SG4 STS+7` DE 9013 — `E01` Ein-/Auszug (Umzug) or `E03` Wechsel,
+        /// the two codes the 55001 column admits (UTILMD AHB Strom 2.2
+        /// Kap. 8.2, S. 73), else `TRANSAKTIONSGRUND_UNZULAESSIG`.
+        pub transaktionsgrund: String,
         /// `SG8 SEQ+Z79` Bilanzkreis; falls back to the single `standard`
         /// entry of the Strom fallback row of `[[lf.bilanzkreise]]`.
         #[serde(default)]
         pub bilanzkreis: Option<String>,
+        /// `SG8 SEQ+Z01 SG10 CCI+++Z15`/`Z18` — Haushaltskunde gem. EnWG (S. 83).
+        #[serde(default)]
+        pub haushaltskunde: Option<bool>,
+        /// `SG8 SEQ+Z75 SG10 CCI+Z61` Grundlage nach EnFG — `ZF9`, `ZG0`,
+        /// `ZG1` (S. 85).
+        #[serde(default)]
+        pub enfg_grundlage: Option<String>,
+        /// `SG10 CAV` Grund der Privilegierung nach EnFG, beside `ZF9` only.
+        #[serde(default)]
+        pub enfg_grund: Option<String>,
+        /// `SG12 NAD+Z09` Kunde des LF with his `NAD+Z04`
+        /// Korrespondenzanschrift (S. 86).
+        #[serde(default)]
+        pub kunde: Option<mako_markt::utilmd_stammdaten::Kunde>,
     }
 
     /// `POST /api/v1/start-supply-gas` — GeLi Gas Lieferbeginn (44001).
@@ -1403,7 +1438,15 @@ mod rest {
     /// |---------------------|--------|----------|-------|
     /// | `malo_id`           | string | ✓        | 11-digit Strom Marktlokations-ID |
     /// | `lieferbeginn_datum` | string | ✓        | ISO-8601 date (YYYY-MM-DD) |
-    /// | `transaktionsgrund` | string | —        | SG4 STS DE9013 (`E01` Ein-/Auszug, `E03` Wechsel); forwarded onto the outbound UTILMD. The Strom date rule is identical for both (LFW24) |
+    /// | `transaktionsgrund` | string | ✓        | `SG4 STS+7` DE 9013, `E01` Ein-/Auszug (Umzug) or `E03` Wechsel — the column makes it Muss (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73). The Strom date rule is identical for both (LFW24) |
+    /// | `bilanzkreis`       | string | —        | `SG8 SEQ+Z79`; without it the single `standard` entry of `[[lf.bilanzkreise]]` |
+    /// | `haushaltskunde`    | bool   | ✓        | `SG8 SEQ+Z01 SG10 CCI+++Z15`/`Z18` (S. 83) |
+    /// | `enfg_grundlage`    | string | ✓        | `SG8 SEQ+Z75 CCI+Z61` — `ZF9`, `ZG0`, `ZG1` (S. 85) |
+    /// | `enfg_grund`        | string | with `ZF9` | `SG10 CAV` — `ZU5` … `ZV3` |
+    /// | `kunde`             | object | ✓        | `SG12 NAD+Z09`/`Z04` — name and Korrespondenzanschrift (S. 86) |
+    ///
+    /// A missing Kunde fact is `ANMELDEDATEN_UNVOLLSTAENDIG`, one the column
+    /// cannot carry `ANMELDEDATEN_UNGUELTIG`.
     ///
     /// ## LFW24 Vorlauffrist (BK6-22-024, consolidated in BK6-24-174 GPKE Teil 2)
     ///
@@ -1424,8 +1467,8 @@ mod rest {
         authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
         use mako_fristen::{self as fristen, HolidayCalendar};
 
-        // `transaktionsgrund` is the optional SG4 STS Transaktionsgrund,
-        // forwarded onto the outbound UTILMD. Under LFW24 the Strom date rule is
+        // `transaktionsgrund` is the `SG4 STS+7` Transaktionsgrund, Muss on
+        // the 55001. Under LFW24 the Strom date rule is
         // Transaktionsgrund-independent, so it does not alter the validation
         // below.
         let StartSupplyRequest {
@@ -1433,6 +1476,10 @@ mod rest {
             lieferbeginn_datum: lieferbeginn_str,
             transaktionsgrund,
             bilanzkreis,
+            haushaltskunde,
+            enfg_grundlage,
+            enfg_grund,
+            kunde,
         } = body;
 
         if malo_id.is_empty() {
@@ -1447,6 +1494,46 @@ mod rest {
                 "\"lieferbeginn_datum\" is required (ISO-8601 date, e.g. \"2026-10-01\")",
             ));
         }
+        // `SG4 STS+7` DE 9013 — a code the 55001 column admits, case and all.
+        let zulaessig = super::TRANSAKTIONSGRUENDE_55001;
+        if !zulaessig.contains(&transaktionsgrund.as_str()) {
+            return Err(refuse_with(
+                "TRANSAKTIONSGRUND_UNZULAESSIG",
+                format!(
+                    "\"transaktionsgrund\" {transaktionsgrund:?} is not a code the 55001 column \
+                     admits in SG4 STS+7 (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73): {}",
+                    zulaessig.join(", ")
+                ),
+                serde_json::json!({ "zulaessig": zulaessig }),
+            ));
+        }
+
+        // The Kunde's facts — the Gruppenzuordnung, the Grundlage nach EnFG
+        // and the Kunde des Lieferanten — are Muss on a 55001 (UTILMD AHB
+        // Strom 2.2 Kap. 8.2, S. 83–86); every missing one is named at once.
+        let mut fehlend: Vec<String> = Vec::new();
+        if haushaltskunde.is_none() {
+            fehlend.push("haushaltskunde (SG10 CCI+++Z15/Z18)".to_owned());
+        }
+        if enfg_grundlage.is_none() {
+            fehlend.push("enfg_grundlage (SG8 SEQ+Z75 CCI+Z61)".to_owned());
+        }
+        if kunde.is_none() {
+            fehlend.push("kunde (SG12 NAD+Z09/Z04)".to_owned());
+        }
+        let (Some(haushaltskunde), Some(enfg_grundlage), Some(kunde)) =
+            (haushaltskunde, enfg_grundlage, kunde)
+        else {
+            return Err(refuse_with(
+                "ANMELDEDATEN_UNVOLLSTAENDIG",
+                format!(
+                    "the Anmeldung 55001 makes these Muss (UTILMD AHB Strom 2.2 Kap. 8.2) and \
+                     the request does not state them: {}",
+                    fehlend.join("; ")
+                ),
+                serde_json::json!({ "fehlend": fehlend }),
+            ));
+        };
 
         // `SG8 SEQ+Z79` Produktpaket — **Muss** on a 55001 (UTILMD AHB Strom
         // 2.2 Kap. 5.3): „ohne die Angabe eines für den LF gültigen
@@ -1461,10 +1548,36 @@ mod rest {
         // among those.
         let bilanzkreis =
             anmeldung_bilanzkreis(&state, bilanzkreis, mako_markt::domain::Sparte::Strom);
-        if bilanzkreis.is_none() {
+        let Some(bilanzkreis) = bilanzkreis else {
             return Err(refuse(
                 "MISSING_BILANZKREIS",
                 "\"bilanzkreis\" is required: the UTILMD AHB Strom 2.2 Kap. 5.3 makes the SG8 SEQ+Z79 Produktpaket with Produkt-Code 9991000002082 (Bilanzkreis) a Muss on PID 55001, and without a Bilanzkreis valid for this LF the NB cannot assign the Marktlokation. Configure [[lf.bilanzkreise]] with a single `standard` entry to have it filled in automatically.",
+            ));
+        };
+
+        // makod's door type, held to what the column can carry before the
+        // dispatch.
+        let anmeldung = mako_markt::commands::GpkeLieferbeginnAnmelden {
+            malo_id: malo_id.clone(),
+            lieferbeginn_datum: lieferbeginn_str.clone(),
+            transaktionsgrund,
+            transaktionsgrund_ergaenzung: None,
+            bilanzkreis,
+            haushaltskunde,
+            enfg_grundlage,
+            enfg_grund,
+            kunde,
+        };
+        let maengel = anmeldung.maengel();
+        if !maengel.is_empty() {
+            return Err(refuse_with(
+                "ANMELDEDATEN_UNGUELTIG",
+                format!(
+                    "the Anmeldung 55001 cannot carry these values (UTILMD AHB Strom 2.2 \
+                     Kap. 8.2): {}",
+                    maengel.join("; ")
+                ),
+                serde_json::json!({ "maengel": maengel }),
             ));
         }
 
@@ -1533,15 +1646,13 @@ mod rest {
             command: mako_markt::commands::GPKE_LIEFERBEGINN_ANMELDEN.to_owned(),
             malo_id: Some(malo_id.clone()),
             melo_id: None,
-            payload: serde_json::json!({
-                "malo_id": malo_id,
-                "lieferbeginn_datum": lieferbeginn.to_string(),
-                // Optional SG4 STS Transaktionsgrund (E01 Ein-/Auszug,
-                // E03 Wechsel) — forwarded onto the outbound UTILMD.
-                "transaktionsgrund": transaktionsgrund,
-                // `SG8 SEQ+Z79` / `SG10 CAV+ZV4` — Muss on 55001.
-                "bilanzkreis": bilanzkreis,
-            }),
+            // makod's door type, every field Muss on the 55001 but the
+            // Ergänzung.
+            payload: serde_json::to_value(mako_markt::commands::GpkeLieferbeginnAnmelden {
+                lieferbeginn_datum: lieferbeginn.to_string(),
+                ..anmeldung
+            })
+            .map_err(ApiError::internal)?,
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
             Ok(accepted) => Ok((

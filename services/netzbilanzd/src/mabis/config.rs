@@ -72,31 +72,42 @@ impl Default for ScheduleConfig {
 impl MabisConfig {
     /// Refuse a section that cannot produce a valid submission.
     ///
-    /// Called from the daemon's `build`, which is the only start-up path there
-    /// is. Both checks exist to fail here rather than at 05:00 on the
+    /// Called from the daemon's `validate`, which every start-up path runs. Both checks exist to fail here rather than at 05:00 on the
     /// Erstaufschlag-Werktag, by which point a run has aggregated a month of
     /// metering data and consumed its version number.
     ///
-    /// # Errors
+    /// One finding each:
     ///
     /// - The configured [`SubmissionTarget`] has no implementation.
     /// - `bilanzierungsgebiet_id` is not a Y-type (Area) EIC. A Bilanzkreis is
     ///   type `X` (Party) and the same length, so only the object type
     ///   separates them — and `LOC+107` carries the value as free text, which
     ///   means the BIKO would accept either.
-    pub fn validate(&self) -> anyhow::Result<()> {
-        self.submission_target.ensure_supported()?;
-        rubo4e::identifiers::BilanzierungsgebietId::new(&self.bilanzierungsgebiet_id).map_err(
-            |e| {
-                anyhow::anyhow!(
-                    "[mabis] bilanzierungsgebiet_id `{}` is not a Bilanzierungsgebiet-EIC: {e}. \
-                     A Bilanzierungsgebiet is a 16-character EIC of ENTSO-E object type `Y` \
-                     (Area); a Bilanzkreis is type `X` (Party) and belongs in a different field.",
-                    self.bilanzierungsgebiet_id
+    #[must_use]
+    pub fn validate(&self) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = Vec::new();
+        if let Err(e) = self.submission_target.ensure_supported() {
+            out.push(Befund::aus_fehler("mabis.submission_target", e));
+        }
+        if let Err(e) =
+            rubo4e::identifiers::BilanzierungsgebietId::new(&self.bilanzierungsgebiet_id)
+        {
+            out.push(
+                Befund::blockiert(
+                    "mabis.bilanzierungsgebiet_id",
+                    format!(
+                        "[mabis] bilanzierungsgebiet_id `{}` is not a Bilanzierungsgebiet-EIC: \
+                         {e}. A Bilanzierungsgebiet is a 16-character EIC of ENTSO-E object type \
+                         `Y` (Area); a Bilanzkreis is type `X` (Party) and belongs in a \
+                         different field.",
+                        self.bilanzierungsgebiet_id
+                    ),
                 )
-            },
-        )?;
-        Ok(())
+                .bereich(Bereich::Bilanzierung),
+            );
+        }
+        out
     }
 }
 

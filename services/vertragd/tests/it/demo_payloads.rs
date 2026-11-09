@@ -150,7 +150,9 @@ fn the_o2c_vertrag_payload_deserialises() {
                 "nb_mp_id": "9900357000004",
                 "product_code": "STROM-H0-DEMO",
                 "lieferbeginn": "2026-01-01",
-                "jahresverbrauch_kwh": "3000"
+                "jahresverbrauch_kwh": "3000",
+                "lieferbeginn_anlass": "WECHSEL",
+                "enfg_grundlage": "ZG1"
             }]
         }),
     );

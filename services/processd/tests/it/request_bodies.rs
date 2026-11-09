@@ -117,15 +117,49 @@ async fn start_supply_body_is_typed() {
     let valid = json!({
         "malo_id": "51238696012",
         "lieferbeginn_datum": "2099-01-01",
+        "transaktionsgrund": "E03",
         "bilanzkreis": "11XBK-STD------Y",
+        "haushaltskunde": true,
+        "enfg_grundlage": "ZG1",
+        "kunde": {
+            "vorname": "Erika",
+            "nachname": "Mustermann",
+            "anschrift": {
+                "strasse": "Hauptstraße", "hausnummer": "1",
+                "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+            }
+        },
     });
     assert_refusals(
         reqwest::Method::POST,
         &url,
         &valid,
-        &["malo_id", "lieferbeginn_datum"],
+        &["malo_id", "lieferbeginn_datum", "transaktionsgrund"],
     )
     .await;
+    // `SG4 STS+7` admits `E01` and `E03` on the 55001 (UTILMD AHB Strom 2.2
+    // Kap. 8.2, S. 73); any other code is refused before makod.
+    for foreign in ["E02", "ZT5", "e03", ""] {
+        let body = with(&valid, "transaktionsgrund", Some(json!(foreign)));
+        let (status, body) = send(reqwest::Method::POST, url.clone(), &body).await;
+        assert_eq!(status, 422, "{foreign:?}: {body}");
+        assert_eq!(body["code"], "TRANSAKTIONSGRUND_UNZULAESSIG", "{body}");
+    }
+    // The Kunde's facts are Muss on the 55001 (UTILMD AHB Strom 2.2 Kap. 8.2,
+    // S. 83–86): every missing one is named, and one the column cannot carry
+    // is refused.
+    let mut ohne = valid.clone();
+    for key in ["haushaltskunde", "enfg_grundlage", "kunde"] {
+        ohne.as_object_mut().expect("an object").remove(key);
+    }
+    let (status, body) = send(reqwest::Method::POST, url.clone(), &ohne).await;
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], "ANMELDEDATEN_UNVOLLSTAENDIG", "{body}");
+    assert_eq!(body["fehlend"].as_array().map(Vec::len), Some(3), "{body}");
+    let zf9 = with(&valid, "enfg_grundlage", Some(json!("ZF9")));
+    let (status, body) = send(reqwest::Method::POST, url.clone(), &zf9).await;
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], "ANMELDEDATEN_UNGUELTIG", "{body}");
     assert!(
         received.lock().unwrap().is_empty(),
         "a refusal reached makod"
@@ -136,8 +170,14 @@ async fn start_supply_body_is_typed() {
     let sent = received.lock().unwrap();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["command"], "gpke.lieferbeginn.anmelden");
-    assert_eq!(sent[0]["payload"]["malo_id"], "51238696012");
-    assert_eq!(sent[0]["payload"]["bilanzkreis"], "11XBK-STD------Y");
+    // makod reads the payload as its door type, which refuses an undeclared
+    // key and an absent Muss field.
+    let door: mako_markt::commands::GpkeLieferbeginnAnmelden =
+        mako_service::json_from_value(sent[0]["payload"].clone()).expect("makod's 55001 body");
+    assert_eq!(door.malo_id, "51238696012");
+    assert_eq!(door.transaktionsgrund, "E03");
+    assert_eq!(door.bilanzkreis, "11XBK-STD------Y");
+    assert!(door.maengel().is_empty(), "{:?}", door.maengel());
 }
 
 /// A 44001 body as a Lieferant's full contract states it.

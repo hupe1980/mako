@@ -1,5 +1,6 @@
 //! The process read model, under the one processd test binary.
 
+mod antwort;
 mod rebuild;
 mod startup_posture;
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]

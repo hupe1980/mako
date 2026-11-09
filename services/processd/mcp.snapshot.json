@@ -334,6 +334,18 @@
     "outputSchema": null
   },
   {
+    "name": "get_policy",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
     "name": "get_process",
     "annotations": {
       "readOnlyHint": true,
@@ -352,7 +364,134 @@
         }
       }
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "process_id",
+        "pid",
+        "family",
+        "workflow_name",
+        "state",
+        "malo_id",
+        "partner_mp_id",
+        "mdm_role",
+        "deadline_at",
+        "deadline_source",
+        "deadline_risk",
+        "started_at",
+        "last_event_at",
+        "erc_code",
+        "antwort_code",
+        "antwort_codeliste",
+        "bedeutung",
+        "initiator_is_affiliate"
+      ],
+      "properties": {
+        "process_id": {
+          "type": "string"
+        },
+        "pid": {
+          "description": "BDEW Prüfidentifikator.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "family": {
+          "type": "string"
+        },
+        "workflow_name": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "malo_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "partner_mp_id": {
+          "description": "The counterparty's MP-ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mdm_role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deadline_at": {
+          "description": "When the business Antwortfrist ends, RFC 3339 in UTC.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "deadline_source": {
+          "description": "The Festlegung the deadline came from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deadline_risk": {
+          "type": "string"
+        },
+        "started_at": {
+          "description": "RFC 3339 in UTC.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "last_event_at": {
+          "description": "RFC 3339 in UTC.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "erc_code": {
+          "description": "The APERAK error code, set only when an APERAK refused a message.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "antwort_code": {
+          "description": "The Antwortcode the counterparty's business answer carried\n(`STS+E01` on a UTILMD, `AJT` on an ORDRSP).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "antwort_codeliste": {
+          "description": "The tree or Codeliste that answer named for its code.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bedeutung": {
+          "description": "The BDEW's wording of `antwort_code` within `antwort_codeliste`;\nabsent when the answer named no list or the list does not publish the\ncode. Quote it — a code means something only within its tree.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "initiator_is_affiliate": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
   },
   {
     "name": "get_process_stp_rate",

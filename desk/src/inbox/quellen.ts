@@ -11,6 +11,7 @@ import { call, ServiceUnavailable } from "../data/mcp";
 import type { Decimal, Instant } from "../format/brands";
 import { formatBusinessDate, formatInstant } from "../format/date";
 import { formatCent, formatEuro } from "../format/money";
+import { katalog } from "../i18n";
 import { ANMELDUNG_PIDS } from "../views/Lage";
 import type { Eintrag, QuelleId, Stand } from "./model";
 
@@ -29,6 +30,9 @@ export const QUELLEN: Record<Rolle, QuelleId[]> = {
   messstelle: ["freigaben", "ueberfaellig", "ableseauftraege"],
   energieservice: ["freigaben", "ueberfaellig"],
 };
+
+/** The sources' words, in the Sprache in force. */
+const wort = () => katalog().quellen;
 
 /** A page: what one source shows at most per refresh. */
 const SEITE = 50;
@@ -72,9 +76,9 @@ function useFreigaben(aktiv: boolean): Stand {
   const eintraege: Eintrag[] = (q.data?.freigaben ?? []).map((f) => ({
     id: `freigabe:${f.id}`,
     quelle: "freigaben",
-    titel: f.malo_id ?? `Prozess ${f.process_id}`,
+    titel: f.malo_id ?? wort().prozess(f.process_id),
     kennung: true,
-    detail: `PID ${f.pid} · ${f.art === "gehalten" ? "Antwort festgehalten" : "Antwort offen"}`,
+    detail: `PID ${f.pid} · ${f.art === "gehalten" ? wort().antwortFestgehalten : wort().antwortOffen}`,
     grund: f.grund,
     frist: f.expires_at,
     bezug: [f.process_id, ...(f.malo_id ? [f.malo_id] : [])],
@@ -82,7 +86,7 @@ function useFreigaben(aktiv: boolean): Stand {
     ziel: { to: "/freigaben", search: { id: f.id } },
     freigabe: f,
   }));
-  return stand("freigaben", "Freigaben", q, eintraege, q.data?.saturated ?? false);
+  return stand("freigaben", wort().freigaben, q, eintraege, q.data?.saturated ?? false);
 }
 
 function useUeberfaellig(aktiv: boolean): Stand {
@@ -105,7 +109,7 @@ function useUeberfaellig(aktiv: boolean): Stand {
     anker: p.malo_id ? { malo: p.malo_id } : { process: p.process_id },
     ziel: { to: "/prozess", search: { key: p.malo_id ?? p.process_id } },
   }));
-  return stand("ueberfaellig", "Überfällige Prozesse", q, eintraege, q.data?.saturated ?? false);
+  return stand("ueberfaellig", wort().ueberfaellig, q, eintraege, q.data?.saturated ?? false);
 }
 
 /**
@@ -128,14 +132,14 @@ function useAnmeldungen(aktiv: boolean): Stand {
       titel: id,
       kennung: true,
       detail: `PID ${p.pid}`,
-      grund: "Anmeldung wartet auf den Netzbetreiber",
+      grund: wort().anmeldungWartet,
       frist: p.deadline_at ?? null,
       bezug: [p.process_id, ...(p.malo_id ? [p.malo_id] : [])],
       anker: p.malo_id ? { malo: p.malo_id } : { process: p.process_id },
       ziel: { to: "/prozess", search: { key: id } },
     };
   });
-  return stand("anmeldungen", "Anmeldungen", q, eintraege, Boolean(q.data?.weiter));
+  return stand("anmeldungen", wort().anmeldungen, q, eintraege, Boolean(q.data?.weiter));
 }
 
 /** Angemeldet in vertragd, but no makod process carries it yet — so no Frist. */
@@ -152,8 +156,8 @@ function useNichtUebermittelt(aktiv: boolean): Stand {
     quelle: "nicht_uebermittelt",
     titel: a.name ?? a.malo_id,
     kennung: !a.name,
-    detail: `${a.malo_id} · ${a.sparte} · Vertrag ${a.vertrags_nr}`,
-    grund: "Angemeldet, noch nicht an den Netzbetreiber übermittelt",
+    detail: `${a.malo_id} · ${a.sparte} · ${wort().vertrag(a.vertrags_nr)}`,
+    grund: wort().nichtUebermitteltGrund,
     frist: null,
     bezug: [a.malo_id],
     anker: { kunde: a.kunden_id },
@@ -162,7 +166,7 @@ function useNichtUebermittelt(aktiv: boolean): Stand {
   const gesamt = q.data?.gesamt ?? 0;
   return stand(
     "nicht_uebermittelt",
-    "Noch nicht übermittelt",
+    wort().nichtUebermittelt,
     q,
     eintraege,
     gesamt > eintraege.length,
@@ -184,13 +188,13 @@ function useKorrekturbedarf(aktiv: boolean): Stand {
     titel: k.bilanzierungsgebiet_id,
     kennung: true,
     detail: `${formatBusinessDate(k.period_from)} – ${formatBusinessDate(k.period_to)}`,
-    grund: "Negative Prüfmitteilung — eine korrigierte Summenzeitreihe steht aus",
+    grund: wort().korrekturGrund,
     frist: null,
     bezug: [k.bilanzierungsgebiet_id],
     anker: null,
     ziel: null,
   }));
-  return stand("korrekturbedarf", "Korrekturbedarf", q, eintraege, false);
+  return stand("korrekturbedarf", wort().korrekturbedarf, q, eintraege, false);
 }
 
 /** Reading orders past their ausfuehrt_bis, the Frist as edmd states it. */
@@ -207,14 +211,14 @@ function useAbleseauftraege(aktiv: boolean): Stand {
     quelle: "ableseauftraege",
     titel: a.malo_id,
     kennung: true,
-    detail: `fällig ${formatBusinessDate(a.ausfuehrt_bis)} · ${a.status}`,
-    grund: a.fehlschlag_grund ? `${a.anlass} — ${a.fehlschlag_grund}` : `${a.anlass} steht aus`,
+    detail: `${wort().faellig(formatBusinessDate(a.ausfuehrt_bis))} · ${a.status}`,
+    grund: a.fehlschlag_grund ? `${a.anlass} — ${a.fehlschlag_grund}` : wort().stehtAus(a.anlass),
     frist: a.frist,
     bezug: [a.malo_id],
     anker: { malo: a.malo_id },
     ziel: { to: "/prozess", search: { key: a.malo_id } },
   }));
-  return stand("ableseauftraege", "Ableseaufträge", q, eintraege, q.data?.saturated ?? false);
+  return stand("ableseauftraege", wort().ableseauftraege, q, eintraege, q.data?.saturated ?? false);
 }
 
 /**
@@ -243,24 +247,24 @@ function useDispute(aktiv: boolean): Stand {
     quelle: "dispute",
     titel:
       name.get(d.sender_mp_id) ??
-      (d.rechnungsnummer ? `Rechnung ${d.rechnungsnummer}` : "Rechnung im Disput"),
+      (d.rechnungsnummer ? wort().rechnung(d.rechnungsnummer) : wort().rechnungImDisput),
     kennung: false,
     detail: [
-      name.has(d.sender_mp_id) && d.rechnungsnummer ? `Rechnung ${d.rechnungsnummer}` : null,
+      name.has(d.sender_mp_id) && d.rechnungsnummer ? wort().rechnung(d.rechnungsnummer) : null,
       d.sender_mp_id,
       `PID ${d.pid}`,
-      d.abgesendet ? "Ablehnung versandt" : "Ablehnung nicht versandt",
+      d.abgesendet ? wort().ablehnungVersandt : wort().ablehnungNichtVersandt,
     ]
       .filter(Boolean)
       .join(" · "),
-    grund: d.befunde[0]?.bezeichnung ?? "Rechnung im Disput — bis zum Zahlungsziel zu klären",
+    grund: d.befunde[0]?.bezeichnung ?? wort().disputGrund,
     frist: d.frist ?? null,
     bezug: [d.process_id],
     anker: { disput: d.id },
     ziel: { to: "/prozess", search: { key: d.process_id } },
     disput: d,
   }));
-  return stand("dispute", "Rechnungsdispute", q, eintraege, q.data?.saturated ?? false);
+  return stand("dispute", wort().dispute, q, eintraege, q.data?.saturated ?? false);
 }
 
 /** Billing records the risk check held for a person, highest risk first. */
@@ -280,14 +284,14 @@ function usePruefposten(aktiv: boolean): Stand {
     detail: `${r.rechnungsnummer} · ${formatBusinessDate(r.period_from)} – ${formatBusinessDate(r.period_to)} · ${formatEuro(r.total_brutto_eur as Decimal)}`,
     grund:
       r.risk_findings[0]?.message ??
-      (r.risk_band === "HELD" ? "Rechnung angehalten" : "Rechnung zur Prüfung"),
+      (r.risk_band === "HELD" ? wort().angehalten : wort().zurPruefung),
     frist: null,
     bezug: [r.malo_id],
     anker: { malo: r.malo_id },
     ziel: null,
     pruefposten: r,
   }));
-  return stand("pruefposten", "Rechnungsprüfung", q, eintraege, q.data?.saturated ?? false);
+  return stand("pruefposten", wort().pruefposten, q, eintraege, q.data?.saturated ?? false);
 }
 
 /**
@@ -308,9 +312,9 @@ function useGeparkt(aktiv: boolean): Stand {
     titel: b.malo_id,
     kennung: true,
     detail: [
-      b.beleg ? `Beleg ${b.beleg}` : null,
-      `Buchungsdatum ${formatBusinessDate(b.buchungsdatum)}`,
-      `geparkt seit ${formatInstant(b.seit)}`,
+      b.beleg ? wort().beleg(b.beleg) : null,
+      wort().buchungsdatum(formatBusinessDate(b.buchungsdatum)),
+      wort().geparktSeit(formatInstant(b.seit)),
     ]
       .filter(Boolean)
       .join(" · "),
@@ -321,7 +325,7 @@ function useGeparkt(aktiv: boolean): Stand {
     ziel: null,
     geparkt: b,
   }));
-  return stand("geparkt", "Geparkte Buchungen", q, eintraege, q.data?.saturated ?? false);
+  return stand("geparkt", wort().geparkt, q, eintraege, q.data?.saturated ?? false);
 }
 
 /** The agent's open Hinweise, for every Rolle; agentd absent is no failure of Heute. */
@@ -378,7 +382,7 @@ export function alsEintrag(h: Hinweis): Eintrag {
   return {
     id: `hinweis:${h.task}`,
     quelle: "hinweise",
-    titel: h.titel ?? h.skill ?? "Hinweis des Assistenten",
+    titel: h.titel ?? h.skill ?? wort().hinweis,
     kennung: false,
     detail: h.anker.map((a) => a.wert).join(" · "),
     grund: h.text,

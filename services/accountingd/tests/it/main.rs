@@ -9,6 +9,7 @@ mod demo_payloads;
 mod dev_config;
 mod eeg_payout;
 mod integration_tests;
+mod mcp_round_trips;
 mod request_bodies;
 mod router_builds;
 mod startup_posture;

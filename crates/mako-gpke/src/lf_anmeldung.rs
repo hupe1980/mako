@@ -45,6 +45,7 @@
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
 
 use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
+use mako_engine::payload::Stammdaten;
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -89,6 +90,29 @@ pub const ANMELDUNG_PIDS_MIT_BILANZKREIS: &[u32] = &[
     55001, // Anmeldung verb. MaLo
     55077, // Anmeldung erz. MaLo
 ];
+
+/// The Anmeldung verbrauchende Marktlokation — LF an NB.
+pub const ANMELDUNG_PID: u32 = 55001;
+/// The Anmeldung erzeugende Marktlokation — LF an NB.
+pub const ANMELDUNG_ERZEUGEND_PID: u32 = 55077;
+
+/// The `SG4 STS+7` Transaktionsgründe the Anmeldung 55001 admits — `E01`
+/// Ein-/Auszug (Umzug), `E03` Wechsel — and the Ergänzungen beside them,
+/// `ZW4` verbrauchende and `ZAP` ruhende Marktlokation; the segment is Muss
+/// (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73). The two Gründe are different
+/// Anmeldungen, so neither is a default for the other.
+pub const ANMELDUNG_GRUENDE: &[&str] = &["E01", "E03"];
+/// See [`ANMELDUNG_GRUENDE`].
+pub const ANMELDUNG_ERGAENZUNGEN: &[&str] = &["ZW4", "ZAP"];
+/// The 55001 Ergänzung where the caller states none: `ZW4`. The LF names a
+/// ruhende Marktlokation with `ZW4` as well, „Somit muss der anmeldende LF
+/// nicht zwingend wissen, dass es sich bei der angemeldeten Marktlokation um
+/// eine zum Zeitpunkt der Anmeldung ruhende Marktlokation handelt" (UTILMD AHB
+/// Strom 2.2 Kap. 5.5.2.4, S. 49).
+pub const ANMELDUNG_ERGAENZUNG: &str = "ZW4";
+/// The 55077's one Transaktionsgrund, `E03` Wechsel (UTILMD AHB Strom 2.2
+/// Kap. 8.3, S. 90); its Ergänzung is one of the [`GESCHAEFTSVORFAELLE`].
+pub const ANMELDUNG_ERZEUGEND_GRUND: &str = "E03";
 
 /// The Abmeldung — LF an NB.
 pub const ABMELDUNG_PID: u32 = 55004;
@@ -355,6 +379,23 @@ impl LfAnmeldungState {
 
 // ── Domain commands ───────────────────────────────────────────────────────────
 
+/// What a 55001 states about the Lieferant's Kunde — each Muss in the column
+/// (UTILMD AHB Strom 2.2 Kap. 8.2), each read at the boundary from the
+/// Lieferant's contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kundendaten {
+    /// `SG8 SEQ+Z01 SG10 CCI+++Z15`/`Z18` Gruppenzuordnung (nach EnWG), S. 83.
+    pub haushaltskunde: bool,
+    /// `SG8 SEQ+Z75 SG10 CCI+Z61` Grundlage zur Verringerung der Umlagen nach
+    /// EnFG — `ZF9`, `ZG0` or `ZG1`, S. 85.
+    pub enfg_grundlage: String,
+    /// `SG10 CAV` Grund der Privilegierung nach EnFG, beside `ZF9` (`[463]`).
+    pub enfg_grund: Option<String>,
+    /// `SG12 NAD+Z09` Kunde des Lieferanten and `NAD+Z04` his
+    /// Korrespondenzanschrift, S. 86.
+    pub stammdaten: Stammdaten,
+}
+
 /// Commands for the GPKE LF-side Anmeldung workflow.
 #[derive(Clone)]
 pub enum LfAnmeldungCommand {
@@ -377,8 +418,10 @@ pub enum LfAnmeldungCommand {
         location_id: MaLo,
         /// Requested process date (Lieferbeginn-/Lieferende-/Kündigungs-Datum).
         process_date: String,
-        /// SG4 STS Transaktionsgrund (DE9013) — `E01` Ein-/Auszug,
-        /// `E03` Wechsel. Rendered as the outbound STS segment.
+        /// `SG4 STS+7` DE 9013 Transaktionsgrund — Muss on every Anfrage
+        /// here, and refused unless its column admits it:
+        /// [`ANMELDUNG_GRUENDE`], [`ANMELDUNG_ERZEUGEND_GRUND`],
+        /// [`ABMELDUNG_GRUENDE`], [`KUENDIGUNG_GRUND`].
         transaktionsgrund: Option<String>,
         /// `SG8 SEQ+Z79` Produktpaket — the Bilanzkreis the LF registers the
         /// Marktlokation into.
@@ -390,10 +433,10 @@ pub enum LfAnmeldungCommand {
         bilanzkreis: Option<String>,
         /// `SG4 STS+7` DE 9013 element 3 — the Transaktionsgrundergänzung.
         ///
-        /// **Muss on 55077**, where the column admits only the three
-        /// Geschäftsvorfälle and no default among them is safe. On 55001 the
-        /// renderer supplies `ZW4` „verbrauchende Marktlokation", which is the
-        /// code that column lists.
+        /// Muss on every Anfrage here, from its column: on 55077 one of the
+        /// three Geschäftsvorfälle, none of which is a default for another;
+        /// on 55001 [`ANMELDUNG_ERGAENZUNGEN`], which the caller fills with
+        /// [`ANMELDUNG_ERGAENZUNG`] when it states none.
         transaktionsgrund_ergaenzung: Option<String>,
         /// `SG8 SEQ+Z79` Produkt `9991000002090` — the **Tranchengröße**.
         ///
@@ -402,6 +445,9 @@ pub enum LfAnmeldungCommand {
         /// verbatim to the renderer, which knows the three Produkteigenschaften
         /// and the Bedingungen on each.
         tranchengroesse: Option<serde_json::Value>,
+        /// The Kunde's facts — **Muss on 55001**, `None` on every other
+        /// Anfrage here, whose columns list none of them.
+        kundendaten: Option<Box<Kundendaten>>,
     },
     /// Inbound NB/LFA response (55002/55003, 55005/55006, 55017, 55018, 55078, 55080) received via AS4.
     ///
@@ -556,6 +602,7 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 bilanzkreis,
                 transaktionsgrund_ergaenzung,
                 tranchengroesse,
+                kundendaten,
             } => {
                 if !matches!(state, LfAnmeldungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -614,26 +661,40 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                     }
                 }
 
-                // The Abmeldung and the Kündigung each make `SG4 STS+7` Muss
-                // with a Lokationsart Ergänzung; a missing or foreign code is
-                // a message the NB or the LFA refuses.
-                let admitted = match pid.as_u32() {
-                    ABMELDUNG_PID => Some((ABMELDUNG_GRUENDE, ABMELDUNG_ERGAENZUNGEN)),
-                    KUENDIGUNG_PID => Some((&[KUENDIGUNG_GRUND][..], KUENDIGUNG_ERGAENZUNGEN)),
-                    _ => None,
-                };
-                if let Some((gruende, ergaenzungen)) = admitted {
-                    let grund = transaktionsgrund.as_deref().unwrap_or("");
-                    let erg = transaktionsgrund_ergaenzung.as_deref().unwrap_or("");
-                    if !gruende.contains(&grund) || !ergaenzungen.contains(&erg) {
-                        return Err(WorkflowError::rejected(format!(
-                            "{pid}: SG4 STS+7 ist Muss — Transaktionsgrund {} und \
-                             Ergänzung {} (UTILMD AHB Strom 2.2), nicht {grund:?}/{erg:?}",
-                            gruende.join("/"),
-                            ergaenzungen.join("/"),
-                        )));
+                // Every Anfrage this workflow sends makes `SG4 STS+7` Muss
+                // with a Transaktionsgrund and an Ergänzung from its column; a
+                // missing or foreign code is a message the NB or the LFA
+                // refuses.
+                let (gruende, ergaenzungen) = match pid.as_u32() {
+                    ANMELDUNG_PID => (ANMELDUNG_GRUENDE, ANMELDUNG_ERGAENZUNGEN),
+                    ANMELDUNG_ERZEUGEND_PID => {
+                        (&[ANMELDUNG_ERZEUGEND_GRUND][..], GESCHAEFTSVORFAELLE)
                     }
+                    ABMELDUNG_PID => (ABMELDUNG_GRUENDE, ABMELDUNG_ERGAENZUNGEN),
+                    _ => (&[KUENDIGUNG_GRUND][..], KUENDIGUNG_ERGAENZUNGEN),
+                };
+                let grund = transaktionsgrund.as_deref().unwrap_or("");
+                let erg = transaktionsgrund_ergaenzung.as_deref().unwrap_or("");
+                if !gruende.contains(&grund) || !ergaenzungen.contains(&erg) {
+                    return Err(WorkflowError::rejected(format!(
+                        "{pid}: SG4 STS+7 ist Muss — Transaktionsgrund {} und \
+                         Ergänzung {} (UTILMD AHB Strom 2.2), nicht {grund:?}/{erg:?}",
+                        gruende.join("/"),
+                        ergaenzungen.join("/"),
+                    )));
                 }
+                // The 55001 names the Kunde: the Gruppenzuordnung, the
+                // Grundlage nach EnFG and the Kunde des Lieferanten with his
+                // Korrespondenzanschrift are Muss there (UTILMD AHB Strom 2.2
+                // Kap. 8.2, S. 83–86).
+                if pid.as_u32() == ANMELDUNG_PID && kundendaten.is_none() {
+                    return Err(WorkflowError::rejected(format!(
+                        "{pid}: SG8 SEQ+Z01 Gruppenzuordnung, SG8 SEQ+Z75 Grundlage nach EnFG \
+                         und SG12 NAD+Z09/Z04 Kunde des Lieferanten sind Muss (UTILMD AHB \
+                         Strom 2.2 Kap. 8.2)"
+                    )));
+                }
+                let kundendaten = kundendaten.filter(|_| pid.as_u32() == ANMELDUNG_PID);
                 let dtm_qualifier = (pid.as_u32() == ABMELDUNG_PID
                     && transaktionsgrund
                         .as_deref()
@@ -686,6 +747,13 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                         tranchengroesse,
                         // `92` on an Aufhebung 55004 ([7]/[11]).
                         dtm_qualifier,
+                        // The 55001's Kunde: `SG8 SEQ+Z01`, `SEQ+Z75`, `SG12`.
+                        kundengruppe: kundendaten
+                            .as_ref()
+                            .map(|k| if k.haushaltskunde { "Z15" } else { "Z18" }.to_owned()),
+                        enfg_grundlage: kundendaten.as_ref().map(|k| k.enfg_grundlage.clone()),
+                        enfg_grund: kundendaten.as_ref().and_then(|k| k.enfg_grund.clone()),
+                        stammdaten: kundendaten.map(|k| k.stammdaten).unwrap_or_default(),
                         ..Default::default()
                     },
                 );
@@ -790,7 +858,8 @@ mod tests {
         let (grund, erg) = match pid {
             ABMELDUNG_PID => (Some("ZT5".to_owned()), Some("ZW4".to_owned())),
             KUENDIGUNG_PID => (Some(KUENDIGUNG_GRUND.to_owned()), Some("ZW4".to_owned())),
-            _ => (None, None),
+            ANMELDUNG_PID => (Some("E03".to_owned()), Some("ZW4".to_owned())),
+            _ => (Some(ANMELDUNG_ERZEUGEND_GRUND.to_owned()), None),
         };
         LfAnmeldungCommand::InitiateAnmeldung {
             transaktionsgrund_ergaenzung: erg,
@@ -802,6 +871,17 @@ mod tests {
             process_date: "2026-10-01".to_owned(),
             transaktionsgrund: grund,
             bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+            kundendaten: (pid == ANMELDUNG_PID).then(|| Box::new(kundendaten())),
+        }
+    }
+
+    /// A Haushaltskunde without an EnFG privilege.
+    fn kundendaten() -> Kundendaten {
+        Kundendaten {
+            haushaltskunde: true,
+            enfg_grundlage: "ZG1".to_owned(),
+            enfg_grund: None,
+            stammdaten: mako_engine::payload::Stammdaten::default(),
         }
     }
 
@@ -814,6 +894,7 @@ mod tests {
             process_date,
             bilanzkreis,
             tranchengroesse,
+            kundendaten,
             ..
         } = make_initiate(pid)
         else {
@@ -829,6 +910,7 @@ mod tests {
             bilanzkreis,
             transaktionsgrund_ergaenzung: erg.map(str::to_owned),
             tranchengroesse,
+            kundendaten,
         }
     }
 
@@ -844,6 +926,39 @@ mod tests {
             (ABMELDUNG_PID, Some("ZT5"), Some("ZW0")),
             (KUENDIGUNG_PID, Some("ZT5"), Some("ZW4")),
             (KUENDIGUNG_PID, Some("E03"), Some("ZAP")),
+        ] {
+            assert!(
+                GpkeLfAnmeldungWorkflow::handle(&state, with_codes(pid, grund, erg)).is_err(),
+                "{pid} {grund:?}/{erg:?}"
+            );
+        }
+    }
+
+    /// The Anmeldung 55001 makes `SG4 STS+7` Muss with `E01`/`E03` and
+    /// `ZW4`/`ZAP` (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73); the erzeugende
+    /// 55077 admits `E03` alone (Kap. 8.3, S. 90). An Anmeldung without its
+    /// Grund, or with one its column does not list, never reaches the wire.
+    #[test]
+    fn an_anmeldung_needs_a_grund_its_column_admits() {
+        let state = LfAnmeldungState::New;
+        for (grund, erg) in [("E01", "ZW4"), ("E03", "ZW4"), ("E03", "ZAP")] {
+            let out = GpkeLfAnmeldungWorkflow::handle(
+                &state,
+                with_codes(ANMELDUNG_PID, Some(grund), Some(erg)),
+            )
+            .unwrap_or_else(|e| panic!("55001 {grund}/{erg}: {e}"));
+            assert_eq!(out.outbox[0].payload["transaktionsgrund"], grund);
+            assert_eq!(out.outbox[0].payload["transaktionsgrund_ergaenzung"], erg);
+        }
+        for (pid, grund, erg) in [
+            (ANMELDUNG_PID, None, Some("ZW4")),
+            (ANMELDUNG_PID, Some(""), Some("ZW4")),
+            (ANMELDUNG_PID, Some("E02"), Some("ZW4")),
+            (ANMELDUNG_PID, Some("ZT5"), Some("ZW4")),
+            (ANMELDUNG_PID, Some("E03"), None),
+            (ANMELDUNG_PID, Some("E03"), Some("ZW3")),
+            (ANMELDUNG_ERZEUGEND_PID, Some("E01"), Some("ZW0")),
+            (ANMELDUNG_ERZEUGEND_PID, None, Some("ZW0")),
         ] {
             assert!(
                 GpkeLfAnmeldungWorkflow::handle(&state, with_codes(pid, grund, erg)).is_err(),
@@ -903,6 +1018,7 @@ mod tests {
             bilanzkreis,
             transaktionsgrund_ergaenzung: Some(erg.to_owned()),
             tranchengroesse: groesse,
+            kundendaten: None,
         }
     }
 

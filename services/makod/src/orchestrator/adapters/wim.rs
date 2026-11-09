@@ -418,7 +418,7 @@ pub fn wim_registry(received_at: time::OffsetDateTime) -> AdapterRegistry<WimDev
 // No `AdapterRegistry` is registered for this workflow; commands are
 // constructed in `energy-api` and submitted directly.
 
-// ── WiM Geräteübernahme (PIDs 17001, 17002, 17009) ───────────────────────────
+// ── WiM Geräteübernahme (PIDs 17001, 17009) ──────────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimGeraeteubernahmeWorkflow`].
 ///
@@ -482,6 +482,14 @@ pub fn wim_geraeteubernahme_registry(
                 .unwrap_or("")
                 .to_owned();
             let message_ref = MessageRef::new(msg.message_ref());
+            // `BGM` DE 1004 — the ORDRSP names the ORDERS by it in `SG1 RFF+ON`
+            // (ORDRSP AHB 1.1b Hinweise `[518]`, `[535]`). It is Muss in the
+            // ORDERS, so an absent one has already failed `validation_passed`.
+            let orders_nummer = o
+                .bgm()
+                .and_then(|b| b.document_id.as_deref())
+                .unwrap_or("")
+                .to_owned();
 
             // MeLo from the IDE segment (element 1, component 0 = object ID).
             let melo_id = MeLo::new(
@@ -524,6 +532,7 @@ pub fn wim_geraeteubernahme_registry(
                 document_date,
                 termin,
                 message_ref,
+                orders_nummer,
                 validation_passed,
                 validation_errors,
                 sparte,

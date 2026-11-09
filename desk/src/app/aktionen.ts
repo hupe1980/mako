@@ -19,6 +19,7 @@ import { ablehnungSenden, beilegen, freigeben, geprueft } from "../data/rechnung
 import type { Handlung } from "../data/verweigert";
 import type { BusinessDate, Instant } from "../format/brands";
 import { faktKoerper } from "../format/fakt";
+import { katalog } from "../i18n";
 import type { Eintrag } from "../inbox/model";
 import type { Wartend } from "../inbox/quellen";
 import { faktenVollstaendig } from "./FaktFelder";
@@ -32,12 +33,20 @@ export type Entscheidbar =
   | { art: "pruefposten"; r: Pruefposten }
   | { art: "buchung"; b: GeparkteBuchung };
 
-/** What each kind is called where it is listed. */
+/** What each kind is called where it is listed, in the Sprache in force when read. */
 export const ART: Record<Entscheidbar["art"], string> = {
-  freigabe: "Freigabe",
-  disput: "Rechnungsdisput",
-  pruefposten: "Rechnungsprüfung",
-  buchung: "Geparkte Buchung",
+  get freigabe() {
+    return katalog().aktionen.art.freigabe;
+  },
+  get disput() {
+    return katalog().aktionen.art.disput;
+  },
+  get pruefposten() {
+    return katalog().aktionen.art.pruefposten;
+  },
+  get buchung() {
+    return katalog().aktionen.art.buchung;
+  },
 };
 
 /** What the person filled in: the answer code, the one text field, and the facts. */
@@ -97,14 +106,13 @@ function codeAus(codes: CodeAuswahl | null, code: string | null): string | null 
   return codes && code && codes.codes.some((c) => c.code === code) ? code : null;
 }
 
-const BEMERKUNG: Feld = {
-  label: "Bemerkung (optional)",
-  pflicht: false,
-  datum: false,
-  vorgabe: "",
-};
+/** The optional note, named in the Sprache in force when the actions are listed. */
+function bemerkung(label = katalog().aktionen.bemerkung): Feld {
+  return { label, pflicht: false, datum: false, vorgabe: "" };
+}
 
 function freigabeAktionen(f: Freigabe): Aktion[] {
+  const k = katalog().aktionen.freigabe;
   const PROCESSD: Handlung = { dienst: "processd", aktion: "entscheiden" };
   const eine = (
     id: "freigeben" | "ablehnen",
@@ -113,16 +121,16 @@ function freigabeAktionen(f: Freigabe): Aktion[] {
     rang: Aktion["rang"],
   ): Aktion => ({
     id,
-    verb: id === "freigeben" ? "Freigeben" : "Ablehnen",
+    verb: id === "freigeben" ? k.freigeben : k.ablehnen,
     taste: id === "freigeben" ? FREIGEBEN : ABLEHNEN,
     rang,
     destruktiv: id === "ablehnen",
     handlung: PROCESSD,
     codes,
-    feld: BEMERKUNG,
+    feld: bemerkung(),
     fakten,
-    was: "Sendet die Antwort als Marktnachricht an den Marktpartner, sobald das Halten endet.",
-    gehalten: id === "freigeben" ? "Freigabe erteilt" : "Freigabe abgelehnt",
+    was: k.was,
+    gehalten: id === "freigeben" ? k.erteilt : k.abgelehnt,
     bereit: (w) =>
       (!codes || codeAus(codes, w.code) !== null) && faktenVollstaendig(fakten, w.fakten ?? {}),
     senden: (w, keepalive) => {
@@ -150,18 +158,19 @@ function freigabeAktionen(f: Freigabe): Aktion[] {
 }
 
 function disputAktionen(d: Disput): Aktion[] {
+  const k = katalog().aktionen.disput;
   const INVOICD: Handlung = { dienst: "invoicd", aktion: "entscheiden" };
   const beilegenA: Aktion = {
     id: "beilegen",
-    verb: "Beilegen",
+    verb: k.beilegen,
     taste: FREIGEBEN,
     rang: "primaer",
     destruktiv: false,
     handlung: INVOICD,
     codes: null,
-    feld: { ...BEMERKUNG, label: "Wie wurde er geklärt? (Bemerkung, optional)" },
-    was: "Schließt den Disput; an den Rechnungssteller geht nichts.",
-    gehalten: "Disput beigelegt",
+    feld: bemerkung(k.bemerkung),
+    was: k.beilegenWas,
+    gehalten: k.beigelegt,
     bereit: () => true,
     senden: (w, keepalive) => beilegen(d.id, w.text, keepalive),
     // The Begründung stays the model's: the Bemerkung is the person's own words.
@@ -173,15 +182,15 @@ function disputAktionen(d: Disput): Aktion[] {
     beilegenA,
     {
       id: "ablehnung",
-      verb: "Ablehnung senden",
+      verb: k.ablehnung,
       taste: ABLEHNEN,
       rang: "sekundaer",
       destruktiv: true,
       handlung: INVOICD,
       codes: null,
       feld: null,
-      was: "Sendet die Ablehnung (REMADV) als Marktnachricht an den Rechnungssteller, sobald das Halten endet.",
-      gehalten: "Ablehnung gesendet",
+      was: k.ablehnungWas,
+      gehalten: k.gesendet,
       bereit: () => true,
       senden: (_w, keepalive) => ablehnungSenden(d.id, keepalive),
       vorbelegen: (v) => (v.aktion === "aufrechterhalten" ? LEER : null),
@@ -191,6 +200,7 @@ function disputAktionen(d: Disput): Aktion[] {
 }
 
 function pruefpostenAktionen(r: Pruefposten): Aktion[] {
+  const k = katalog().aktionen.pruefposten;
   const gehalten = r.risk_band === "HELD";
   // The assistant proposes nothing here: the risk gate's findings are the evidence.
   const nie = () => null;
@@ -198,15 +208,15 @@ function pruefpostenAktionen(r: Pruefposten): Aktion[] {
     gehalten
       ? {
           id: "freigeben",
-          verb: "Freigeben",
+          verb: k.freigeben,
           taste: FREIGEBEN,
           rang: "primaer",
           destruktiv: false,
           handlung: { dienst: "billingd", aktion: "freigeben" },
           codes: null,
           feld: null,
-          was: "Gibt die Rechnung zur Ausstellung frei, sobald das Halten endet — danach nimmt sie nur eine Stornorechnung zurück.",
-          gehalten: "Rechnung freigegeben",
+          was: k.freigebenWas,
+          gehalten: k.freigegeben,
           bereit: () => true,
           senden: (_w, keepalive) => freigeben(r.id, keepalive),
           vorbelegen: nie,
@@ -214,15 +224,15 @@ function pruefpostenAktionen(r: Pruefposten): Aktion[] {
         }
       : {
           id: "geprueft",
-          verb: "Geprüft",
+          verb: k.geprueft,
           taste: FREIGEBEN,
           rang: "primaer",
           destruktiv: false,
           handlung: { dienst: "billingd", aktion: "pruefen" },
           codes: null,
           feld: null,
-          was: "Nimmt die ausgestellte Rechnung von der Liste; gesendet wird nichts.",
-          gehalten: "Als geprüft vermerkt",
+          was: k.gepruefWas,
+          gehalten: k.vermerkt,
           bereit: () => true,
           senden: (_w, keepalive) => geprueft(r.id, keepalive),
           vorbelegen: nie,
@@ -232,11 +242,12 @@ function pruefpostenAktionen(r: Pruefposten): Aktion[] {
 }
 
 function buchungAktionen(b: GeparkteBuchung): Aktion[] {
+  const k = katalog().aktionen.buchung;
   const BUCHEN: Handlung = { dienst: "accountingd", aktion: "buchen" };
   return [
     {
       id: "buchen",
-      verb: "Neu buchen",
+      verb: k.buchen,
       taste: FREIGEBEN,
       rang: "primaer",
       destruktiv: false,
@@ -244,13 +255,13 @@ function buchungAktionen(b: GeparkteBuchung): Aktion[] {
       codes: null,
       // The first open day the service names; the assistant's date replaces it only marked.
       feld: {
-        label: "Neu buchen am",
+        label: k.datum,
         pflicht: true,
         datum: true,
         vorgabe: b.vorschlag_datum ?? "",
       },
-      was: "Bucht sie ins Hauptbuch, sobald das Halten endet — zurück nimmt sie dann nur eine Gegenbuchung.",
-      gehalten: "Neu gebucht",
+      was: k.buchenWas,
+      gehalten: k.gebucht,
       bereit: (w) => ISO_DATUM.test(w.text),
       senden: (w, keepalive) => neuBuchen(b.key, w.text as BusinessDate, keepalive),
       vorbelegen: (v) =>
@@ -261,20 +272,20 @@ function buchungAktionen(b: GeparkteBuchung): Aktion[] {
     },
     {
       id: "verwerfen",
-      verb: "Verwerfen",
+      verb: k.verwerfen,
       taste: ABLEHNEN,
       rang: "sekundaer",
       destruktiv: true,
       handlung: BUCHEN,
       codes: null,
       feld: {
-        label: "Warum wird sie verworfen? (Grund, Pflicht)",
+        label: k.grund,
         pflicht: true,
         datum: false,
         vorgabe: "",
       },
-      was: "Verwirft sie endgültig, sobald das Halten endet; der Grund bleibt mit ihr im Prüfpfad.",
-      gehalten: "Buchung verworfen",
+      was: k.verwerfenWas,
+      gehalten: k.verworfen,
       bereit: (w) => w.text.trim().length > 0,
       senden: (w, keepalive) => verwerfen(b.key, w.text, keepalive),
       vorbelegen: (v) =>

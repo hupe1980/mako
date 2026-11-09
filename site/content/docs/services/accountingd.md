@@ -226,7 +226,7 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `POST` | `/api/v1/jahresabschluss/{malo_id}` | Annual settlement (`?year=`, `?dry_run=true`) |
 | `GET` | `/accountingd/metrics` | Ledger and dunning gauges |
 | `GET` | `/health/live` · `/health/ready` | Liveness; readiness |
-| `POST/GET` | `/mcp` | MCP Streamable HTTP |
+| `POST` | `/mcp` | MCP Streamable HTTP |
 
 ### Manual booking
 
@@ -1053,6 +1053,8 @@ Every handler extracts `Claims` (a JWT) and checks one Cedar action from
 | `manage-dunning` | Escalation, resolution, Abwendung offer, Mahnsperren, Einwände | **`LF`** |
 | `close-period` | Jahresabschluss, seal | **`LF`** |
 | `erase-pii` | Anonymization | **`LF`** |
+| `read-policy` | `GET /api/v1/policy` and the MCP tool `get_policy` — the posture report | any caller of the tenant |
+| `read-config` | `GET /admin/einrichtung` — the configuration findings | any caller of the tenant |
 | `use-mcp` | Open the MCP surface | any caller of the tenant |
 
 Roles are market roles from `mako_roles`; an MSB runs the same receivable
@@ -1166,7 +1168,7 @@ service](@/docs/architecture/_index.md#what-metrics-carries-on-every-service).
 
 ## MCP server
 
-`accountingd` exposes **16 tools** at `/mcp` (Streamable HTTP 2025-11-25), the
+`accountingd` exposes **17 tools** at `/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session), the
 contract pinned by `services/accountingd/mcp.snapshot.json`. Every
 tool is authorized by `mcp_server::tool_action` against the Cedar action its
 REST twin enforces; a tool without a mapping is refused. An `[mcp]` key
@@ -1174,6 +1176,7 @@ authorizes as `User::"<key name>"` with the roles its `roles` list declares.
 
 | Tool | Description | Action |
 |---|---|---|
+| `get_policy` | The posture this deployment runs under | `read-policy` |
 | `get_balance` | Balance in ct | `read-account` |
 | `get_vorauszahlung` | The BO4E `Vorauszahlung` of a MaLo — the body of `GET /api/v1/accounts/{malo_id}/vorauszahlung` | `read-account` |
 | `list_ledger` | Ledger entries of a MaLo | `read-account` |

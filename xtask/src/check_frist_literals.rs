@@ -12,8 +12,9 @@
 //!
 //! A Rust string literal that contains **both**
 //!
-//! - a source name: a BK-Aktenzeichen (`BK6-…`, `BK7-…`, `BK8-…`) or a
-//!   document name — GPKE, GeLi Gas, WiM, MaBiS, AHB, AWH, KoV — and
+//! - a source name: a BK-Aktenzeichen (`BK6-…`, `BK7-…`, `BK8-…`), a
+//!   document name — GPKE, GeLi Gas, WiM, MaBiS, AHB, AWH, KoV — or a statute
+//!   that sets Fristen of its own, EnWG and MsbG, and
 //! - a Frist literal: a number of Werktage (`5 Werktage`, `3. WT`,
 //!   `6 Werktagen`) or a clock time (`11:00`, `12 Uhr`). Midnight (`00:00`)
 //!   is not one: it names the boundary of a day, a Zeitpunkt rather than a
@@ -117,6 +118,14 @@ const EXEMPT: &[Exempt] = &[
         path: "services/processd/src/sperr/mcp.rs",
         fragment: "6 Werktagen nach dem frühestmöglichen Sperrtermin",
         reason: SPERR_AUSFUEHRUNG,
+    },
+    Exempt {
+        path: "services/accountingd/src/sperr.rs",
+        fragment: "Sperrankündigung issued (§41f Abs. 5 EnWG, 8 Werktage)",
+        reason: "verified against BGBl. 2025 I Nr. 347 Art. 1 Nr. 66, S. 26: § 41f Abs. 5 S. 1 \
+                 EnWG „Der Beginn der Unterbrechung der Energieversorgung ist dem Haushaltskunden \
+                 acht Werktage im Voraus durch briefliche Mitteilung anzukündigen.“ Open: the \
+                 literal belongs in `mako_fristen`",
     },
 ];
 
@@ -410,7 +419,7 @@ impl Matcher {
     fn new() -> Self {
         Self {
             source: Regex::new(
-                r"\bBK[678]-[0-9]{2}|\bGPKE\b|\bGeLi Gas\b|\bWiM\b|\bMaBiS\b|\bAHB\b|\bAWH\b|\bKoV\b",
+                r"\bBK[678]-[0-9]{2}|\bGPKE\b|\bGeLi Gas\b|\bWiM\b|\bMaBiS\b|\bAHB\b|\bAWH\b|\bKoV\b|\bEnWG\b|\bMsbG\b",
             )
             .expect("source pattern"),
             frist: Regex::new(
@@ -820,6 +829,31 @@ mod tests {
             refused("fn f() {}\n#[cfg(test)]\nmod t { const S: &str = \"5 WT (WiM)\"; }"),
             0
         );
+    }
+
+    #[test]
+    fn a_frist_beside_a_statute_is_refused() {
+        assert_eq!(
+            refused(r#"let s = "Sperrankündigung (§41f Abs. 5 EnWG, 8 Werktage)";"#),
+            1
+        );
+        assert_eq!(
+            refused(r#"let s = "Einbau binnen 4 Werktagen (§ 34 MsbG)";"#),
+            1
+        );
+        assert_eq!(refused(r#"let s = "§ 41a Abs. 2 EnWG";"#), 0);
+    }
+
+    #[test]
+    fn the_admitted_sperrankuendigung_passes_only_in_its_own_file() {
+        let src =
+            r#"let s = "accountingd: Sperrankündigung issued (§41f Abs. 5 EnWG, 8 Werktage)";"#;
+        assert!(
+            Matcher::new()
+                .findings("services/accountingd/src/sperr.rs", src)
+                .is_empty()
+        );
+        assert_eq!(refused(src), 1, "an admission is per file");
     }
 
     #[test]

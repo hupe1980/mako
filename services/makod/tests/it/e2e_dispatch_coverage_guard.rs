@@ -76,6 +76,21 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
     // would drop every inbound version without a trace. 13010–13012 likewise:
     // the LF and the MSB receive the normierte Profile and may answer with an
     // ORDERS 17211 Reklamation, which is what `mabis-profile` exists for.
+    // ── WiM Geräteübernahme: the MSBA's answers ──────────────────────────────
+    // mako implements the MSBA: it receives ORDERS 17001/17009 and sends these.
+    // The MSBN that sends the ORDERS and receives the answer is not built, so
+    // no process waits for one. (19001/19002 are the same at an Nmsb
+    // deployment; under every role at once GPKE Konfiguration claims them.)
+    (
+        19015,
+        "wim-geraeteubernahme",
+        "Bestätigung Gerätewechselabsicht (MSBA → MSBN) — MSBN receiver not implemented",
+    ),
+    (
+        19016,
+        "wim-geraeteubernahme",
+        "Ablehnung Gerätewechselabsicht (MSBA → MSBN) — MSBN receiver not implemented",
+    ),
     // ── MMM Allokationsliste Anforderungen ───────────────────────────────────
     (
         17110,

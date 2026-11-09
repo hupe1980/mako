@@ -10,6 +10,10 @@
 //! - [`error`] — shared [`ApiError`] / [`ApiResult`] with `IntoResponse`
 //! - [`cloudevent`] — canonical `CloudEvent` envelope + signed publisher
 //! - [`outbox`] — transactional outbox (persist-before-dispatch) + drain worker
+//! - [`befund`] — configuration findings ([`befund::Befund`]) every
+//!   [`Daemon::validate`] returns, all of them, with path and source
+//! - [`mod@einrichtung`] — a daemon's readiness report, `GET /admin/einrichtung`,
+//!   and the deployment-wide checklist across daemons
 //! - [`policy`] — operator policy settings ([`policy::PolicyChoice`]), the
 //!   report the runner logs, exports and records, and `GET /api/v1/policy`
 //! - [`webhook`] — the one HMAC-SHA256 signer/verifier
@@ -36,16 +40,21 @@
     reason = "pedantic categories this crate does not adopt; pedantic stays on for everything else"
 )]
 
+pub mod befund;
 pub mod builder;
 pub mod cloudevent;
 pub mod config;
 pub mod dates;
+pub mod einrichtung;
 pub mod error;
 pub mod headers;
 pub mod health;
 pub mod http;
 pub mod json;
 pub mod mcp_snapshot;
+
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod outbox;
 pub mod policy;
 pub mod schema_check;
@@ -80,6 +89,7 @@ pub mod metrics;
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit;
 
+pub use befund::{Befund, Schwere};
 pub use builder::ServiceBuilder;
 pub use cloudevent::{CloudEvent, PublishError, post_ce_with_retry, source};
 pub use config::{
@@ -88,7 +98,10 @@ pub use config::{
 };
 pub use error::{ApiError, ApiResult, UpstreamFailure};
 pub use json::{DETAIL_SENTINEL, Json, Lenient, from_value as json_from_value};
-pub use service::{Daemon, Listener, ServiceConfig, ServiceContext, run, serve, validate_config};
+pub use service::{
+    Daemon, Listener, ServiceConfig, ServiceContext, check_config, einrichtung, run, serve,
+    validate_config,
+};
 #[cfg(feature = "testing")]
 pub use service::{build_for_test, build_for_test_on};
 pub use telemetry::{

@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: desk-assistant
-  version: "1.4.0"
+  version: "1.5.0"
   annotations:
     mako.de/titel: "Assistent im Desk"
     mako.de/zweck: "Beantwortet eine Frage zum Kunden, zur Marktlokation, zum Prozess oder zur Entscheidung auf dem Bildschirm, jeden Satz mit seiner Quelle."
@@ -98,6 +98,18 @@ spec:
       sentence. When the booking has no `vorschlag_datum` and no duplicate
       shows, propose nothing (`vorschlag: null`) and say what is missing.
       The person decides; you never act.
+
+      ## A RULE — only ever as a quote
+      Never state a rule from memory: no Frist, no obligation, no paragraph.
+      When the question asks for one, call agentd `find_source` with its
+      words for the addresses that hold it, then call agentd `quote_source`
+      with one of them — `doc`, `edition` where the document has several,
+      `at` — and state the rule in one sentence that names exactly that
+      address („§ 41f Abs. 5 EnWG", „APERAK AHB 1.1 Kap. 2.4.1"), in the
+      quote's own words, citing `agentd/quote_source`. A sentence naming a §
+      or a chapter is checked against the quote of that address and no
+      other. When `quote_source` refuses, the index holds no such passage:
+      say „Dazu liegt keine Quelle vor.", never a nearby one.
 
       ## EVERY SENTENCE
       - names in `quelle` the one call whose output carries its figures, as
@@ -239,6 +251,47 @@ spec:
       description: >-
         A customer account's ledger movements, newest first, each with its
         Beleg, and the balance the window opens at.
+    - ref: tool://agentd/find_source
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        The addresses — document, edition, chapter or § — whose passage holds
+        the given words, best first. Addresses only, never text: quote one
+        with quote_source.
+      arguments:
+        type: object
+        additionalProperties: false
+        required: [worte, doc]
+        properties:
+          worte:
+            type: string
+            description: The words the rule is about, in German.
+          doc:
+            type: [string, "null"]
+            description: One document to search (EnWG, APERAK AHB), or null for all.
+    - ref: tool://agentd/quote_source
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        The passage at one address, verbatim, with its page and the
+        document's SHA-256. An address the index does not hold is refused,
+        never answered with a nearby passage.
+      arguments:
+        type: object
+        additionalProperties: false
+        required: [doc, edition, at]
+        properties:
+          doc:
+            type: string
+            description: The document as find_source names it (EnWG, APERAK AHB).
+          edition:
+            type: [string, "null"]
+            description: >-
+              The edition as find_source names it; null only where the
+              document has one.
+          at:
+            type: string
+            description: The chapter (2.4.1) or paragraph (§ 41f Abs. 5).
     - ref: tool://processd/list_open_processes
       mutates: false
       max_sensitivity: internal

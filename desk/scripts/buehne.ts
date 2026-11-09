@@ -43,8 +43,14 @@ export const FREIGABE = {
   decided_at: null,
 };
 
+/** makod's checklist and a rehearsal's verdict, as makod answered them (desk/fixtures/). */
+const fixture = (name: string): unknown =>
+  JSON.parse(readFileSync(resolve(FIXTURES, name), "utf8"));
+const PROBE = fixture("probe-44004-abgelehnt.json");
+
 // What each typed tool answers, by name; any other read is a process's Verlauf, empty.
 const ANTWORTEN: Record<string, unknown> = {
+  einrichtung_checkliste: fixture("einrichtung-checkliste.json"),
   list_pending_approvals: { freigaben: [FREIGABE], count: 1, saturated: false },
   list_disputes: { disputes: [], count: 0, saturated: false },
   list_review_queue: { records: [], count: 0, saturated: false },
@@ -93,6 +99,7 @@ export async function aufnehmen(context: BrowserContext, run: string): Promise<v
           body: JSON.stringify({ jsonrpc: "2.0", id: m.id, result }),
         });
       }
+      if (pathname.startsWith("/svc/makod/api/v1/probe/")) return route.fulfill(json(PROBE));
       if (pathname === "/svc/agentd/api/v1/agents/catalog")
         return route.fulfill({ contentType: "application/json", body: katalog });
       if (pathname === "/svc/agentd/api/v1/runs" && req.method() === "POST")

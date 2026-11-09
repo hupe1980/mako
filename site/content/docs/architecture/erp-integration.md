@@ -432,10 +432,24 @@ Authorization: Bearer <token>
   "marktrolle": "LF",
   "payload": {
     "malo_id":            "51238696799",
-    "lieferbeginn_datum": "2026-10-01"
+    "lieferbeginn_datum": "2026-10-01",
+    "transaktionsgrund":  "E03",
+    "bilanzkreis":        "11XBK-STD------Y",
+    "haushaltskunde":     true,
+    "enfg_grundlage":     "ZG1",
+    "kunde": {
+      "nachname": "Mustermann",
+      "anschrift": { "strasse": "Hauptstraße", "hausnummer": "1",
+                     "postleitzahl": "50667", "ort": "Köln", "landescode": "DE" }
+    }
   }
 }
 ```
+
+The payload carries the facts of the Lieferant's contract the Anmeldung makes
+Muss — for a 55001 the `SG4 STS+7` Transaktionsgrund, the Bilanzkreis and the
+Kunde (UTILMD AHB Strom 2.2 Kap. 8.2); `makod` reads it as a typed body and
+refuses a missing one or a key it does not declare.
 
 `marktrolle` is required only for a command more than one role may issue (such
 as `invoic.nne.stellen`, permitted for `NB` and `GNB`); for a single-role

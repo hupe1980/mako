@@ -17,6 +17,7 @@
 //   "read-gdpr-erasures"  — GET /api/v1/gdpr/erasures (the erasure audit trail)
 //   "use-mcp"             — /mcp (Streamable HTTP MCP server)
 //   "read-policy"         — GET /api/v1/policy (the operator policy report)
+//   "read-config"         — GET /admin/einrichtung (the configuration findings)
 
 // Same-tenant read: any authenticated caller may read their own meter data.
 permit(
@@ -29,7 +30,8 @@ permit(
         Action::"read-archive-olap",
         Action::"read-archive-status",
         Action::"use-mcp",
-        Action::"read-policy"
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

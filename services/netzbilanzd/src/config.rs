@@ -158,28 +158,43 @@ impl NetzbilanzConfig {
         Ok(())
     }
 
-    /// Refuse a `[mabis]` section that cannot produce a valid submission.
+    /// Every finding about a `[mabis]` section that cannot produce a valid
+    /// submission: an unimplemented submission target, a Bilanzierungsgebiet
+    /// that is not a Y-type EIC, or no `edmd_url` — where every Lastgang the
+    /// aggregate sums comes from.
     ///
     /// Run at startup, so a misconfigured filing fails here and not at 05:00 on
     /// the Erstaufschlag-Werktag, after a month of metering data has been
     /// aggregated and the run's version number consumed.
+    #[must_use]
+    pub fn mabis_befunde(&self) -> Vec<mako_service::Befund> {
+        let Some(mabis) = &self.mabis else {
+            return Vec::new();
+        };
+        let mut out = mabis.validate();
+        if self.edmd_url.is_none() {
+            out.push(
+                mako_service::Befund::blockiert(
+                    "edmd_url",
+                    "[mabis] is configured but edmd_url is not: every Lastgang a \
+                     Summenzeitreihe aggregates is read from edmd, so the filing cannot be \
+                     built without it",
+                )
+                .bereich(mako_service::befund::Bereich::Erreichbarkeit),
+            );
+        }
+        out
+    }
+
+    /// [`Self::mabis_befunde`] as the boot refusal states them.
     ///
     /// # Errors
     ///
-    /// When `[mabis]` is present and its submission target is unimplemented,
-    /// its Bilanzierungsgebiet is not a Y-type EIC, or `edmd_url` — where every
-    /// Lastgang the aggregate sums comes from — is unset.
-    pub fn check_mabis(&self) -> anyhow::Result<()> {
-        let Some(mabis) = &self.mabis else {
-            return Ok(());
-        };
-        mabis.validate()?;
-        anyhow::ensure!(
-            self.edmd_url.is_some(),
-            "[mabis] is configured but edmd_url is not: every Lastgang a Summenzeitreihe \
-             aggregates is read from edmd, so the filing cannot be built without it"
-        );
-        Ok(())
+    /// Every blocking finding.
+    pub fn check_mabis(
+        &self,
+    ) -> Result<Vec<mako_service::Befund>, mako_service::befund::Verweigerung> {
+        mako_service::befund::als_ergebnis(self.mabis_befunde())
     }
 
     /// Whether `[mcp]` carries a usable API key — primary or named.

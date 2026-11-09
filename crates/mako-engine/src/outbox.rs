@@ -350,6 +350,17 @@ pub struct OutboxMessage {
     /// [`OutboxMessage::new`], which no workflow does.
     pub workflow_name: Box<str>,
 
+    /// BDEW format version the producing process runs under.
+    ///
+    /// Stamped from the `EventEnvelope::workflow_id.format_version` at
+    /// materialisation, beside [`OutboxMessage::workflow_name`]. A process keeps
+    /// the format version it started under until it completes, so a message it
+    /// sends is rendered under that version, not the one in force on the day
+    /// of sending. `None` on a message built with [`OutboxMessage::new`],
+    /// which no process owns; the renderer then takes the version in force.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_version: Option<crate::version::FormatVersion>,
+
     /// W3C `traceparent` of the request that caused this message.
     ///
     /// Captured from [`crate::trace_ctx`] at creation time and injected into
@@ -397,6 +408,7 @@ pub(crate) fn materialise(
         attempt_count: 0,
         first_attempt_at: None,
         workflow_name: env.workflow_id.name.clone(),
+        format_version: Some(env.workflow_id.format_version.clone()),
     }
 }
 
@@ -442,6 +454,7 @@ impl OutboxMessage {
             attempt_count: 0,
             first_attempt_at: None,
             workflow_name: "".into(),
+            format_version: None,
             trace_context: crate::trace_ctx::current().map(Into::into),
         }
     }

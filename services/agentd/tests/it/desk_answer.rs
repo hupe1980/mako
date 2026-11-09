@@ -278,3 +278,133 @@ async fn a_question_is_answered_in_sentences_each_checked_against_its_call() {
         Err(agentd::plane::BewertungError::NichtBewertbar(_))
     ));
 }
+
+/// A passage index with § 41f Abs. 1 and Abs. 5 EnWG, as `cargo xtask
+/// index-sources` writes it.
+fn quellen() -> agentd::plane::quellen::Quellen {
+    let index = json!({ "dokumente": [{
+        "doc": "EnWG", "edition": "Stand 2026-10-22", "datei": "gesetze/enwg_2005.xml",
+        "sha256": "03b376d9ceb7", "stellen": [
+            { "at": "§ 41f Abs. 1", "text": "(1) Bei der Nichterfüllung einer Zahlungsverpflichtung eines Haushaltskunden trotz Mahnung …" },
+            { "at": "§ 41f Abs. 5", "text": "(5) Der Beginn der Unterbrechung der Energieversorgung ist dem Haushaltskunden acht Werktage im Voraus durch briefliche Mitteilung anzukündigen." }
+        ] }] });
+    agentd::plane::quellen::Quellen::new(
+        agentd::plane::quellen::Quellenindex::from_slice(index.to_string().as_bytes())
+            .expect("an index"),
+    )
+}
+
+/// A sentence naming a § is belegt only beside the quote of that very
+/// address: the model quoted Abs. 1, stated Abs. 5, and the sentence is
+/// „nicht belegt"; the one stating Abs. 1 from its quote is belegt; and an
+/// address the index lacks is refused, so no quote exists to carry it.
+#[tokio::test]
+async fn a_rule_is_belegt_only_beside_the_quote_of_its_own_address() {
+    let tenant = agentplane::core::TenantId::new("9900357000004").expect("a usable key scope");
+    let policy = agentd::plane::policy::engine(agentd::plane::policy::DEFAULT_POLICY)
+        .expect("the embedded policy set compiles");
+    let stub: Arc<dyn ToolClient> = Arc::new(Makod);
+    let eigene: Arc<dyn ToolClient> = Arc::new(quellen());
+    let servers = agentd::plane::tools::servers_named_in_grants()
+        .into_iter()
+        .map(|name| {
+            let client = if name == agentd::plane::quellen::SERVER {
+                Arc::clone(&eigene)
+            } else {
+                Arc::clone(&stub)
+            };
+            (name, client)
+        })
+        .collect();
+    let provider = FakeProvider::new();
+    let plane = Plane::new(
+        Stores::redb(RedbStore::open_in_memory().expect("store"), &tenant),
+        PlaneConfig {
+            outbox: None,
+            signer: None,
+            quota: agentplane::quota::TenantQuota::default(),
+            owner: "agentd-desk-quote",
+            tenant: &tenant,
+            activated: &Activation::all(),
+            providers: vec![(
+                "anthropic".to_owned(),
+                Arc::clone(&provider) as Arc<dyn agentplane::model::ModelProvider>,
+            )],
+            tool_servers: servers,
+            policy,
+            keyring: None,
+        },
+    )
+    .expect("the plane assembles");
+
+    provider.will_answer(turn(
+        "",
+        None,
+        vec![
+            ToolCall {
+                id: "call-1".to_owned(),
+                name: "agentd__quote_source".to_owned(),
+                arguments: json!({ "doc": "EnWG", "edition": null, "at": "§ 41f Abs. 1" }),
+            },
+            ToolCall {
+                id: "call-2".to_owned(),
+                name: "agentd__quote_source".to_owned(),
+                arguments: json!({ "doc": "EnWG", "edition": null, "at": "§ 41f Abs. 6" }),
+            },
+        ],
+    ));
+    provider.will_answer(turn(
+        "",
+        Some(json!({ "saetze": [
+            {
+                "text": "Die Unterbrechung ist acht Werktage im Voraus anzukündigen (§ 41f Abs. 5 EnWG).",
+                "quelle": "agentd/quote_source"
+            },
+            {
+                "text": "Bei Nichterfüllung trotz Mahnung gilt § 41f Abs. 1 EnWG.",
+                "quelle": "agentd/quote_source"
+            },
+            {
+                "text": "§ 41f Abs. 6 EnWG regelt die Unterbrechungsandrohung.",
+                "quelle": "agentd/quote_source"
+            }
+        ], "vorschlag": null })),
+        Vec::new(),
+    ));
+
+    let accepted = plane
+        .accept_named(
+            "desk-assistant",
+            Envelope {
+                id: "q-quote",
+                source: "urn:mako:test:desk",
+                event_type: "manual",
+            },
+            json!({ "frage": "Wann ist eine Sperrung anzukündigen?", "malo": "51238696012" }),
+        )
+        .await
+        .expect("activated");
+    assert!(accepted.refused.is_none(), "{:?}", accepted.refused);
+
+    let mut answer = None;
+    for _ in 0..200 {
+        let a = plane
+            .answer(&accepted.run_id, "erika")
+            .await
+            .expect("readable")
+            .expect("known");
+        if a.status != "running" {
+            answer = Some(a);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let answer = answer.expect("the run concludes");
+    assert_eq!(answer.status, "succeeded", "{answer:?}");
+    let marks: Vec<bool> = answer.saetze.iter().map(|s| s.belegt).collect();
+    assert_eq!(
+        marks,
+        vec![false, true, false],
+        "Abs. 5 against a quote of Abs. 1, Abs. 1 against its own, Abs. 6 refused: {answer:#?}"
+    );
+}

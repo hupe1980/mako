@@ -55,6 +55,13 @@
      the translucent bar. */
   --topbar: 52px;
 
+  /* The docked sidebar; below the `md` width it is a sheet over the view. */
+  --pane-sidebar: 232px;
+
+  /* The list–detail–inspector layout's fixed panes; the detail takes the rest. */
+  --pane-list: 340px;
+  --pane-inspector: 288px;
+
   /* Motion */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --dur-move: 240ms;
@@ -233,6 +240,14 @@
   .einblenden {
     animation: einblenden var(--dur-move) var(--ease-out) both;
   }
+  /* The sidebar as a sheet slides in from the leading edge; reduced motion
+     sets --dur-move to 0, so it simply appears. */
+  .schublade[data-entering] {
+    animation: schublade var(--dur-move) var(--ease-out);
+  }
+  .schublade[data-exiting] {
+    animation: schublade var(--dur-move) var(--ease-out) reverse;
+  }
   .morph {
     transition-property: background-color, color, border-color, box-shadow, transform;
     transition-duration: var(--dur-move);
@@ -305,6 +320,12 @@
 @keyframes ring-drain {
   to {
     stroke-dashoffset: 1;
+  }
+}
+
+@keyframes schublade {
+  from {
+    transform: translateX(-100%);
   }
 }
 

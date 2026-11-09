@@ -81,10 +81,42 @@ pub struct AnmeldungMsb {
     /// not evidence of absence, and `ZC9` on a Messlokation that exists refuses
     /// a lawful § 5 MsbG registration.
     pub melo_bekannt: Option<bool>,
-    /// Whether a Vertrag nach § 9 Abs. 1 Nr. 3 MsbG with the MSBN exists.
+    /// What the NB's Rahmenvertrag registry says about the Vertrag nach § 9
+    /// Abs. 1 Nr. 3 MsbG with the MSBN on the Zuordnungsbeginn.
     ///
-    /// The third check of Kap. 2.3.2 Nr. 2. `None` escalates.
-    pub msb_rahmenvertrag: Option<bool>,
+    /// The third check of Kap. 2.3.2 Nr. 2. Only
+    /// [`RahmenvertragBefund::Abgeschlossen`] passes; every other Befund
+    /// escalates naming itself, and `None` — the lookup could not be made —
+    /// escalates as an unknown Vertragslage.
+    pub msb_rahmenvertrag: Option<RahmenvertragBefund>,
+}
+
+/// What the NB's registry says about the Messstellenbetreiberrahmenvertrag
+/// between it and the MSBN on one day — the third check of an Anmeldung MSB
+/// (WiM Teil 1 Kap. 2.3.2 Nr. 2 Ziff. 3; AWH WiM Gas 2.0 Kap. 3.5.2 Nr. 2
+/// Ziff. 3).
+///
+/// The wire form is `marktd`'s `befund` (`GET /api/v1/msb-rahmenvertraege/check`).
+/// The four Befunde besides `Abgeschlossen` all escalate — `E_0201`/`E_2002`
+/// publish no code for any of them — but each asks the operator for a
+/// different act: a contract to conclude, an offer to settle, an ended one to
+/// renew, a Gas one to adapt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RahmenvertragBefund {
+    /// A contract with status `abgeschlossen` covers the day — the one Befund
+    /// that satisfies the check.
+    Abgeschlossen,
+    /// No contract of this Sparte between the two covers the day.
+    KeinVertrag,
+    /// The covering contract is only offered, not concluded.
+    Angeboten,
+    /// The covering contract is marked ended.
+    Beendet,
+    /// Gas: the covering contract was concluded before the Fassung GeLi Gas
+    /// 3.0 (BK7-24-01-009, S. 7–8) Tenor 15 requires and is still to be
+    /// adapted to it (Tenor 15 Satz 2).
+    AnpassungErforderlich,
 }
 
 /// An inbound Kündigung MSB (UTILMD 55039), as the **MSBA** reads it.

@@ -85,9 +85,10 @@ fn the_two_messlokationsaenderung_trees_share_pids_but_not_codes() {
     assert!(codes::lookup(codes::EBD_MESSLOKATIONSAENDERUNG_NB, "A03").is_none());
 }
 
-/// 19016 is named „Ablehnung Gerätewechselabsicht" but carries `ZB5` „Kein
-/// Eigenausbau des MSBA" — a division of labour, not a refusal. Reading it as
-/// one aborts a Gerätewechsel the counterparty just agreed to carry out.
+/// `ZB5` „Kein Eigenausbau des MSBA" sits in the Ablehnungs-Codeliste
+/// `S_0066`, yet it is a division of labour, not a refusal, and rides the
+/// Bestätigung 19015 (ORDRSP AHB 1.1b Kap. 4.10, Bedingung `[38]`). Reading it
+/// as one aborts a Gerätewechsel the counterparty just agreed to carry out.
 #[test]
 fn the_geraetewechselabsicht_answer_is_not_a_refusal() {
     let zb5 = codes::lookup(codes::EBD_GERAETEWECHSELABSICHT, "ZB5").expect("published");

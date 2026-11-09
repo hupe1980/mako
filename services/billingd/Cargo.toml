@@ -22,7 +22,7 @@ test = false
 [dependencies]
 mako-fristen = { workspace = true }
 mako-events = { workspace = true }
-mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
+mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics", "mcp"] }
 energy-billing = { workspace = true, features = ["eeg", "bo4e", "en16931"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }

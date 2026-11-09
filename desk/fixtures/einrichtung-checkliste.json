@@ -1,0 +1,201 @@
+{
+  "bereit": false,
+  "dienste": [
+    {
+      "dienst": "makod",
+      "url": "",
+      "status": "blockiert",
+      "version": "1.0.0"
+    },
+    {
+      "dienst": "processd",
+      "url": "http://127.0.0.1:8580",
+      "status": "bereit",
+      "version": "1.0.0"
+    },
+    {
+      "dienst": "edmd",
+      "url": "http://127.0.0.1:8380",
+      "status": "unerreichbar"
+    },
+    {
+      "dienst": "billingd",
+      "url": "http://127.0.0.1:9280",
+      "status": "unlesbar"
+    }
+  ],
+  "punkte": [
+    {
+      "bereich": "identitaeten",
+      "frage": "Jede Rolle hat je Sparte genau eine MP-ID mit der Codenummer, die sie verlangt",
+      "ampel": "rot",
+      "befunde": [
+        {
+          "dienst": "makod",
+          "schwere": "blockiert",
+          "bereich": "identitaeten",
+          "text": "\"9900001000001\" ist eine BDEW-Codenummer (Strom), aber die Rollen [\"GNB\"] gehören zur anderen Sparte — eine Gas-Rolle braucht eine DVGW-Codenummer (98…), eine Strom-Rolle eine BDEW-Codenummer (99…)",
+          "pfad": "party[0].mp_id",
+          "quelle": "BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“"
+        }
+      ]
+    },
+    {
+      "bereich": "zertifikate",
+      "frage": "Jedes Zertifikat ist lesbar, passt zu seinem Schlüssel und läuft nicht ab",
+      "ampel": "gruen",
+      "befunde": []
+    },
+    {
+      "bereich": "bilanzierung",
+      "frage": "Jeder Bilanzkreis ist seiner Sparte eindeutig zugeordnet",
+      "ampel": "gruen",
+      "befunde": []
+    },
+    {
+      "bereich": "zugriff",
+      "frage": "Jede Tür ist authentifiziert und autorisiert",
+      "ampel": "gruen",
+      "befunde": []
+    },
+    {
+      "bereich": "erreichbarkeit",
+      "frage": "Jeder Dienst und jede Gegenstelle ist erreichbar",
+      "ampel": "unbekannt",
+      "befunde": [
+        {
+          "dienst": "makod",
+          "schwere": "blockiert",
+          "bereich": "erreichbarkeit",
+          "text": "[marktd] url is set without [marktd] webhook_url (MAKOD_MARKTD_WEBHOOK_URL): makod's MaLo cache follows marktd through its fan-out and needs the address marktd delivers to, e.g. http://makod:8080/webhooks/marktd",
+          "pfad": "marktd.webhook_url"
+        },
+        {
+          "dienst": "edmd",
+          "schwere": "warnung",
+          "bereich": "erreichbarkeit",
+          "text": "nicht erreichbar: error sending request for url (http://127.0.0.1:8380/admin/einrichtung)",
+          "pfad": ""
+        },
+        {
+          "dienst": "billingd",
+          "schwere": "blockiert",
+          "bereich": "erreichbarkeit",
+          "text": "Antwort ist kein Einrichtungsbericht (expected value at line 1 column 1): <html><body>502 Bad Gateway</body></html>",
+          "pfad": ""
+        }
+      ]
+    },
+    {
+      "bereich": "formatabdeckung",
+      "frage": "Jede gültige Formatversion ist durch Profil und Adapter abgedeckt",
+      "ampel": "gruen",
+      "befunde": []
+    },
+    {
+      "bereich": "konfiguration",
+      "frage": "Jede weitere Einstellung ist gültig",
+      "ampel": "gruen",
+      "befunde": []
+    }
+  ],
+  "berichte": [
+    {
+      "dienst": "makod",
+      "url": "",
+      "zustand": "erreicht",
+      "einrichtung": {
+        "dienst": "makod",
+        "version": "1.0.0",
+        "bereit": false,
+        "befunde": [
+          {
+            "schwere": "blockiert",
+            "bereich": "identitaeten",
+            "text": "\"9900001000001\" ist eine BDEW-Codenummer (Strom), aber die Rollen [\"GNB\"] gehören zur anderen Sparte — eine Gas-Rolle braucht eine DVGW-Codenummer (98…), eine Strom-Rolle eine BDEW-Codenummer (99…)",
+            "pfad": "party[0].mp_id",
+            "quelle": "BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“"
+          },
+          {
+            "schwere": "blockiert",
+            "bereich": "erreichbarkeit",
+            "text": "[marktd] url is set without [marktd] webhook_url (MAKOD_MARKTD_WEBHOOK_URL): makod's MaLo cache follows marktd through its fan-out and needs the address marktd delivers to, e.g. http://makod:8080/webhooks/marktd",
+            "pfad": "marktd.webhook_url"
+          }
+        ],
+        "policy": {
+          "entries": [
+            {
+              "key": "as4.unbekannte_absender",
+              "value": "nur_konfigurierte",
+              "origin": "default",
+              "class": "policy",
+              "quelle": "BDEW AS4-Profil 1.2 Kap. 2.3.7 (S. 19): Zertifikate KÖNNEN auf der Grundlage der MP-ID im OU-Feld abgelehnt werden (Whitelist); die Whitelist sind die Partnerstammdaten des Betreibers",
+              "doc": "@/docs/services/makod.md#policy-as4-unbekannte-absender",
+              "insecure": false,
+              "review_by": null,
+              "review_grund": null
+            },
+            {
+              "key": "ingest.unbekannter_vorgang",
+              "value": "z33",
+              "origin": "default",
+              "class": "policy",
+              "quelle": "APERAK AHB 1.1 Kap. 2.1.3 (S. 14): nur wenn die Zuordnung scheitert, kann und muss der Empfänger dies mit der APERAK / Zuordnungsfehler melden, wo die Stelle der Zuordnungsprüfung „V“ ist; Kap. 4.3 (S. 43): Z33 Referenziertes Geschäftsvorfall-Tupel nicht vorhanden",
+              "doc": "@/docs/services/makod.md#policy-ingest-unbekannter-vorgang",
+              "insecure": false,
+              "review_by": null,
+              "review_grund": null
+            },
+            {
+              "key": "deployment.rollen",
+              "value": "nb-gas",
+              "origin": "explicit",
+              "class": "posture",
+              "quelle": null,
+              "doc": null,
+              "insecure": false,
+              "review_by": null,
+              "review_grund": null
+            }
+          ]
+        },
+        "parteien": [
+          {
+            "rolle": "GNB",
+            "sparte": "gas",
+            "mp_id": "9900001000001"
+          }
+        ]
+      }
+    },
+    {
+      "dienst": "processd",
+      "url": "http://127.0.0.1:8580",
+      "zustand": "erreicht",
+      "einrichtung": {
+        "dienst": "processd",
+        "version": "1.0.0",
+        "bereit": true,
+        "befunde": [],
+        "policy": {
+          "entries": []
+        },
+        "parteien": []
+      }
+    },
+    {
+      "dienst": "edmd",
+      "url": "http://127.0.0.1:8380",
+      "zustand": "unerreichbar",
+      "grund": "error sending request for url (http://127.0.0.1:8380/admin/einrichtung)"
+    },
+    {
+      "dienst": "billingd",
+      "url": "http://127.0.0.1:9280",
+      "zustand": "unlesbar",
+      "grund": "expected value at line 1 column 1",
+      "roh": "<html><body>502 Bad Gateway</body></html>"
+    }
+  ]
+}

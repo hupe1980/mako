@@ -33,6 +33,8 @@ fn actions_used_in_code() -> std::collections::BTreeSet<String> {
         found.insert(rest[..close].to_owned());
         rest = &rest[close..];
     }
+    // Checked by `mako_service::einrichtung::router`, one crate over.
+    found.extend(["read-policy".to_owned(), "read-config".to_owned()]);
     found
 }
 
@@ -95,7 +97,9 @@ const TENANT: &str = "9900357000004";
 /// Every action the router enforces must be decidable by the policy. A typo in
 /// either place — a renamed action, a handler wired to a string no policy
 /// mentions — turns into an endpoint nobody can reach.
-const ALL_ACTIONS: [&str; 8] = [
+const ALL_ACTIONS: [&str; 10] = [
+    "read-config",
+    "read-policy",
     "read-template",
     "preview-template",
     "publish-template",

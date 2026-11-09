@@ -101,6 +101,41 @@ impl Daemon for Marktd {
             .context("run marktd migrations")
     }
 
+    /// Fail closed: without `[oidc]` every request is admitted with dev claims,
+    /// and without `webhook.inbound_secret` the inbound events endpoint accepts
+    /// unsigned events that mutate VersorgungsStatus and the device registry.
+    /// Either gap must be asked for by name, never reached by omission; each is
+    /// its own finding.
+    fn validate(cfg: &Config) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = Vec::new();
+        if cfg.allow_insecure_no_auth {
+            return out;
+        }
+        if cfg.oidc.is_none() {
+            out.push(
+                Befund::blockiert(
+                    "oidc",
+                    "no [oidc] section configured — every request would be admitted with dev \
+                     claims. Configure [oidc], or set allow_insecure_no_auth = true.",
+                )
+                .bereich(Bereich::Zugriff),
+            );
+        }
+        if cfg.webhook.inbound_secret.is_none() {
+            out.push(
+                Befund::blockiert(
+                    "webhook.inbound_secret",
+                    "no webhook.inbound_secret configured — the inbound events endpoint would \
+                     accept unsigned events that mutate master data. Configure it, or set \
+                     allow_insecure_no_auth = true.",
+                )
+                .bereich(Bereich::Zugriff),
+            );
+        }
+        out
+    }
+
     async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
         let pool = ctx.pool().clone();
         let shutdown = ctx.shutdown.clone();
@@ -111,26 +146,11 @@ impl Daemon for Marktd {
         let http = ctx.http.clone();
         let tenant = cfg.markt.tenant.clone();
 
-        // Fail closed: without [oidc] every request is admitted with dev claims,
-        // and without webhook.inbound_secret the inbound events endpoint accepts
-        // unsigned events that mutate VersorgungsStatus and the device registry.
-        // Either gap must be asked for by name, never reached by omission.
+        // The auth posture is refused in `validate`, before `build` runs.
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
                 "marktd: allow_insecure_no_auth is set — dev claims accepted and unsigned \
                  inbound events accepted"
-            );
-        } else {
-            anyhow::ensure!(
-                cfg.oidc.is_some(),
-                "no [oidc] section configured — every request would be admitted with dev \
-                 claims. Configure [oidc], or set allow_insecure_no_auth = true."
-            );
-            anyhow::ensure!(
-                cfg.webhook.inbound_secret.is_some(),
-                "no webhook.inbound_secret configured — the inbound events endpoint would \
-                 accept unsigned events that mutate master data. Configure it, or set \
-                 allow_insecure_no_auth = true."
             );
         }
 
@@ -214,6 +234,7 @@ impl Daemon for Marktd {
                     Some(Arc::clone(&cedar)),
                     &tenant,
                 ),
+                policy: ctx.einrichtung.policy.clone(),
             }),
             shutdown,
         );
@@ -231,6 +252,9 @@ impl Daemon for Marktd {
             .route(&cfg.webhook.inbound_path, post(ingest_event))
             .merge(openapi_router())
             .with_state(state)
+            // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
+            // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
+            .merge(mako_service::einrichtung::router(ctx.einrichtung.clone()))
             .layer(Extension(mako_service::oidc::ExpectedTenant(
                 cfg.markt.tenant.clone(),
             )))

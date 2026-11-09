@@ -1705,7 +1705,8 @@ pub fn pricing_context_fuer(
     }
 }
 
-/// Default Angebot validity: today + 10 Werktage (≈ 14 calendar days).
+/// Default Angebot validity: today + 14 calendar days, a productd default
+/// and no regulatory Frist.
 fn default_gueltig_bis() -> time::Date {
     mako_fristen::heute() + time::Duration::days(14)
 }

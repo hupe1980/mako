@@ -33,7 +33,7 @@ mako-engine     = { workspace = true }
 metering        = { workspace = true, features = ["serde"] }
 futures         = "0.3"
 mako-markt      = { workspace = true, features = ["makod-client", "marktd-client"] }
-mako-service    = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
+mako-service    = { workspace = true, features = ["oidc", "cedar", "otel", "metrics", "mcp"] }
 invoic-checker  = { workspace = true }
 axum            = { version = "0.8" }
 sqlx            = { workspace = true, features = ["rust_decimal"] }

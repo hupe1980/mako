@@ -21,6 +21,7 @@
 //                          rendered document for 8 years and sends it to the
 //                          customer on their channels
 //   "read-policy"        — GET  /api/v1/policy — the operator policy report
+//   "read-config"        — GET  /admin/einrichtung — the configuration findings
 //
 // The MCP surface is authenticated separately by `[mcp]` (McpAuth) and is
 // read-only by construction, so it carries no Cedar action. The VPP dispatch
@@ -38,7 +39,8 @@ permit(
     action in [
         Action::"read-billing",
         Action::"preview-billing",
-        Action::"read-policy"
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

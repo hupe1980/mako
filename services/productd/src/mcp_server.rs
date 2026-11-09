@@ -4,6 +4,7 @@
 //!
 //! | Tool | Description |
 //! |---|---|
+//! | `get_policy` | The operator policy and posture this deployment runs under |
 //! | `list_products` | List products for an LF MP-ID |
 //! | `get_product` | Get a single product with full Tarifpreisblatt JSONB |
 //! | `get_product_history` | Full version history for a product (includes energiemix) |
@@ -38,9 +39,7 @@ use rmcp::{
     },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
+    transport::streamable_http_server::StreamableHttpServerConfig,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -53,6 +52,8 @@ pub struct ProductdMcpState {
     pub pool: PgPool,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
+    /// The posture report the runner built at boot, served by `get_policy`.
+    pub policy: Arc<mako_service::policy::PolicyReport>,
 }
 
 // ── Parameter types ───────────────────────────────────────────────────────────
@@ -161,6 +162,16 @@ impl ProductdMcpHandler {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    #[tool(
+        description = "The operator policy and posture this productd deployment runs under: each entry with its value and whether it was set or defaulted. Read-only; a setting changes only by editing the config and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_policy(&self) -> Result<CallToolResult, McpError> {
+        ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     // ── Product catalog ───────────────────────────────────────────────────────
@@ -764,7 +775,7 @@ impl ProductdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "§41a EnWG requires all LFs to offer dynamic tariffs to iMSys customers (mandatory since Jan 2025).\n\n\
+                "§ 41a Abs. 2 EnWG obliges every Stromlieferant, since 1 January 2025, to offer a dynamic tariff to a Letztverbraucher with an iMSys.\n\n\
                  Steps:\n\n\
                  1. Create the product in productd:\n\
                     PUT /api/v1/products/{lf_mp_id}/STROM-EPEX-01\n\
@@ -777,7 +788,7 @@ impl ProductdMcpHandler {
                         \"tarifpreise\": [{ \"preistyp\": \"GRUNDPREIS\", ... }]\n\
                       }\n\
                     }\n\n\
-                 2. Import EPEX D-1 prices daily (cron at 13:00 CET after EPEX publication):\n\
+                 2. Import EPEX D-1 prices daily, once EPEX has published the day-ahead auction:\n\
                     PUT /api/v1/epex-prices/YYYY-MM-DD\n\
                     { \"prices\": [ct_h0, ct_h1, ..., ct_h23] }  -- 24 values\n\n\
                  3. Put iMSys-eligible MaLos on it via vertragd:\n\
@@ -837,7 +848,7 @@ impl ProductdMcpHandler {
                  POST /api/v1/angebote\n\
                  {\n\
                    \"kunden_id\": \"<UUID from vertragd>\",   -- or use interessent_name for prospects\n\
-                   \"gueltig_bis\": \"2026-08-25\",            -- 10 Werktage default if omitted\n\
+                   \"gueltig_bis\": \"2026-08-25\",            -- today + 14 days if omitted\n\
                    \"lieferbeginn\": \"2027-01-01\",\n\
                    \"laufzeit_monate\": 24,\n\
                    \"positionen\": [{\n\
@@ -874,7 +885,7 @@ impl ProductdMcpHandler {
                  - Angebot expires automatically after gueltig_bis (background worker)\n\
                  - jahreskosten includes NNE + KA if supplied in positionen\n\
                  - Varianten side-by-side comparison: different laufzeit/rabatt/products\n\
-                 - §41 EnWG: customer is bound from annehmen; no cooling-off for B2B\n\
+                 - the customer is bound from annehmen; a B2B customer is no Verbraucher, so no Widerrufsrecht applies (§ 312g Abs. 1 BGB grants it to the Verbraucher)\n\
                  - NNE data source: marktd GET /api/v1/preisblaetter/{nb_mp_id}",
             ),
         ]
@@ -886,6 +897,13 @@ impl ProductdMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for ProductdMcpHandler {
+    /// The revisions every mako MCP server speaks, not the SDK's set.
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        mako_service::mcp::supported_revisions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder().enable_tools().enable_prompts().build(),
@@ -920,9 +938,8 @@ async fn mcp_auth_middleware(
 
 pub fn router(state: Arc<ProductdMcpState>, _shutdown: CancellationToken) -> Router {
     let handler = ProductdMcpHandler::new(Arc::clone(&state));
-    let service = StreamableHttpService::new(
+    let service = mako_service::mcp::service(
         move || Ok(handler.clone()),
-        LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default(),
     );
     Router::new()

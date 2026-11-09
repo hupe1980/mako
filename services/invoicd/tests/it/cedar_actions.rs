@@ -97,6 +97,9 @@ fn the_declared_list_matches_the_authorize_calls() {
         .collect();
     // The MCP surface is gated by `McpAuth`, which checks `use-mcp`.
     called.push("use-mcp");
+    // `read-policy` and `read-config` are checked by
+    // `mako_service::einrichtung::router`.
+    called.extend(["read-policy", "read-config"]);
     called.sort_unstable();
     called.dedup();
 

@@ -25,6 +25,8 @@ re-checks it.
 |---|---|---|
 | `read-product` | product `GET`s, `/history`, `/energiemix`, `POST …/resolve` | any token of the tenant |
 | `read-marktpreise` | EPEX and nEHS `GET`s | any token of the tenant |
+| `read-policy` | `GET /api/v1/policy` (posture report; MCP `get_policy`) | any token of the tenant |
+| `read-config` | `GET /admin/einrichtung` (configuration findings) | any token of the tenant |
 | `write-product` | `PUT` / `DELETE` of a product and its `/energiemix` | LF, MSB, ESA, ADMIN |
 | `write-marktpreise` | `PUT /epex-prices/{date}`, `PUT /nehs-prices/{date}` | LF, MSB, ESA, ADMIN |
 | `read-angebot` | `GET /angebote[/{id}[/comparison]]` | LF, MSB, ESA, ADMIN |
@@ -579,7 +581,7 @@ Content-Type: application/json
 ## MCP tools
 
 `productd` ships an MCP server at `/mcp` (Streamable HTTP) with
-**13 read-only tools** and **3 prompts**.
+**14 read-only tools** and **3 prompts**.
 
 | Tool | Description |
 |---|---|

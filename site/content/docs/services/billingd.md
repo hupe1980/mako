@@ -889,8 +889,9 @@ Art. 17 audit fields.
 | `POST` | `/api/v1/billing/{id}/reviewed` | Record the review of a REVIEW record; sends nothing |
 | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G (§ 4a EGovG i.V.m. ERechV) |
 | `GET` | `/api/v1/policy` | Operator policy (Cedar `read-policy`) |
+| `GET` | `/admin/einrichtung` | Configuration findings and policy (Cedar `read-config`) |
 | `GET` | `/health/live` · `/health/ready` | Liveness; readiness |
-| `POST/GET` | `/mcp` | MCP |
+| `POST` | `/mcp` | MCP |
 
 ### Errors
 
@@ -946,7 +947,7 @@ keep releases and reviews attributable.
 
 ## MCP server
 
-`/mcp` (Streamable HTTP 2025-11-25): **thirteen tools** and six prompts, every
+`/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session): **thirteen tools** and six prompts, every
 tool **read-only**, run in process. There is no `calculate_billing`: issuing a
 Rechnung is a legally binding act for an OIDC identity, not a model.
 

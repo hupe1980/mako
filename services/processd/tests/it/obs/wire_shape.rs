@@ -32,6 +32,8 @@ fn projection() -> ProcessProjection {
         started_at: OffsetDateTime::UNIX_EPOCH,
         last_event_at: OffsetDateTime::UNIX_EPOCH,
         erc_code: None,
+        antwort_code: None,
+        antwort_codeliste: None,
         initiator_is_affiliate: false,
     }
 }

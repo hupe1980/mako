@@ -215,23 +215,28 @@ pub use weiterverpflichtung::{
 /// | 55042 | `wim-device-change` | Anmeldung MSB (MSBN → NB) | any |
 /// | 55051 | `wim-device-change` | Ende MSB / Abmeldung (MSBA → NB) | any |
 /// | 55168 | `wim-device-change` | Verpflichtungsanfrage / Aufforderung (NB → gMSB) | any |
-/// | 17001, 17002, 17009 | `wim-geraeteubernahme` | Geräteübernahme ORDERS | any |
+/// | 17001, 17009 | `wim-geraeteubernahme` | Geräteübernahme ORDERS (MSBN → MSBA) | any |
 /// | 39002 | `wim-wertebestellung` | ESA Stornierung der Bestellung (ORDCHG) | **Msb only** |
-/// | 19001, 19002 | `wim-geraeteubernahme` | ORDRSP Bestellbestätigung/Ablehnung from NB | **nMSB only** |
+/// | 19001, 19002 | `wim-geraeteubernahme` | ORDRSP Bestellbestätigung/Ablehnung (MSBA → MSBN) | **nMSB only** |
 /// | 19015, 19016 | `wim-geraeteubernahme` | ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung | any |
 ///
 /// ## Role-conditional PIDs (ORDRSP 19001/19002)
 ///
 /// GPKE Konfiguration claims 19001/19002 on an NB instance — it receives them
 /// after sending ORDERS 17134/17135 — and WiM Geräteübernahme claims them on an
-/// nMSB instance, answering its own ORDERS 17001. Only one reading can win, so
+/// nMSB instance. Only one reading can win, so
 /// the WiM one is registered when [`DeploymentRoles`] contains
 /// [`Marktrolle::Nmsb`]. Use [`DeploymentRoles::nmsb()`] and
 /// [`DeploymentRoles::nb()`] rather than a catch-all role set on a deployment
 /// that is both.
 ///
-/// 19015/19016 are **not** gated: nothing else claims them, and the deployment
-/// that receives them is the one that sent the 17009 they answer.
+/// 19015/19016 are **not** gated: nothing else claims them.
+///
+/// The workflow is the MSBA's: it receives the ORDERS and sends the ORDRSP. The
+/// MSBN side — sending 17001/17009 and receiving the answer — is not built, so
+/// makod's dispatcher has no arm for an inbound 19001/19002/19015/19016 and
+/// dead-letters one as not dispatchable; the registration keeps the router
+/// naming the workflow.
 ///
 /// [`DeploymentRoles`]: mako_engine::marktrolle::DeploymentRoles
 /// [`Marktrolle::Nmsb`]: mako_engine::marktrolle::Marktrolle::Nmsb
@@ -342,9 +347,8 @@ impl mako_engine::builder::EngineModule for WimModule {
         }
 
         // ORDRSP 19015/19016 — Bestätigung/Ablehnung der Gerätewechselabsicht,
-        // the answer to the ORDERS 17009 the MSBN sends. No other module claims
-        // them, so they are registered unconditionally: gating them would
-        // dead-letter the answer to a message this deployment itself sent.
+        // the MSBA's answer to the ORDERS 17009. No other module claims them,
+        // so they are registered unconditionally.
         for pid in [19_015_u32, 19_016] {
             router.register(pid, geraeteubernahme::WORKFLOW_NAME);
         }

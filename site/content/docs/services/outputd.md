@@ -105,6 +105,7 @@ is tenant-scoped).
 |---|---|---|
 | `read-template` | `GET /templates`, `/{kind}/current`, `/by-hash/{hash}`, `/reference/{kind}` | any authenticated caller in the tenant |
 | `preview-template` | `POST /templates/preview` | any authenticated caller in the tenant |
+| `read-policy`, `read-config` | `GET /api/v1/policy`, `GET /admin/einrichtung` — the operator policy and the configuration findings | any authenticated caller in the tenant |
 | `publish-template` | `POST /templates` | `LF`, `MSB`, `ESA` |
 | `rollout-template` | `PUT /templates/{kind}/current` | `LF`, `MSB`, `ESA` |
 | `render-document` | `POST /render/{kind}` | `LF`, `MSB`, `ESA` |

@@ -215,9 +215,14 @@ async fn get_process(
         .await
         .map_err(|e| query_failed("get_process", e))?
         .ok_or(ApiError::NotFound)?;
-    Ok(Json(
-        serde_json::to_value(process).map_err(ApiError::internal)?,
-    ))
+    // The wording of the counterparty's code, read in the list it named —
+    // the field `get_process` on the MCP surface states too.
+    let bedeutung = process.bedeutung();
+    let mut body = serde_json::to_value(process).map_err(ApiError::internal)?;
+    if let Some(fields) = body.as_object_mut() {
+        fields.insert("bedeutung".into(), bedeutung.into());
+    }
+    Ok(Json(body))
 }
 
 #[derive(Debug, Deserialize)]

@@ -140,4 +140,4 @@ export interface GeparkteBuchung {
 }
 
 /** Tools accountingd serves without an output schema: no view may read them. */
-export const accountingdUntyped = ["compute_bilanzielle_abgrenzung","get_balance","get_vorauszahlung","import_payments","list_dunning","list_ledger","list_overdue","list_sepa_collections","post_manual_booking","run_abschlag_cycle","run_sepa_collection","suggest_payment_match","trigger_jahresabschluss","update_abschlag"] as const;
+export const accountingdUntyped = ["compute_bilanzielle_abgrenzung","get_balance","get_policy","get_vorauszahlung","import_payments","list_dunning","list_ledger","list_overdue","list_sepa_collections","post_manual_booking","run_abschlag_cycle","run_sepa_collection","suggest_payment_match","trigger_jahresabschluss","update_abschlag"] as const;

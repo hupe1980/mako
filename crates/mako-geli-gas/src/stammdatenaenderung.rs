@@ -764,6 +764,16 @@ pub enum GasStammdatenState {
     },
 }
 
+/// A Stammdatenänderung holds its Marktlokation from the first message until
+/// it is answered or refused: the ingest door keys a second Änderung on the
+/// same Marktlokation by the same MaLo, and the command doors find the process
+/// they answer by it.
+impl mako_engine::workflow::OccupiesBusinessKey for GasStammdatenState {
+    fn occupies_business_key(&self) -> bool {
+        !matches!(self, Self::New) && !self.is_terminal()
+    }
+}
+
 impl GasStammdatenState {
     /// Stable label.
     #[must_use]
@@ -865,6 +875,12 @@ pub enum GasStammdatenCommand {
         /// `157` on every Änderung column (UTILMD AHB Gas 1.2 Kap. 5.10–5.11,
         /// Nr 00014 and 00017).
         vertragsbeginn: String,
+        /// The changed Stammdaten. Every data group of an Änderung column is
+        /// Soll `[92]` „Wenn Wert innerhalb SG bzw. Segment geändert wird"
+        /// (UTILMD AHB Gas 1.2 Kap. 5.10.1, S. 97–110; Kap. 5.11.3, S.
+        /// 120–123), so an Änderung carries the groups that changed and is
+        /// refused carrying none.
+        stammdaten: Stammdaten,
     },
     /// Verantwortlicher: the Berechtigter's Antwort arrived.
     ReceiveAntwort {
@@ -1437,6 +1453,7 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                 location_id,
                 aenderungsdatum,
                 vertragsbeginn,
+                stammdaten,
             } => {
                 if !matches!(state, GasStammdatenState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -1452,6 +1469,13 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                          (UTILMD AHB Gas 1.2 Kap. 5.10–5.11, Muss)"
                             .to_owned(),
                     ));
+                }
+                if stammdaten.is_empty() {
+                    return Err(WorkflowError::validation(format!(
+                        "an Änderung {pid} names no changed Stammdatum — each data group is \
+                         sent „Wenn Wert innerhalb SG bzw. Segment geändert wird“ (UTILMD AHB \
+                         Gas 1.2 Kap. 5.10–5.11, Bedingung [92])"
+                    )));
                 }
                 // A bila.rel. change must carry a Monatserster Änderungsdatum.
                 if bilanzierungsrelevant && !is_monatserster(&aenderungsdatum) {
@@ -1470,6 +1494,7 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                         process_date: Some(aenderungsdatum.clone()),
                         vertragsbeginn: Some(vertragsbeginn.clone()),
                         document_code: Some(AENDERUNGSMELDUNGEN.to_owned()),
+                        stammdaten,
                         ..UtilmdPayload::default()
                     },
                 );
@@ -1846,6 +1871,26 @@ mod tests {
         assert_eq!(antwort_codeliste(44160), Some("G_0030"));
     }
 
+    /// An Änderung naming no changed group transmits nothing: every data group
+    /// of its column is sent „Wenn Wert … geändert wird“ (`[92]`).
+    #[test]
+    fn an_aenderung_without_a_changed_group_is_refused() {
+        let err = GeliGasStammdatenaenderungWorkflow::handle(
+            &GasStammdatenState::New,
+            GasStammdatenCommand::SendAenderung {
+                pid: pid(44109),
+                sender: mcod("9800357000011"),
+                receiver: mcod("9800357000004"),
+                location_id: malo("51238696012"),
+                aenderungsdatum: "20260715".to_owned(),
+                vertragsbeginn: "20250101".to_owned(),
+                stammdaten: Stammdaten::default(),
+            },
+        )
+        .expect_err("an empty Änderung is refused");
+        assert!(err.to_string().contains("[92]"), "{err}");
+    }
+
     #[test]
     fn initiator_bila_requires_monatserster() {
         let result = GeliGasStammdatenaenderungWorkflow::handle(
@@ -1857,6 +1902,7 @@ mod tests {
                 location_id: malo("51238696781"),
                 aenderungsdatum: "20260715".to_owned(), // not Monatserster
                 vertragsbeginn: "20250101".to_owned(),
+                stammdaten: gemeinderabatt(),
             },
         );
         assert!(result.is_err());
@@ -1873,6 +1919,7 @@ mod tests {
                 location_id: malo("51238696781"),
                 aenderungsdatum: "20260715".to_owned(),
                 vertragsbeginn: "20250101".to_owned(),
+                stammdaten: gemeinderabatt(),
             },
         )
         .unwrap();

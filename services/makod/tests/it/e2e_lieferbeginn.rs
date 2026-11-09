@@ -108,15 +108,21 @@ impl MockLfn {
             .process
             .run(
                 LfAnmeldungCommand::InitiateAnmeldung {
-                    transaktionsgrund_ergaenzung: None,
+                    transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
                     tranchengroesse: None,
                     pid: Pruefidentifikator::new(pid).unwrap(),
                     sender: MarktpartnerCode::new(LFN_ID),
                     receiver: MarktpartnerCode::new(NB_ID),
                     location_id: MaLo::new(malo_id),
                     process_date: process_date.to_owned(),
-                    transaktionsgrund: None,
+                    transaktionsgrund: Some("E03".to_owned()),
                     bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+                    kundendaten: Some(Box::new(mako_gpke::lf_anmeldung::Kundendaten {
+                        haushaltskunde: true,
+                        enfg_grundlage: "ZG1".to_owned(),
+                        enfg_grund: None,
+                        stammdaten: mako_engine::payload::Stammdaten::default(),
+                    })),
                 },
                 RunOptions::new(),
             )
@@ -331,6 +337,20 @@ impl MockNb {
             "NB Antwort must be addressed to the LFN"
         );
 
+        // The answer's completion moves the NB's own supply projection (marktd):
+        // the same PID and the verdict, never a bare terminal event.
+        let completed = outbox
+            .iter()
+            .find(|e| e.message_type.as_ref() == "ProcessCompleted")
+            .expect("the NB's answer queues its ProcessCompleted");
+        assert_eq!(completed.payload["pid"].as_u64(), Some(expected_pid));
+        assert_eq!(completed.payload["malo_id"].as_str(), Some(MALO_ID));
+        assert_eq!(completed.payload["accepted"].as_bool(), Some(accepted));
+        assert_eq!(
+            completed.payload["outcome"].as_str(),
+            Some(if accepted { "accepted" } else { "rejected" })
+        );
+
         if accepted {
             // Bestätigung also enqueues MSCONS 13015 (Bewegungsdaten-Anforderung).
             let mscons = outbox
@@ -355,8 +375,9 @@ impl MockNb {
         } else {
             assert_eq!(
                 outbox.len(),
-                1,
-                "rejection must enqueue only UTILMD {expected_pid} (no MSCONS)"
+                2,
+                "rejection must enqueue only UTILMD {expected_pid} and its ProcessCompleted \
+                 (no MSCONS)"
             );
         }
 

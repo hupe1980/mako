@@ -11,6 +11,7 @@ and serves the BDEW API-Webdienste Strom. Seven modules register
 ```bash
 just dev makod         # dev/config/makod.toml: in-memory store, permit-all, no AS4 keys
 makod --check --config /etc/makod/makod.toml   # every startup validation, then exit
+makod --check-config --config /etc/makod/makod.toml   # every configuration finding with path and source (--json: the GET /admin/einrichtung body)
 ```
 
 `makod` refuses to start without durability (`[storage] data_dir`, or

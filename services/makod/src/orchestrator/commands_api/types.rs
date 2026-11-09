@@ -47,9 +47,9 @@ pub struct CommandsApiState {
     ///
     /// Written by `MaloIdentSender` after a positive callback is delivered.
     /// The ERP receives `MaloIdentified` via the ERP webhook and then calls
-    /// `maloid.lieferbeginn.fortsetzen` with only the `tx_id` and
-    /// `lieferbeginn_datum` — `makod` resolves the `malo_id` and `nb_mp_id`
-    /// from this cache.
+    /// `maloid.lieferbeginn.fortsetzen` with the `tx_id`, the
+    /// `lieferbeginn_datum` and the 55001's contract facts — `makod` resolves
+    /// the `malo_id` and `nb_mp_id` from this cache.
     pub maloid_result_cache: MaloIdentResultCache,
     /// Number of events between automatic process snapshots.
     ///
@@ -100,11 +100,19 @@ pub struct ErpCommand {
     /// Marktlokations-ID) plus the process-specific date.  The engine
     /// resolves all partner MP-IDs (NB, MSB) and MeLo data from the MaLo cache.
     ///
-    /// Example for `gpke.lieferbeginn.anmelden`:
+    /// Example for `gpke.lieferbeginn.anmelden`
+    /// (`mako_markt::commands::GpkeLieferbeginnAnmelden`, every field Muss on
+    /// the 55001):
     /// ```json
     /// {
-    ///   "malo_id":            "10001234558",
-    ///   "lieferbeginn_datum": "2026-10-01"
+    ///   "malo_id":            "51238696012",
+    ///   "lieferbeginn_datum": "2026-10-01",
+    ///   "transaktionsgrund":  "E03",
+    ///   "bilanzkreis":        "11XBK-LF-------9",
+    ///   "haushaltskunde":     true,
+    ///   "enfg_grundlage":     "ZG1",
+    ///   "kunde": { "nachname": "Mustermann", "anschrift": { "strasse": "Hauptstraße",
+    ///              "hausnummer": "1", "postleitzahl": "50667", "ort": "Köln", "landescode": "DE" } }
     /// }
     /// ```
     ///
@@ -115,7 +123,12 @@ pub struct ErpCommand {
     ///
     /// **Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or
     /// `message_ref` — these are engine-owned and will be ignored or rejected.
-    #[schema(value_type = Object, example = json!({"malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01"}))]
+    #[schema(value_type = Object, example = json!({
+        "malo_id": "51238696012", "lieferbeginn_datum": "2026-10-01", "transaktionsgrund": "E03",
+        "bilanzkreis": "11XBK-LF-------9", "haushaltskunde": true, "enfg_grundlage": "ZG1",
+        "kunde": {"nachname": "Mustermann", "anschrift": {"strasse": "Hauptstraße",
+            "hausnummer": "1", "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"}}
+    }))]
     pub payload: serde_json::Value,
 }
 
@@ -231,6 +244,10 @@ pub enum DispatchError {
         /// The Rechnungsnummer.
         invoice_ref: String,
     },
+    /// A rehearsal reached the door's pre-send check and stopped there with
+    /// the outbox in hand (`probe::rehearse`). Only a rehearsal scope raises
+    /// it; a door outside one never sees it.
+    Geprobt,
 }
 
 impl From<mako_engine::error::EngineError> for DispatchError {

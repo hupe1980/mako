@@ -8,9 +8,12 @@ import { call } from "../data/mcp";
 import { FristUhr } from "../design/FristUhr";
 import { Notice } from "../design/Panel";
 import { antwortTeile } from "../format/antwort";
+import { formatCount } from "../format/count";
 import { epochMs, formatInstant } from "../format/date";
+import { useT } from "../i18n";
 
 function Message({ entry }: { entry: HistoryEntry }) {
+  const t = useT();
   const eingang = entry.richtung === "eingang";
   const antwort = antwortTeile(entry);
   return (
@@ -23,7 +26,7 @@ function Message({ entry }: { entry: HistoryEntry }) {
     >
       <p className="m-0 flex items-baseline gap-2 text-body">
         <span className={`font-semibold ${eingang ? "text-text" : "text-accent"}`}>
-          {eingang ? "Eingang" : "Ausgang"}
+          {eingang ? t.verlauf.eingang : t.verlauf.ausgang}
         </span>
         {entry.pid && <span className="font-mono text-text">PID {entry.pid}</span>}
       </p>
@@ -35,7 +38,7 @@ function Message({ entry }: { entry: HistoryEntry }) {
         </p>
       )}
       <p className="m-0 mt-0.5 text-caption text-text-2">
-        {entry.recorded_at ? `${formatInstant(entry.recorded_at)} Uhr` : "ohne Zeitpunkt"}
+        {entry.recorded_at ? t.zeit.uhr(formatInstant(entry.recorded_at)) : t.verlauf.ohneZeitpunkt}
         {entry.message_ref && (
           <>
             {" · "}
@@ -74,10 +77,11 @@ function zeilen(eintraege: HistoryEntry[]): (HistoryEntry | HistoryEntry[])[] {
 }
 
 function Schritte({ steps }: { steps: HistoryEntry[] }) {
+  const t = useT();
   return (
     <details className="group text-caption text-text-2">
       <summary className="focus-ring cursor-default list-none rounded-[6px] [&::-webkit-details-marker]:hidden">
-        {steps.length === 1 ? "1 interner Schritt" : `${steps.length} interne Schritte`}
+        {t.verlauf.schritte(steps.length, formatCount(steps.length))}
       </summary>
       <ul className="m-0 mt-1 list-none p-0">
         {steps.map((s) => (
@@ -114,6 +118,7 @@ export function Verlauf({
   processId: string;
   deadlines: DeadlineView[];
 }) {
+  const t = useT();
   const { rolle } = useRolle();
   const history = useQuery({
     queryKey: [rolle, "makod", "get_process_history", processId],
@@ -132,13 +137,13 @@ export function Verlauf({
     >
       <div className="mb-3 flex items-baseline gap-3">
         <h3 id={`verlauf-${processId}`} className="m-0 text-callout font-semibold">
-          Verlauf
+          {t.verlauf.titel}
         </h3>
         <span className="flex-1" />
-        <span className="text-caption text-text-2">← Eingang · Ausgang →</span>
+        <span className="text-caption text-text-2">{t.verlauf.legende}</span>
       </div>
       {history.isError && (
-        <Notice tone="failure" title="Der Verlauf ließ sich nicht lesen">
+        <Notice tone="failure" title={t.verlauf.fehler}>
           {history.error.message}
         </Notice>
       )}

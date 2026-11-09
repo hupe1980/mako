@@ -15,6 +15,10 @@
 //   streamed step of the trail on screen: ≤ 1000 ms.
 // - **Aktionen** — from choosing the entry ⌘K found to its actions on
 //   screen: ≤ 100 ms.
+// - **Erste Befunde der Einrichtung** — from the navigation to /einrichtung
+//   to the checklist's items on screen: ≤ 1000 ms.
+// - **Urteil des Probelaufs** — from the press on „Probelauf starten" to
+//   makod's verdict on screen: ≤ 3000 ms.
 // - **Entscheidung per Tastatur** — the Interaction to Next Paint of a
 //   decision taken from the keyboard, in its view (R, then ↵ on the send) and
 //   in ⌘K (↵ in its parameters): ≤ 100 ms. INP is read from the browser's
@@ -99,6 +103,25 @@ async function markieren(page: Page, art: "keydown" | "pointerdown", selektor: s
   );
 }
 
+// In the page, before any script of it runs: the frame in which `selektor`
+// first stands on screen, measured from the navigation's start.
+async function abNavigation(page: Page, selektor: string) {
+  await page.addInitScript((selektor) => {
+    const w = window as unknown as { __mark: { t0?: number; t1?: number } };
+    w.__mark = { t0: 0 };
+    const obs = new MutationObserver(() => {
+      if (!document.querySelector(selektor)) return;
+      obs.disconnect();
+      requestAnimationFrame(() => {
+        w.__mark.t1 = performance.now();
+      });
+    });
+    document.addEventListener("DOMContentLoaded", () =>
+      obs.observe(document.body, { childList: true, subtree: true }),
+    );
+  }, selektor);
+}
+
 async function gemessen(page: Page): Promise<number> {
   await page.waitForFunction(
     () => (window as unknown as { __mark: { t1?: number } }).__mark.t1 !== undefined,
@@ -179,6 +202,29 @@ const aktionenSichtbar: Budget = {
     await paletteAufFreigabe(page, base);
     await markieren(page, "pointerdown", '[role="listbox"][aria-label="Aktionen"]');
     await page.getByRole("menuitem", { name: /Freigabe/ }).click();
+    return gemessen(page);
+  },
+};
+
+const ersteBefunde: Budget = {
+  name: "Erste Befunde der Einrichtung sichtbar",
+  grenzeMs: 1000,
+  async messen(page, base) {
+    await abNavigation(page, '[aria-label="Punkte"] li');
+    await page.goto(`${base}einrichtung`);
+    return gemessen(page);
+  },
+};
+
+const probeUrteil: Budget = {
+  name: "Urteil des Probelaufs sichtbar",
+  grenzeMs: 3000,
+  async messen(page, base) {
+    await page.goto(`${base}einrichtung`);
+    const start = page.getByRole("button", { name: /Probelauf starten/ });
+    await start.waitFor();
+    await markieren(page, "pointerdown", "[data-urteil]");
+    await start.click();
     return gemessen(page);
   },
 };
@@ -269,6 +315,8 @@ try {
   for (const budget of [
     ersterSchritt,
     aktionenSichtbar,
+    ersteBefunde,
+    probeUrteil,
     entscheidungAnsicht,
     entscheidungPalette,
   ]) {

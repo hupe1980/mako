@@ -73,7 +73,7 @@ pub async fn authorize(
 ) -> ApiResult<PortalAuthCtx> {
     let Some(vertragd_url) = cfg.vertragd_url.as_deref() else {
         // Reachable only with `allow_insecure_no_auth`; startup refuses
-        // otherwise (see `server::build`). Logged per request rather than once,
+        // otherwise (see `Portald::validate`). Logged per request rather than once,
         // because the interesting fact is *which* data went out unauthorised.
         tracing::warn!(
             malo_id,

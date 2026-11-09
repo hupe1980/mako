@@ -11,6 +11,7 @@ import {
   vorschlagText,
 } from "../format/bilanz";
 import { formatCount } from "../format/count";
+import { useT } from "../i18n";
 import { DESK_ASSISTANT, useKatalog } from "./Bilanz";
 import { useDeadLetters } from "./DeadLetters";
 import { Hinweise } from "./Hinweise";
@@ -38,6 +39,7 @@ export function tileState<T>(
 }
 
 function FristenTile() {
+  const t = useT();
   const { rolle } = useRolle();
   const overdue = useQuery({
     queryKey: [rolle, "processd", "list_overdue_processes"],
@@ -48,7 +50,7 @@ function FristenTile() {
   // non-empty answer is the service's own breach — not a threshold set here.
   return (
     <Tile
-      label="Fristen überschritten"
+      label={t.ueberblick.fristen}
       source={DIENST.processd}
       href="/fristen"
       state={tileState(overdue, "processd", (d) => ({
@@ -61,6 +63,7 @@ function FristenTile() {
 }
 
 function AnmeldungenTile() {
+  const t = useT();
   const { rolle } = useRolle();
   const anmeldungen = useQuery({
     queryKey: [rolle, "vertragd", "list_anmeldungen"],
@@ -69,7 +72,7 @@ function AnmeldungenTile() {
   });
   return (
     <Tile
-      label="Anmeldungen offen"
+      label={t.ueberblick.anmeldungen}
       source={DIENST.vertragd}
       href="/heute"
       state={tileState(anmeldungen, "vertragd", (d) => ({ n: d.gesamt }))}
@@ -78,12 +81,13 @@ function AnmeldungenTile() {
 }
 
 function DeadLettersTile() {
+  const t = useT();
   const q = useDeadLetters();
   // `gesamt` is every dead letter the service holds, not the page it lists.
   // It marks no breach, so the tile stays uncoloured.
   return (
     <Tile
-      label="Dead Letters"
+      label={t.ueberblick.deadLetters}
       source={DIENST.makod}
       href="/dead-letters"
       state={tileState(q, "makod", (d) => ({ n: d.gesamt }))}
@@ -97,6 +101,7 @@ function DeadLettersTile() {
 const SEITE = 50;
 
 function PruefpostenTile() {
+  const t = useT();
   const { rolle } = useRolle();
   const q = useQuery({
     queryKey: [rolle, "billingd", "list_review_queue"],
@@ -105,7 +110,7 @@ function PruefpostenTile() {
   });
   return (
     <Tile
-      label="Rechnungsprüfung"
+      label={t.ueberblick.pruefung}
       source={DIENST.billingd}
       href="/heute"
       state={tileState(q, "billingd", (d) => ({ n: d.count, atLeast: d.saturated }))}
@@ -114,6 +119,7 @@ function PruefpostenTile() {
 }
 
 function GeparktTile() {
+  const t = useT();
   const { rolle } = useRolle();
   const q = useQuery({
     queryKey: [rolle, "accountingd", "list_parked_bookings"],
@@ -125,7 +131,7 @@ function GeparktTile() {
   // the ledger does not carry yet, so any is a breach.
   return (
     <Tile
-      label="Geparkte Buchungen"
+      label={t.ueberblick.geparkt}
       source={DIENST.accountingd}
       href="/heute"
       state={tileState(q, "accountingd", (d) => ({ n: d.count, breach: d.count > 0 }))}
@@ -134,6 +140,7 @@ function GeparktTile() {
 }
 
 function DisputeTile() {
+  const t = useT();
   const { rolle } = useRolle();
   const q = useQuery({
     queryKey: [rolle, "invoicd", "list_disputes"],
@@ -142,7 +149,7 @@ function DisputeTile() {
   });
   return (
     <Tile
-      label="Rechnungsdispute"
+      label={t.ueberblick.dispute}
       source={DIENST.invoicd}
       href="/heute"
       state={tileState(q, "invoicd", (d) => ({ n: d.count, atLeast: d.saturated }))}
@@ -151,6 +158,7 @@ function DisputeTile() {
 }
 
 function AbleseauftraegeTile() {
+  const t = useT();
   const { rolle } = useRolle();
   const q = useQuery({
     queryKey: [rolle, "edmd", "list_overdue_reading_orders"],
@@ -161,7 +169,7 @@ function AbleseauftraegeTile() {
   // the service's own breach.
   return (
     <Tile
-      label="Ableseaufträge überfällig"
+      label={t.ueberblick.ablesung}
       source={DIENST.edmd}
       href="/heute"
       state={tileState(q, "edmd", (d) => ({
@@ -179,30 +187,31 @@ function AbleseauftraegeTile() {
  * below — and what became of its proposals. It opens the Beipackzettel.
  */
 function AssistentTile() {
+  const t = useT();
   const q = useKatalog();
   const b = q.data?.find((f) => f.name === DESK_ASSISTANT)?.bilanz;
   const state = ((): TileState => {
     if (q.isError) return { kind: "failed", service: DIENST.agentd };
     if (!q.data) return { kind: "loading" };
-    if (!b) return { kind: "wert", zeilen: ["Nicht aktiviert"] };
-    const fenster = `in ${formatCount(b.tage)} Tagen`;
+    if (!b) return { kind: "wert", zeilen: [t.ueberblick.nichtAktiviert] };
+    const fenster = t.ueberblick.fenster(formatCount(b.tage));
     const n = b.hilfreich.ja + b.hilfreich.nein;
     const vorschlag = vorschlagText(b.vorschlag);
     return n >= MINDEST_URTEILE
       ? {
           kind: "wert",
           wert: formatAnteil(b.hilfreich.ja, n),
-          zeilen: [`hilfreich · ${formatBewertungen(n)} ${fenster}`, vorschlag],
+          zeilen: [t.ueberblick.hilfreich(formatBewertungen(n), fenster), vorschlag],
         }
       : { kind: "wert", zeilen: [`${hilfreichText(b.hilfreich)} ${fenster}`, vorschlag] };
   })();
   return (
     <Tile
-      label="Assistent"
+      label={t.ueberblick.assistent}
       source={DIENST.agentd}
       href="/assistent"
       state={state}
-      ziel="Beipackzettel öffnen"
+      ziel={t.ueberblick.beipackzettel}
     />
   );
 }
@@ -212,14 +221,14 @@ function AssistentTile() {
  * service's own figure, each opening the list it counts.
  */
 export function UeberblickView() {
+  const t = useT();
   const { rolle } = useRolle();
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6 px-8 py-10">
+    <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
       <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">Überblick</h1>
+        <h1 className="m-0 text-large font-bold tracking-tight">{t.ueberblick.titel}</h1>
         <p className="m-0 mt-1 text-callout text-text-2">
-          {ROLLEN[rolle].label} — jede Zahl so, wie ihr Dienst sie meldet; ein Klick öffnet die
-          Liste.
+          {t.ueberblick.untertitel(ROLLEN[rolle].label)}
         </p>
       </header>
       <Hinweise />

@@ -34,6 +34,26 @@ fn a_productd_behg_regime_key_is_refused() {
     );
 }
 
+/// A config with two defects reports both, each at its path.
+#[test]
+fn two_defects_are_both_reported() {
+    use mako_service::Daemon as _;
+    let cfg: productd::config::ProductdConfig = toml::from_str(
+        r#"
+        tenant = "9900357000004"
+        behg_regime = "korridor"
+        [database]
+        url = "env:DATABASE_URL"
+    "#,
+    )
+    .expect("parses");
+    let pfade: Vec<String> = productd::Productd::validate(&cfg)
+        .into_iter()
+        .map(|b| b.pfad)
+        .collect();
+    assert_eq!(pfade, ["behg_regime", "oidc"]);
+}
+
 /// A billingd answering `GET /api/v1/policy` with its policy report, the shape
 /// `mako_service::policy::router` serves.
 async fn billingd_stub(regime: &'static str) -> String {

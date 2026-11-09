@@ -755,3 +755,85 @@ fn the_removed_lenient_receipts_switch_is_refused() {
     assert!(!ok);
     assert!(out.contains("receipt-without-non-repudiation"), "{out}");
 }
+
+/// `--check-config` reports every finding, not the first: a Gas role under a
+/// BDEW-Codenummer and a `[marktd] url` without its webhook are two findings,
+/// each at its path, in the JSON `GET /admin/einrichtung` serves — and the
+/// exit is non-zero. It opens no store, so it needs no `--allow-volatile`.
+#[test]
+fn check_config_reports_both_defects_and_exits_nonzero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = write_config(
+        dir.path(),
+        r#"
+[deployment]
+rollen = ["nb-gas"]
+
+[[party]]
+mp_id = "9900001000001"
+roles = ["GNB"]
+primary = true
+
+[marktd]
+url = "http://marktd:8180"
+api_key = "k"
+"#,
+    );
+    let out = makod()
+        .args(["--config"])
+        .arg(&cfg)
+        .args(&STARTABLE[1..])
+        .args(["--check-config", "--json"])
+        .output()
+        .expect("spawn makod");
+    assert!(!out.status.success(), "a blocking finding exits non-zero");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "stdout is the report ({e}):\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    assert_eq!(report["dienst"], "makod");
+    assert_eq!(report["bereit"], false);
+    let pfade: Vec<&str> = report["befunde"]
+        .as_array()
+        .expect("befunde")
+        .iter()
+        .filter_map(|b| b["pfad"].as_str())
+        .collect();
+    assert!(pfade.contains(&"party[0].mp_id"), "{pfade:?}");
+    assert!(pfade.contains(&"marktd.webhook_url"), "{pfade:?}");
+}
+
+/// A startable config passes `--check-config` with exit 0 and a ready report.
+#[test]
+fn check_config_exits_zero_on_a_startable_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = write_config(
+        dir.path(),
+        r#"
+[deployment]
+rollen = ["nb-strom"]
+
+[[party]]
+mp_id = "9900001000001"
+roles = ["NB"]
+primary = true
+"#,
+    );
+    let out = makod()
+        .args(["--config"])
+        .arg(&cfg)
+        .args(STARTABLE)
+        .arg("--check-config")
+        .output()
+        .expect("spawn makod");
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("makod"));
+}

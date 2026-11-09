@@ -11,6 +11,7 @@ mod eog_answer_contract;
 mod eog_command_contract;
 mod esa_pid_contract;
 mod former_actions;
+mod mcp_round_trips;
 mod mcp_route_contract;
 mod obs;
 mod pid_contract;

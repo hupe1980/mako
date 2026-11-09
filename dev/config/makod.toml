@@ -38,3 +38,55 @@ webhook_url = "http://127.0.0.1:8180/api/v1/events"
 # delivered, and the AS4 listener does not start.
 [as4]
 allow_no_signing = true
+
+# The deployment's other daemons, asked by the Einrichtung checklist
+# (`GET /admin/einrichtung/deployment`, the Desk's Einrichtung view). Their dev
+# configs run without authentication, so no key is named. One that is not
+# running is shown unreachable — unknown, not failing.
+[[einrichtung.dienst]]
+name = "marktd"
+url  = "http://127.0.0.1:8180"
+
+[[einrichtung.dienst]]
+name = "invoicd"
+url  = "http://127.0.0.1:8280"
+
+[[einrichtung.dienst]]
+name = "edmd"
+url  = "http://127.0.0.1:8380"
+
+[[einrichtung.dienst]]
+name = "processd"
+url  = "http://127.0.0.1:8580"
+
+[[einrichtung.dienst]]
+name = "netzbilanzd"
+url  = "http://127.0.0.1:8680"
+
+[[einrichtung.dienst]]
+name = "productd"
+url  = "http://127.0.0.1:9080"
+
+[[einrichtung.dienst]]
+name = "einsd"
+url  = "http://127.0.0.1:9180"
+
+[[einrichtung.dienst]]
+name = "billingd"
+url  = "http://127.0.0.1:9280"
+
+[[einrichtung.dienst]]
+name = "accountingd"
+url  = "http://127.0.0.1:9380"
+
+[[einrichtung.dienst]]
+name = "agentd"
+url  = "http://127.0.0.1:9580"
+
+[[einrichtung.dienst]]
+name = "vertragd"
+url  = "http://127.0.0.1:9780"
+
+[[einrichtung.dienst]]
+name = "outputd"
+url  = "http://127.0.0.1:9880"

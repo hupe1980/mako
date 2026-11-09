@@ -75,11 +75,7 @@ async fn a_failed_key_write_fails_the_spawn_and_the_reissue_sends_one_utilmd() {
         .upsert(&state.tenant_id.to_string(), &malo_record())
         .await
         .expect("seed MaLo cache");
-    let payload = serde_json::json!({
-        "malo_id": MALO_ID,
-        "lieferbeginn_datum": "2026-10-01",
-        "bilanzkreis": "11XBK-LF-------9",
-    });
+    let payload = anmeldung_55001();
 
     let faulted = KEY_REGISTRATION_FAULT
         .scope(
@@ -122,11 +118,7 @@ async fn the_command_door_waits_for_the_business_key_lock() {
         .upsert(&state.tenant_id.to_string(), &malo_record())
         .await
         .expect("seed MaLo cache");
-    let payload = serde_json::json!({
-        "malo_id": MALO_ID,
-        "lieferbeginn_datum": "2026-10-01",
-        "bilanzkreis": "11XBK-LF-------9",
-    });
+    let payload = anmeldung_55001();
 
     let held = crate::ingest_dispatcher::business_key_locks()
         .acquire(MALO_ID)
@@ -153,4 +145,24 @@ async fn the_command_door_waits_for_the_business_key_lock() {
         .expect("join")
         .expect("the Anmeldung is accepted");
     assert!(matches!(outcome, DispatchOutcome::Spawned { .. }));
+}
+
+/// A 55001 body with every fact its column makes Muss (UTILMD AHB Strom 2.2
+/// Kap. 8.2).
+fn anmeldung_55001() -> serde_json::Value {
+    serde_json::json!({
+        "malo_id": MALO_ID,
+        "lieferbeginn_datum": "2026-10-01",
+        "transaktionsgrund": "E03",
+        "bilanzkreis": "11XBK-LF-------9",
+        "haushaltskunde": true,
+        "enfg_grundlage": "ZG1",
+        "kunde": {
+            "nachname": "Mustermann",
+            "anschrift": {
+                "strasse": "Hauptstraße", "hausnummer": "1",
+                "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+            }
+        },
+    })
 }

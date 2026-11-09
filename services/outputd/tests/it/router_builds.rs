@@ -13,3 +13,26 @@ async fn the_router_builds_as_the_runner_mounts_it() {
         .await
         .expect("the router builds");
 }
+
+/// A config with two defects reports both: no `[oidc]` and a relay URL
+/// without its credential are each a finding at its own path.
+#[test]
+fn a_config_with_two_defects_reports_both() {
+    use mako_service::Daemon as _;
+    let mut cfg: outputd::config::OutputdConfig =
+        toml::from_str(include_str!("../../../../demos/o2c/outputd.toml"))
+            .expect("the demo configuration parses");
+    cfg.allow_insecure_no_auth = false;
+    cfg.oidc = None;
+    cfg.delivery.email_relay_url = Some("https://relay.example".to_owned());
+    cfg.delivery.email_relay_api_key = None;
+    let pfade: Vec<String> = outputd::Outputd::validate(&cfg)
+        .into_iter()
+        .map(|b| b.pfad)
+        .collect();
+    assert!(pfade.contains(&"oidc".to_owned()), "{pfade:?}");
+    assert!(
+        pfade.contains(&"delivery.email_relay_api_key".to_owned()),
+        "{pfade:?}"
+    );
+}

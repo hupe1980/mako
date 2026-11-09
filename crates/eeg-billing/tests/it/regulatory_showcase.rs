@@ -5284,6 +5284,59 @@ fn a_reduction_in_a_period_with_no_tabled_fassung_is_refused() {
     assert_eq!(out.settlement_eur, None);
 }
 
+/// A recorded short-term extension of the EEG 2023 approval keeps the periods
+/// it covers on the EEG 2023: January 2027 is open and a § 53c reduction is
+/// labelled „EEG 2023". An EEG 2027 Genehmigung covering the same month is
+/// never read as that extension — it opens the period under a Fassung not yet
+/// tabled, so the reduction is refused rather than read from the EEG 2023.
+#[test]
+fn an_eeg_2023_extension_keeps_january_2027_on_the_eeg_2023() {
+    let genehmigung = |regelung| eeg_billing::Beihilfegenehmigung {
+        regelung,
+        eingang: date!(2026 - 12 - 18),
+        gilt_ab: date!(2027 - 01 - 01),
+        gilt_bis: Some(date!(2027 - 06 - 30)),
+        bundesanzeiger: "BAnz AT (Fixture)".to_owned(),
+    };
+    let input = |monat: time::Date, regelung| SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
+        einspeisemenge_kwh: Some(d("1000")),
+        billing_date: Some(monat),
+        aw_reductions: AwReductionContext {
+            stromsteuerbefreiung_ct_kwh: Some(d("2.05")),
+            ..AwReductionContext::default()
+        },
+        beihilfegenehmigungen: vec![genehmigung(regelung)],
+        ..SettleInput::default()
+    };
+    let verlaengerung = eeg_billing::Beihilferegelung::Eeg2023Verlaengerung;
+
+    let out = calculate_settlement(&input(date!(2027 - 01 - 01), verlaengerung));
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    assert!(
+        out.positions
+            .iter()
+            .any(|p| p.legal_basis == "§53c EEG 2023"),
+        "{:?}",
+        out.positions
+    );
+    // (8,11 − 2,05) ct × 1 000 kWh = 60,60 EUR.
+    assert_eq!(out.settlement_eur, Some(d("60.60")));
+
+    // The extension ends where it says.
+    let out = calculate_settlement(&input(date!(2027 - 07 - 01), verlaengerung));
+    assert_eq!(out.status, SettlementStatus::FassungNichtTabelliert);
+
+    let out = calculate_settlement(&input(
+        date!(2027 - 01 - 01),
+        eeg_billing::Beihilferegelung::Eeg2027,
+    ));
+    assert_eq!(out.status, SettlementStatus::FassungNichtTabelliert);
+    assert_eq!(out.settlement_eur, None);
+}
+
 // ── § 101 Abs. 1 EEG 2023 — the § 100 Abs. 47 opt-in waits on its approval ──
 
 /// § 101 Abs. 1 S. 1 EEG 2023 reserves „§ 100 Absatz 35 und 47" until „der

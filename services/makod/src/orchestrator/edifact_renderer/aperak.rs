@@ -35,11 +35,7 @@ pub(super) fn render_aperak(
         .as_deref()
         .unwrap_or(msg.recipient.as_ref());
 
-    let release = active_release(MessageType::Aperak, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: "APERAK".into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Aperak, ReleaseTrack::Short)?;
 
     // `SG2` (`RFF+ACE` + `DTM+171`, and `RFF+AGO` on an Anerkennungsmeldung) is
     // **Muss** in both APERAK Anwendungsfälle; `orig_message_ref` is a required

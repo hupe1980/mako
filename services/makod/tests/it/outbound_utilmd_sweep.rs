@@ -2,6 +2,12 @@
 //! Prüfschablone accepts — the check the pre-send gate
 //! (`transport::as4_sender`) runs before any delivery.
 //!
+//! An answer goes out in the release of the process it answers, which keeps
+//! the format version it started under until it completes (AGENTS.md
+//! *Format-version coexistence*). So each case is swept once per process
+//! start in [`STARTS`] — one before the 01.10.2026 cutover, one after — and
+//! validated against that process's own release, not the one in force today.
+//!
 //! Each case drives its workflow as production does — the inbound Anfrage, then
 //! the answer command — and hands the outbox entry the answer writes to the
 //! renderer, the parser and the AHB validation. A PID enters [`SWEEP`] once it
@@ -15,6 +21,7 @@
 
 use mako_engine::outbox::PendingOutbox;
 use mako_engine::types::{MaLo, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator};
+use mako_engine::version::FormatVersion;
 use mako_engine::workflow::Workflow;
 use mako_gpke::{
     AnkuendigungZuordnungLfCommand, GpkeAnkuendigungZuordnungLfWorkflow, GpkeNeuanlageWorkflow,
@@ -43,15 +50,36 @@ const SWEEP: &[(u32, Antwort)] = &[
     (55609, || zuordnung_lf(ablehnung("E_0603"))),
 ];
 
+/// The days the swept processes start on: under fv20251001 and under
+/// fv20261001, the two UTILMD Strom releases in force at once.
+const STARTS: [time::Date; 2] = [
+    time::macros::date!(2026 - 09 - 15),
+    time::macros::date!(2026 - 10 - 15),
+];
+
+/// The format version a process started on `day` runs under — the newest in
+/// force that day, which is what makod stamps on its `WorkflowId`.
+fn started_on(day: time::Date) -> FormatVersion {
+    edi_energy::registry::ReleaseRegistry::global()
+        .format_versions_in_force_on(day)
+        .into_iter()
+        .filter_map(|s| FormatVersion::parse(&s).ok())
+        .max()
+        .expect("a format version in force")
+}
+
 #[test]
 fn every_swept_answer_passes_its_profile() {
     let mut failures = Vec::new();
-    for (expected, build) in SWEEP {
-        let pending = build();
-        assert_eq!(pending.payload["pid"], *expected, "{:#}", pending.payload);
-        let found = findings(&pending);
-        if !found.is_empty() {
-            failures.push(format!("{expected}:\n  {}", found.join("\n  ")));
+    for start in STARTS {
+        let fv = started_on(start);
+        for (expected, build) in SWEEP {
+            let pending = build();
+            assert_eq!(pending.payload["pid"], *expected, "{:#}", pending.payload);
+            let (_, found) = findings(&pending, &fv);
+            if !found.is_empty() {
+                failures.push(format!("{expected} under {fv}:\n  {}", found.join("\n  ")));
+            }
         }
     }
     assert!(
@@ -61,6 +89,29 @@ fn every_swept_answer_passes_its_profile() {
     );
 }
 
+/// A 55052 answering a process started on 15.09.2026 goes out in that
+/// process's release — the UTILMD Strom release in force on its format
+/// version's Anwendungszeitpunkt, fv20251001 — and passes that profile; it is
+/// not rendered in the fv20261001 release in force on the day it is sent.
+#[test]
+fn an_answer_is_validated_against_the_release_of_its_process() {
+    let fv = started_on(time::macros::date!(2026 - 09 - 15));
+    let (release, found) = findings(&bestaetigung_ende_msb(), &fv);
+    let fv20251001 = edi_energy::registry::ReleaseRegistry::global()
+        .all_profiles()
+        .iter()
+        .find(|p| {
+            p.message_type() == edi_energy::MessageType::Utilmd
+                && p.release().track() == edi_energy::ReleaseTrack::Strom
+                && p.valid_from() == Some(time::macros::date!(2025 - 10 - 01))
+        })
+        .expect("the fv20251001 UTILMD Strom profile")
+        .release()
+        .clone();
+    assert_eq!(release, fv20251001, "{fv}");
+    assert!(found.is_empty(), "55052 under {fv}: {found:#?}");
+}
+
 /// The Gas Bestätigung EoG, rendered from marktd's record and the LF's own
 /// facts, passes its profile.
 #[tokio::test]
@@ -68,7 +119,7 @@ async fn the_gas_bestaetigung_eog_passes_its_profile() {
     let om = crate::e2e_gnb_lf_combined_gas::rendered_44014().await;
     let pending = PendingOutbox::new(&*om.message_type, &*om.recipient, om.payload.clone());
     assert_eq!(pending.payload["pid"], 44014);
-    let found = findings(&pending);
+    let (_, found) = findings(&pending, &started_on(mako_fristen::heute()));
     assert!(found.is_empty(), "44014: {found:#?}");
 }
 
@@ -79,7 +130,7 @@ async fn the_strom_bestaetigung_eog_passes_its_profile() {
     let om = crate::e2e_nb_lf_combined_strom::rendered_55014().await;
     let pending = PendingOutbox::new(&*om.message_type, &*om.recipient, om.payload.clone());
     assert_eq!(pending.payload["pid"], 55014);
-    let found = findings(&pending);
+    let (_, found) = findings(&pending, &started_on(mako_fristen::heute()));
     assert!(found.is_empty(), "55014: {found:#?}");
     let wire = String::from_utf8(
         makod::edifact_renderer::render_to_wire_bytes(&om, &registry())
@@ -125,21 +176,29 @@ fn registry() -> makod::party_registry::MpIdRegistry {
     .expect("registry")
 }
 
-/// What the pre-send gate says about `pending`: empty when it passes.
-fn findings(pending: &PendingOutbox) -> Vec<String> {
+/// The release `pending` renders in when its process runs under `fv`, and
+/// what that release's profile says about it: empty when it passes.
+fn findings(pending: &PendingOutbox, fv: &FormatVersion) -> (edi_energy::Release, Vec<String>) {
     use edi_energy::EdiEnergyMessage as _;
-    let om = crate::support::outbox_message(
+    let mut om = crate::support::outbox_message(
         &pending.message_type,
         &pending.recipient,
         pending.payload.clone(),
     );
+    om.format_version = Some(fv.clone());
     let wire = match makod::edifact_renderer::render_to_wire_bytes(&om, &registry()) {
         Ok(w) => w,
-        Err(e) => return vec![format!("does not render: {e:?}")],
+        Err(e) => {
+            return (
+                edi_energy::Release::new("-"),
+                vec![format!("does not render: {e:?}")],
+            );
+        }
     };
     let msg = edi_energy::parse(&wire.bytes).expect("a rendered UTILMD parses");
+    let release = msg.detect_release().expect("a release").clone();
     let mut found: Vec<String> = msg
-        .validate_on_date(mako_fristen::heute())
+        .validate_on_date(fv.date().expect("an FV<YYYY>-<MM>-<DD>"))
         .expect("the AHB validation runs")
         .errors()
         .iter()
@@ -148,7 +207,7 @@ fn findings(pending: &PendingOutbox) -> Vec<String> {
     if !found.is_empty() {
         found.push(String::from_utf8_lossy(&wire.bytes).replace('\'', "'\n    "));
     }
-    found
+    (release, found)
 }
 
 fn fold<W: Workflow>(state: W::State, events: &[W::Event]) -> W::State {

@@ -387,15 +387,21 @@ fn lf_anmeldung_survives_every_interleaving() {
         name: "GPKE 55001 (NB answers the LF)",
         steps: vec![
             C::InitiateAnmeldung {
-                transaktionsgrund_ergaenzung: None,
+                transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
                 tranchengroesse: None,
                 pid: pid(55_001),
                 sender: mp("4012345000023"),
                 receiver: mp("9900357000004"),
                 location_id: MaLo::new("51238696012"),
                 process_date: "2026-04-01".to_owned(),
-                transaktionsgrund: None,
+                transaktionsgrund: Some("E03".to_owned()),
                 bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+                kundendaten: Some(Box::new(mako_gpke::lf_anmeldung::Kundendaten {
+                    haushaltskunde: true,
+                    enfg_grundlage: "ZG1".to_owned(),
+                    enfg_grund: None,
+                    stammdaten: mako_engine::payload::Stammdaten::default(),
+                })),
             },
             C::HandleAntwort {
                 response_pid: pid(55_003),

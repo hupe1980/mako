@@ -5,6 +5,7 @@
 mod cedar_actions;
 mod dev_config;
 mod dtm_qualifiers;
+mod mcp_round_trips;
 mod receipts_pg;
 mod receiving_has_no_grace;
 mod startup;

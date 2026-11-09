@@ -3,8 +3,10 @@ import { DIENST, nichtErreichbar } from "../app/dienste";
 import { useRolle } from "../app/rollen";
 import { call, ServiceUnavailable } from "../data/mcp";
 import { EmptyState, Notice, Panel } from "../design/Panel";
+import { type Spalte, Table } from "../design/Table";
 import { formatCount } from "../format/count";
 import { formatInstant } from "../format/date";
+import { useT } from "../i18n";
 
 /** The read the Dead-Letters tile and this list share — one request for both. */
 export function useDeadLetters() {
@@ -16,31 +18,54 @@ export function useDeadLetters() {
   });
 }
 
+/** One dead letter of the page; the page is ordered by the service and replaced whole. */
+type Zeile = NonNullable<ReturnType<typeof useDeadLetters>["data"]>["dead_letters"][number];
+
 /**
  * Dead Letters: the messages the Marktkommunikation could not take or could
- * not deliver, the most recent first — each one waits on a person.
+ * not deliver, the most recent first — each one waits on a person. A table,
+ * in the service's order: the Desk sorts no page.
  */
 export function DeadLettersView() {
+  const t = useT();
   const q = useDeadLetters();
   const rows = q.data?.dead_letters ?? [];
+  const d = t.deadLetters;
+
+  const spalten: Spalte<Zeile>[] = [
+    {
+      id: "zeitpunkt",
+      titel: d.spalteZeitpunkt,
+      className: "w-44 whitespace-nowrap tabular-nums text-text-2",
+      zelle: (z) => (z.rejected_at ? formatInstant(z.rejected_at) : d.zeitpunktUnlesbar),
+    },
+    {
+      id: "was",
+      titel: d.spalteWas,
+      rowHeader: true,
+      className: "text-callout text-text",
+      zelle: (z) => z.reason_detail,
+    },
+    {
+      id: "kategorie",
+      titel: d.spalteKategorie,
+      className: "font-mono text-text-2",
+      zelle: (z) => z.reason_label,
+    },
+  ];
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
+    <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
       <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">Dead Letters</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">
-          Nachrichten, die kein Prozess annahm oder deren Zustellung endgültig scheiterte — die
-          jüngste zuerst.
-        </p>
+        <h1 className="m-0 text-large font-bold tracking-tight">{d.titel}</h1>
+        <p className="m-0 mt-1 text-callout text-text-2">{d.untertitel}</p>
       </header>
 
       {q.isError && (
         <Notice
           tone="failure"
           title={
-            q.error instanceof ServiceUnavailable
-              ? nichtErreichbar(q.error.service)
-              : "Die Dead Letters ließen sich nicht lesen"
+            q.error instanceof ServiceUnavailable ? nichtErreichbar(q.error.service) : d.fehler
           }
         >
           {q.error.message}
@@ -49,39 +74,23 @@ export function DeadLettersView() {
 
       {q.data && rows.length === 0 && (
         <Panel>
-          <EmptyState title="Keine Dead Letters.">
-            Jede Nachricht wurde angenommen oder zugestellt.
-          </EmptyState>
+          <EmptyState title={d.leer}>{d.leerText}</EmptyState>
         </Panel>
       )}
 
       {rows.length > 0 && (
-        <Panel className="overflow-hidden">
-          <ul className="m-0 list-none p-0">
-            {rows.map((d, i) => (
-              <li
-                // A dead letter carries no id of its own; the page is
-                // ordered by the service and replaced whole on each read.
-                // biome-ignore lint/suspicious/noArrayIndexKey: see above
-                key={i}
-                className="flex items-start gap-4 border-b border-separator px-5 py-3 last:border-b-0"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block text-callout text-text">{d.reason_detail}</span>
-                  <span className="mt-0.5 block font-mono text-body text-text-2">
-                    {d.reason_label}
-                  </span>
-                </span>
-                <span className="shrink-0 text-body tabular-nums text-text-2">
-                  {d.rejected_at ? formatInstant(d.rejected_at) : "Zeitpunkt unlesbar"}
-                </span>
-              </li>
-            ))}
-          </ul>
+        <Panel className="overflow-x-auto">
+          <Table
+            label={d.tabelle}
+            spalten={spalten}
+            zeilen={rows}
+            // A dead letter carries no id of its own; the page is replaced
+            // whole on each read, so its position names it.
+            zeilenId={(_, i) => `${i}`}
+          />
           {q.data && q.data.gesamt > rows.length && (
             <p className="m-0 border-t border-separator px-5 py-3 text-body text-text-2">
-              Die jüngsten {formatCount(rows.length)} von {formatCount(q.data.gesamt)} — mehr
-              liefert die {DIENST.makod} nicht auf einmal.
+              {d.juengste(formatCount(rows.length), formatCount(q.data.gesamt), DIENST.makod)}
             </p>
           )}
         </Panel>

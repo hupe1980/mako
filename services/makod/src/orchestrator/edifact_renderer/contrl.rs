@@ -66,11 +66,7 @@ pub(super) fn render_contrl(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Contrl, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Contrl, ReleaseTrack::Short)?;
 
     let mut builder = builders::ContrlBuilder::new(release)
         .sender(sender)

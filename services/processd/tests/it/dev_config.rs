@@ -15,7 +15,9 @@ fn the_dev_config_loads() {
     };
     // What startup checks beyond the parse — `[lf] eog_auto_respond` without
     // its Abrechnungsintervall among them.
-    if let Err(e) = <processd::Processd as mako_service::Daemon>::validate(&cfg) {
+    if let Err(e) = mako_service::befund::als_ergebnis(
+        <processd::Processd as mako_service::Daemon>::validate(&cfg),
+    ) {
         panic!("dev/config/processd.toml parses but is refused at startup: {e:#}");
     }
 }

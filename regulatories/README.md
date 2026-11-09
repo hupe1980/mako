@@ -1,7 +1,7 @@
 # regulatories — official primary sources
 
 Index of the regulatory documents in this folder (retrieved 2026-07-24). Only
-official primary sources (BNetzA, BDEW, DVGW).
+official primary sources (BNetzA, BDEW, DVGW, the EU Official Journal).
 
 The files themselves are **not tracked in git** — they are third-party
 copyrighted publications totalling roughly 400 MB. Two things *are* tracked, so
@@ -15,6 +15,21 @@ the folder can be reconstructed from a fresh clone:
 
 Every regulatory claim in the codebase must cite a document, section and page
 from here rather than an external URL or recollection.
+
+## The passage index
+
+```bash
+cargo xtask index-sources --download
+```
+
+cuts the mirror into addressed passages for agentd's `quote_source` and
+`find_source`: every EDI@Energy document of `bdew-mako/manifest.json` whose
+bytes still hash to the manifest's SHA-256, one passage per chapter of its
+Inhaltsverzeichnis and addressed by the document and edition its title names,
+and the consolidated EnWG and MsbG, one passage per § and per Absatz.
+`--download` first fetches the two statutes into `gesetze/`. The result,
+`quellen-index.json`, lies here and is gitignored with the documents it is cut
+from; agentd reads it from `[quellen] index`.
 
 ## Reconstructing `bdew-mako/`
 
@@ -78,6 +93,8 @@ BDEW catalogue and are maintained by hand; `sync-regulatories` reports them as
 | `bnetza-mispel-618-25-02-anlage1-abgrenzungsoption-arbeitsstand-20260805.pdf` | <https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Aufsicht/MiSpeL/DL/Anlage1_Arbeitsstand.pdf?__blob=publicationFile&v=1> | 05.08.2026 | MiSpeL Anlage 1 Arbeitsstand — Abgrenzungsoption (¼-h formula separation of flows) |
 | `bnetza-mispel-618-25-02-anlage2-pauschaloption-arbeitsstand-20260805.pdf` | <https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Aufsicht/MiSpeL/DL/Anlage2_Arbeitsstand.pdf?__blob=publicationFile&v=1> | 05.08.2026 | MiSpeL Anlage 2 Arbeitsstand — Pauschaloption (Solaranlagen ≤ 30 kWp) |
 | `bt-drs-21-7867-eeg-2027-regierungsentwurf-20260907.pdf` | <https://dserver.bundestag.de/btd/21/078/2107867.pdf> | 07.09.2026 | BT-Drs. 21/7867 — Gesetzentwurf der Bundesregierung „für einen planbaren, kosteneffizienten, netzverträglichen und marktorientierten Ausbau der erneuerbaren Energien im Stromsektor" (EEG 2027). Vorabfassung. Carries § 50c Direktvermarktungsbonus (1,5 ct/kWh, < 25 kW, 48 Kalendermonate), § 21d/§ 21e/§ 23a Refinanzierungsbeitrag (ab 100 kW, operator → Netzbetreiber) and the replacement § 51 / § 51a negative-price regime |
+| `eu-sa-102084-eeg-2023-c-2022-9900-20221221.pdf` | <https://ec.europa.eu/competition/state_aid/cases1/202302/SA_102084_80CC9685-0100-C1F9-86A8-933503F73C2D_58_1.pdf> | 21.12.2022 | European Commission, C(2022) 9900 final, State Aid SA.102084 (2022/N) — Germany – EEG 2023, public version. Recital (211), p. 56: „The notified measures apply between 1 January 2023 and 31 December 2026 (four years)." — the end of the EEG 2023 state-aid approval |
+| `eu/eu-richtlinie-2025-516-vida-20250311.pdf` | <https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=OJ:L_202500516> | 11.03.2025 (OJ L 2025/516, 25.3.2025) | Council Directive (EU) 2025/516 (VAT in the Digital Age) amending Directive 2006/112/EC — Art. 369aa (Art. 2 point (12), from 01.01.2027) puts cross-border supplies of gas, electricity and heat/cooling to non-taxable customers into the OSS, Art. 369b(d) (Art. 3 point (19), from 01.07.2028) keeps them there; Art. 5 digital reporting from 01.07.2030 (Art. 6(5)). Passages relied on, with the PDF's SHA-256: `eu/eu-richtlinie-2025-516-vida-20250311.md` |
 
 > **BNetzA Mitteilung Nr. 73** (07.07.2026, Az. BK6-06-009 — §42c Energy Sharing
 > via the Dienstleistungsmodell, no new MaKo processes) is published **HTML-only**;
@@ -95,4 +112,5 @@ BDEW catalogue and are maintained by hand; `sync-regulatories` reports them as
 | `bnetza-festlegungen/` | Other BNetzA/GBK Festlegungen (e.g. GBK-25-02 vermiedene Netzentgelte) |
 | `dvgw/` | DVGW gas message formats (ALOCAT, NOMINT, NOMRES, …) |
 | `eeg/` | EEG 2017/2021/2023 law texts |
-| `gesetze/` | BGBl law texts (EnWG amendments) |
+| `gesetze/` | BGBl law texts (EnWG amendments); `enwg_2005.xml` and `messbg.xml`, the consolidated EnWG and MsbG as gesetze-im-internet.de publishes them (<https://www.gesetze-im-internet.de/enwg_2005/xml.zip>, <https://www.gesetze-im-internet.de/messbg/xml.zip>), fetched by `cargo xtask index-sources --download` |
+| `eu/` | EU legal acts from EUR-Lex: the PDF where one is mirrored, and beside it a `.md` of the passages relied on, copied verbatim with source URL, retrieval date and page |

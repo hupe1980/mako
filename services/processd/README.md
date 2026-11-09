@@ -9,8 +9,9 @@ business Frist) where it does not. Answers go to `makod` as commands.
 Two modules ride the same delivery. The **process read model** (`src/obs/`)
 projects every `de.mako.*` lifecycle event into `process_projections` — per-PID
 KPIs, the overdue list against each process's Antwortfrist, the § 7a Abs. 5 EnWG
-Gleichbehandlung evidence — in every role build, and is rebuildable from
-`marktd`'s replay log. In an NB build the **Sperrauftrag queue** (`src/sperr/`)
+Gleichbehandlung evidence, the Antwortcode a counterparty answered with and its
+BDEW wording within the list it named — in every role build, and is rebuildable
+from `marktd`'s replay log. In an NB build the **Sperrauftrag queue** (`src/sperr/`)
 turns an inbound ORDERS 17115 / 17117 into a field work order and reports its
 outcome as IFTSTA 21039. `POST /webhook` verifies once and hands each event to
 the read model first, then to the queue, then to the decision modules.
@@ -41,7 +42,7 @@ The APERAK (45 min Strom UTILMD) is `makod`'s, not this service's.
 | **NB** | 55004 | GPKE Abmeldung — Lieferende von LF an NB | **06:00 Uhr des 1. WT nach dem ÜT** | `mako_pruefung::evaluate_abmeldung` (`E_0607`) |
 | **NB** | 44001 | GeLi Gas Anmeldung NN | **Ablauf des 4. Werktags** | `mako_pruefung::evaluate` (`G_0011`) |
 | **NB** | 44004 | GeLi Gas Abmeldung NN | **Ablauf des 3. Werktags** | `mako_pruefung::evaluate_abmeldung` (`G_0007`) |
-| **NB** | 55042, 44042 | WiM Anmeldung MSB (MSBN → NB) | 5 WT | `mako_pruefung::msb` (`E_0201` / `E_2002`): MeLo known, Versicherung, Mindestvorlauf, and the `marktd` MSB-Rahmenvertrag of that Sparte `abgeschlossen` on the Zuordnungsbeginn |
+| **NB** | 55042, 44042 | WiM Anmeldung MSB (MSBN → NB) | 5 WT | `mako_pruefung::msb` (`E_0201` / `E_2002`): MeLo known, Versicherung, Mindestvorlauf, and the `marktd` MSB-Rahmenvertrag of that Sparte `abgeschlossen` on the Zuordnungsbeginn — any other Befund escalates naming itself |
 | **NB** | 55051 | WiM Ende MSB (MSBA → NB) | 7 WT | operator queue |
 | **NB** | 55600, 55601 | GPKE Neuanlage (verb. / erz. MaLo) | **00:00 Uhr des 61. WT nach dem ÜT** | `mako_pruefung::nb::neuanlage` (`E_0608`), daily Prüflauf |
 | **NB** | *(event)* | EoG gap closure → 55013 (§ 36/§ 38 EnWG) | unverzüglich; 3-month timer | `grundversorger` from `marktd` |
@@ -95,6 +96,8 @@ principal is recorded in `approval_queue.decided_by` and on the dispatched
 command.
 
 ## Configuration
+
+`processd --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one; `--json` prints the body `GET /admin/einrichtung` serves.
 
 `PROCESSD_CONFIG` names the file; `PROCESSD_<SECTION>__<KEY>` overrides any key.
 

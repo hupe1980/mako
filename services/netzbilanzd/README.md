@@ -23,7 +23,7 @@ just dev netzbilanzd   # dev/config/netzbilanzd.toml against the dev PostgreSQL
 | **Lifecycle** | `draft` → `dispatched` → `paid` \| `disputed`; `draft` → `rejected`. Only a dispatched invoice can be reversed (Storno) or corrected (Korrektur) |
 | **Numbering** | consecutive per tenant/series/year, allocated by the database (§ 14 Abs. 4 Nr. 4 UStG) |
 | **Events** | `de.netzbilanz.invoic.{drafted,dispatched,paid,disputed,dispatch-overdue}`, `de.netzbilanz.kostenblatt.{computed,deadline-approaching}`, `de.mabis.{submission.failed,korrekturbedarf.opened}` — through the transactional outbox |
-| **MCP server** | 12 **read-only** tools · 7 prompts at `/mcp` (Streamable HTTP) |
+| **MCP server** | 13 **read-only** tools · 7 prompts at `/mcp` (Streamable HTTP) |
 
 ## What it issues
 
@@ -125,6 +125,8 @@ Werktag of the Erstaufschlag window. `POST /api/v1/mabis/sync` needs
 BIKO-response routes need only `record-biko-response`.
 
 ## Configuration
+
+`netzbilanzd --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one; `--json` prints the body `GET /admin/einrichtung` serves.
 
 ```toml
 # netzbilanzd.toml

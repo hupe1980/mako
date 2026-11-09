@@ -81,20 +81,35 @@ impl ProductdConfig {
         self.lf_mp_id_override.as_deref().unwrap_or(&self.tenant)
     }
 
-    /// Refuse a config productd cannot run as documented — a removed key.
-    ///
-    /// # Errors
-    ///
-    /// Names the removed key and what replaced it.
-    pub fn validate(&self) -> anyhow::Result<()> {
+    /// Every finding that keeps productd from running as documented: a
+    /// removed key, and the authentication posture ([`Self::check_auth_posture`]).
+    pub fn validate(&self) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = Vec::new();
         if let Some(old) = &self.behg_regime {
-            anyhow::bail!(
-                "productd: `behg_regime = {old:?}` is not read; the regime is billingd's \
-                 `[policy] behg_regime`, which productd reads from billingd. Set it there and \
-                 configure `billingd_url` (and `billingd_api_key`) here."
-            );
+            out.push(Befund::blockiert(
+                "behg_regime",
+                format!(
+                    "productd: `behg_regime = {old:?}` is not read; the regime is billingd's \
+                     `[policy] behg_regime`, which productd reads from billingd. Set it there \
+                     and configure `billingd_url` (and `billingd_api_key`) here."
+                ),
+            ));
         }
-        Ok(())
+        if let Err(e) = self.check_auth_posture() {
+            out.push(Befund::aus_fehler("oidc", e).bereich(Bereich::Zugriff));
+        }
+        out
+    }
+
+    /// The posture productd runs under — logged, exported, recorded and served
+    /// at `GET /api/v1/policy` and by the MCP tool `get_policy`.
+    #[must_use]
+    pub fn policy_report(&self) -> mako_service::policy::PolicyReport {
+        mako_service::policy::PolicyReport::new()
+            .posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
+            .posture_presence("oidc", self.oidc.is_some(), true)
+            .posture_presence("billingd_url", self.billingd_url.is_some(), false)
     }
 
     /// Refuse to start in a posture that authenticates nothing.

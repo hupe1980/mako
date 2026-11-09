@@ -6,8 +6,10 @@ import { createRoot } from "react-dom/client";
 import { applyRememberedAppearance } from "./app/appearance";
 import { RolleProvider } from "./app/rollen";
 import { router } from "./app/router";
+import { applyRememberedSprache } from "./i18n";
 
 applyRememberedAppearance();
+applyRememberedSprache();
 
 const queries = new QueryClient({
   defaultOptions: {

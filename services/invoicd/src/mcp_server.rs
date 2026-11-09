@@ -40,9 +40,7 @@ use rmcp::{
     },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
+    transport::streamable_http_server::StreamableHttpServerConfig,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -209,6 +207,8 @@ pub struct InvoicdMcpState {
     pub pool: PgPool,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
+    /// The operator policy and posture the runner built at boot.
+    pub policy: mako_service::policy::PolicyReport,
 }
 
 // ── Tool parameters ───────────────────────────────────────────────────────────
@@ -264,6 +264,16 @@ impl InvoicdMcpHandler {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    #[tool(
+        description = "The operator policy and posture this invoicd deployment runs under: each setting with its value, whether it was set or defaulted, and the primary source of the value. Read-only; a setting changes only by editing the config and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_policy(&self) -> Result<CallToolResult, McpError> {
+        ContentBlock::json(serde_json::to_value(&self.state.policy).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     /// Read a single INVOIC receipt by UUID.
@@ -844,6 +854,13 @@ impl InvoicdMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for InvoicdMcpHandler {
+    /// The revisions every mako MCP server speaks, not the SDK's set.
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        mako_service::mcp::supported_revisions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
@@ -900,18 +917,16 @@ async fn mcp_auth_middleware(
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-pub fn router(state: Arc<InvoicdMcpState>, shutdown: CancellationToken) -> Router {
+pub fn router(state: Arc<InvoicdMcpState>, _shutdown: CancellationToken) -> Router {
     let config = StreamableHttpServerConfig::default()
         .disable_allowed_hosts()
-        .with_sse_keep_alive(Some(std::time::Duration::from_secs(30)))
-        .with_cancellation_token(shutdown);
+        .with_sse_keep_alive(Some(std::time::Duration::from_secs(30)));
 
-    let mcp_service = StreamableHttpService::new(
+    let mcp_service = mako_service::mcp::service(
         {
             let state = state.clone();
             move || Ok(InvoicdMcpHandler::new(state.clone()))
         },
-        Arc::new(LocalSessionManager::default()),
         config,
     );
 

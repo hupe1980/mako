@@ -96,6 +96,10 @@ fn the_policy_grants_no_action_the_code_never_checks() {
     // per-tool actions are checked by `mcp_server::mcp_auth_middleware` rather
     // than by a `cedar.check` in `handlers.rs`.
     used.insert("use-mcp".to_owned());
+    // `read-policy` and `read-config` are checked by
+    // `mako_service::einrichtung::router`, the one handler for every daemon.
+    used.insert("read-policy".to_owned());
+    used.insert("read-config".to_owned());
     used.extend(mcp_tools().iter().filter_map(|t| {
         accountingd::mcp_server::tool_action(t).map(std::borrow::ToOwned::to_owned)
     }));
@@ -409,11 +413,13 @@ fn actions_forbidden_to_an_advisory_principal() -> BTreeSet<String> {
 }
 
 /// The reads an advisory principal keeps.
-const READS: [&str; 5] = [
+const READS: [&str; 7] = [
     "read-account",
     "read-banking",
     "read-books",
     "read-enfg",
+    "read-policy",
+    "read-config",
     "use-mcp",
 ];
 

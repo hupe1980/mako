@@ -474,7 +474,6 @@ impl As4Sender for BdewAs4Sender {
             //
             //   • ORDERS 17116 (Anfrage Sperrung, NB → MSB / GNB → gMSB)
             //   • ORDERS 17134/17135 (Konfiguration, NB → MSB)
-            //   • ORDERS 17001/17009 (Geräteübernahme, MSBN → MSBA)
             //
             // When a loopback handle is wired (combined-role deployment with
             // EdifactApiState carrying a dispatcher), the message is rendered to

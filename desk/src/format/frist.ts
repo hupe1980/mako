@@ -3,6 +3,7 @@
 // Werktag count is shown only when a service returns one.
 
 import { useEffect, useState } from "react";
+import { katalog } from "../i18n";
 import type { Instant } from "./brands";
 import { berlinDayNumber, epochMs } from "./date";
 
@@ -19,27 +20,29 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 function span(ms: number): string {
-  if (ms < HOUR) return `${Math.max(1, Math.round(ms / MINUTE))} min`;
+  const z = katalog().zeit;
+  if (ms < HOUR) return z.minuten(String(Math.max(1, Math.round(ms / MINUTE))));
   if (ms < DAY) {
     const h = Math.floor(ms / HOUR);
     const m = Math.round((ms % HOUR) / MINUTE);
-    return m ? `${h} h ${m} min` : `${h} h`;
+    return m ? z.stundenMinuten(String(h), String(m)) : z.stunden(String(h));
   }
   const d = Math.round(ms / DAY);
-  return d === 1 ? "1 Tag" : `${d} Tagen`;
+  return z.tage(d, String(d));
 }
 
 /** How far `due` is from `now`, and how urgent that is. */
 export function distance(due: Instant, now: number): Distance {
   const left = epochMs(due) - now;
-  if (left <= 0) return { urgency: "lapsed", text: `abgelaufen vor ${span(-left)}` };
+  const z = katalog().zeit;
+  if (left <= 0) return { urgency: "lapsed", text: z.abgelaufenVor(span(-left)) };
   const urgency: Urgency = left < 2 * HOUR ? "critical" : left < DAY ? "soon" : "calm";
-  return { urgency, text: `in ${span(left)}` };
+  return { urgency, text: z.in(span(left)) };
 }
 
 /** `seit 3 Tagen`, `seit 2 h` — how long ago `since` was, on the wall clock. */
 export function seit(since: Instant, now: number): string {
-  return `seit ${span(Math.max(0, now - epochMs(since)))}`;
+  return katalog().zeit.seit(span(Math.max(0, now - epochMs(since))));
 }
 
 /** The current time, re-read every `everyMs` while mounted. */
@@ -55,13 +58,15 @@ export function useNow(everyMs = 30_000): number {
 /** Where an inbox item sits by its Frist: the bands Heute is read in. */
 export type Band = "ueberfaellig" | "heute" | "woche" | "spaeter" | "ohne";
 
-export const BAENDER: { band: Band; titel: string }[] = [
-  { band: "ueberfaellig", titel: "Überfällig" },
-  { band: "heute", titel: "Heute" },
-  { band: "woche", titel: "Nächste 7 Tage" },
-  { band: "spaeter", titel: "Später" },
-  { band: "ohne", titel: "Ohne Frist" },
-];
+export const BAENDER: { band: Band; readonly titel: string }[] = (
+  ["ueberfaellig", "heute", "woche", "spaeter", "ohne"] as const
+).map((band) => ({
+  band,
+  // Read from the catalogue each time a band is shown.
+  get titel() {
+    return katalog().baender[band];
+  },
+}));
 
 /**
  * The band of a Frist the service returned, against `now`: lapsed, due on

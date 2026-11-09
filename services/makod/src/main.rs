@@ -61,8 +61,8 @@ mod transport;
 // lib target). Mirrors the re-export block in lib.rs.
 use crate::api::{edifact_api, malo_admin_api, migration_api, partner_api};
 use crate::core::{
-    cedar_authz, config, deployment, erp_adapter, health, malo_cache, malo_sync, party_registry,
-    preflight, worker_health,
+    cedar_authz, config, deployment, einrichtung, erp_adapter, health, malo_cache, malo_sync,
+    party_registry, preflight, worker_health,
 };
 use crate::orchestrator::{
     adapters, commands_api, deadline_dispatch, dvgw_ingest, edifact_renderer, ingest_dispatcher,
@@ -629,6 +629,16 @@ struct Cli {
     #[arg(long, env = "MAKOD_CHECK", default_value_t = false)]
     check: bool,
 
+    /// Print every configuration finding — path, severity, source — and exit
+    /// non-zero on a blocking one. Opens no store, binds nothing, writes
+    /// nothing; runs right after the config is loaded.
+    #[arg(long, default_value_t = false)]
+    check_config: bool,
+
+    /// With `--check-config`: print the body `GET /admin/einrichtung` serves.
+    #[arg(long, requires = "check_config", default_value_t = false)]
+    json: bool,
+
     /// Marktrollen this makod instance is licensed for (comma-separated).
     ///
     /// When set, only commands whose required Marktrolle appears in this list
@@ -651,36 +661,6 @@ struct Cli {
         value_delimiter = ','
     )]
     marktrollen: Vec<String>,
-
-    /// BDEW Marktrollen active for PID routing (comma-separated).
-    ///
-    /// Controls which inbound EDIFACT PID → workflow routes are registered at
-    /// startup.  Shared PIDs (e.g. ORDRSP 19001/19002) are registered to
-    /// different workflows depending on role:
-    ///
-    /// - `NB`  → ORDRSP 19001/19002 routes to `gpke-konfiguration`
-    ///   (GPKE Konfiguration: NB receives ORDRSP from MSB in response to ORDERS 17134/17135)
-    /// - `NMSB` → ORDRSP 19001/19002 routes to `wim-geraeteubernahme`
-    ///   (WiM Geräteübernahme: nMSB receives ORDRSP from NB in response to ORDERS 17001/17009)
-    ///
-    /// **If both roles are listed and they share a PID, `build` will panic** —
-    /// run separate makod instances with disjoint role sets instead.
-    ///
-    /// Available roles: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`, `BIKO`,
-    /// `ESA`
-    ///
-    /// When omitted, all PIDs are registered unconditionally (backward-compatible
-    /// default, equivalent to `--deployment-roles NB,LF,MSB,BKV,UENB,BIKO`).
-    ///
-    /// Can also be set via the `MAKOD_DEPLOYMENT_ROLES` environment variable
-    /// (comma-separated, e.g. `MAKOD_DEPLOYMENT_ROLES=NB,MSB`).
-    #[arg(
-        long,
-        value_name = "ROLES",
-        env = "MAKOD_DEPLOYMENT_ROLES",
-        value_delimiter = ','
-    )]
-    deployment_roles: Vec<String>,
 
     /// Cluster-internal marktd base URL, e.g. `http://marktd:8180`.
     ///
@@ -822,6 +802,11 @@ struct Cli {
     /// `[policy]` loaded from `makod.toml`.
     #[arg(skip)]
     policy: config::MakodPolicy,
+
+    /// `[einrichtung]` loaded from `makod.toml`: the daemons the deployment
+    /// checklist asks.
+    #[arg(skip)]
+    einrichtung: config::EinrichtungConfig,
 
     /// Subcommand to run instead of the daemon.
     #[command(subcommand)]
@@ -974,29 +959,134 @@ fn main() -> anyhow::Result<()> {
 
 async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // Hold the guard for the process lifetime — dropping it flushes OTel spans.
-    let _otel_guard = init_tracing(&cli);
+    // `--check-config` installs none: its stdout is the report, and a log line
+    // there would break `--check-config --json` for every consumer.
+    let _otel_guard = (!cli.check_config).then(|| init_tracing(&cli));
 
     use party_registry::MpIdRegistry;
 
-    // ── MP-ID registry ─────────────────────────────────────────────────────────
+    // ── Configuration findings ─────────────────────────────────────────────────
     //
-    // `[[party]]` entries are the single source of truth for all MP-ID identity.
-    // There is no `--tenant-id` fallback — a config file with at least one
-    // `[[party]]` entry is required.
-    anyhow::ensure!(
-        !cli.parties.is_empty(),
-        "makod requires at least one [[party]] entry in makod.toml.\n\
-         Create a config file (--config / MAKOD_CONFIG) with:\n\
-         \n\
-         [[party]]\n\
-         mp_id   = \"<13-digit BDEW/DVGW code>\"\n\
-         roles = [\"NB\", \"LF\", \"MSB\"]  # adjust to operator's Marktrollen\n\
-         \n\
-         See site/content/docs/services/makod.md for the full configuration reference."
-    );
+    // Every check judgeable from the configuration alone — the `[[party]]`
+    // table, `[deployment] rollen`, adapter coverage, AS4 key material and
+    // certificate expiry, Cedar policies, credentials for every authenticated
+    // port, callback URLs — runs here, all of them, before the store opens.
+    // `--check-config` prints the result, `GET /admin/einrichtung` serves it,
+    // and the boot refuses on any blocking finding: one list, so the three
+    // cannot disagree. Boot consumes the preflight's resolved values.
+    let registry = MpIdRegistry::from_config(&cli.parties).ok();
+    let (extra_policies, cedar_policy_dir_fehler) =
+        match read_cedar_policy_dir(&cli.cedar_policy_dir) {
+            Ok(p) => (p, None),
+            Err(e) => (None, Some(format!("{e:#}"))),
+        };
+    let preflight_input = registry.as_ref().map(|r| preflight::PreflightInput {
+        primary_mp_id: r.primary_mp_id(),
+        parties: &cli.parties,
+        registry: r,
+        as4: &cli.as4,
+        policy: &cli.policy,
+        as4_inbound_enabled: cli.as4_addr.is_some(),
+        http_enabled: cli.http_addr.is_some(),
+        webdienste_enabled: cli.api_webdienste_addr.is_some(),
+        webdienste_allow_unauthenticated: cli.webdienste_allow_unauthenticated,
+        webdienste_client_identity: cli.webdienste_client_cert_pem.is_some()
+            && cli.webdienste_client_key_pem.is_some(),
+        allow_unauthenticated_webdienste_client: cli.allow_unauthenticated_webdienste_client,
+        webdienste_signing_key: cli.webdienste_signing_key_pem.is_some(),
+        allow_no_as4_signing: cli.allow_no_as4_signing,
+        edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.as_deref(),
+        erp_webhook_secret_set: cli
+            .erp_webhook_secret
+            .as_ref()
+            .is_some_and(|s| !secrecy::ExposeSecret::expose_secret(s).trim().is_empty()),
+        erp_webhook_url: cli.erp_webhook_url.as_deref(),
+        netzzugang_endpoint_url: cli.netzzugang_endpoint_url.as_deref(),
+        maloid_partner: &cli.maloid_partner,
+        verzeichnisdienst_url: cli.verzeichnisdienst_url.as_deref(),
+        marktd_url: cli.marktd_url.as_deref(),
+        marktd_api_key: cli.marktd_api_key.as_deref(),
+        auth_keys: &cli.auth_keys,
+        cedar_policies: extra_policies.clone(),
+        cedar_permit_all: cli.cedar_permit_all,
+        oidc_issuer: cli.oidc_issuer.as_deref(),
+        oidc_audience: cli.oidc_audience.as_deref(),
+    });
+    let posture = [
+        ("cedar_permit_all", cli.cedar_permit_all),
+        ("allow_no_as4_signing", cli.allow_no_as4_signing),
+        (
+            "allow_unauthenticated_webdienste_client",
+            cli.allow_unauthenticated_webdienste_client,
+        ),
+        (
+            "webdienste_allow_unauthenticated",
+            cli.webdienste_allow_unauthenticated,
+        ),
+        ("allow_volatile", cli.allow_volatile),
+    ];
+    let pruefung = einrichtung::pruefe(&einrichtung::Eingabe {
+        parties: &cli.parties,
+        rollen: &cli.rollen,
+        preflight: preflight_input.as_ref(),
+        cedar_policy_dir_fehler,
+        as4: &cli.as4,
+        policy: &cli.policy,
+        marktd_url: cli.marktd_url.as_deref(),
+        marktd_webhook_url: cli.marktd_webhook_url.as_deref(),
+        http_enabled: cli.http_addr.is_some(),
+        webdienste_signing_key: cli.webdienste_signing_key_pem.is_some(),
+        webdienste_signing_cert: cli.webdienste_signing_cert_pem.is_some(),
+        posture: &posture,
+        jetzt: time::OffsetDateTime::now_utc(),
+        einrichtung: &cli.einrichtung,
+    });
 
-    let mp_id_registry: Arc<MpIdRegistry> =
-        Arc::new(MpIdRegistry::from_config(&cli.parties).context("invalid [[party]] config")?);
+    if cli.check_config {
+        let e = &pruefung.einrichtung;
+        if cli.json {
+            println!("{}", serde_json::to_string_pretty(e)?);
+        } else {
+            print!("{}", e.text());
+        }
+        anyhow::ensure!(e.bereit, "makod config has blocking findings");
+        return Ok(());
+    }
+
+    mako_service::befund::log(einrichtung::DIENST, &pruefung.einrichtung.befunde);
+    if !pruefung.einrichtung.bereit {
+        let blockiert = pruefung
+            .einrichtung
+            .befunde
+            .iter()
+            .filter(|b| b.ist_blockiert())
+            .cloned()
+            .collect();
+        return Err(
+            anyhow::Error::new(mako_service::befund::Verweigerung(blockiert))
+                .context("makod config is invalid"),
+        );
+    }
+    pruefung
+        .einrichtung
+        .policy
+        .log(einrichtung::DIENST, time::OffsetDateTime::now_utc());
+    if let Some(input) = &preflight_input {
+        preflight::warn_on_degraded_config(input, cli.data_dir.is_some());
+    }
+    let einrichtung::Pruefung {
+        einrichtung: einrichtung_bericht,
+        preflight: checked,
+        rollen,
+        dienste: einrichtung_dienste,
+    } = pruefung;
+    let einrichtung_bericht = Arc::new(einrichtung_bericht);
+    let mut checked = checked.expect("no finding blocks, so the preflight resolved");
+    let mp_id_registry: Arc<MpIdRegistry> = Arc::new(
+        registry
+            .clone()
+            .expect("no finding blocks, so the [[party]] table built a registry"),
+    );
 
     // makod is single-tenant: the primary Marktpartner-ID *is* the tenant, and
     // this UUID scopes every event stream, outbox entry and cache key. Derived
@@ -1010,37 +1100,19 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         party_count  = cli.parties.len(),
         "MP-ID registry built from [[party]] entries",
     );
-
-    // ── [deployment] rollen — which engine modules register ──────────────────
-    //
-    // Checked against [[party]] before anything opens the store: a declared
-    // role without exactly one MP-ID, or an MP-ID for an undeclared role,
-    // refuses startup (and `--check`).
-    let rollen = deployment::validate_rollen(&cli.rollen, &cli.parties)
-        .context("invalid [deployment] rollen")?;
     info!(
         rollen = ?rollen.iter().map(|r| r.token()).collect::<Vec<_>>(),
         "deployment roles declared",
     );
 
-    // ── Auto-derive engine roles from [[party]] ───────────────────────────────
+    // ── Engine roles, from [[party]] as [deployment] rollen admits it ─────────
     //
-    // When --deployment-roles / MAKOD_DEPLOYMENT_ROLES is not set explicitly,
-    // derive from the union of all [[party]] roles.  This eliminates the need
-    // to configure the same role set in two places.
-    let effective_deployment_roles = if cli.deployment_roles.is_empty() {
-        let derived = mp_id_registry.deployment_role_strings();
-        if !derived.is_empty() {
-            info!(
-                roles = ?derived,
-                "deployment roles auto-derived from [[party]] entries \
-                 (set --deployment-roles explicitly to override)",
-            );
-        }
-        parse_deployment_roles(&derived)
-    } else {
-        parse_deployment_roles(&cli.deployment_roles)
-    };
+    // The findings above refuse a [[party]] role whose deployment role is not
+    // declared, so these are exactly the declared roles, with the AHB
+    // sub-qualifiers (NMSB, AMSB) that decide shared-PID routing kept. There is
+    // no second declaration that could widen them.
+    let effective_deployment_roles =
+        parse_deployment_roles(&mp_id_registry.deployment_role_strings());
 
     // ── Auto-derive marktrollen from [[party]] ────────────────────────────────
     //
@@ -1112,13 +1184,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
          and the data-directory lock keeps it the only writer"
     );
 
-    // ── Startup: validate MessageAdapter coverage ─────────────────
-    //
-    // Each domain workflow must have a registered adapter for every known
-    // BDEW format version. A missing adapter means cross-FV inbound messages
-    // would be silently dead-lettered. Panics on missing coverage.
-    startup::validate_adapter_coverage();
-
     // Verify every PidRouter-registered workflow has a dispatch arm.
     // Panics if a domain crate registers a new PID without a matching arm in
     // EdifactIngestDispatcher — prevents silent dead-lettering at runtime.
@@ -1128,68 +1193,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // (e.g. missing [outbox] section in makod.toml) must never silently
     // start with a Noop backend, whether in check mode or full daemon mode.
     ctx.assert_production_stores();
-
-    // ── Configuration preflight ────────────────────────────────────────────
-    //
-    // Everything judgeable from the configuration alone — AS4 key material and
-    // partner registry, Cedar policies, credentials for every authenticated
-    // port, callback URLs, the ingest and egress transport rules. It runs above
-    // the `--check` exit so the two cannot diverge: check mode validates exactly
-    // what the daemon then boots with, and the boot consumes this same result.
-    let extra_policies = read_cedar_policy_dir(&cli.cedar_policy_dir)
-        .context("loading Cedar policy files from --cedar-policy-dir")?;
-    let preflight_input = preflight::PreflightInput {
-        primary_mp_id: mp_id_registry.primary_mp_id(),
-        parties: &cli.parties,
-        registry: &mp_id_registry,
-        as4: &cli.as4,
-        policy: &cli.policy,
-        as4_inbound_enabled: cli.as4_addr.is_some(),
-        http_enabled: cli.http_addr.is_some(),
-        webdienste_enabled: cli.api_webdienste_addr.is_some(),
-        webdienste_allow_unauthenticated: cli.webdienste_allow_unauthenticated,
-        webdienste_client_identity: cli.webdienste_client_cert_pem.is_some()
-            && cli.webdienste_client_key_pem.is_some(),
-        allow_unauthenticated_webdienste_client: cli.allow_unauthenticated_webdienste_client,
-        webdienste_signing_key: cli.webdienste_signing_key_pem.is_some(),
-        allow_no_as4_signing: cli.allow_no_as4_signing,
-        edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.as_deref(),
-        erp_webhook_secret_set: cli
-            .erp_webhook_secret
-            .as_ref()
-            .is_some_and(|s| !secrecy::ExposeSecret::expose_secret(s).trim().is_empty()),
-        erp_webhook_url: cli.erp_webhook_url.as_deref(),
-        netzzugang_endpoint_url: cli.netzzugang_endpoint_url.as_deref(),
-        maloid_partner: &cli.maloid_partner,
-        verzeichnisdienst_url: cli.verzeichnisdienst_url.as_deref(),
-        marktd_url: cli.marktd_url.as_deref(),
-        marktd_api_key: cli.marktd_api_key.as_deref(),
-        auth_keys: &cli.auth_keys,
-        cedar_policies: extra_policies,
-        cedar_permit_all: cli.cedar_permit_all,
-        oidc_issuer: cli.oidc_issuer.as_deref(),
-        oidc_audience: cli.oidc_audience.as_deref(),
-    };
-    let mut checked = preflight::preflight(&preflight_input)?;
-
-    // The MaLo-Ident cache follows marktd through the fan-out, which delivers
-    // to the HTTP port. A marktd without the subscription address would leave
-    // the cache answering counterparties from whatever it last held.
-    if cli.marktd_url.is_some() {
-        anyhow::ensure!(
-            cli.marktd_webhook_url.is_some(),
-            "[marktd] url is set without [marktd] webhook_url (MAKOD_MARKTD_WEBHOOK_URL): \
-             makod's MaLo cache follows marktd through its fan-out and needs the address \
-             marktd delivers to, e.g. http://makod:8080{}",
-            malo_sync::WEBHOOK_PATH,
-        );
-        anyhow::ensure!(
-            cli.http_addr.is_some(),
-            "[marktd] webhook_url needs the HTTP port (--http-addr): the fan-out delivers to {}",
-            malo_sync::WEBHOOK_PATH,
-        );
-    }
-    preflight::warn_on_degraded_config(&preflight_input, cli.data_dir.is_some());
 
     // ── --check mode early exit ────────────────────────────────────────
     //
@@ -1205,6 +1208,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             "check mode: all startup validations passed"
         );
         return Ok(());
+    }
+
+    // ── The policy report against the last boot's ──────────────────────
+    //
+    // Below the `--check` exit, because it writes: each changed setting is
+    // logged at warn and the report is stored for the next boot.
+    match einrichtung::policy_aufzeichnen(&store, &einrichtung_bericht.policy).await {
+        Ok(changes) => mako_service::policy::log_changes(einrichtung::DIENST, &changes),
+        Err(e) => tracing::error!(error = %e, "could not record the policy report"),
     }
 
     // ── ProcessRegistry startup reconciliation ─────────────────────────
@@ -1451,6 +1463,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                     malo_sync: malo_sync.clone(),
                     as4_partner: &as4_partner_endpoints,
                     volatile_mode: cli.data_dir.is_none() && cli.allow_volatile,
+                    einrichtung: Arc::clone(&einrichtung_bericht),
+                    einrichtung_dienste: einrichtung_dienste.clone(),
                 },
             )
             .await?,
@@ -1658,13 +1672,16 @@ fn read_cedar_policy_dir(dir: &Option<std::path::PathBuf>) -> anyhow::Result<Opt
     Ok(Some(buf))
 }
 
-/// Parse the `--deployment-roles` CLI argument into a [`DeploymentRoles`] value.
+/// The engine roles of [`MpIdRegistry::deployment_role_strings`] as a
+/// [`DeploymentRoles`] value.
 ///
 /// Accepts uppercase BDEW role codes: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`, `BIKO`.
-/// An empty list means no explicit roles were configured → returns [`DeploymentRoles::all()`]
-/// (backward-compatible default: all PIDs registered unconditionally).
+/// An empty list returns [`DeploymentRoles::all()`]; the configuration findings
+/// refuse a `[[party]]` table that would give one.
 ///
 /// Unknown role strings are logged as warnings and ignored.
+///
+/// [`MpIdRegistry::deployment_role_strings`]: party_registry::MpIdRegistry::deployment_role_strings
 fn parse_deployment_roles(roles: &[String]) -> DeploymentRoles {
     if roles.is_empty() {
         return DeploymentRoles::all();
@@ -1700,7 +1717,7 @@ fn parse_deployment_roles(roles: &[String]) -> DeploymentRoles {
             other => {
                 tracing::warn!(
                     role = other,
-                    "Unknown Marktrolle in --deployment-roles; valid values: \
+                    "Unknown Marktrolle in [[party]] roles; valid values: \
                      NB, LF, MSB, NMSB, AMSB, BKV, UENB/FNB, BIKO, ESA, \
                      GNB, ANB, VNB, LFG, GMSB, MGV"
                 );
@@ -1946,11 +1963,6 @@ fn apply_config_file(
         {
             cli.marktrollen = roles;
         }
-        if cli.deployment_roles.is_empty()
-            && let Some(roles) = engine.deployment_roles
-        {
-            cli.deployment_roles = roles;
-        }
     }
 
     // ── AS4 ───────────────────────────────────────────────────────────────────
@@ -1975,6 +1987,9 @@ fn apply_config_file(
 
     // ── [policy] ──────────────────────────────────────────────────────────────
     cli.policy = cfg.policy;
+
+    // ── [einrichtung] ─────────────────────────────────────────────────────────
+    cli.einrichtung = cfg.einrichtung.unwrap_or_default();
 
     // ── ERP ───────────────────────────────────────────────────────────────────
     if let Some(erp) = cfg.erp {
@@ -2487,6 +2502,12 @@ mod config_surface_tests {
             "unbekannte_absender",
             "ingest",
             "unbekannter_vorgang",
+            // `[as4]` again, read by `core/einrichtung.rs`.
+            "zertifikat_warnfenster_tage",
+            // `[einrichtung]` (`cli.einrichtung`), read by the deployment
+            // checklist route.
+            "dienst",
+            "name",
         ];
 
         let merge_body = MAIN_SOURCE
@@ -2555,7 +2576,11 @@ mod config_surface_tests {
             "config",
             // One-shot validation mode; a config that turned itself into a
             // check-only run would never start.
-            "check", // Subcommand selector (`makod migrate`).
+            "check",
+            // The configuration check and its output format, likewise.
+            "check_config",
+            "json",
+            // Subcommand selector (`makod migrate`).
             "command",
             // Populated from the file's `[[party]]` array, not from a flag.
             "parties",

@@ -92,10 +92,7 @@ pub(super) fn render_utilmd(
     } else {
         ReleaseTrack::Strom
     };
-    let release =
-        active_release(MessageType::Utilmd, track).ok_or_else(|| RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        })?;
+    let release = release_for(msg, MessageType::Utilmd, track)?;
 
     // The MSB is assigned to the **Messlokation**, never to the Marktlokation
     // („Der MSB ist ausschließlich dem Objekt Messlokation zugeordnet" — WiM
@@ -812,11 +809,7 @@ fn render_utilmd_liste(
     let listennummer = required(&u.listennummer, "listennummer")?;
     let codeliste = required(&u.antwort_codeliste, "antwort_codeliste")?;
 
-    let release = active_release(MessageType::Utilmd, ReleaseTrack::Strom).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Utilmd, ReleaseTrack::Strom)?;
     let edifact_pid = Pruefidentifikator::new(pid).map_err(|e| RenderError::MissingField {
         message_type: mt.into(),
         field: format!("pid value {pid} is invalid: {e}").into(),
@@ -1371,6 +1364,33 @@ pub(crate) fn utilmd_ahb_findings(
     pending: &mako_engine::outbox::PendingOutbox,
     tenant_id: mako_engine::ids::TenantId,
 ) -> Result<Vec<String>, String> {
+    Ok(utilmd_gate_check(pending, tenant_id)?
+        .findings
+        .into_iter()
+        .map(|e| e.message)
+        .collect())
+}
+
+/// The UTILMD a command is about to write, rendered, and what its profile
+/// says about it — the one check [`utilmd_ahb_findings`] answers in words and
+/// a rehearsal (`POST /api/v1/probe/{command}`) answers per segment.
+pub(crate) struct UtilmdGateCheck {
+    /// The rendered interchange, as the gate parsed it.
+    pub bytes: Vec<u8>,
+    /// The profile's errors; empty when the message passes.
+    pub findings: Vec<edifact_rs::ValidationIssue>,
+}
+
+/// Render `pending` as the outbox worker will, parse it back and validate it
+/// against its profile on today's date.
+///
+/// # Errors
+///
+/// The render or parse failure, as text.
+pub(crate) fn utilmd_gate_check(
+    pending: &mako_engine::outbox::PendingOutbox,
+    tenant_id: mako_engine::ids::TenantId,
+) -> Result<UtilmdGateCheck, String> {
     use edi_energy::EdiEnergyMessage as _;
     use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
     let process_id = ProcessId::new();
@@ -1390,9 +1410,8 @@ pub(crate) fn utilmd_ahb_findings(
     let report = parsed
         .validate_on_date(mako_fristen::heute())
         .map_err(|e| e.to_string())?;
-    Ok(report
-        .errors()
-        .iter()
-        .map(|e| e.message.to_string())
-        .collect())
+    Ok(UtilmdGateCheck {
+        findings: report.errors().to_vec(),
+        bytes: rendered.bytes,
+    })
 }

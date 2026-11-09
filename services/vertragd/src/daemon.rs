@@ -26,8 +26,8 @@ impl Daemon for Vertragd {
         Ok(())
     }
 
-    fn validate(cfg: &config::VertragdConfig) -> anyhow::Result<()> {
-        cfg.check_auth_posture()
+    fn validate(cfg: &config::VertragdConfig) -> Vec<mako_service::Befund> {
+        cfg.auth_befunde()
     }
 
     fn policy(cfg: &config::VertragdConfig) -> mako_service::policy::PolicyReport {
@@ -87,8 +87,11 @@ impl Daemon for Vertragd {
 
         let app = handlers::router(handler_ctx, enforcer)
             .merge(mcp_server::router(mcp_state, shutdown.clone()))
-            // Operator policy: GET /api/v1/policy (read-only; Cedar `read-policy`).
-            .merge(mako_service::policy::router(cfg.policy_report()))
+            // Readiness and operator policy: GET /admin/einrichtung (Cedar
+            // `read-config`) and GET /api/v1/policy (Cedar `read-policy`).
+            .merge(mako_service::einrichtung::router(Arc::clone(
+                &ctx.einrichtung,
+            )))
             .layer(Extension(mako_service::oidc::ExpectedTenant(
                 cfg.tenant.clone(),
             )))

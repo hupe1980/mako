@@ -755,6 +755,15 @@ pub struct SettleInput {
     /// detection. When omitted, the caller must check FoerderungBeendet manually.
     pub billing_date: Option<Date>,
 
+    /// The state-aid approvals recorded beyond the EEG 2023 approval
+    /// ([`crate::Beihilfegenehmigung`]). A recorded extension of the EEG 2023
+    /// approval keeps the periods it covers on the EEG 2023
+    /// ([`crate::Fassung::fuer_periode`]); with none, a period from 01.01.2027
+    /// has no tabled Fassung and a reduction of the anzulegender Wert in it is
+    /// refused.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub beihilfegenehmigungen: Vec<crate::version::Beihilfegenehmigung>,
+
     // ── §24 Anlagenerweiterung / Zusammenlegung ───────────────────────────────
     /// Additional capacity blocks for §24 EEG Anlagenerweiterung / Zusammenlegung.
     ///

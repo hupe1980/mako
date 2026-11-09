@@ -844,3 +844,54 @@ async fn a_local_closure_that_cannot_be_written_is_not_reported_as_dispatched() 
         .unwrap();
     assert!(row.iftsta_dispatched_at.is_none());
 }
+
+/// The order the dispatcher reads states the earliest Sperrtermin under
+/// `[policy] msb_vorlauf_lesart`, counted from the day the order arrived: a
+/// date five Werktage out is inside the MSB's window under the default
+/// `additiv` and admissible under `wortlaut`.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_order_view_states_the_msb_window_under_the_reading() {
+    use mako_service::policy::Policy;
+    use processd::config::{MsbVorlaufLesart, ProcessdPolicy};
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let heute = mako_fristen::heute();
+    let fuenf_wt = mako_fristen::add_werktage(heute, 5, mako_fristen::HolidayCalendar::BdewMaKo);
+    let mut req = order(Some(uniq("proc")));
+    req.ausfuehrung_am = Some(fuenf_wt);
+    let id = pg::create_order_pg(&pool, TENANT, &req)
+        .await
+        .unwrap()
+        .expect("inserted");
+    let row = || async {
+        pg::fetch_order_pg(&pool, id, TENANT)
+            .await
+            .unwrap()
+            .expect("found")
+    };
+
+    let additiv =
+        pg::SperrOrderView::new(row().await, &ProcessdPolicy::default().msb_vorlauf_lesart);
+    let fenster = additiv.msb_fenster.expect("a Sperrauftrag names a date");
+    assert!(!fenster.eingehalten, "{fenster:?}");
+    assert_eq!(
+        fenster.fruehester_sperrtermin,
+        mako_fristen::add_werktage(heute, 6, mako_fristen::HolidayCalendar::BdewMaKo)
+    );
+    let json = serde_json::to_value(pg::SperrOrderView::new(
+        row().await,
+        &ProcessdPolicy::default().msb_vorlauf_lesart,
+    ))
+    .unwrap();
+    assert_eq!(json["msb_fenster"]["lesart"]["value"], "additiv");
+    assert_eq!(
+        json["malo_id"], "51238696012",
+        "the row stays flat beside the window"
+    );
+
+    let wortlaut =
+        pg::SperrOrderView::new(row().await, &Policy::explicit(MsbVorlaufLesart::Wortlaut));
+    assert!(wortlaut.msb_fenster.expect("dated").eingehalten);
+}

@@ -60,6 +60,26 @@ impl Daemon for Invoicd {
             .context("run invoicd migrations")
     }
 
+    /// Fail closed on both doors — the REST API and the inbound webhook each
+    /// reach the receipt store and the market answer — and refuse an
+    /// auto-dispute threshold that is no EUR amount.
+    fn validate(cfg: &Config) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = Vec::new();
+        if let Err(e) = cfg.check_auth_posture() {
+            let pfad = if cfg.oidc.is_none() {
+                "oidc"
+            } else {
+                "webhook.inbound_secret"
+            };
+            out.push(Befund::aus_fehler(pfad, e).bereich(Bereich::Zugriff));
+        }
+        if let Err(e) = cfg.check.auto_dispute_threshold_raw() {
+            out.push(Befund::aus_fehler("check.auto_dispute_threshold_eur", e));
+        }
+        out
+    }
+
     async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
         build(cfg, ctx).await
     }
@@ -86,6 +106,8 @@ pub const CEDAR_ACTIONS: &[&str] = &[
     "read-overdue-remadv",
     "write-receipt",
     "use-mcp",
+    "read-policy",
+    "read-config",
 ];
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -649,9 +671,7 @@ async fn fetch_receipts(
 /// handler state and MCP server, spawn the background workers, and register the
 /// `marktd` subscription.
 pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
-    // Fail closed on both doors before anything else: the REST API and the
-    // inbound webhook each reach the receipt store and the market answer.
-    cfg.check_auth_posture()?;
+    // The auth posture is refused in `Daemon::validate`, before `build` runs.
 
     let oidc = mako_service::oidc::OidcConfig::build_verifier(
         cfg.oidc.as_ref(),
@@ -710,6 +730,7 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
             Some(cedar.clone()),
             &tenant,
         ),
+        policy: ctx.einrichtung.policy.clone(),
     });
 
     if let Some(erp_url) = cfg.erp.webhook_url.clone() {
@@ -757,6 +778,9 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
 
     let expected_tenant = mako_service::oidc::ExpectedTenant(state.tenant.clone());
     Ok(router(state)
+        // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
+        // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
+        .merge(mako_service::einrichtung::router(ctx.einrichtung.clone()))
         .layer(Extension(cedar))
         .layer(Extension(expected_tenant))
         .layer(Extension(oidc))

@@ -45,7 +45,10 @@ fn the_demo_configs_declare_roles_their_parties_hold() {
             .as_ref()
             .map(|d| d.rollen.clone())
             .unwrap_or_default();
-        makod::deployment::validate_rollen(&rollen, cfg.party.as_deref().unwrap_or_default())
-            .unwrap_or_else(|e| panic!("{rel} [deployment] rollen: {e:#}"));
+        let parties = cfg.party.as_deref().unwrap_or_default();
+        let (_, mut befunde) = makod::deployment::pruefe_rollen(&rollen, parties);
+        befunde.extend(makod::party_registry::MpIdRegistry::pruefe(parties));
+        befunde.extend(makod::einrichtung::codenummer_befunde(parties));
+        assert!(befunde.is_empty(), "{rel} identities: {befunde:#?}");
     }
 }

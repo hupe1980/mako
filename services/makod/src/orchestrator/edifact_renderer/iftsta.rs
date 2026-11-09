@@ -53,11 +53,7 @@ pub(super) fn render_iftsta(
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
 
-    let release = active_release(MessageType::Iftsta, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Iftsta, ReleaseTrack::Short)?;
 
     let message_ref = p
         .get("message_ref")

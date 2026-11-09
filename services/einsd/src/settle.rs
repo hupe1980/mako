@@ -341,6 +341,7 @@ pub async fn settle_plant(
             sect51_abs3_unreported_days,
             ausfallverguetung,
             beihilfe,
+            beihilfegenehmigungen: cfg.beihilfevorbehalt.genehmigungen.clone(),
         },
     )?;
 

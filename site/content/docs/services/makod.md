@@ -102,9 +102,15 @@ A production deployment carries key material, so it belongs in the config file:
 a secret passed as a flag is visible in `ps`.
 
 ```bash
-makod --check --config /etc/makod/makod.toml   # gate the pipeline on this
+makod --check-config --config /etc/makod/makod.toml   # every finding; no store, nothing written
+makod --check --config /etc/makod/makod.toml          # gate the pipeline on this
 makod --config /etc/makod/makod.toml
 ```
+
+`--check-config` prints every configuration finding — severity, `makod.toml`
+path, source — and exits non-zero on a blocking one; `--check-config --json`
+prints the body `GET /admin/einrichtung` serves. Boot refuses on the same
+blocking findings and logs every warning. See [Einrichtung](#einrichtung).
 
 ---
 
@@ -269,11 +275,14 @@ does not apply).
 | `projection_checkpoint_interval` | `MAKOD_PROJECTION_CHECKPOINT_INTERVAL` | `--projection-checkpoint-interval` | `60` | Seconds between projection cursor writes; `0` stops the projection workers |
 | `worker_threads` | `MAKOD_WORKER_THREADS` | `--worker-threads` | logical CPUs | Tokio worker threads |
 | `marktrollen` | `MAKOD_MARKTROLLEN` | `--marktrollen` | `[[party]]` role union | Roles the command API accepts commands for |
-| `deployment_roles` | `MAKOD_DEPLOYMENT_ROLES` | `--deployment-roles` | `[[party]]` role union | Roles that gate PID registration: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`/`ÜNB`/`UNB`/`FNB`, `BIKO`, `ESA`; `GNB`/`ANB`/`VNB` → `NB`, `LFG` → `LF`, `GMSB` → `MSB`. Unrecognised values are dropped with a `WARN` |
 
 A command for a role outside `marktrollen` is refused with
 `422 role_not_configured`. Typical values: `LF` (supplier), `LF,LFG`
 (dual-fuel), `NB`, `NB,MSB` (Stadtwerke), `BKV`.
+
+The roles that gate PID registration inside the registered modules are the
+`[[party]]` roles, which `[deployment] rollen` admits — there is no second
+declaration that could widen them.
 
 ### `[deployment]` — the roles this instance plays (required)
 
@@ -287,7 +296,7 @@ At least one entry; one per Marktpartner-ID.
 
 | TOML key | Required | Description |
 |---|---|---|
-| `mp_id` | yes | 13-digit BDEW- (`99…`) or DVGW-Codenummer (`98…`), GS1 GLN, or 16-char EIC |
+| `mp_id` | yes | 13-digit BDEW- (`99…`) or DVGW-Codenummer (`98…`), GS1 GLN, or 16-char EIC. A Gas role under a `99…` code, or a Strom role under a `98…` code, is refused (BDEW-AWH Identifikatoren V1.2 Kap. 2.2, S. 5: Stelle 1+2 „99 = BDEW/Strom", „98 = DVGW/Gas") |
 | `roles` | yes | Case-insensitive. Strom: `NB`, `ANB`, `VNB` (`nb-strom`), `LF` (`lf-strom`), `MSB`, `NMSB`, `AMSB` (`msb-strom`), `ESA` (`esa-strom`). Gas: `GNB` (`nb-gas`), `LFG` (`lf-gas`), `GMSB` (`msb-gas`). Each must belong to a declared `rollen` token; `BKV`, `UNB`, `BIKO`, `DP`, `EIV`, `MGV`, `FNB`, `KN` and `RB` have no module and are refused |
 | `primary` | no | Storage partition key (derives the `TenantId`) and default sender MP-ID; the first entry when none is marked |
 | `agency` | no | NAD DE 3055 override; derived from the prefix otherwise (`99…` → `293`, `98…` → `332`, EIC → `ZEW`, else `9`) |
@@ -377,12 +386,13 @@ MaKo namespace
 ├── AdminMaloRecord    — attrs: tenant, malo_id (optional)
 ├── AdminPartnerRecord — attrs: tenant, gln (optional)
 ├── MetricsEndpoint · McpEndpoint · RechnungEndpoint
-├── MigrationEndpoint · WebdiensteEndpoint
+├── MigrationEndpoint · WebdiensteEndpoint · EinrichtungEndpoint
 └── ProcessRecord      — attrs: tenant, workflow
 
 Actions
-├── SubmitCommand · IngestEdifact
+├── SubmitCommand · RehearseCommand · IngestEdifact
 ├── ReadMetrics · UseMcp · ReadRechnung · AdminMigrations · UseWebdienste
+├── AdminEinrichtung
 ├── ReadProcess        — evaluated per workflow (§ 6a EnWG role separation)
 ├── AdminMalo (group)    → AdminMaloRead / Write / Delete / Stats
 └── AdminPartner (group) → AdminPartnerRead / Write / Delete / Import
@@ -391,12 +401,14 @@ Actions
 | Action | Guards |
 |---|---|
 | `SubmitCommand` | `POST /api/v1/commands`, MCP `submit_command` |
+| `RehearseCommand` | `POST /api/v1/probe/{command}`, MCP `rehearse_command` — same `Command` resource as `SubmitCommand`; `conservative.cedar` grants it to `erp-operator` |
 | `IngestEdifact` | `POST /edifact` |
 | `AdminMalo*` / `AdminPartner*` | `/admin/malo/*`, `/admin/partners/*` |
 | `ReadMetrics` | `GET /metrics` |
 | `UseMcp` | `/mcp` (transport only — see [MCP authorization](#mcp-authorization)) |
 | `ReadRechnung` | `GET /api/v1/invoic/{process_id}/rechnung` |
 | `AdminMigrations` | `POST /admin/migrations` — grant to a break-glass principal for the FV cutover only; `conservative.cedar` grants it to nobody |
+| `AdminEinrichtung` | `GET /admin/einrichtung`, `GET /admin/einrichtung/deployment`, `GET /api/v1/policy`, MCP `get_policy` and `einrichtung_checkliste` — read-only; `conservative.cedar` grants it to `erp-operator` and `admin-readonly` |
 | `UseWebdienste` | every `:8090` route |
 | `ReadProcess` | MCP `get_process`, `get_process_history`, `list_overdue_deadlines`, `list_dead_letters`; carries the workflow name, so an NB principal can be kept off LF process state |
 
@@ -472,6 +484,7 @@ its own AS4 client**: a combined Strom+Gas deployment holds two `[party.as4]`.
 | `[as4] message_id_domain` | The `id-right` of every `eb:MessageId`: `<outbox id>@<domain>` (RFC 2822 §3.6.4) |
 | `[as4] trust_anchor_pem_file` | SM-PKI root certificate |
 | `[as4] crl_signer_pem_file` | SM-PKI CCRL-S(Root) certificate |
+| `[as4] zertifikat_warnfenster_tage` | Days before expiry a `[party.as4]` or `[[as4.partner]]` certificate is reported as a warning, with its date; an expired one blocks. Default `30` |
 | `[as4] allow_no_signing` (`MAKOD_ALLOW_NO_AS4_SIGNING`, `--allow-no-as4-signing`) | **Dev/test:** start without AS4 key material and without an outbox webhook; outbound EDIFACT is logged |
 | `[party.as4] signing_cert_pem_file` · `signing_key_pem_file` | The MP-ID's EMT.MAK signing certificate (leaf first, then intermediates) and key |
 | `[party.as4] encryption_cert_pem_file` · `encryption_key_pem_file` | Its encryption certificate and decryption key |
@@ -675,22 +688,27 @@ The answer is recorded via marktd
 ## MCP Server
 
 `/mcp` on the `--http-addr` port speaks the MCP Streamable HTTP transport
-(spec 2025-11-25): `POST` for JSON-RPC, `GET` for SSE. Sessions are in memory.
+(revisions 2026-07-28 and 2025-11-25): `POST` for JSON-RPC. No session is held
+on either revision, so any replica answers any request and `GET` opens no
+stream (`405`).
 Every request needs `Authorization: Bearer <token>` (API key or OIDC) and the
 Cedar `UseMcp` action; unauthenticated requests are `401`.
 
 ### Tools
 
-`makod` ships **13 MCP tools**:
+`makod` ships **16 MCP tools**:
 
 | Tool | Annotations | Description |
 |---|---|---|
 | `list_commands` | `read_only` | Commands for this instance's Marktrollen, with role, primary PID and whether `marktrolle` is required — call first |
 | `submit_command` | `destructive` | Same as `POST /api/v1/commands`, with progress notifications |
+| `rehearse_command` | `read_only` | Same as `POST /api/v1/probe/{command}` — the door up to its pre-send check, nothing written (`outputSchema` declared) |
 | `get_malo` | `read_only` | Cached Marktlokation by 11-digit ID |
 | `list_partners` | `read_only` | Registered trading partners |
 | `get_partner` | `read_only` | Partner by 13-digit MP-ID |
 | `get_health` | `read_only` | Version, tenant, Marktrollen, MaLo cache stats |
+| `get_policy` | `read_only` | Same as `GET /api/v1/policy` — the `[policy]` settings with origin and source, `deployment.rollen` and every `allow_*` posture |
+| `einrichtung_checkliste` | `read_only` | Same as `GET /admin/einrichtung/deployment` — the readiness checklist across `[[einrichtung.dienst]]` (`outputSchema` declared) |
 | `get_process` | `read_only` | Business key (`malo_id`/`melo_id`/`vorgang`) or process id → every process indexed under it, each with its pending deadlines (`outputSchema` declared) |
 | `get_process_history` | `read_only` | A process's events, oldest first; a market message carries `richtung`, `pid` and `message_ref` as its workflow states them (`EventPayload::verlauf`), never parsed from the event type; an answer adds `antwortcode`, `codeliste` (`EventPayload::antwort`) and the BDEW's `bedeutung`, resolved through `mako_pruefung::codes::lies` in that list only (`outputSchema` declared) |
 | `list_overdue_deadlines` | `read_only` | Deadlines past due and not yet fired — the deadline worker's backlog, not missed Fristen (those are processd `list_overdue_processes`) |
@@ -709,9 +727,11 @@ the action its REST twin enforces:
 | Tool | Additional Cedar action |
 |---|---|
 | `submit_command` | `SubmitCommand` (command, Marktrolle, PID) |
+| `rehearse_command` | `RehearseCommand` (command, Marktrolle, PID) |
 | `get_malo` | `AdminMaloRead` |
 | `list_partners`, `get_partner` | `AdminPartnerRead` |
 | `get_process`, `get_process_history`, `list_overdue_deadlines` | `ReadProcess`, per workflow (`get_process` leaves out each process the caller may not read, and answers `not_found` when none remains; `get_process_history` answers a refused process `not_found`) |
+| `get_policy`, `einrichtung_checkliste` | `AdminEinrichtung` |
 | `list_dead_letters` | `ReadProcess` across workflows — a workflow-scoped principal is denied outright |
 | `list_commands`, `get_health`, `get_format_version_coverage`, `list_active_processes`, `get_outbox_status` | none — no tenant data |
 
@@ -735,8 +755,8 @@ the action its REST twin enforces:
 
 | Prompt | Arguments | Guides |
 |---|---|---|
-| `gpke-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | GPKE Lieferbeginn Strom |
-| `geli-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | GeLi Gas Lieferbeginn |
+| `gpke-lieferbeginn` | `malo_id`, `lieferbeginn_datum` (YYYY-MM-DD) | GPKE Lieferbeginn Strom — the 55001 body with every Muss fact, as `GpkeLieferbeginnAnmelden` reads it |
+| `geli-lieferbeginn` | `malo_id`, `process_date` (YYYYMMDD) | GeLi Gas Lieferbeginn — the 44001 body with every Muss fact, as `GeliLieferbeginnAnmelden` reads it |
 | `wim-geraetewechsel` | `melo_id`, `process_date`, `receiver_mp_id`, `marktrolle` | WiM Gerätewechsel |
 | `msb-preisanfrage` | — | MSB Preisanfrage (REQOTE/QUOTES, PRICAT 27003) |
 | `wim-gas-anmeldung` | — | GNB answers a gMSB Anmeldung (UTILMD G 44042–44053) |
@@ -765,6 +785,32 @@ cluster, reach `/mcp` through `kubectl port-forward` or an internal `Service`.
 
 ---
 
+## Einrichtung {#einrichtung}
+
+Every startup check reports a finding instead of stopping at the first:
+`[[party]]`, `[deployment] rollen`, the Codenummer each MP-ID's prefix implies,
+adapter coverage per format version, AS4 key material and certificate expiry,
+Cedar policies, the credentials of every port, callback URLs, the `[marktd]`
+subscription. Each finding names its severity (`blockiert` refuses the boot,
+`warnung` is logged), its checklist area, the `makod.toml` path and, where a
+document fixes the rule, the document.
+
+| Surface | What it shows |
+|---|---|
+| `makod --check-config [--json]` | The findings; exit non-zero on a blocking one. Opens no store |
+| `GET /admin/einrichtung` | The same JSON: `dienst`, `version`, `bereit`, `befunde`, `policy`, `parteien` |
+| `GET /admin/einrichtung/deployment` | The checklist across makod and every `[[einrichtung.dienst]]`: one item per area — green, amber, red, or unknown when a daemon cannot be reached — and a finding when two daemons name different MP-IDs for one Rolle and Sparte |
+
+```toml
+[[einrichtung.dienst]]
+name         = "processd"
+url          = "http://processd:8580"
+api_key_file = "/etc/makod/processd.key"   # or api_key; a credential its read-config admits
+```
+
+At each boot makod compares its policy report with the one it stored at the
+previous boot and logs every changed value at `warn`.
+
 ## REST API Endpoints
 
 All on the `--http-addr` port.
@@ -772,13 +818,17 @@ All on the `--http-addr` port.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/api/v1/commands` | Bearer · `SubmitCommand` | [ERP command](#erp-commands-post-api-v1-commands) |
+| `POST` | `/api/v1/probe/{command}` | Bearer · `RehearseCommand` | [Rehearse a command](#rehearse-a-command-post-api-v1-probe-command) — writes nothing |
 | `POST` | `/edifact` | Bearer · `IngestEdifact` | Raw EDIFACT interchange |
 | `GET` | `/api/v1/invoic/{process_id}/rechnung` | Bearer · `ReadRechnung` | BO4E billing data of an INVOIC process |
 | `GET` `PUT` `DELETE` | `/admin/partners/{mp_id}` · `GET /admin/partners` · `POST /admin/partners/import` | Bearer · `AdminPartner*` | [Partner registry](#partner-management-admin-partners) |
 | `GET` `PUT` `DELETE` | `/admin/malo/{malo_id}` · `GET /admin/malo/stats` | Bearer · `AdminMalo*` | [MaLo cache](#malo-cache-admin-malo) |
 | `POST` | `/admin/migrations` | Bearer · `AdminMigrations` | Migrate in-flight process streams between format versions while live (`{"from":"FV2025-10-01","to":"FV2026-10-01"}`) |
+| `GET` | `/admin/einrichtung` | Bearer · `AdminEinrichtung` | [Configuration findings](#einrichtung) — the `--check-config --json` body |
+| `GET` | `/admin/einrichtung/deployment` | Bearer · `AdminEinrichtung` | [Deployment checklist](#einrichtung) across `[[einrichtung.dienst]]` |
+| `GET` | `/api/v1/policy` | Bearer · `AdminEinrichtung` | The policy report: `[policy]`, `deployment.rollen`, every `allow_*` posture |
 | `GET` | `/metrics` | Bearer · `ReadMetrics` | Prometheus |
-| `POST` `GET` | `/mcp` | Bearer · `UseMcp` | [MCP server](#mcp-server) |
+| `POST` | `/mcp` | Bearer · `UseMcp` | [MCP server](#mcp-server) |
 | `GET` | `/api/v1/openapi.json` | public | OpenAPI 3.1 document — open it in any Swagger UI or Redoc |
 | `GET` | `/health/live` · `/health/ready` · `/health` | public | [Probes](#health-checks) |
 
@@ -884,7 +934,15 @@ for the full contract.
   "payload": {
     "malo_id":            "51238696012",
     "lieferbeginn_datum": "2026-10-01",
-    "bilanzkreis":        "11XBK-STD------Y"
+    "transaktionsgrund":  "E03",
+    "bilanzkreis":        "11XBK-STD------Y",
+    "haushaltskunde":     true,
+    "enfg_grundlage":     "ZG1",
+    "kunde": {
+      "nachname": "Mustermann",
+      "anschrift": { "strasse": "Hauptstraße", "hausnummer": "1",
+                     "postleitzahl": "50667", "ort": "Köln", "landescode": "DE" }
+    }
   }
 }
 ```
@@ -1098,6 +1156,8 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `geli.stornierung.bestaetigen` | `GNB` | GeLi Gas | 44023 | GNB confirms an inbound Stornierungsanfrage (`E15`, `G_0004`) |
 | `geli.stornierung.ablehnen` | `GNB` | GeLi Gas | 44024 | GNB refuses it — `E14` with `bemerkung`, `Z14` or `ZE1` (`G_0003`) |
 | `geli.stammdaten.anfrage.beantworten` | `GNB` · `LFG` | GeLi Gas | 44142 · 44157 · 44181 · 44182 · 44138 · 44151 · 44152 | the Verantwortlicher answers an Anfrage zur Stammdatenänderung (UTILMD AHB Gas 1.2 Kap. 5.12) from the column the code selects — the GNB with what marktd holds, the LF with its own facts⁶ |
+| `geli.stammdaten-aenderung.beantworten` | `GNB` · `LFG` | GeLi Gas | 44115 · 44111 · 44121 · 44124 · 44119 · 44161 · 44176 | the Berechtigter answers an inbound Stammdatenänderung (UTILMD AHB Gas 1.2 Kap. 5.10–5.11) — the 44115 to the GNB's 44112 — with a code of its column's Codeliste (`G_0016` publishes `E15` alone); due by the end of the 10. WT after Eingang (AWH GeLi Gas V1.2 Kap. 4.3.2 Nr. 2) |
+| `geli.stammdaten-aenderung.senden` | `GNB` · `LFG` | GeLi Gas | 44112 · 44109 | the Verantwortlicher sends a nicht bilanzierungsrelevante Änderung: the GNB's 44112 (Kap. 5.10.1) with the changed groups read from marktd, the LF's 44109 (Kap. 5.11.3) with its own facts; the other Änderung PIDs answer `501` |
 | `gpke.stornierung.bestaetigen` | `NB` | GPKE | 55023 | NB confirms an inbound Stornierungsanfrage (`E15`, `S_0086`) |
 | `gpke.stornierung.ablehnen` | `NB` | GPKE | 55024 | NB refuses it — `E14` with `bemerkung`, `Z14` or `ZE1` (`S_0087`) |
 | `gpke.geschaeftsdatenanfrage.anfragen` | `LF` · `MSB` | GPKE | 17132 | LF or MSB asks the NB for a Lokation's Stammdaten (ORDERS, `BGM+Z14` with the Anfrage-Nummer); answer due 1 WT after the Anfrage (GPKE Teil 4 Kap. 3.2 Nr. 2) |
@@ -1198,7 +1258,7 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 
 | Command | Required ERP payload fields |
 |---------|-----------------------------|
-| `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum`, `bilanzkreis`, `transaktionsgrund` |
+| `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum`, `transaktionsgrund` (`E01`/`E03`), `bilanzkreis`, `haushaltskunde`, `enfg_grundlage` (with `enfg_grund` beside `ZF9`), `kunde`; optional `transaktionsgrund_ergaenzung` (`ZW4` default, `ZAP`) — no other key¹⁰ |
 | `gpke.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `transaktionsgrund` — nothing else³ |
 | `geli.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `bilanzierungsbeginn`, `transaktionsgrund` — nothing else³ |
 | `gpke.eog.bestaetigen` | `malo_id`, `versorgungsart` (ZC9/ZD0/ZE3), `bilanzkreis`, `enfg_grundlage` (ZF9/ZG0/ZG1), `enfg_grund` (ZU5…ZV3, beside ZF9 only)⁹ |
@@ -1224,6 +1284,8 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `gpke.stornierung.bestaetigen` · `geli.stornierung.bestaetigen` | `vorgang_id` (the Anfrage's `IDE+24` Vorgangsnummer) |
 | `gpke.stornierung.ablehnen` · `geli.stornierung.ablehnen` | `vorgang_id`, `antwortcode` (`E14`/`Z14`/`ZE1`), `bemerkung` (with `E14` only) |
 | `geli.stammdaten.anfrage.beantworten` | `malo_id`, `antwort_code` (a code of the column's Codeliste, table in ⁶); on a 44138 the LF's `abrechnungsintervall_monate` (1/3/6/12), `haushaltskunde`, `kunde` (`vorname`/`nachname` or `organisationsname`, `anschrift`), on a 44151 its `bilanzkreis` — each only where the Anfrage filled its group⁶ |
+| `geli.stammdaten-aenderung.beantworten` | `malo_id`, `antwort_code` (a code of the Antwort column's Codeliste) |
+| `geli.stammdaten-aenderung.senden` | `malo_id`, `pid` (`44112`/`44109`), `empfaenger_mp_id`, `aenderungsdatum`, `vertragsbeginn` (`YYYYMMDD`), `gruppen` (the changed groups — `TERMIN_NETZNUTZUNGSABRECHNUNG` … `MARKTLOKATIONSANSCHRIFT` on a 44112, `ABRECHNUNGSINTERVALL_LF`, `GRUPPENZUORDNUNG`, `KUNDE_DES_LF`, `KORRESPONDENZANSCHRIFT_KUNDE_LF` on a 44109); on a 44109 the LF's `abrechnungsintervall_monate`, `haushaltskunde`, `kunde` |
 | `gpke.geschaeftsdatenanfrage.anfragen` | `lokation_id`, `nb_mp_id`, `anfrage_nummer` (optional, an..35) |
 | `gpke.geschaeftsdatenanfrage.beantworten` | `anfragender_mp_id`, `anfrage_nummer`, `antwort_pid`, `stichtag` (optional, `YYYY-MM-DD`; absent = the Berlin day of sending) — the Stammdaten are read from marktd⁸ |
 | `gpke.geschaeftsdatenanfrage.ablehnen` | `anfragender_mp_id`, `anfrage_nummer`, `anfragender` (`LF`/`MSB`), `antwortcode` |
@@ -1346,6 +1408,19 @@ from marktd for the Zuordnungsbeginn. A missing fact is refused naming it —
 `invalid_payload` for the command's, `422 stammdaten_unvollstaendig` for
 marktd's — and the 55014 passes the pre-send gate before anything is written.
 
+¹⁰ The Anmeldung 55001 carries what UTILMD AHB Strom 2.2 Kap. 8.2 makes Muss:
+`SG4 STS+7` with `E01` Ein-/Auszug (Umzug) or `E03` Wechsel and the Ergänzung
+`ZW4` or `ZAP` (S. 73) — `ZW4` where the caller states none, because the LF
+names a ruhende Marktlokation with it too (Kap. 5.5.2.4, S. 49) — the `SG8 SEQ+Z79`
+Bilanzkreis (S. 78), `SEQ+Z01 CCI+++Z15`/`Z18` Gruppenzuordnung (S. 83),
+`SEQ+Z75 CCI+Z61` Grundlage nach EnFG with `CAV` beside `ZF9` (S. 85), and
+`SG12 NAD+Z09` Kunde des Lieferanten with `NAD+Z04` Korrespondenzanschrift
+(S. 86). The body is `mako_markt::commands::GpkeLieferbeginnAnmelden`; a missing
+fact or a Grund the column does not admit is `invalid_payload` naming the
+segment, and the 55001 passes the pre-send gate before anything is written.
+`processd` `POST /api/v1/start-supply` builds it from the supply contract
+`vertragd` holds.
+
 ### Integrated operators (NB + MSB, same MP-ID)
 
 A Stadtwerke operating as NB and MSB under one MP-ID lists both roles on its
@@ -1364,7 +1439,6 @@ and no `[[as4.partner]]` entry. Self-addressed by design:
 | ORDERS 17116 (Anfrage Sperrung Strom) | `gpke-sperrung-msb` | NB → MSB |
 | ORDERS 17116 (Anfrage Gas-Sperrung) | `geli-gas-sperrung-nb` | GNB → gMSB |
 | ORDERS 17134/17135 (Konfiguration) | `gpke-konfiguration` | NB → MSB |
-| ORDERS 17001/17009 (Geräteübernahme) | `wim-geraeteubernahme` | NB → MSBA |
 
 | PID(s) received via loopback | Action | Workflow |
 |---|---|---|
@@ -1453,7 +1527,7 @@ REQOTE **35003** „Anfrage von Werten" is ESA → MSB (REQOTE AHB 1.2 §4.3) an
 routes to `wim-wertebestellung` on the PID alone. **35002** is a different
 process (LF → MSB, WiM Teil 1, §4.2).
 
-`deployment-roles ESA` registers the ESA side's inbound answers (QUOTES 15003,
+The `ESA` party role (`esa-strom`) registers the ESA side's inbound answers (QUOTES 15003,
 ORDRSP 19011–19014). An MSB serving an ESA registers ORDERS 17007 under `MSB`.
 The sets are disjoint, so an integrated deployment may hold both.
 
@@ -1673,6 +1747,83 @@ applied does not overwrite it. `PUT /admin/malo/{malo_id}` stays available for
 an ERP that keeps the cache itself.
 
 ---
+
+## Rehearse a command (`POST /api/v1/probe/{command}`)
+
+Before go-live, the rehearsal shows whether the first real message would pass:
+it runs the command's own door on a payload — the same body
+`POST /api/v1/commands` takes — up to the door's pre-send check, and answers
+with the check's verdict and the message the door built. **Nothing is queued,
+sent or stored**: no process, no outbox entry, no idempotency record, so no
+`Idempotency-Key` is needed and a repeat is another rehearsal.
+
+The rehearsal runs the registered door itself, so the verdict is the door's
+own — where the real command is refused, `grund` is that refusal word for
+word. The door ends at its pre-send check, before the duplicate guard and the
+spawn, and `spawn_process` refuses inside a rehearsal as a second line.
+
+```http
+POST /api/v1/probe/geli.lieferende.anmelden HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{ "payload": { "malo_id": "51238696012", "process_date": "20261231", "transaktionsgrund": "E03" } }
+```
+
+```json
+{
+  "command": "geli.lieferende.anmelden",
+  "marktrolle": "LFG",
+  "urteil": "abgelehnt",
+  "stufe": "pruefung",
+  "grund": "invalid_payload: the UTILMD violates its AHB profile: STS (Nr 00025): DE 9013 „Statusanlass, Code“ is \"E03\"; the Prüfschablone of 44004 admits E01, Z33, Z41, ZG9, ZH1, ZH2, ZT4, ZT5, ZZD",
+  "nachrichten": [{
+    "nachrichtentyp": "UTILMD",
+    "pruefidentifikator": 44004,
+    "empfaenger": "9800357000005",
+    "formatversion": "FV2026-10-01",
+    "ahb_version": "1.2",
+    "wire": "UNB+UNOC:3+…'UNH+…'…'UNZ+1+…'",
+    "segmente": [
+      { "position": 8, "tag": "STS", "nr": "00025", "gruppe": "SG4",
+        "name": "Transaktionsgrund", "text": "STS+7++E03'",
+        "elemente": ["7", "", "E03"],
+        "befunde": [{ "text": "STS (Nr 00025): DE 9013 …", "regel": "AHB-44004-00025-STS-9013-CODE",
+                      "element": 2, "komponente": 0 }] }
+    ],
+    "befunde": []
+  }]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `urteil` | `besteht` — the door built the message and the check passes it; `abgelehnt` — the door or the check refuses |
+| `stufe` | `tuer` — the door refused before a message existed (a missing field, a MaLo not in the cache, a Stammdatum marktd lacks); `pruefung` — the message's profile refuses it. Absent on `besteht` |
+| `grund` | The refusal as the real command is answered with (the MCP `submit_command` wording) |
+| `nachrichten[]` | Each UTILMD the door built: `formatversion` and `ahb_version` of the profile that named its segments, the rendered `wire`, and `segmente` from `UNH` (position 1) to `UNT` |
+| `segmente[]` | `tag`, the MIG place's `nr`, the enclosing groups `gruppe`, the MIG's `name` for the place, the segment `text`, its `elemente` (components joined by `:`) and the `befunde` that sit on it — `element`/`komponente` index into `elemente` |
+
+`200` carries the verdict whether the message passes or not. A refusal to
+rehearse is a `422`: `unknown_command`; `not_rehearsable` — the command's door
+has no pre-send check that runs before it writes; `role_not_configured`,
+naming the Marktrolle the command needs and the ones `[deployment] rollen`
+declares; `marktrolle_required`; `role_not_permitted`. Cedar evaluates
+`RehearseCommand` on the same `Command` resource as `SubmitCommand`.
+
+Rehearsable — the doors that render and check their UTILMD before they write:
+
+| Command | Prüfidentifikator |
+|---|---|
+| `gpke.lieferbeginn.anmelden` | 55001 Anmeldung |
+| `gpke.lieferende.anmelden` | 55004 Abmeldung |
+| `gpke.kuendigung.anmelden` | 55016 Kündigung |
+| `geli.lieferbeginn.anmelden` | 44001 Anmeldung NN |
+| `geli.lieferende.anmelden` | 44004 Abmeldung NN |
+| `geli.kuendigung.anmelden` | 44016 Kündigung |
+
+The Desk's Einrichtung rehearsal panel posts here and renders the answer as
+it comes.
 
 ## EDIFACT Rendering
 

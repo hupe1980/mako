@@ -21,7 +21,7 @@ just dev productd      # dev/config/productd.toml against the dev PostgreSQL
 | **Identities** | `tenant` is the data-isolation key, `lf_mp_id` the market identity products are sold under (defaults to `tenant`) |
 | **Versioning** | one row per price version, `[valid_from, valid_to]`, no overlap (GiST); `PUT` of a future version end-dates the running one; `DELETE` withdraws, never deletes (§ 147 AO) |
 | **EPEX** | keyed on the UTC start of the market time unit; 15-minute MTUs since delivery day 1 Oct 2025 |
-| **MCP** | 13 tools + 3 prompts at `/mcp` |
+| **MCP** | 14 tools + 3 prompts at `/mcp` |
 
 ## Routes
 
@@ -70,6 +70,11 @@ audience = "productd"
 [mcp]
 api_key = "env:PRODUCTD_MCP_API_KEY"
 ```
+
+`productd --check-config [--json]` prints every configuration finding (path,
+severity, source) and exits non-zero on a blocking one; the same findings are
+served at `GET /admin/einrichtung`, the posture at `GET /api/v1/policy` and by
+the MCP tool `get_policy`.
 
 DB suite: `just test-productd-db`.
 

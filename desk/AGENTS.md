@@ -47,6 +47,22 @@ script (`allowScripts` in `package.json`).
   clears the cache (`src/app/rollen.tsx`). No view combines two Rollen's data.
 - **Agent text keeps its disclosure.** Render a model's text through `AiNote`,
   with agentd's `AI-generated.` sentence first, as text.
+- **Every word on screen comes from the catalogue** (`src/i18n/`). Add the
+  German string to `de.ts` and its English twin to `en.ts` — `en` is typed as
+  `de`'s shape, so a missing key is a type error — and read it with
+  `const t = useT()` (`katalog()` outside a component). A sentence with a value
+  in it is a function (`zeile: (pid, zustand) => …`), so word order is the
+  language's. The market's vocabulary (MaLo, Frist, PID, APERAK, Lieferbeginn,
+  Klärfall, Werktag, Antwortcode, process names) stays German in `en.ts` too.
+  `cargo xtask check-desk` refuses JSX text and a literal `aria-label`,
+  `title`, `placeholder`, `label`, `textValue` or `alt` in any `.tsx`, with no
+  file exempt, and in any `.ts` module a literal text property (`label:`,
+  `titel:`, `was:`, `verb:`, …) or a code table naming a value in words
+  (`STORNO: "Storno"`); `src/i18n/i18n.test.tsx` renders the views under a marking
+  catalogue and refuses any unmarked word.
+- **A list that opens entries is a `ListDetail`** (`src/design/ListDetail.tsx`)
+  of `ListRow`s: ↑ ↓ select, ↵ opens into the detail, esc returns to the row,
+  the selection in the address; one pane at a phone's width.
 - **Design tokens are the only place a colour, size, radius or duration is
   written** (`src/design/tokens.css`). A new control appears in
   `/dev/gallery` in every state, in light and dark.

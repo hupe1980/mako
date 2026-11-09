@@ -21,6 +21,7 @@ use std::sync::Arc;
 use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
+use crate::config::MsbVorlaufLesart;
 use crate::sperr::model::{Arbeitszeit, OrderStatus, OrderType};
 
 /// The window GPKE Teil 2 § 3.5.1.2 Nr. 1 gives the NB for the physical act:
@@ -107,24 +108,64 @@ pub fn vorlauffrist_befund(
 }
 
 /// The earliest Sperrtermin the NB may set when the MSB has given no **generelle
-/// Zustimmung** to Sperrung/Entsperrung by the NB.
+/// Zustimmung** to Sperrung/Entsperrung by the NB, under the operator's reading
+/// of GPKE Teil 2 Kap. 3.5.1.2 Nr. 2.
 ///
-/// GPKE Teil 2 § 3.5.1.2 Nr. 2 puts this on the NB, not on the LF: „Sofern keine
-/// generelle Zustimmung des MSB … vorliegt, ist der Sperrtermin vom NB so
-/// festzulegen, dass dem MSB noch eine fristgerechte Antwort auf Anfrage vor dem
-/// Sperrtermin möglich ist (s. dazu Fristen der SD-Schritte 3 und 4)." Those two
-/// are the Anfrage's 3 WT before the Sperrtermin (Nr. 3) and the MSB's 3 WT to
-/// answer it (Nr. 4), so the earliest admissible date is six Werktage out.
+/// Nr. 2 puts this on the NB, not on the LF: „Sofern keine generelle Zustimmung
+/// des MSB … vorliegt, ist der Sperrtermin vom NB so festzulegen, dass dem MSB
+/// noch eine fristgerechte Antwort auf Anfrage vor dem Sperrtermin möglich ist
+/// (s. dazu Fristen der SD-Schritte 3 und 4)." Those two are the Anfrage's
+/// 3 WT before the Sperrtermin (Nr. 3) and the MSB's 3 WT to answer it (Nr. 4).
+/// Whether they add up is [`MsbVorlaufLesart`]: `additiv` gives six Werktage,
+/// `wortlaut` the three of Nr. 3.
 ///
 /// With a generelle Zustimmung on file no Anfrage is sent at all and the NB may
 /// schedule freely.
 #[must_use]
-pub fn fruehester_sperrtermin_ohne_msb_zustimmung(heute: Date) -> Date {
-    mako_fristen::add_werktage(
-        heute,
-        mako_fristen::vorlauf::SPERRUNG_MSB_ANFRAGE_WT + MSB_ANTWORT_WERKTAGE,
-        mako_fristen::HolidayCalendar::BdewMaKo,
-    )
+pub fn fruehester_sperrtermin_ohne_msb_zustimmung(heute: Date, lesart: MsbVorlaufLesart) -> Date {
+    let werktage = match lesart {
+        MsbVorlaufLesart::Additiv => {
+            mako_fristen::vorlauf::SPERRUNG_MSB_ANFRAGE_WT + MSB_ANTWORT_WERKTAGE
+        }
+        MsbVorlaufLesart::Wortlaut => mako_fristen::vorlauf::SPERRUNG_MSB_ANFRAGE_WT,
+    };
+    mako_fristen::add_werktage(heute, werktage, mako_fristen::HolidayCalendar::BdewMaKo)
+}
+
+/// Whether the date a Sperrauftrag asks for leaves the MSB its window, when
+/// the MSB has given no generelle Zustimmung — and the reading that decided it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MsbFenster {
+    /// The date the order asks for: `DTM+203` or `DTM+469`.
+    pub angefragt: Date,
+    /// The earliest Sperrtermin the NB may set without a generelle Zustimmung,
+    /// counted from the day the order arrived.
+    pub fruehester_sperrtermin: Date,
+    /// `false` when [`Self::angefragt`] lies before
+    /// [`Self::fruehester_sperrtermin`]: without a Zustimmung on file the NB
+    /// cannot set the Sperrtermin on the date asked for.
+    pub eingehalten: bool,
+    /// `[policy] msb_vorlauf_lesart` — the reading the date was counted under.
+    pub lesart: mako_service::policy::PolicyTriple,
+}
+
+/// The MSB window of a Sperrauftrag that arrived on `eingang`, or `None` for
+/// an order that names no date (an Entsperrauftrag).
+#[must_use]
+pub fn msb_fenster(
+    eingang: Date,
+    ausfuehrung_am: Option<Date>,
+    fruehestens_am: Option<Date>,
+    lesart: &mako_service::policy::Policy<MsbVorlaufLesart>,
+) -> Option<MsbFenster> {
+    let angefragt = ausfuehrung_am.or(fruehestens_am)?;
+    let fruehester_sperrtermin = fruehester_sperrtermin_ohne_msb_zustimmung(eingang, lesart.get());
+    Some(MsbFenster {
+        angefragt,
+        fruehester_sperrtermin,
+        eingehalten: angefragt >= fruehester_sperrtermin,
+        lesart: lesart.triple(),
+    })
 }
 
 /// „Unverzüglich, jedoch spätester ÜT ist der **3. WT** nach dem ÜT von Nr. 3" —
@@ -302,6 +343,40 @@ pub struct SperrOrderRow {
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+}
+
+/// An order as the field dispatcher reads it: the row, and the earliest
+/// Sperrtermin the NB may set when the MSB has given no generelle Zustimmung.
+///
+/// Stated, not enforced: whether a Zustimmung is on file is not recorded here,
+/// so the dispatcher reads the date beside the order before fixing the
+/// Sperrtermin.
+#[derive(Debug, Serialize)]
+pub struct SperrOrderView {
+    #[serde(flatten)]
+    pub order: SperrOrderRow,
+    /// `None` for an order that names no date.
+    pub msb_fenster: Option<MsbFenster>,
+}
+
+impl SperrOrderView {
+    /// The view of `order` under `lesart`, counting from the day it arrived.
+    #[must_use]
+    pub fn new(
+        order: SperrOrderRow,
+        lesart: &mako_service::policy::Policy<MsbVorlaufLesart>,
+    ) -> Self {
+        let msb_fenster = match order.order_type {
+            OrderType::Sperrung => msb_fenster(
+                mako_fristen::berlin_date(order.created_at),
+                order.ausfuehrung_am,
+                order.fruehestens_am,
+                lesart,
+            ),
+            OrderType::Entsperrung => None,
+        };
+        Self { order, msb_fenster }
+    }
 }
 
 const ORDER_COLUMNS: &str = "id::TEXT, tenant, malo_id, lf_mp_id, order_type, \
@@ -1396,21 +1471,53 @@ mod vorlauf_tests {
         assert!(vorlauffrist_befund(None, None, d(2026, Month::October, 20)).is_none());
     }
 
-    /// GPKE Teil 2 § 3.5.1.2 Nr. 2 puts a floor on the **NB**: without a
+    /// GPKE Teil 2 Kap. 3.5.1.2 Nr. 2 puts a floor on the **NB**: without a
     /// generelle MSB-Zustimmung the Sperrtermin must leave room for the
-    /// Anfrage (3 WT before it) *and* the MSB's answer (3 WT to give it).
+    /// Anfrage (3 WT before it) and — under the default `additiv` reading —
+    /// the MSB's answer (3 WT to give it) on top.
     #[test]
-    fn the_earliest_sperrtermin_leaves_the_msb_its_window() {
-        // Monday 2026-11-02 + 6 WT = Tuesday 2026-11-10.
+    fn the_earliest_sperrtermin_follows_the_reading() {
+        use crate::config::MsbVorlaufLesart;
+        // Monday 2026-11-02 + 6 WT = Tuesday 2026-11-10; + 3 WT = Thursday.
         let heute = d(2026, Month::November, 2);
         assert_eq!(
-            fruehester_sperrtermin_ohne_msb_zustimmung(heute),
+            fruehester_sperrtermin_ohne_msb_zustimmung(heute, MsbVorlaufLesart::Additiv),
             d(2026, Month::November, 10)
         );
-        // …which is exactly the Anfrage window plus the answer window.
+        assert_eq!(
+            fruehester_sperrtermin_ohne_msb_zustimmung(heute, MsbVorlaufLesart::Wortlaut),
+            d(2026, Month::November, 5)
+        );
         assert_eq!(
             mako_fristen::vorlauf::SPERRUNG_MSB_ANFRAGE_WT + MSB_ANTWORT_WERKTAGE,
             6
         );
+    }
+
+    /// A Sperrtermin five Werktage out: inside the MSB's window under
+    /// `additiv`, which names itself and the earliest date; admissible under
+    /// `wortlaut`.
+    #[test]
+    fn a_sperrtermin_five_werktage_out_is_too_early_only_under_additiv() {
+        use crate::config::{MsbVorlaufLesart, ProcessdPolicy};
+        use mako_service::policy::Policy;
+        let eingang = d(2026, Month::November, 2);
+        let fuenf_wt = d(2026, Month::November, 9);
+
+        let standard = ProcessdPolicy::default().msb_vorlauf_lesart;
+        assert_eq!(standard.get(), MsbVorlaufLesart::Additiv);
+        let additiv = msb_fenster(eingang, Some(fuenf_wt), None, &standard).expect("dated");
+        assert!(!additiv.eingehalten);
+        assert_eq!(additiv.fruehester_sperrtermin, d(2026, Month::November, 10));
+        assert_eq!(additiv.lesart.key, "msb_vorlauf_lesart");
+        assert_eq!(additiv.lesart.value, "additiv");
+        assert!(additiv.lesart.quelle.contains("Kap. 3.5.1.2 Nr. 2"));
+
+        let wortlaut = Policy::explicit(MsbVorlaufLesart::Wortlaut);
+        let w = msb_fenster(eingang, None, Some(fuenf_wt), &wortlaut).expect("dated");
+        assert!(w.eingehalten);
+        assert_eq!(w.lesart.value, "wortlaut");
+
+        assert!(msb_fenster(eingang, None, None, &standard).is_none());
     }
 }

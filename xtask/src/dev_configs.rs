@@ -10,8 +10,9 @@
 //! `dev/ports.toml` names each service's dev port. A config listens on
 //! `[http] addr = "127.0.0.1:<port>"` — the one listen shape; a top-level
 //! `port` is refused — and every `http://127.0.0.1:<port>` URL in it reaches
-//! the service its key names (`marktd_url`, `[marktd] url`, `marktd = …`), or,
-//! for a key that names none (`webhook_url`), some port the table holds. A port
+//! the service its key names (`marktd_url`, `[marktd] url`, `marktd = …`) or
+//! its table names (`[[einrichtung.dienst]] name = "marktd"` beside `url`),
+//! or, for a key that names none (`webhook_url`), some port the table holds. A port
 //! copied by hand into the nine files that call a service is the drift this
 //! stops: a dev stack that starts and does not talk.
 
@@ -109,7 +110,16 @@ fn strings<'a>(v: &'a toml::Value, path: &mut Vec<String>, out: &mut Vec<(Vec<St
         }
         toml::Value::Array(a) => {
             for v in a {
+                // A table in an array that names a service (`[[einrichtung.dienst]]
+                // name = "marktd"`) names it for each URL beside the name.
+                let named = v.get("name").and_then(toml::Value::as_str);
+                if let Some(n) = named {
+                    path.push(n.to_owned());
+                }
                 strings(v, path, out);
+                if named.is_some() {
+                    path.pop();
+                }
             }
         }
         _ => {}
@@ -239,6 +249,22 @@ fn a_port_moved_in_the_table_names_every_file_that_disagrees() {
             "{caller} calls marktd and is not named: {out:#?}"
         );
     }
+}
+
+/// A daemon the checklist asks by `name` is reached on that daemon's port.
+#[test]
+fn a_named_table_reaches_the_service_it_names() {
+    let services = BTreeMap::from([("svc".to_owned(), 9000), ("marktd".to_owned(), 8180)]);
+    let config = |port: u16| {
+        format!(
+            "[http]\naddr = \"127.0.0.1:9000\"\n[[einrichtung.dienst]]\nname = \"marktd\"\n\
+             url = \"http://127.0.0.1:{port}\"\n"
+        )
+    };
+    assert!(port_problems("svc", &config(8180), &services, &BTreeSet::new()).is_empty());
+    let out = port_problems("svc", &config(9000), &services, &BTreeSet::new());
+    assert_eq!(out.len(), 1, "{out:#?}");
+    assert!(out[0].contains("names marktd"), "{out:#?}");
 }
 
 #[test]

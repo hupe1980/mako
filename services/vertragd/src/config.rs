@@ -141,42 +141,56 @@ impl VertragdConfig {
     ///
     /// When either is unconfigured and `allow_insecure_no_auth` is not set.
     pub fn check_auth_posture(&self) -> anyhow::Result<()> {
+        let fehlt: Vec<String> = self.auth_befunde().into_iter().map(|b| b.text).collect();
+        if fehlt.is_empty() {
+            return Ok(());
+        }
+        Err(anyhow::Error::msg(format!(
+            "vertragd refuses to start: {}. Configure them, or set \
+             allow_insecure_no_auth = true to accept an unauthenticated deployment.",
+            fehlt.join("; ")
+        )))
+    }
+
+    /// One finding per missing credential of [`Self::check_auth_posture`],
+    /// each at its own key — none under `allow_insecure_no_auth`.
+    pub fn auth_befunde(&self) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
         if self.allow_insecure_no_auth {
             tracing::warn!(
                 "vertragd: allow_insecure_no_auth is set — requests are admitted with dev \
                  claims and inbound webhooks are accepted unsigned"
             );
-            return Ok(());
+            return Vec::new();
         }
-        let mut fehlt = Vec::new();
+        let mut out = Vec::new();
         if self.oidc.is_none() {
-            fehlt.push(
+            out.push((
+                "oidc",
                 "[oidc] — without it every request is admitted with dev claims, GDPR \
                  customer data, IBANs and contract mutation included",
-            );
+            ));
         }
         if self.inbound_secret.is_none() {
-            fehlt.push(
+            out.push((
+                "inbound_secret",
                 "inbound_secret — without it POST /api/v1/events and \
                  POST /api/v1/webhooks/angebot accept any unsigned body, and a forged one \
                  confirms supply or creates a contract",
-            );
+            ));
         }
         if self.erp_webhook_url.is_some() && self.erp_hmac_secret.is_none() {
-            fehlt.push(
+            out.push((
+                "erp_hmac_secret",
                 "erp_hmac_secret — erp_webhook_url is set, and `OutboxWorker` signs only \
                  when it has a secret: every de.vertrag.* CloudEvent, the § 41 Abs. 5 EnWG \
                  notices among them, goes to the ERP unsigned and the receiver cannot tell \
                  one from a forgery",
-            );
+            ));
         }
-        anyhow::ensure!(
-            fehlt.is_empty(),
-            "vertragd refuses to start: {}. Configure them, or set \
-             allow_insecure_no_auth = true to accept an unauthenticated deployment.",
-            fehlt.join("; ")
-        );
-        Ok(())
+        out.into_iter()
+            .map(|(pfad, text)| Befund::blockiert(pfad, text).bereich(Bereich::Zugriff))
+            .collect()
     }
 }
 
@@ -266,6 +280,15 @@ mod tests {
         config("")
             .check_auth_posture()
             .expect("no erp_webhook_url means no unsigned delivery");
+    }
+
+    /// Every missing credential is its own finding, not the first.
+    #[test]
+    fn every_missing_credential_is_reported() {
+        let mut cfg = config(r#"erp_webhook_url = "https://erp.example.test/events""#);
+        cfg.oidc = None;
+        let pfade: Vec<String> = cfg.auth_befunde().into_iter().map(|b| b.pfad).collect();
+        assert_eq!(pfade, ["oidc", "erp_hmac_secret"]);
     }
 
     /// The escape hatch still opens every door, this one included.

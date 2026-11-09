@@ -204,6 +204,26 @@ impl FormatVersion {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The Anwendungszeitpunkt the version names — `FV2025-10-01` is
+    /// 2025-10-01 — or `None` for a value [`FormatVersion::new`] took
+    /// unchecked that is no `FV<YYYY>-<MM>-<DD>`.
+    ///
+    /// ```
+    /// use mako_engine::version::FormatVersion;
+    ///
+    /// let fv = FormatVersion::parse("FV2025-10-01").unwrap();
+    /// assert_eq!(fv.date(), Some(time::macros::date!(2025 - 10 - 01)));
+    /// assert_eq!(FormatVersion::new("v1").date(), None);
+    /// ```
+    #[must_use]
+    pub fn date(&self) -> Option<time::Date> {
+        Self::parse(&self.0).ok()?;
+        let d = self.0.strip_prefix("FV")?;
+        let month = time::Month::try_from(d.get(5..7)?.parse::<u8>().ok()?).ok()?;
+        time::Date::from_calendar_date(d.get(..4)?.parse().ok()?, month, d.get(8..)?.parse().ok()?)
+            .ok()
+    }
 }
 
 impl fmt::Display for FormatVersion {

@@ -21,24 +21,33 @@ impl Daemon for Portald {
     type Config = PortaldConfig;
     const NAME: &'static str = "portald";
 
+    /// Every portal route serves one customer's consumption, ledger and
+    /// invoices, and `vertragd` is the only thing that knows which customer.
+    /// Starting without it is refused unless the operator asked for it by name
+    /// — an omitted URL is a mistake, not a request to serve everyone's data to
+    /// everyone.
+    fn validate(cfg: &PortaldConfig) -> Vec<mako_service::Befund> {
+        let mut out = Vec::new();
+        if cfg.vertragd_url.is_none() && !cfg.allow_insecure_no_auth {
+            out.push(
+                mako_service::Befund::blockiert(
+                    "vertragd_url",
+                    "no `vertragd_url` configured. Every portal route resolves customer \
+                     ownership through vertragd, so without it portald cannot tell one \
+                     customer's Lastgang, Kontoauszug and invoices from another's. Set \
+                     `vertragd_url`, or set `allow_insecure_no_auth = true` to accept a \
+                     deployment that serves them unauthorised.",
+                )
+                .bereich(mako_service::befund::Bereich::Zugriff),
+            );
+        }
+        out
+    }
+
     async fn build(cfg: Arc<PortaldConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
         let mut cfg = (*cfg).clone();
         cfg.resolve_env_refs()?;
 
-        // Every portal route serves one customer's consumption, ledger and
-        // invoices, and `vertragd` is the only thing that knows which customer.
-        // Starting without it is refused unless the operator asked for it by
-        // name — an omitted URL is a mistake, not a request to serve everyone's
-        // data to everyone.
-        if cfg.vertragd_url.is_none() && !cfg.allow_insecure_no_auth {
-            anyhow::bail!(
-                "no `vertragd_url` configured. Every portal route resolves customer \
-                 ownership through vertragd, so without it portald cannot tell one \
-                 customer's Lastgang, Kontoauszug and invoices from another's. Set \
-                 `vertragd_url`, or set `allow_insecure_no_auth = true` to accept a \
-                 deployment that serves them unauthorised."
-            );
-        }
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
                 "portald: allow_insecure_no_auth is set — every caller can read every \

@@ -28,6 +28,7 @@ import { Notice, Panel } from "../design/Panel";
 import { formatBusinessDate, formatInstant } from "../format/date";
 import { seit, useNow } from "../format/frist";
 import { formatCent } from "../format/money";
+import { useT } from "../i18n";
 import { VorschlagKarte } from "./Fragen";
 import { Gehalten } from "./Rechnungen";
 
@@ -61,22 +62,22 @@ function VomAssistenten({ children }: { children: string }) {
 
 /** accountingd's answer to a resolution it did not take, in its words. */
 function Fehler({ error }: { error: unknown }) {
+  const t = useT();
   if (!error || error instanceof Verweigert) return null;
   if (error instanceof ErneutGeparkt)
     return (
-      <Notice tone="info" title="Erneut geparkt">
-        {error.message} — das Hauptbuch hat auch das neue Datum abgelehnt; die Buchung steht gleich
-        wieder in der Liste.
+      <Notice tone="info" title={t.buchungen.erneutGeparkt}>
+        {t.buchungen.erneutGeparktText(error.message)}
       </Notice>
     );
   if (error instanceof SchonErledigt)
     return (
-      <Notice tone="info" title="Schon erledigt">
-        {error.message} Es wurde nichts gebucht.
+      <Notice tone="info" title={t.entscheidung.schonErledigt}>
+        {t.buchungen.nichtsGebucht(error.message)}
       </Notice>
     );
   return (
-    <Notice tone="refusal" title={`${DIENST.accountingd}: Buchung nicht angenommen`}>
+    <Notice tone="refusal" title={t.buchungen.nichtAngenommen(DIENST.accountingd)}>
       {error instanceof Abgelehnt ? error.message : nichtErreichbar("accountingd")}
     </Notice>
   );
@@ -120,6 +121,8 @@ export function GeparktEntscheiden({
   /** The assistant's record for the card's line; read from the catalog when absent. */
   bilanz?: Bilanz | null | undefined;
 }) {
+  const t = useT();
+  const k = t.buchungen;
   const verweigert = useVerweigert({ dienst: "accountingd", aktion: "buchen" });
   const erster = b.vorschlag_datum ?? null;
   const [aktion, setAktion] = useState<Aktion | null>(anfang.aktion ?? (erster ? "buchen" : null));
@@ -131,7 +134,7 @@ export function GeparktEntscheiden({
   const [herkunft, setHerkunft] = useState<{ run: string; v: Vorschlag } | null>(null);
   const [beiseite, setBeiseite] = useState(false);
   const now = useNow();
-  const was = `${buchungsart(b.art)} über ${formatCent(b.betrag_ct)}`;
+  const was = k.was(buchungsart(b.art), formatCent(b.betrag_ct));
   const wartet = nehmbar(vorschlag);
 
   /** The form says what the proposal says — nothing of it was changed. */
@@ -222,30 +225,30 @@ export function GeparktEntscheiden({
 
   return (
     <Panel className="flex flex-col gap-4 p-5">
-      <h3 className="m-0 text-callout font-semibold">Entscheidung</h3>
+      <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
       <p className="m-0 text-body text-text">{b.hinweis}</p>
       <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-body">
-        <dt className="text-text-2">Buchung</dt>
+        <dt className="text-text-2">{k.buchung}</dt>
         <dd className="m-0 text-text">
           {was}
           {b.beleg && <span className="ml-2 font-mono text-caption text-text-2">{b.beleg}</span>}
         </dd>
-        <dt className="text-text-2">Abgelehnt für</dt>
+        <dt className="text-text-2">{k.abgelehntFuer}</dt>
         <dd className="m-0 text-text">
           {formatBusinessDate(b.buchungsdatum)}
           <span className="ml-2 text-caption text-text-2">
             {b.meldung}
-            {b.code !== null && ` (Code ${b.code})`}
+            {b.code !== null && k.code(`${b.code}`)}
           </span>
         </dd>
-        <dt className="text-text-2">Geparkt</dt>
+        <dt className="text-text-2">{k.geparkt}</dt>
         <dd className="m-0 text-text">
           {seit(b.seit, now)}
           <span className="ml-2 text-caption text-text-2">{formatInstant(b.seit)}</span>
         </dd>
       </dl>
       {verweigert ? (
-        <Notice tone="refusal" title={`${DIENST.accountingd}: Sie dürfen hier nicht buchen`}>
+        <Notice tone="refusal" title={k.nichtErlaubt(DIENST.accountingd)}>
           {verweigert}
         </Notice>
       ) : gehalten && gewaehlt ? (
@@ -260,31 +263,27 @@ export function GeparktEntscheiden({
               bilanz={bilanz}
               onUebernehmen={stimmt(wartet.v) ? undefined : uebernehmen}
               onVerwerfen={beiseiteLegen}
-              hinweis={
-                stimmt(wartet.v)
-                  ? "In die Entscheidung übernommen — gebucht oder verworfen wird erst, wenn Sie senden."
-                  : undefined
-              }
+              hinweis={stimmt(wartet.v) ? k.uebernommen : undefined}
             />
           )}
           {!wartet && vorschlag?.status === "running" && (
             <p role="status" className="m-0 flex items-center gap-2 text-caption text-ai">
               <Icon name="sparkle" size={12} className="animate-pulse" />
-              Der Assistent prüft die Buchung …
+              {k.prueft}
             </p>
           )}
           <RadioGroup
-            aria-label="Entscheidung"
+            aria-label={t.entscheidung.titel}
             value={aktion}
             onChange={(v) => waehlen(v as Aktion)}
             orientation="horizontal"
             className="flex gap-2"
           >
             <Radio value="buchen" className={WAHL}>
-              Neu buchen
+              {k.neuBuchen}
             </Radio>
             <Radio value="verwerfen" className={WAHL}>
-              Verwerfen
+              {k.verwerfen}
             </Radio>
           </RadioGroup>
 
@@ -298,16 +297,12 @@ export function GeparktEntscheiden({
               isRequired
               className="flex flex-col gap-1"
             >
-              <Label className="text-caption text-text-2">Neu buchen am</Label>
+              <Label className="text-caption text-text-2">{k.neuBuchenAm}</Label>
               <Input type="date" className={`${FELD} w-48`} />
-              {vomAssistenten && (
-                <VomAssistenten>Datum vom Assistenten vorgeschlagen.</VomAssistenten>
-              )}
+              {vomAssistenten && <VomAssistenten>{k.datumVorgeschlagen}</VomAssistenten>}
               {erster && (
                 <span className="text-caption text-text-2">
-                  {datum === erster
-                    ? "Der erste offene Tag im Hauptbuch."
-                    : `Der erste offene Tag ist der ${formatBusinessDate(erster)}.`}
+                  {datum === erster ? k.ersterOffen : k.ersterOffenAm(formatBusinessDate(erster))}
                 </span>
               )}
             </TextField>
@@ -323,16 +318,9 @@ export function GeparktEntscheiden({
               isRequired
               className="flex flex-col gap-1"
             >
-              <Label className="text-caption text-text-2">
-                Warum wird sie verworfen? (Grund, Pflicht)
-              </Label>
+              <Label className="text-caption text-text-2">{k.warumVerworfen}</Label>
               <TextArea rows={2} maxLength={512} className={FELD} />
-              {vomAssistenten && (
-                <VomAssistenten>
-                  Grund vom Assistenten vorgeschlagen — gesendet steht er unter Ihrem Namen im
-                  Prüfpfad.
-                </VomAssistenten>
-              )}
+              {vomAssistenten && <VomAssistenten>{k.grundVorgeschlagen}</VomAssistenten>}
             </TextField>
           )}
 
@@ -341,7 +329,7 @@ export function GeparktEntscheiden({
           <div className="flex flex-wrap items-center justify-end gap-3">
             {gewaehlt && <p className="m-0 flex-1 text-caption text-text-2">{gewaehlt.was}</p>}
             <AriaButton isDisabled={!bereit} onPress={senden} className={PRIMAER}>
-              {aktion === "verwerfen" ? "Buchung verwerfen" : "Neu buchen"}
+              {aktion === "verwerfen" ? k.buchungVerwerfen : k.neuBuchen}
             </AriaButton>
           </div>
         </>

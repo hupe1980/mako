@@ -156,6 +156,10 @@ pub struct AgentdConfig {
     #[serde(default)]
     pub vorschlaege: VorschlaegeConfig,
 
+    /// `[quellen]` — the passage index `quote_source` and `find_source` read.
+    #[serde(default)]
+    pub quellen: QuellenConfig,
+
     /// OIDC configuration.
     ///
     /// Authenticates `POST /api/v1/runs` and — with no dev-mode relaxation — the
@@ -165,7 +169,7 @@ pub struct AgentdConfig {
     /// a convenience.
     pub oidc: Option<mako_service::oidc::OidcConfig>,
 
-    /// The Cedar policy set. Omit to use mako's own, embedded in the binary.
+    /// The Cedar policy set, and the plane's operator settings.
     #[serde(default)]
     pub policy: PolicyConfig,
 
@@ -200,6 +204,20 @@ impl mako_service::service::ServiceConfig for AgentdConfig {
     fn bind_addr(&self) -> String {
         self.http.addr.clone()
     }
+}
+
+// ── Quellen ────────────────────────────────────────────────────────────────
+
+/// Where the passage index lies that agentd's `quote_source` and
+/// `find_source` read.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuellenConfig {
+    /// The file `cargo xtask index-sources` writes
+    /// (`regulatories/quellen-index.json`), built from the operator's own
+    /// mirror. Absent or unreadable, both tools refuse every call and say
+    /// why, and a sentence naming a rule is never belegt.
+    pub index: Option<String>,
 }
 
 // ── Vorschläge ─────────────────────────────────────────────────────────────
@@ -275,6 +293,78 @@ pub struct PolicyConfig {
     /// least-privilege file layered over a broader one cannot narrow anything.
     /// An operator who mounts a file gets exactly their rules.
     pub path: Option<String>,
+    /// Whether a specialist may hold a grant to a mutating tool.
+    #[serde(default)]
+    pub agent_posture: mako_service::policy::Policy<AgentPosture>,
+    /// Where the operator's own record of the AI Act classification of this
+    /// plane is kept — a document reference, not the record. Required under
+    /// `supervised`.
+    #[serde(default)]
+    pub klassifizierung_ref: Option<String>,
+}
+
+mako_service::policy_choice! {
+    /// Whether the agent plane may hold a grant to a tool that changes the
+    /// world.
+    ///
+    /// Whether a plane that dispatches is a safety component of the gas or
+    /// electricity supply, and so high-risk, is the operator's classification
+    /// to record; mako states none for them. `supervised` therefore names the
+    /// operator's record in `klassifizierung_ref` and refuses to start without
+    /// it.
+    pub enum AgentPosture {
+        key: "agent_posture",
+        doc: "@/docs/services/agentd.md#policy-agent-posture",
+        default: tightening(Advisory, "a plane that reaches no mutating tool changes nothing in the market or the ledger, which is the position the shipped classification rests on"),
+        options: {
+            /// No activated specialist holds a grant to a mutating tool; one
+            /// that does refuses startup.
+            Advisory = "advisory" => "Regulation (EU) 2024/1689 Art. 6(1a), inserted by Regulation (EU) 2026/1744 Art. 1 point (8): AI systems solely used for non-safety related aspects of user assistance, performance optimisation, service efficiency, automation or convenience or quality control shall not qualify as safety components",
+            /// A specialist may hold a mutating grant only with a person
+            /// approving each call (`requires_approval`); one without refuses
+            /// startup.
+            Supervised = "supervised" => "Regulation (EU) 2024/1689 Annex III point 2 (safety components in the supply of gas or electricity) and Art. 6(1b), inserted by Regulation (EU) 2026/1744 Art. 1 point (8): AI systems the failure or malfunctioning of which would endanger health and safety shall qualify as safety components",
+        }
+    }
+}
+
+/// Hold the activated specialists' tool grants against the posture.
+///
+/// `grants` are `(specialist, grant)` pairs of the specialists this plane
+/// registers. Under `advisory` any mutating grant refuses; under `supervised`
+/// a mutating grant without `requires_approval` does.
+///
+/// # Errors
+///
+/// Every grant the posture does not admit, named with its specialist.
+pub fn haltung_pruefen<'a>(
+    posture: &mako_service::policy::Policy<AgentPosture>,
+    grants: impl IntoIterator<Item = (&'a str, &'a agentplane::manifest::ToolGrant)>,
+) -> Result<(), String> {
+    let abgelehnt: Vec<String> = grants
+        .into_iter()
+        .filter(|(_, g)| {
+            g.mutates
+                && match posture.get() {
+                    AgentPosture::Advisory => true,
+                    AgentPosture::Supervised => !g.requires_approval,
+                }
+        })
+        .map(|(agent, g)| format!("{agent}: {}", g.reference))
+        .collect();
+    if abgelehnt.is_empty() {
+        return Ok(());
+    }
+    let warum = match posture.get() {
+        AgentPosture::Advisory => "a mutating grant",
+        AgentPosture::Supervised => "a mutating grant without requires_approval",
+    };
+    Err(format!(
+        "{} admits no {warum}: {} — change the grant, or the posture together with the \
+         classification record",
+        posture.triple(),
+        abgelehnt.join(", ")
+    ))
 }
 
 // ── Keyring ────────────────────────────────────────────────────────────────
@@ -558,45 +648,97 @@ pub struct Secrets {
 }
 
 impl AgentdConfig {
-    /// Validate security and worker invariants before opening any transport.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an implicitly insecure deployment, unsigned audit
+    /// The policy and posture this plane runs under; the classification
+    /// reference is named when one is configured.
+    #[must_use]
+    pub fn policy_report(&self) -> mako_service::policy::PolicyReport {
+        let mut report = mako_service::policy::PolicyReport::new().with(&self.policy.agent_posture);
+        if let Some(r) = self
+            .policy
+            .klassifizierung_ref
+            .as_deref()
+            .filter(|r| !r.trim().is_empty())
+        {
+            report.entries.push(mako_service::policy::PolicyEntry {
+                key: "klassifizierung_ref".to_owned(),
+                value: r.to_owned(),
+                origin: mako_service::policy::Origin::Explicit,
+                class: mako_service::policy::PolicyClass::Policy,
+                quelle: None,
+                doc: Some(<AgentPosture as mako_service::policy::PolicyChoice>::DOC.to_owned()),
+                insecure: false,
+                review_by: None,
+                review_grund: None,
+            });
+        }
+        report.posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
+    }
+
+    /// Every finding about the security and worker invariants, checked before
+    /// any transport opens: an implicitly insecure deployment, unsigned audit
     /// delivery, or an interval that would panic its detached worker.
-    pub fn validate(&self) -> anyhow::Result<()> {
+    #[must_use]
+    pub fn validate(&self) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = Vec::new();
         if !self.allow_insecure_no_auth && self.oidc.is_none() {
-            anyhow::bail!(
-                "refusing to start without [oidc]: manual runs and agent inventory would be unauthenticated. Configure [oidc] or set allow_insecure_no_auth = true (dev only)."
-            );
+            out.push(Befund::blockiert(
+                "oidc",
+                "refusing to start without [oidc]: manual runs and agent inventory would be unauthenticated. Configure [oidc] or set allow_insecure_no_auth = true (dev only).",
+            ).bereich(Bereich::Zugriff));
         }
         if !self.allow_insecure_no_auth && self.inbound_hmac_secret.is_none() {
-            anyhow::bail!(
-                "refusing to start without inbound_hmac_secret: unsigned CloudEvents could spend model budget and open operator tasks. Configure inbound_hmac_secret or set allow_insecure_no_auth = true (dev only)."
-            );
+            out.push(Befund::blockiert(
+                "inbound_hmac_secret",
+                "refusing to start without inbound_hmac_secret: unsigned CloudEvents could spend model budget and open operator tasks. Configure inbound_hmac_secret or set allow_insecure_no_auth = true (dev only).",
+            ).bereich(Bereich::Zugriff));
         }
         if self.vorschlaege.automatisch && self.vorschlaege.intervall_secs == 0 {
-            anyhow::bail!(
+            out.push(Befund::blockiert(
+                "vorschlaege.intervall_secs",
                 "[vorschlaege] intervall_secs = 0 would read the open entries in a busy loop — \
-                 choose a period in seconds, or set automatisch = false"
-            );
+                 choose a period in seconds, or set automatisch = false",
+            ));
         }
         if self.audit_webhook_url.is_some() && self.audit_hmac_secret.is_none() {
-            anyhow::bail!(
-                "audit_webhook_url requires audit_hmac_secret so decision deliveries are authenticated"
+            out.push(Befund::blockiert(
+                "audit_hmac_secret",
+                "audit_webhook_url requires audit_hmac_secret so decision deliveries are authenticated",
+            ).bereich(Bereich::Zugriff));
+        }
+        if self.policy.agent_posture.get() == AgentPosture::Supervised
+            && self
+                .policy
+                .klassifizierung_ref
+                .as_deref()
+                .is_none_or(|r| r.trim().is_empty())
+        {
+            out.push(
+                Befund::blockiert(
+                    "policy.klassifizierung_ref",
+                    "agent_posture = \"supervised\" lets a specialist hold a mutating grant, \
+                     which is a classification under Regulation (EU) 2024/1689 Annex III \
+                     point 2 and Art. 6(1b) only the operator can record — name that record \
+                     in [policy] klassifizierung_ref, or keep agent_posture = \"advisory\"",
+                )
+                .referenz_auf::<AgentPosture>(),
             );
         }
-        anyhow::ensure!(
-            self.sweep_interval_secs > 0,
-            "sweep_interval_secs must be greater than zero"
-        );
-        if let Some(witness) = &self.witness {
-            anyhow::ensure!(
-                witness.interval_secs > 0,
-                "witness.interval_secs must be greater than zero"
-            );
+        if self.sweep_interval_secs == 0 {
+            out.push(Befund::blockiert(
+                "sweep_interval_secs",
+                "sweep_interval_secs must be greater than zero",
+            ));
         }
-        Ok(())
+        if let Some(witness) = &self.witness
+            && witness.interval_secs == 0
+        {
+            out.push(Befund::blockiert(
+                "witness.interval_secs",
+                "witness.interval_secs must be greater than zero",
+            ));
+        }
+        out
     }
 
     /// Resolve every `env:VAR` indirection in secret-bearing fields.
@@ -674,6 +816,107 @@ mod tests {
     use super::*;
     use secrecy::ExposeSecret as _;
 
+    fn cfg_with_policy(policy: serde_json::Value) -> AgentdConfig {
+        serde_json::from_value(serde_json::json!({
+            "tenant": "9900000000001",
+            "mcp_servers": {},
+            "mcp_api_key": "test-key",
+            "providers": {},
+            "allow_insecure_no_auth": true,
+            "policy": policy,
+        }))
+        .expect("valid config")
+    }
+
+    fn grant(mutates: bool, requires_approval: bool) -> agentplane::manifest::ToolGrant {
+        serde_json::from_value(serde_json::json!({
+            "ref": "tool://makod/submit_command",
+            "mutates": mutates,
+            "requires_approval": requires_approval,
+        }))
+        .expect("a grant")
+    }
+
+    /// Unset, the plane is advisory, and the report says it was defaulted.
+    #[test]
+    fn the_agent_posture_defaults_to_advisory() {
+        let cfg = cfg_with_policy(serde_json::json!({}));
+        assert_eq!(cfg.policy.agent_posture.get(), AgentPosture::Advisory);
+        let report = cfg.policy_report();
+        let e = report.get("agent_posture").expect("reported");
+        assert_eq!(e.value, "advisory");
+        assert_eq!(e.origin, mako_service::policy::Origin::Default);
+        assert!(report.get("klassifizierung_ref").is_none());
+    }
+
+    /// `supervised` without the operator's classification record refuses to
+    /// start, pointing at the setting; with one, the report names it.
+    #[test]
+    fn supervised_needs_the_classification_reference() {
+        let ohne = cfg_with_policy(serde_json::json!({ "agent_posture": "supervised" }));
+        let befund = ohne
+            .validate()
+            .into_iter()
+            .find(|b| b.pfad == "policy.klassifizierung_ref")
+            .expect("supervised without a reference is refused");
+        assert!(befund.ist_blockiert());
+        assert_eq!(
+            befund.referenz.as_deref(),
+            Some("@/docs/services/agentd.md#policy-agent-posture")
+        );
+
+        let mit = cfg_with_policy(serde_json::json!({
+            "agent_posture": "supervised",
+            "klassifizierung_ref": "ISMS-KI-2027-01",
+        }));
+        assert!(
+            !mit.validate()
+                .iter()
+                .any(|b| b.pfad == "policy.klassifizierung_ref")
+        );
+        let report = mit.policy_report();
+        assert_eq!(
+            report.get("agent_posture").map(|e| e.value.as_str()),
+            Some("supervised")
+        );
+        assert_eq!(
+            report.get("klassifizierung_ref").map(|e| e.value.as_str()),
+            Some("ISMS-KI-2027-01")
+        );
+    }
+
+    /// The posture decides which grants a registered specialist may hold:
+    /// advisory none that mutates, supervised only those a person approves.
+    #[test]
+    fn the_posture_bounds_the_mutating_grants() {
+        use mako_service::policy::Policy;
+        let advisory = Policy::<AgentPosture>::default();
+        let supervised = Policy::explicit(AgentPosture::Supervised);
+        let lesen = grant(false, false);
+        let freigegeben = grant(true, true);
+        let unbewacht = grant(true, false);
+
+        assert!(haltung_pruefen(&advisory, [("a", &lesen)]).is_ok());
+        let e = haltung_pruefen(&advisory, [("a", &freigegeben)]).unwrap_err();
+        assert!(
+            e.contains("agent_posture=advisory") && e.contains("a: tool://makod/submit_command"),
+            "{e}"
+        );
+        assert!(haltung_pruefen(&supervised, [("a", &freigegeben)]).is_ok());
+        let e = haltung_pruefen(&supervised, [("a", &unbewacht)]).unwrap_err();
+        assert!(e.contains("requires_approval"), "{e}");
+    }
+
+    /// Every specialist this binary ships registers under the default posture.
+    #[test]
+    fn the_shipped_specialists_are_advisory() {
+        let grants = crate::plane::manifests()
+            .iter()
+            .flat_map(|(name, m)| m.spec.tools.iter().map(move |g| (name.as_str(), g)));
+        haltung_pruefen(&mako_service::policy::Policy::default(), grants)
+            .expect("no shipped specialist holds a mutating grant");
+    }
+
     fn cfg_with_key(key: &str) -> AgentdConfig {
         serde_json::from_value(serde_json::json!({
             "tenant": "9900000000001",
@@ -733,13 +976,21 @@ mod tests {
     #[test]
     fn production_security_and_worker_intervals_fail_closed() {
         let mut cfg = cfg_with_key("sk");
-        let error = cfg.validate().expect_err("OIDC is required").to_string();
+        let error = mako_service::befund::als_ergebnis(cfg.validate())
+            .expect_err("OIDC is required")
+            .to_string();
         assert!(error.contains("[oidc]"), "{error}");
 
-        cfg.allow_insecure_no_auth = true;
+        // Two defects, two findings — not the first only.
         cfg.sweep_interval_secs = 0;
-        let error = cfg
-            .validate()
+        let pfade: Vec<String> = cfg.validate().into_iter().map(|b| b.pfad).collect();
+        assert!(
+            pfade.contains(&"oidc".to_owned()) && pfade.contains(&"sweep_interval_secs".to_owned()),
+            "{pfade:?}"
+        );
+
+        cfg.allow_insecure_no_auth = true;
+        let error = mako_service::befund::als_ergebnis(cfg.validate())
             .expect_err("a zero sweep interval would panic the worker")
             .to_string();
         assert!(error.contains("sweep_interval_secs"), "{error}");
@@ -792,7 +1043,7 @@ url = "postgres://localhost/agentd"
 
         let cfg: AgentdConfig = toml::from_str(block)
             .expect("the documented example config must be one an operator can copy");
-        cfg.validate()
+        mako_service::befund::als_ergebnis(cfg.validate())
             .expect("the documented production config must pass startup security validation");
 
         // Spot-check the keys most likely to be swallowed by a table above
@@ -811,6 +1062,7 @@ url = "postgres://localhost/agentd"
         );
         let missing: Vec<_> = crate::plane::tools::servers_named_in_grants()
             .into_iter()
+            .filter(|server| server != crate::plane::quellen::SERVER)
             .filter(|server| !cfg.mcp_servers.contains_key(server))
             .collect();
         assert!(

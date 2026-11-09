@@ -1,5 +1,6 @@
 import { Link } from "react-aria-components";
 import { formatCount } from "../format/count";
+import { useT } from "../i18n";
 
 /** What a tile shows: a number a service returned, or why there is none. */
 export type TileState =
@@ -22,15 +23,16 @@ export function Tile({
   source,
   href,
   state,
-  ziel = "Liste öffnen",
+  ziel,
 }: {
   label: string;
   source: string;
   href: string;
   state: TileState;
-  /** What the click opens, said on hover. */
+  /** What the click opens, said on hover; „Liste öffnen“ when not named. */
   ziel?: string;
 }) {
+  const t = useT();
   const breach = state.kind === "count" && state.breach;
   const value =
     state.kind === "count"
@@ -57,7 +59,7 @@ export function Tile({
       <span className="mt-auto pt-4">
         {state.kind === "loading" ? (
           <span className="skeleton block h-10 w-20">
-            <span className="sr-only">lädt</span>
+            <span className="sr-only">{t.steuer.laedt}</span>
           </span>
         ) : state.kind === "wert" && !state.wert ? (
           <span className="block text-title font-semibold text-text-2">{value}</span>
@@ -84,7 +86,7 @@ export function Tile({
           aria-hidden="true"
           className="opacity-0 transition-opacity group-data-[hovered]:opacity-100"
         >
-          {ziel} →
+          {ziel ?? t.steuer.listeOeffnen} →
         </span>
       </span>
     </Link>

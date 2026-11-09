@@ -14,17 +14,23 @@ import { Kbd } from "../design/Kbd";
 import { EmptyState, Notice, Panel } from "../design/Panel";
 import { SearchField } from "../design/SearchField";
 import { epochMs } from "../format/date";
+import { useT } from "../i18n";
 import { Fragen } from "./Fragen";
 import { Hinweise } from "./Hinweise";
+import { MarktpartnerAntwort } from "./MarktpartnerAntwort";
 import { Verlauf } from "./Verlauf";
 
 type Processes = ToolOutput<"makod", "get_process">;
 
+/** The recipe that starts the services beside the Desk in development. */
+const DEV_BEFEHL = "just desk";
+
 function Copy({ value, label }: { value: string; label: string }) {
+  const t = useT();
   const [done, setDone] = useState(false);
   return (
     <AriaButton
-      aria-label={`${label} kopieren`}
+      aria-label={t.prozessAnsicht.kopieren(label)}
       onPress={() => {
         navigator.clipboard?.writeText(value).then(() => {
           setDone(true);
@@ -59,6 +65,8 @@ function firstDue(p: ProcessView): number {
 }
 
 function ProcessCard({ process }: { process: ProcessView }) {
+  const t = useT();
+  const k = t.prozessAnsicht;
   const next = process.deadlines
     .flatMap((d) => (d.due_at ? [d.due_at] : []))
     .sort((a, b) => epochMs(a) - epochMs(b))[0];
@@ -76,33 +84,35 @@ function ProcessCard({ process }: { process: ProcessView }) {
                 size={12}
                 className="transition-transform group-open:rotate-90"
               />
-              Technische Angaben
+              {k.technisch}
             </summary>
             <dl className="m-0 mt-3 grid grid-cols-2 gap-4">
-              <Fact term="Workflow" value={process.workflow_name} />
-              <Fact term="Prozess-ID" value={process.process_id} copy />
-              <Fact term="Stream" value={process.stream_id} copy />
+              <Fact term={k.workflow} value={process.workflow_name} />
+              <Fact term={k.prozessId} value={process.process_id} copy />
+              <Fact term={k.stream} value={process.stream_id} copy />
             </dl>
           </details>
         </div>
         {next && <FristUhr due={next} />}
       </div>
+      <MarktpartnerAntwort processId={process.process_id} />
       <Verlauf processId={process.process_id} deadlines={process.deadlines} />
     </Panel>
   );
 }
 
 function Result({ view }: { view: Processes }) {
+  const t = useT();
   const ordered = [...view.processes].sort((a, b) => firstDue(a) - firstDue(b));
   const n = ordered.length;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-baseline gap-3 px-1">
         <span className="font-mono text-title font-semibold">{view.business_key}</span>
-        <Copy value={view.business_key} label="Geschäftsschlüssel" />
+        <Copy value={view.business_key} label={t.prozessAnsicht.schluessel} />
         <span className="text-callout text-text-2">{keyKind(view.business_key)}</span>
         <span className="flex-1" />
-        <span className="text-callout text-text-2">{n === 1 ? "1 Prozess" : `${n} Prozesse`}</span>
+        <span className="text-callout text-text-2">{t.prozessAnsicht.anzahl(n, `${n}`)}</span>
       </div>
       <Hinweise nurFuer={[view.business_key]} />
       {keyKind(view.business_key) === "MaLo-ID" && <Fragen anker={{ malo: view.business_key }} />}
@@ -114,9 +124,10 @@ function Result({ view }: { view: Processes }) {
 }
 
 function Loading() {
+  const t = useT();
   return (
     <div role="status" aria-busy="true">
-      <span className="sr-only">Lädt …</span>
+      <span className="sr-only">{t.prozessAnsicht.laedt}</span>
       <Panel className="p-6">
         <div className="skeleton h-3 w-20" />
         <div className="skeleton mt-2 h-6 w-64" />
@@ -131,9 +142,11 @@ function Loading() {
 }
 
 function Failure({ error, businessKey }: { error: unknown; businessKey: string }) {
+  const t = useT();
+  const k = t.prozessAnsicht;
   if (error instanceof ToolRefusal) {
     return (
-      <Notice tone="refusal" title={`Kein Prozess für „${businessKey}“`}>
+      <Notice tone="refusal" title={k.keiner(businessKey)}>
         {error.message}
       </Notice>
     );
@@ -143,7 +156,7 @@ function Failure({ error, businessKey }: { error: unknown; businessKey: string }
       <Notice tone="failure" title={nichtErreichbar(error.service)}>
         {import.meta.env.DEV && (
           <>
-            <code className="font-mono">just desk</code> startet sie mit dem Desk.{" "}
+            <code className="font-mono">{DEV_BEFEHL}</code> {k.devStart}{" "}
           </>
         )}
         ({error.message})
@@ -151,7 +164,7 @@ function Failure({ error, businessKey }: { error: unknown; businessKey: string }
     );
   }
   return (
-    <Notice tone="failure" title="Die Antwort war unerwartet">
+    <Notice tone="failure" title={k.unerwartet}>
       {error instanceof Error ? error.message : String(error)}
     </Notice>
   );
@@ -159,6 +172,8 @@ function Failure({ error, businessKey }: { error: unknown; businessKey: string }
 
 /** Prozesse: open a running process by its business key. */
 export function ProzessView() {
+  const t = useT();
+  const k = t.prozessAnsicht;
   const { key } = useSearch({ from: "/prozess" });
   const navigate = useNavigate({ from: "/prozess" });
   const { rolle } = useRolle();
@@ -172,12 +187,10 @@ export function ProzessView() {
   });
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
+    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
       <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">Prozesse</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">
-          Prozesse über ihren Geschäftsschlüssel öffnen — MaLo-ID, MeLo-ID, Vorgangsnummer.
-        </p>
+        <h1 className="m-0 text-large font-bold tracking-tight">{k.titel}</h1>
+        <p className="m-0 mt-1 text-callout text-text-2">{k.untertitel}</p>
       </header>
 
       <Form
@@ -188,8 +201,8 @@ export function ProzessView() {
         }}
       >
         <SearchField
-          aria-label="Geschäftsschlüssel"
-          placeholder="MaLo-ID, MeLo-ID oder Vorgangsnummer"
+          aria-label={k.schluessel}
+          placeholder={k.platzhalter}
           value={draft}
           onChange={setDraft}
           onClear={() => navigate({ search: {} })}
@@ -198,8 +211,8 @@ export function ProzessView() {
       </Form>
 
       {!key && (
-        <EmptyState title="Welcher Prozess?">
-          Geschäftsschlüssel eingeben und <Kbd>↵</Kbd> drücken — oder von überall <Kbd>⌘K</Kbd>.
+        <EmptyState title={k.welcher}>
+          {k.eingebenVor} <Kbd>↵</Kbd> {k.eingebenNach} <Kbd>⌘K</Kbd>.
         </EmptyState>
       )}
       {key && query.isPending && <Loading />}

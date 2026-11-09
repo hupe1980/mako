@@ -127,15 +127,17 @@ fn test_router_with(pool: PgPool, cfg: einsd::config::EinsdConfig) -> axum::Rout
         cfg: std::sync::Arc::clone(&cfg),
         http_client: std::sync::Arc::clone(&http),
     });
-    einsd::routes::build_router(
+    let einrichtung = std::sync::Arc::new(mako_service::einrichtung::<einsd::Einsd>(&cfg));
+    einsd::routes::build_router(einsd::routes::RouterDeps {
         cfg,
-        http,
+        http_client: http,
         cedar,
         oidc,
         pool,
         mcp_state,
-        mako_service::shutdown::token(),
-    )
+        shutdown: mako_service::shutdown::token(),
+        einrichtung,
+    })
 }
 
 /// A minimal registerable plant.
@@ -4028,11 +4030,11 @@ async fn an_approval_or_the_vorbehalt_policy_opens_january_2027() {
 
     let mut genehmigt = test_config();
     genehmigt.beihilfevorbehalt.genehmigungen = vec![eeg_billing::Beihilfegenehmigung {
+        regelung: eeg_billing::Beihilferegelung::Eeg2027,
         eingang: time::macros::date!(2027 - 02 - 10),
         gilt_ab: time::macros::date!(2027 - 01 - 01),
         gilt_bis: None,
         bundesanzeiger: "BAnz AT (Fixture)".to_owned(),
-        umfang: "Teil 3".to_owned(),
     }];
     let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "P-GEN")
         .await
@@ -4068,6 +4070,83 @@ async fn an_approval_or_the_vorbehalt_policy_opens_january_2027() {
         r.policy.as_ref().map(|t| t.value.as_str()),
         Some("unter_vorbehalt"),
         "the receipt names the reading it was paid under"
+    );
+}
+
+/// A recorded short-term extension of the EEG 2023 approval
+/// (`regelung = "eeg2023_verlaengerung"`) opens January 2027 under the
+/// EEG 2023: the plant's § 53c Stromsteuerbefreiung is deducted and labelled
+/// „EEG 2023". An EEG 2027 approval for the same month is never read as that
+/// extension — the reduction has no tabled Fassung and the period is not paid.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_eeg_2023_extension_settles_january_2027_on_the_eeg_2023() {
+    let Some((pool, _pg)) = test_pool("beihilfe_verlaengerung").await else {
+        return;
+    };
+    let http = reqwest::Client::new();
+    let req = || einsd::settle::SettleRequest {
+        einspeisemenge_kwh: Some(rust_decimal::Decimal::from(1000)),
+        ..Default::default()
+    };
+    let genehmigung = |regelung| eeg_billing::Beihilfegenehmigung {
+        regelung,
+        eingang: time::macros::date!(2026 - 12 - 18),
+        gilt_ab: time::macros::date!(2027 - 01 - 01),
+        gilt_bis: Some(time::macros::date!(2027 - 06 - 30)),
+        bundesanzeiger: "BAnz AT (Fixture)".to_owned(),
+    };
+    for tr_id in ["P-VERL", "P-E27"] {
+        seed_plant(&pool, tr_id, TENANT, "", "").await;
+        einsd::pg::record_stromsteuerbefreiung(
+            &pool,
+            TENANT,
+            tr_id,
+            rust_decimal::Decimal::new(205, 2),
+            "§9 Abs. 1 Nr. 1 StromStG",
+            time::macros::date!(2026 - 01 - 01),
+            None,
+        )
+        .await
+        .expect("record Stromsteuerbefreiung");
+    }
+
+    let mut verlaengert = test_config();
+    verlaengert.beihilfevorbehalt.genehmigungen = vec![genehmigung(
+        eeg_billing::Beihilferegelung::Eeg2023Verlaengerung,
+    )];
+    let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "P-VERL")
+        .await
+        .unwrap()
+        .unwrap();
+    let r = einsd::settle::settle_plant(&pool, &verlaengert, &http, &anlage, 2027, 1, req())
+        .await
+        .expect("an extension opens the period");
+    assert_eq!(r.status, "calculated");
+    let positions: serde_json::Value = sqlx::query_scalar(
+        "SELECT positions_json FROM settlement_receipts WHERE tr_id = 'P-VERL' AND billing_year = 2027",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        positions.to_string().contains("§53c EEG 2023"),
+        "the reduction names the EEG 2023: {positions}"
+    );
+
+    let mut eeg2027 = test_config();
+    eeg2027.beihilfevorbehalt.genehmigungen =
+        vec![genehmigung(eeg_billing::Beihilferegelung::Eeg2027)];
+    let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "P-E27")
+        .await
+        .unwrap()
+        .unwrap();
+    let r = einsd::settle::settle_plant(&pool, &eeg2027, &http, &anlage, 2027, 1, req())
+        .await
+        .expect("an EEG 2027 approval opens the gate");
+    assert_eq!(
+        r.status, "fassung_nicht_tabelliert",
+        "an EEG 2027 approval is not read as an EEG 2023 extension"
     );
 }
 
@@ -4145,11 +4224,11 @@ async fn the_halten_policy_holds_a_payment_until_an_approval_releases_it() {
 
     let mut released = halten;
     released.beihilfevorbehalt.genehmigungen = vec![eeg_billing::Beihilfegenehmigung {
+        regelung: eeg_billing::Beihilferegelung::Eeg2027,
         eingang: time::macros::date!(2027 - 02 - 10),
         gilt_ab: time::macros::date!(2027 - 01 - 01),
         gilt_bis: None,
         bundesanzeiger: "BAnz AT (Fixture)".to_owned(),
-        umfang: "Teil 3".to_owned(),
     }];
     let r = einsd::settle::settle_plant(&pool, &released, &http, &anlage, 2027, 1, req())
         .await

@@ -26,7 +26,7 @@
 //! state types (`EdifactApiState`, the renderer/adapters pairing consumed by
 //! both the AS4 sender and the commands API) would force a web of cross-crate
 //! `pub` surface for what is genuinely one deployable unit. The folders give
-//! the namespacing benefit; the single crate keeps `validate_adapter_coverage`
+//! the namespacing benefit; the single crate keeps `adapter_befunde`
 //! / `validate_dispatch_completeness` able to see every registry and dispatch
 //! table at once.
 //!
@@ -56,12 +56,12 @@ pub mod transport;
 // integration-test suite rely on these.
 
 pub use crate::api::{
-    edifact_api, invoic_api, malo_admin_api, mcp_server, metrics_api, migration_api, openapi,
-    partner_api,
+    edifact_api, einrichtung_api, invoic_api, malo_admin_api, mcp_server, metrics_api,
+    migration_api, openapi, partner_api,
 };
 pub use crate::core::{
-    cedar_authz, config, deployment, erp_adapter, health, malo_cache, malo_sync, party_registry,
-    preflight, worker_health,
+    cedar_authz, config, deployment, einrichtung, erp_adapter, health, malo_cache, malo_sync,
+    party_registry, preflight, worker_health,
 };
 pub use crate::orchestrator::{
     adapters, commands_api, deadline_dispatch, dvgw_ingest, edifact_renderer, ingest_dispatcher,
@@ -72,7 +72,7 @@ pub use crate::transport::{
     redispatch_xml_ingest, verzeichnisdienst_worker, webdienste,
 };
 
-// startup symbols (MakodCtx, WorkersConfig, spawn_workers, validate_adapter_coverage)
+// startup symbols (MakodCtx, WorkersConfig, spawn_workers, adapter_befunde)
 // are pub(crate) and called only from main.rs. The lib target sees them as dead code
 // because main.rs is a separate compilation unit, in every build — so the
 // suppression is an expectation.

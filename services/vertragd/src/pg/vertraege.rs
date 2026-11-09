@@ -86,8 +86,10 @@ pub struct CreateKomponenteInput {
     /// product rather than picking a tier.
     #[serde(default)]
     pub jahresverbrauch_kwh: Option<rust_decimal::Decimal>,
-    /// Why the supply begins — the GeLi Gas Anmeldung's Transaktionsgrund.
-    /// Required for a GAS component registered at the NB.
+    /// Why the supply begins — the Anmeldung's `SG4 STS+7` Transaktionsgrund.
+    /// Required for every component registered at the NB: a GAS one states
+    /// any of the four, every other one `WECHSEL` or `UMZUG`, the two the
+    /// Strom Anmeldung 55001 admits.
     #[serde(default)]
     pub lieferbeginn_anlass: Option<domain::Lieferbeginnanlass>,
     /// Who holds the Netznutzungsvertrag with the NB (`CAV+Z74`). Required for
@@ -102,6 +104,14 @@ pub struct CreateKomponenteInput {
     /// is not the Gemeinde. Required for a GAS component registered at the NB.
     #[serde(default)]
     pub gemeinderabatt_prozent: Option<rust_decimal::Decimal>,
+    /// Grundlage zur Verringerung der Umlagen nach EnFG (`CCI+Z61`: `ZF9`,
+    /// `ZG0`, `ZG1`). Required for every component `start-supply` registers.
+    #[serde(default)]
+    pub enfg_grundlage: Option<String>,
+    /// Grund der Privilegierung nach EnFG (`CAV`, `ZU5` … `ZV3`) — beside
+    /// `ZF9` and nowhere else.
+    #[serde(default)]
+    pub enfg_grund: Option<String>,
     pub fulfillment_data: Option<serde_json::Value>,
 }
 
@@ -113,6 +123,30 @@ impl CreateKomponenteInput {
         VertragskomponenteRow::requires_mako_workflow(&self.sparte)
             && self.malo_id.is_some()
             && self.nb_mp_id.is_some()
+    }
+
+    /// The Strom Anmeldung 55001 of this component, from it and the
+    /// contract's Kunde. `Ok(None)` for a GAS component and for one not
+    /// registered at the NB.
+    ///
+    /// # Errors
+    ///
+    /// Each fact the 55001 needs and the contract does not state.
+    pub fn strom_anmeldung(
+        &self,
+        kunde: &KundeAnmeldedaten,
+    ) -> std::result::Result<Option<outbound::StromAnmeldung>, Vec<String>> {
+        if self.sparte == "GAS" || !self.wird_angemeldet() {
+            return Ok(None);
+        }
+        outbound::StromAnmeldung::aus_vertrag(
+            self.lieferbeginn_anlass,
+            kunde.haushaltskunde,
+            self.enfg_grundlage.as_deref(),
+            self.enfg_grund.as_deref(),
+            kunde.kunde.clone(),
+        )
+        .map(Some)
     }
 
     /// The GeLi Gas Anmeldung of this component, from it, its contract and the
@@ -540,14 +574,9 @@ pub async fn insert_versorgungsvertrag(
 
     let mut komponenten = Vec::new();
     let mut dispatched = 0usize;
-    // The Kunde a GeLi Gas Anmeldung names — read once, and only when one of
-    // the components is such an Anmeldung.
-    let kunde = if is_new
-        && input
-            .komponenten
-            .iter()
-            .any(|k| k.sparte == "GAS" && k.wird_angemeldet())
-    {
+    // The Kunde an Anmeldung names — read once, and only when one of the
+    // components is registered at the NB.
+    let kunde = if is_new && input.komponenten.iter().any(|k| k.wird_angemeldet()) {
         Some(
             kunde_anmeldedaten(&mut tx, kunden_id, tenant, input.standort_adresse.as_ref())
                 .await?
@@ -578,12 +607,22 @@ pub async fn insert_versorgungsvertrag(
                             fehlend.join("; ")
                         )
                     })?;
+                let strom = kunde
+                    .as_ref()
+                    .map_or(Ok(None), |kunde| komp.strom_anmeldung(kunde))
+                    .map_err(|fehlend| {
+                        anyhow::anyhow!(
+                            "the Anmeldung 55001 of {malo_id} lacks: {}",
+                            fehlend.join("; ")
+                        )
+                    })?;
                 let task = outbound::lieferbeginn(
                     komp_id,
                     &komp.sparte,
                     malo_id,
                     komp.bilanzkreis.as_deref(),
                     komp.lieferbeginn,
+                    strom.as_ref(),
                     gas.as_ref(),
                 )?;
                 if outbound::enqueue(&mut *tx, tenant, &task).await? {
@@ -635,8 +674,9 @@ async fn insert_komponente(
         "INSERT INTO vertragskomponenten
          (id,vertrag_id,tenant,sparte,malo_id,melo_id,lf_mp_id,nb_mp_id,bilanzkreis,
           lieferbeginn,lieferende,jahresverbrauch_kwh,fulfillment_data,
-          lieferbeginn_anlass,netznutzungsvertrag,netznutzung_zahler,gemeinderabatt_prozent)
-         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+          lieferbeginn_anlass,netznutzungsvertrag,netznutzung_zahler,gemeinderabatt_prozent,
+          enfg_grundlage,enfg_grund)
+         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
          FROM versorgungsvertraege v WHERE v.id=$2",
     )
     .bind(id)
@@ -655,6 +695,8 @@ async fn insert_komponente(
     .bind(k.netznutzungsvertrag.map(|v| v.as_str()))
     .bind(k.netznutzung_zahler.map(|z| z.as_str()))
     .bind(k.gemeinderabatt_prozent)
+    .bind(&k.enfg_grundlage)
+    .bind(&k.enfg_grund)
     .execute(&mut *conn)
     .await?;
     // The product a component starts on is its first valid-time slice. Written

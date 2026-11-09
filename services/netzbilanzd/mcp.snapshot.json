@@ -51,6 +51,18 @@
     "outputSchema": null
   },
   {
+    "name": "get_policy",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": null
+  },
+  {
     "name": "get_submission_run",
     "annotations": {
       "readOnlyHint": true,

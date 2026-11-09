@@ -12,6 +12,7 @@ mod konfigurationsprodukte_body;
 mod lokationsbuendel_integration;
 mod mabis_zp_integration;
 mod malo_write_calls_no_makod;
+mod mcp_round_trips;
 mod melo_graph_integration;
 mod overlap_is_a_client_error;
 mod published_examples;

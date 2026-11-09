@@ -1,5 +1,574 @@
 [
   {
+    "name": "einrichtung_checkliste",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "DienstZeile": {
+          "description": "One daemon's line in the checklist.",
+          "type": "object",
+          "properties": {
+            "dienst": {
+              "description": "The daemon.",
+              "type": "string"
+            },
+            "url": {
+              "description": "Where it was asked.",
+              "type": "string"
+            },
+            "status": {
+              "description": "Its state.",
+              "$ref": "#/$defs/DienstStatus"
+            },
+            "version": {
+              "description": "Its version, when it answered.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "dienst",
+            "url",
+            "status"
+          ]
+        },
+        "DienstStatus": {
+          "description": "The state of one daemon in the checklist.",
+          "oneOf": [
+            {
+              "description": "Answered, nothing blocks.",
+              "type": "string",
+              "const": "bereit"
+            },
+            {
+              "description": "Answered with a blocking finding.",
+              "type": "string",
+              "const": "blockiert"
+            },
+            {
+              "description": "Could not be asked — neither ready nor failing.",
+              "type": "string",
+              "const": "unerreichbar"
+            },
+            {
+              "description": "Answered with something that is not a report.",
+              "type": "string",
+              "const": "unlesbar"
+            }
+          ]
+        },
+        "Punkt": {
+          "description": "One readiness question of the deployment.",
+          "type": "object",
+          "properties": {
+            "bereich": {
+              "description": "The area.",
+              "$ref": "#/$defs/Bereich"
+            },
+            "frage": {
+              "description": "The question.",
+              "type": "string"
+            },
+            "ampel": {
+              "description": "Its colour.",
+              "$ref": "#/$defs/Ampel"
+            },
+            "befunde": {
+              "description": "The findings that colour it.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DienstBefund"
+              }
+            }
+          },
+          "required": [
+            "bereich",
+            "frage",
+            "ampel",
+            "befunde"
+          ]
+        },
+        "Bereich": {
+          "description": "Which readiness question of the deployment-wide checklist a finding\nbelongs to.",
+          "oneOf": [
+            {
+              "description": "MP-IDs per Rolle and Sparte and the agency code each implies.",
+              "type": "string",
+              "const": "identitaeten"
+            },
+            {
+              "description": "AS4 and API-Webdienste certificates, key material and their expiry.",
+              "type": "string",
+              "const": "zertifikate"
+            },
+            {
+              "description": "Bilanzkreise per Sparte.",
+              "type": "string",
+              "const": "bilanzierung"
+            },
+            {
+              "description": "Authentication, Cedar policies, the posture of every door.",
+              "type": "string",
+              "const": "zugriff"
+            },
+            {
+              "description": "The services and endpoints a daemon depends on.",
+              "type": "string",
+              "const": "erreichbarkeit"
+            },
+            {
+              "description": "Profiles and adapters per format version in force.",
+              "type": "string",
+              "const": "formatabdeckung"
+            },
+            {
+              "description": "Everything else a configuration states.",
+              "type": "string",
+              "const": "konfiguration"
+            }
+          ]
+        },
+        "Ampel": {
+          "description": "The colour of a checklist item.",
+          "oneOf": [
+            {
+              "description": "Nothing found.",
+              "type": "string",
+              "const": "gruen"
+            },
+            {
+              "description": "Warnings only.",
+              "type": "string",
+              "const": "gelb"
+            },
+            {
+              "description": "At least one blocking finding.",
+              "type": "string",
+              "const": "rot"
+            },
+            {
+              "description": "A daemon that would answer it could not be asked.",
+              "type": "string",
+              "const": "unbekannt"
+            }
+          ]
+        },
+        "DienstBefund": {
+          "description": "A finding with the daemon that reported it.",
+          "type": "object",
+          "properties": {
+            "dienst": {
+              "description": "The reporting daemon; `deployment` for a finding across daemons.",
+              "type": "string"
+            },
+            "schwere": {
+              "description": "Whether it refuses the boot.",
+              "$ref": "#/$defs/Schwere"
+            },
+            "bereich": {
+              "description": "The checklist area it belongs to.",
+              "$ref": "#/$defs/Bereich",
+              "default": "konfiguration"
+            },
+            "text": {
+              "description": "What is wrong, in the daemon's own words.",
+              "type": "string"
+            },
+            "pfad": {
+              "description": "The setting's path in the configuration file, dotted as the loader\nnames it (`lf.bilanzkreise[1].sparte`, `party[0].mp_id`); empty for a\nfinding about the file as a whole.",
+              "type": "string"
+            },
+            "referenz": {
+              "description": "The setting's operator-policy reference entry\n(`@/docs/services/<svc>.md#policy-<key>`), for a [`PolicyChoice`].",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "quelle": {
+              "description": "The document and chapter the rule rests on, where a document fixes it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "dienst",
+            "schwere",
+            "bereich",
+            "text",
+            "pfad"
+          ]
+        },
+        "Schwere": {
+          "description": "Whether a finding refuses the boot.",
+          "oneOf": [
+            {
+              "description": "The daemon refuses to start on it.",
+              "type": "string",
+              "const": "blockiert"
+            },
+            {
+              "description": "The daemon starts and warns at every boot.",
+              "type": "string",
+              "const": "warnung"
+            }
+          ]
+        },
+        "DienstBericht": {
+          "description": "One daemon of the deployment and what it answered.",
+          "type": "object",
+          "properties": {
+            "dienst": {
+              "description": "The daemon's name as configured.",
+              "type": "string"
+            },
+            "url": {
+              "description": "Where it was asked; empty for a local `--check-config`.",
+              "type": "string",
+              "default": ""
+            }
+          },
+          "required": [
+            "dienst",
+            "url"
+          ],
+          "oneOf": [
+            {
+              "description": "The daemon answered with its report.",
+              "type": "object",
+              "properties": {
+                "zustand": {
+                  "type": "string",
+                  "const": "erreicht"
+                },
+                "einrichtung": {
+                  "description": "The report.",
+                  "$ref": "#/$defs/Einrichtung"
+                }
+              },
+              "required": [
+                "zustand",
+                "einrichtung"
+              ]
+            },
+            {
+              "description": "The daemon could not be reached or refused the request.",
+              "type": "object",
+              "properties": {
+                "zustand": {
+                  "type": "string",
+                  "const": "unerreichbar"
+                },
+                "grund": {
+                  "description": "Why.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "zustand",
+                "grund"
+              ]
+            },
+            {
+              "description": "The daemon answered with something that is not a report — shown\nverbatim, never dropped.",
+              "type": "object",
+              "properties": {
+                "zustand": {
+                  "type": "string",
+                  "const": "unlesbar"
+                },
+                "grund": {
+                  "description": "Why it did not parse.",
+                  "type": "string"
+                },
+                "roh": {
+                  "description": "The body as received.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "zustand",
+                "grund",
+                "roh"
+              ]
+            }
+          ]
+        },
+        "Einrichtung": {
+          "description": "What one daemon reports about its configuration.",
+          "type": "object",
+          "properties": {
+            "dienst": {
+              "description": "The daemon's name.",
+              "type": "string"
+            },
+            "version": {
+              "description": "The version it is built at.",
+              "type": "string"
+            },
+            "bereit": {
+              "description": "No finding blocks.",
+              "type": "boolean"
+            },
+            "befunde": {
+              "description": "Every finding, blocking ones first.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Befund"
+              }
+            },
+            "policy": {
+              "description": "The operator policy and posture it runs under.",
+              "$ref": "#/$defs/PolicyReport"
+            },
+            "parteien": {
+              "description": "The identities it acts as; empty for a daemon that holds none.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Partei"
+              },
+              "default": []
+            }
+          },
+          "required": [
+            "dienst",
+            "version",
+            "bereit",
+            "befunde",
+            "policy",
+            "parteien"
+          ]
+        },
+        "Befund": {
+          "description": "One finding about a daemon's configuration.",
+          "type": "object",
+          "properties": {
+            "schwere": {
+              "description": "Whether it refuses the boot.",
+              "$ref": "#/$defs/Schwere"
+            },
+            "bereich": {
+              "description": "The checklist area it belongs to.",
+              "$ref": "#/$defs/Bereich",
+              "default": "konfiguration"
+            },
+            "text": {
+              "description": "What is wrong, in the daemon's own words.",
+              "type": "string"
+            },
+            "pfad": {
+              "description": "The setting's path in the configuration file, dotted as the loader\nnames it (`lf.bilanzkreise[1].sparte`, `party[0].mp_id`); empty for a\nfinding about the file as a whole.",
+              "type": "string"
+            },
+            "referenz": {
+              "description": "The setting's operator-policy reference entry\n(`@/docs/services/<svc>.md#policy-<key>`), for a [`PolicyChoice`].",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "quelle": {
+              "description": "The document and chapter the rule rests on, where a document fixes it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "schwere",
+            "bereich",
+            "text",
+            "pfad"
+          ]
+        },
+        "PolicyReport": {
+          "description": "The policy and posture a daemon runs under.",
+          "type": "object",
+          "properties": {
+            "entries": {
+              "description": "One entry per setting, in the order the daemon reports them.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PolicyEntry"
+              }
+            }
+          },
+          "required": [
+            "entries"
+          ]
+        },
+        "PolicyEntry": {
+          "description": "One line of a [`PolicyReport`].",
+          "type": "object",
+          "properties": {
+            "key": {
+              "description": "The key, e.g. `beihilfe_politik` or `allow_insecure_no_auth`.",
+              "type": "string"
+            },
+            "value": {
+              "description": "The value as written in the config (`present`/`absent` for a secret).",
+              "type": "string"
+            },
+            "origin": {
+              "description": "Set or defaulted.",
+              "$ref": "#/$defs/Origin"
+            },
+            "class": {
+              "description": "Policy or posture.",
+              "$ref": "#/$defs/PolicyClass"
+            },
+            "quelle": {
+              "description": "The primary source of the value; `None` for a posture.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "doc": {
+              "description": "The docs anchor; `None` for a posture.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "insecure": {
+              "description": "A posture in its insecure state.",
+              "type": "boolean"
+            },
+            "review_by": {
+              "description": "The review date of a setting that represents law not yet enacted.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "review_grund": {
+              "description": "What the review checks.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "key",
+            "value",
+            "origin",
+            "class",
+            "quelle",
+            "doc",
+            "insecure",
+            "review_by",
+            "review_grund"
+          ]
+        },
+        "Origin": {
+          "description": "Whether the operator set a value or the tightening default applied.",
+          "oneOf": [
+            {
+              "description": "The tightening default — the operator set nothing.",
+              "type": "string",
+              "const": "default"
+            },
+            {
+              "description": "Set in the config file or the environment.",
+              "type": "string",
+              "const": "explicit"
+            }
+          ]
+        },
+        "PolicyClass": {
+          "description": "What an entry describes.",
+          "oneOf": [
+            {
+              "description": "An operator reading under `[policy]`.",
+              "type": "string",
+              "const": "policy"
+            },
+            {
+              "description": "A deployment posture: an `allow_*` flag or whether a secret is present.\nNever legitimised as policy; reported so an insecure one is seen.",
+              "type": "string",
+              "const": "posture"
+            }
+          ]
+        },
+        "Partei": {
+          "description": "An identity a daemon acts as: an MP-ID in a Marktrolle, for a Sparte where\nthe daemon knows it.",
+          "type": "object",
+          "properties": {
+            "rolle": {
+              "description": "The Marktrolle (`LF`, `NB`, `MSB`, …).",
+              "type": "string"
+            },
+            "sparte": {
+              "description": "`strom` / `gas`, where the daemon knows it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mp_id": {
+              "description": "The 13-digit BDEW-/DVGW-Codenummer or GLN, or a 16-character EIC.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rolle",
+            "mp_id"
+          ]
+        }
+      },
+      "required": [
+        "bereit",
+        "dienste",
+        "punkte",
+        "berichte"
+      ],
+      "type": "object",
+      "properties": {
+        "bereit": {
+          "description": "Every item green or amber and every daemon answered.",
+          "type": "boolean"
+        },
+        "dienste": {
+          "description": "One line per daemon.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DienstZeile"
+          }
+        },
+        "punkte": {
+          "description": "One item per [`Bereich`], in [`Bereich::ALLE`] order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Punkt"
+          }
+        },
+        "berichte": {
+          "description": "Every answer as received, so nothing a daemon said is lost.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DienstBericht"
+          }
+        }
+      }
+    }
+  },
+  {
     "name": "get_format_version_coverage",
     "annotations": {
       "readOnlyHint": true,
@@ -74,6 +643,18 @@
         }
       },
       "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "get_policy",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
     },
     "outputSchema": null
   },
@@ -439,6 +1020,296 @@
     "outputSchema": null
   },
   {
+    "name": "rehearse_command",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "command",
+        "payload"
+      ],
+      "properties": {
+        "command": {
+          "description": "Dotted command name — one of the rehearsable commands\n(`gpke.lieferbeginn.anmelden`, `gpke.lieferende.anmelden`,\n`gpke.kuendigung.anmelden`, `geli.lieferbeginn.anmelden`,\n`geli.lieferende.anmelden`, `geli.kuendigung.anmelden`).",
+          "type": "string",
+          "examples": [
+            "\"geli.lieferbeginn.anmelden\""
+          ]
+        },
+        "marktrolle": {
+          "description": "Marktrolle to rehearse as — required only for multi-role commands.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": {
+          "description": "The command's payload, exactly as `submit_command` takes it."
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Urteil": {
+          "description": "What the pre-send check says about a rehearsed command.",
+          "oneOf": [
+            {
+              "description": "The door built the message and the pre-send check passes it.",
+              "type": "string",
+              "const": "besteht"
+            },
+            {
+              "description": "The door or the pre-send check refuses; `grund` says which and why.",
+              "type": "string",
+              "const": "abgelehnt"
+            }
+          ]
+        },
+        "Stufe": {
+          "description": "Where a refusal came from.",
+          "oneOf": [
+            {
+              "description": "The door refused the command before a message existed — a missing\nfield, a Marktlokation not in the cache, a Stammdatum marktd lacks.",
+              "type": "string",
+              "const": "tuer"
+            },
+            {
+              "description": "The door built the message and its profile refuses it.",
+              "type": "string",
+              "const": "pruefung"
+            }
+          ]
+        },
+        "ProbeNachricht": {
+          "description": "One message the door built.",
+          "type": "object",
+          "properties": {
+            "nachrichtentyp": {
+              "description": "`UTILMD`, ….",
+              "type": "string"
+            },
+            "pruefidentifikator": {
+              "description": "The Prüfidentifikator the message carries.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "empfaenger": {
+              "description": "The MP-ID it is addressed to.",
+              "type": "string"
+            },
+            "formatversion": {
+              "description": "The format version whose profile named the segments (`FV2025-10-01`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ahb_version": {
+              "description": "The AHB version of that profile.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wire": {
+              "description": "The interchange as rendered, `UNA` … `UNZ`.",
+              "type": "string"
+            },
+            "segmente": {
+              "description": "The message, `UNH` … `UNT`, segment by segment.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ProbeSegment"
+              }
+            },
+            "befunde": {
+              "description": "Findings the check placed on no single segment.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ProbeBefund"
+              }
+            }
+          },
+          "required": [
+            "nachrichtentyp",
+            "pruefidentifikator",
+            "empfaenger",
+            "formatversion",
+            "ahb_version",
+            "wire",
+            "segmente",
+            "befunde"
+          ]
+        },
+        "ProbeSegment": {
+          "description": "One segment of the rendered message.",
+          "type": "object",
+          "properties": {
+            "position": {
+              "description": "One-based position in the message, `UNH` = 1.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "tag": {
+              "description": "The segment tag.",
+              "type": "string"
+            },
+            "nr": {
+              "description": "The MIG's running number of the place the segment sits at.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gruppe": {
+              "description": "The segment groups enclosing the place, outermost first (`SG4/SG8`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "The MIG's name for the place; absent when the segment fits no place.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "description": "The segment as it goes on the wire, terminator included.",
+              "type": "string"
+            },
+            "elemente": {
+              "description": "Each data element as written, components joined by `:`.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "befunde": {
+              "description": "The findings that sit on this segment.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ProbeBefund"
+              }
+            }
+          },
+          "required": [
+            "position",
+            "tag",
+            "nr",
+            "gruppe",
+            "name",
+            "text",
+            "elemente",
+            "befunde"
+          ]
+        },
+        "ProbeBefund": {
+          "description": "One finding of the pre-send check.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "The check's own wording.",
+              "type": "string"
+            },
+            "regel": {
+              "description": "The profile rule it rests on (`AHB-…`, `MIG-…`), where it names one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "element": {
+              "description": "Zero-based index into the segment's `elemente`, where the finding\nnames a data element.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "komponente": {
+              "description": "Zero-based component within that data element.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "text",
+            "regel",
+            "element",
+            "komponente"
+          ]
+        }
+      },
+      "required": [
+        "command",
+        "marktrolle",
+        "urteil",
+        "stufe",
+        "grund",
+        "nachrichten"
+      ],
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "The command rehearsed.",
+          "type": "string"
+        },
+        "marktrolle": {
+          "description": "The Marktrolle it was rehearsed as.",
+          "type": "string"
+        },
+        "urteil": {
+          "description": "The pre-send check's verdict.",
+          "$ref": "#/$defs/Urteil"
+        },
+        "stufe": {
+          "description": "Where the refusal came from; absent when the message passes.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Stufe"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grund": {
+          "description": "The refusal in the door's own words — the sentence the real command\nwould be answered with.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nachrichten": {
+          "description": "The messages the door built; empty when it refused before building one.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProbeNachricht"
+          }
+        }
+      }
+    }
+  },
+  {
     "name": "submit_command",
     "annotations": {
       "destructiveHint": false,
@@ -470,9 +1341,9 @@
           ]
         },
         "payload": {
-          "description": "Command-specific payload fields.\n\n| Command | Required fields |\n|---|---|\n| `gpke.lieferbeginn.anmelden` | `malo_id` (11-digit), `lieferbeginn_datum` (YYYY-MM-DD) |\n| `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum`, `transaktionsgrund`, optional `transaktionsgrund_ergaenzung` (default: the MaLo's energy direction) |\n| `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `lfa_mp_id` (the Altlieferant) |\n| `geli.lieferbeginn.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund`, `bilanzkreis`, `abrechnungsintervall_monate`, `haushaltskunde`, `netznutzungsvertrag`, `netznutzung_zahler`, `gemeinderabatt_prozent`, `kunde`, `ablesekarte` — `mako_markt::commands::GeliLieferbeginnAnmelden`, no other key |\n| `geli.lieferende.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund` — `mako_markt::commands::GeliLieferendeAnmelden`, no other key |\n| `geli.kuendigung.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `lfa_mp_id` (the Altlieferant) — `mako_markt::commands::GeliKuendigungAnmelden`, no other key |\n| `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id` |\n| `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |",
+          "description": "Command-specific payload fields.\n\n| Command | Required fields |\n|---|---|\n| `gpke.lieferbeginn.anmelden` | `malo_id` (11-digit), `lieferbeginn_datum` (YYYY-MM-DD), `transaktionsgrund` (`E01` Ein-/Auszug, `E03` Wechsel), `bilanzkreis`, `haushaltskunde`, `enfg_grundlage` (`ZF9`/`ZG0`/`ZG1`, with `enfg_grund` beside `ZF9`), `kunde`, optional `transaktionsgrund_ergaenzung` (`ZW4` default, `ZAP`) — `mako_markt::commands::GpkeLieferbeginnAnmelden`, no other key |\n| `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum`, `transaktionsgrund`, optional `transaktionsgrund_ergaenzung` (default: the MaLo's energy direction) |\n| `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `lfa_mp_id` (the Altlieferant) |\n| `geli.lieferbeginn.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund`, `bilanzkreis`, `abrechnungsintervall_monate`, `haushaltskunde`, `netznutzungsvertrag`, `netznutzung_zahler`, `gemeinderabatt_prozent`, `kunde`, `ablesekarte` — `mako_markt::commands::GeliLieferbeginnAnmelden`, no other key |\n| `geli.lieferende.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund` — `mako_markt::commands::GeliLieferendeAnmelden`, no other key |\n| `geli.kuendigung.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `lfa_mp_id` (the Altlieferant) — `mako_markt::commands::GeliKuendigungAnmelden`, no other key |\n| `geli.stammdaten-aenderung.beantworten` | `malo_id` (gas), `antwort_code` (a code of the Antwort column's Codeliste — `E15` on a 44115) — `mako_markt::commands::GeliStammdatenAenderungBeantworten`, no other key |\n| `geli.stammdaten-aenderung.senden` | `malo_id` (gas), `pid` (44112 or 44109), `empfaenger_mp_id`, `aenderungsdatum` / `vertragsbeginn` (YYYYMMDD), `gruppen` (the changed groups); on a 44109 the LF's `abrechnungsintervall_monate`, `haushaltskunde`, `kunde` — `mako_markt::commands::GeliStammdatenAenderungSenden`, no other key |\n| `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id` |\n| `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |",
           "examples": [
-            "{\"malo_id\": \"10001234558\", \"lieferbeginn_datum\": \"2026-10-01\"}"
+            "{\"malo_id\": \"51238696012\", \"lieferbeginn_datum\": \"2026-10-01\", \"transaktionsgrund\": \"E03\", \"bilanzkreis\": \"11XBK-LF-------9\", \"haushaltskunde\": true, \"enfg_grundlage\": \"ZG1\", \"kunde\": {\"nachname\": \"Mustermann\", \"anschrift\": {\"strasse\": \"Hauptstraße\", \"hausnummer\": \"1\", \"postleitzahl\": \"50667\", \"ort\": \"Köln\", \"landescode\": \"DE\"}}}"
           ]
         },
         "idempotency_key": {

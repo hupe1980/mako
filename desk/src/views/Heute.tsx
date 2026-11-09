@@ -14,6 +14,7 @@ import type { BusinessDate } from "../format/brands";
 import { formatCount } from "../format/count";
 import { epochMs, formatBusinessDate } from "../format/date";
 import { BAENDER, type Band, band, useNow } from "../format/frist";
+import { useT } from "../i18n";
 import { type Eintrag, type QuelleId, type Stand, warumAnker } from "../inbox/model";
 import { alsEintrag, useBenannt, useHinweise, useQuellen, useVorschlaege } from "../inbox/quellen";
 import { Bewertung } from "./Bewertung";
@@ -69,11 +70,12 @@ function zusammenfuehren(
 }
 
 function HinweisZeile({ h }: { h: Hinweis }) {
+  const t = useT();
   return (
     <p className="m-0 flex gap-2 rounded-[10px] border border-ai-border bg-ai-fill px-3 py-2 text-body text-text">
       <Icon name="sparkle" size={14} className="mt-0.5 shrink-0 text-ai" />
       <span className="min-w-0">
-        <span className="font-semibold text-ai">{h.titel ?? h.skill ?? "Assistent"}: </span>
+        <span className="font-semibold text-ai">{h.titel ?? h.skill ?? t.heute.assistent}: </span>
         <span className="italic">{h.text}</span>
       </span>
     </p>
@@ -86,13 +88,14 @@ function HinweisZeile({ h }: { h: Hinweis }) {
  * the decision.
  */
 function VorschlagZeile({ a, befund }: { a: Answer; befund?: string | undefined }) {
+  const t = useT();
   const v = a.vorschlag;
   if (!v) {
     if (a.status !== "running") return null;
     return (
       <p className="m-0 flex items-center gap-2 text-caption text-ai">
         <Icon name="sparkle" size={12} className="animate-pulse" />
-        Der Assistent bereitet einen Vorschlag vor …
+        {t.heute.bereitetVor}
       </p>
     );
   }
@@ -101,19 +104,21 @@ function VorschlagZeile({ a, befund }: { a: Answer; befund?: string | undefined 
       <Icon name="sparkle" size={14} className="mt-0.5 shrink-0 text-ai" />
       <span className="min-w-0 flex-1">
         <span className="font-semibold text-ai">
-          {a.disclosure} Vorschlag: {AKTION[v.aktion]}
+          {a.disclosure} {t.heute.vorschlag(AKTION[v.aktion])}
           {v.antwortcode && <span className="ml-1 font-mono">{v.antwortcode}</span>}
           {v.aktion === "neu_buchen" && v.buchungsdatum && (
-            <span className="ml-1">am {formatBusinessDate(v.buchungsdatum as BusinessDate)}</span>
+            <span className="ml-1">
+              {t.heute.am(formatBusinessDate(v.buchungsdatum as BusinessDate))}
+            </span>
           )}
-          {befund && <span className="ml-1 font-normal">wegen {befund}</span>}
+          {befund && <span className="ml-1 font-normal">{t.heute.wegen(befund)}</span>}
           {" — "}
         </span>
         <span className="italic">{v.begruendung}</span>
         {!v.belegt && (
           <span className="ml-2 inline-flex h-5 items-center gap-1 rounded-full bg-soon-fill px-2 align-middle text-caption font-semibold text-soon">
             <Icon name="warn" size={11} />
-            nicht belegt
+            {t.heute.nichtBelegt}
           </span>
         )}
       </span>
@@ -161,6 +166,7 @@ function Zeile({
   onEntschieden: () => void;
   zeilen: RefObject<(HTMLButtonElement | null)[]>;
 }) {
+  const t = useT();
   const router = useRouter();
   const ai = e.quelle === "hinweise";
   const ding = entscheidbar(e);
@@ -209,12 +215,12 @@ function Zeile({
             {e.frist ? (
               <FristUhr due={e.frist} />
             ) : (
-              <span className="text-body text-text-2">keine Frist</span>
+              <span className="text-body text-text-2">{t.heute.keineFrist}</span>
             )}
             {ding && <Entscheidungsstand ding={ding} fehlschlag={!offen} />}
             {ding && (
               <span className="text-caption text-accent">
-                {offen ? "schließen" : "entscheiden"}
+                {offen ? t.heute.schliessen : t.heute.entscheiden}
               </span>
             )}
           </span>
@@ -228,7 +234,7 @@ function Zeile({
             className={`focus-ring mt-3.5 mr-4 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-ai-border px-2 text-caption font-medium text-ai transition-opacity data-[hovered]:bg-ai-fill ${warum ? "bg-ai-fill opacity-100" : "opacity-0 group-hover:opacity-100 group-data-[aktiv=true]:opacity-100 data-[focus-visible]:opacity-100"}`}
           >
             <Icon name="sparkle" size={11} />
-            Warum?
+            {t.heute.warum}
           </AriaButton>
         )}
       </div>
@@ -277,22 +283,25 @@ function Zeile({
 
 /** One quiet line per source: its count, or its refusal in its own words. */
 function Quellenzeile({ staende, agent }: { staende: Stand[]; agent: string | null }) {
+  const t = useT();
   return (
     <ul
-      aria-label="Quellen"
+      aria-label={t.heute.quellen}
       className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 px-1 text-caption text-text-2"
     >
       {staende.map((s) => (
         <li key={s.quelle} className={s.fehler ? "text-critical" : undefined}>
-          {s.label}:{" "}
-          {s.fehler
-            ? s.fehler
-            : s.laedt
-              ? "lädt …"
-              : `${formatCount(s.eintraege.length)}${s.mehr ? "+" : ""}`}
+          {t.heute.quelle(
+            s.label,
+            s.fehler
+              ? s.fehler
+              : s.laedt
+                ? t.heute.quelleLaedt
+                : `${formatCount(s.eintraege.length)}${s.mehr ? "+" : ""}`,
+          )}
         </li>
       ))}
-      {agent && <li>Assistent: nicht erreichbar</li>}
+      {agent && <li>{t.heute.assistentFehlt}</li>}
     </ul>
   );
 }
@@ -304,6 +313,8 @@ function Quellenzeile({ staende, agent }: { staende: Stand[]; agent: string | nu
  * asks it anything about the item in focus.
  */
 export function HeuteView() {
+  const t = useT();
+  const k = t.heute;
   const { rolle } = useRolle();
   const staende = useQuellen(rolle);
   const { hinweise, fehler: agentFehler } = useHinweise();
@@ -391,17 +402,17 @@ export function HeuteView() {
   useEffect(() => () => fokussieren(null), []);
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
+    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
       <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">Heute</h1>
+        <h1 className="m-0 text-large font-bold tracking-tight">{k.titel}</h1>
         <p className="m-0 mt-1 text-callout text-text-2">
           {eintraege.length === 0
-            ? "Was auf Sie wartet — die nächste Frist zuerst."
+            ? k.untertitel
             : [
-                zahl("ueberfaellig") && `${formatCount(zahl("ueberfaellig"))} überfällig`,
-                zahl("heute") && `${formatCount(zahl("heute"))} heute fällig`,
-                `${formatCount(eintraege.length)} insgesamt`,
-                bereit > 0 && `${formatCount(bereit)} mit Vorschlag`,
+                zahl("ueberfaellig") && k.ueberfaellig(formatCount(zahl("ueberfaellig"))),
+                zahl("heute") && k.heuteFaellig(formatCount(zahl("heute"))),
+                k.insgesamt(formatCount(eintraege.length)),
+                bereit > 0 && k.mitVorschlag(formatCount(bereit)),
               ]
                 .filter(Boolean)
                 .join(" · ")}
@@ -411,7 +422,7 @@ export function HeuteView() {
 
       {laedt && (
         <Panel className="flex flex-col gap-3 p-5">
-          <span className="sr-only">Lädt …</span>
+          <span className="sr-only">{k.laedt}</span>
           <div className="skeleton h-4 w-2/3" />
           <div className="skeleton h-4 w-1/2" />
           <div className="skeleton h-4 w-3/5" />
@@ -420,7 +431,7 @@ export function HeuteView() {
 
       {!laedt && eintraege.length === 0 && (
         <Panel>
-          <EmptyState title="Alles erledigt.">Nichts wartet auf Sie.</EmptyState>
+          <EmptyState title={k.erledigt}>{k.erledigtText}</EmptyState>
         </Panel>
       )}
 
@@ -469,26 +480,21 @@ export function HeuteView() {
 
       {eintraege.length > SICHTBAR && (
         <p className="m-0 px-1 text-body text-text-2">
-          Die ersten {formatCount(SICHTBAR)} von {formatCount(eintraege.length)} — der Rest folgt,
-          sobald diese erledigt sind.
+          {k.ersten(formatCount(SICHTBAR), formatCount(eintraege.length))}
         </p>
       )}
 
       {fokus?.anker && !offen && (
-        <section aria-label={`Fragen zu ${fokus.titel}`} className="flex flex-col gap-2">
+        <section aria-label={k.fragenZu(fokus.titel)} className="flex flex-col gap-2">
           <h2 className="m-0 px-1 text-callout font-semibold">
-            Fragen zu <span className={fokus.kennung ? "font-mono" : ""}>{fokus.titel}</span>
+            {k.fragenZuKopf} <span className={fokus.kennung ? "font-mono" : ""}>{fokus.titel}</span>
           </h2>
           <Fragen key={JSON.stringify(fokus.anker)} anker={fokus.anker} />
         </section>
       )}
 
       <Quellenzeile staende={staende} agent={agentFehler} />
-      <p className="m-0 px-1 text-caption text-text-2">
-        J K oder ↑↓ wählen · ↵ öffnet, Freigaben, Dispute, Prüfposten und geparkte Buchungen werden
-        hier entschieden (A / R, U übernimmt den Vorschlag) · ? fragt, warum der gewählte Eintrag
-        hier steht · ⌘J fragt den Assistenten zum gewählten Eintrag · ⌘K listet seine Aktionen
-      </p>
+      <p className="m-0 px-1 text-caption text-text-2">{k.hilfe}</p>
     </div>
   );
 }

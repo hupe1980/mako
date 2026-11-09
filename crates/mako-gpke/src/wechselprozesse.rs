@@ -650,9 +650,9 @@ pub enum SupplierChangeCommand {
         ///
         /// Not a segment of the 55002: it is a fact about the days between the
         /// two dates, which no supplier covers, and § 38 Abs. 1 EnWG attaches
-        /// to that interval. marktd's supply projection reads it from a
-        /// `ProcessCompleted` payload; this workflow queues none for the 55002,
-        /// so the date is accepted here and reaches no consumer.
+        /// to that interval. It rides the `ProcessCompleted` notification the
+        /// Bestätigung queues ([`ANMELDUNG_ANTWORT_PIDS`]), where marktd's
+        /// supply projection reads it beside the Zuordnungsbeginn.
         ///
         /// `None` on every other answer, which is the ordinary case: the LFA
         /// releases the Marktlokation exactly at the Zuordnungsbeginn and there
@@ -696,6 +696,21 @@ pub enum SupplierChangeCommand {
 impl CommandPayload for SupplierChangeCommand {}
 
 // ── Response PID derivation ───────────────────────────────────────────────────
+
+/// The answers to an Anmeldung — Bestätigung 55002 / 55078, Ablehnung 55003 /
+/// 55080 — each of which queues a `ProcessCompleted` notification beside its
+/// UTILMD.
+///
+/// The NB's supply projection (marktd) moves the announced supplier on it:
+/// the Bestätigung makes it the supplier of record, the Ablehnung withdraws the
+/// announcement. On a Bestätigung in **Fall b** — GPKE Teil 2 Kap. 2.1.2 Nr. 4
+/// (S. 21): „der LFA bestätigt die Anfrage zu einem Zuordnungsende, das vor dem
+/// Zuordnungsbeginn des LFN liegt", answered with `E_0624` `A34`, under which
+/// the LFA ends supply and states its Lieferendedatum in the answer (EBD 4.3
+/// Kap. 6.6.3, S. 82) — the notification also carries that
+/// Lieferende as `lfa_lieferende`: the days up to the Zuordnungsbeginn are
+/// supplied by nobody, and marktd announces them as the § 38 Abs. 1 EnWG gap.
+pub const ANMELDUNG_ANTWORT_PIDS: &[u32] = &[55_002, 55_003, 55_078, 55_080];
 
 /// Derive the outbound UTILMD response PID from the inbound ANFRAGE PID.
 ///
@@ -1076,11 +1091,12 @@ impl Workflow for GpkeSupplierChangeWorkflow {
             }
 
             // Fall b (`lfa_lieferende`) is not a segment of the 55002 and has
-            // no place in the UTILMD payload — see the command.
+            // no place in the UTILMD payload: it rides the `ProcessCompleted`
+            // notification — see the command.
             SupplierChangeCommand::SendAntwort {
                 antwort,
                 obligations,
-                lfa_lieferende: _,
+                lfa_lieferende,
             } => {
                 let accepted = antwort.zustimmung;
                 let data = match state {
@@ -1196,6 +1212,27 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         data.new_supplier.as_str(),
                         payload,
                     ));
+                    if ANMELDUNG_ANTWORT_PIDS.contains(&rpid.as_u32()) {
+                        // `accepted`/`outcome` are the verdict: the event type
+                        // says only that the process is terminal.
+                        let mut completed = serde_json::json!({
+                            "pid":           rpid.as_u32(),
+                            "malo_id":       data.location_id.as_str(),
+                            "new_supplier":  data.new_supplier.as_str(),
+                            "grid_operator": data.grid_operator.as_str(),
+                            "process_date":  data.process_date,
+                            "accepted":      accepted,
+                            "outcome":       if accepted { "accepted" } else { "rejected" },
+                            "antwortcode":   antwort.antwort_code,
+                            "codeliste":     antwort.ebd,
+                        });
+                        // Fall b, and only on a Bestätigung: an Ablehnung leaves
+                        // the Altlieferant where it was, so no interval opens.
+                        if accepted && let Some(ende) = lfa_lieferende.as_deref() {
+                            completed["lfa_lieferende"] = serde_json::json!(ende);
+                        }
+                        outbox.push(PendingOutbox::new("ProcessCompleted", "", completed));
+                    }
                 }
                 // Co-persist caller-provided post-acceptance obligations
                 // atomically with the AntwortGesendet event.  Obligations are

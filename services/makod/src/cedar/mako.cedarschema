@@ -9,6 +9,7 @@
 // MaKo::AdminMaloRecord    — MaLo admin resource (tenant, malo_id?)
 // MaKo::AdminPartnerRecord — partner admin resource (tenant, mp_id?)
 // MaKo::MetricsEndpoint    — Prometheus /metrics endpoint (tenant)
+// MaKo::EinrichtungEndpoint — configuration findings + policy report (tenant)
 //
 // Action groups (use in Cedar policies as `action in MaKo::Action::"AdminMalo"`)
 // ────────────
@@ -55,6 +56,10 @@ namespace MaKo {
     tenant: String,
   };
 
+  entity EinrichtungEndpoint = {
+    tenant: String,
+  };
+
   entity WebdiensteEndpoint = {
     tenant: String,
   };
@@ -69,6 +74,17 @@ namespace MaKo {
   action AdminPartner;
 
   action SubmitCommand appliesTo {
+    principal: [Principal],
+    resource:  [Command],
+    context: {
+      tenant:     String,
+      marktrolle: String,
+      pid:        Long,
+    }
+  };
+
+  // A rehearsal of a command up to its pre-send check; writes nothing.
+  action RehearseCommand appliesTo {
     principal: [Principal],
     resource:  [Command],
     context: {
@@ -169,6 +185,15 @@ namespace MaKo {
   action ReadRechnung appliesTo {
     principal: [Principal],
     resource:  [RechnungEndpoint],
+    context: {
+      tenant: String,
+    }
+  };
+
+  // The configuration findings and the policy report — read-only.
+  action AdminEinrichtung appliesTo {
+    principal: [Principal],
+    resource:  [EinrichtungEndpoint],
     context: {
       tenant: String,
     }

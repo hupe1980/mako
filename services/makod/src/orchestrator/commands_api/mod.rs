@@ -17,8 +17,9 @@
 //!
 //! ```json
 //! {
-//!   "command": "gpke.lieferbeginn.anmelden",
-//!   "payload": { "malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01" }
+//!   "command": "gpke.lieferende.anmelden",
+//!   "payload": { "malo_id": "10001234558", "lieferende_datum": "2026-12-31",
+//!                "transaktionsgrund": "ZT5" }
 //! }
 //! ```
 //!
@@ -342,6 +343,7 @@ mod lf_anmeldung_gas;
 mod mabis;
 mod netzbilanz;
 mod netzzugang;
+pub mod probe;
 mod registry;
 mod stornierung;
 mod types;
@@ -352,6 +354,8 @@ mod wim;
 mod geli_frist_tests;
 #[cfg(test)]
 mod geli_lf_anmeldung_tests;
+#[cfg(test)]
+mod geli_stammdaten_aenderung_tests;
 #[cfg(test)]
 mod gpke_lf_anmeldung_tests;
 #[cfg(test)]
@@ -447,6 +451,13 @@ where
     W: mako_engine::workflow::Workflow,
     Arc<mako_engine::store_slatedb::SlateDbStore>: mako_engine::event_store::AtomicAppend,
 {
+    // A rehearsal writes nothing. Its doors stop at their pre-send check; a
+    // door that reached this point inside one is refused before the write.
+    if probe::active() {
+        return Err(mako_engine::error::EngineError::store(
+            "a rehearsal reached spawn_process — a rehearsal writes nothing",
+        ));
+    }
     let process =
         mako_engine::process::Process::<W, Arc<mako_engine::store_slatedb::SlateDbStore>>::new(
             Arc::clone(store),

@@ -150,12 +150,14 @@ impl Kuendigungsgrund {
     }
 }
 
-// ── Lieferbeginn Gas ──────────────────────────────────────────────────────────
+// ── Lieferbeginn ──────────────────────────────────────────────────────────────
 
-/// Why a gas supply begins — the contract fact the Anmeldung NN 44001 states as
-/// its `SG4 STS+7` Transaktionsgrund (UTILMD AHB Gas 1.2 Kap. 5.6, S. 45).
+/// Why a supply begins — the contract fact the Anmeldung states as its `SG4
+/// STS+7` Transaktionsgrund: the GeLi Gas Anmeldung NN 44001 (UTILMD AHB Gas
+/// 1.2 Kap. 5.6, S. 45) and the Strom Anmeldung 55001 (UTILMD AHB Strom 2.2
+/// Kap. 8.2, S. 73, [`Self::anmeldung_strom_transaktionsgrund`]).
 ///
-/// It decides the Mindestvorlauffrist as well: a Wechsel needs 10 WT, an
+/// On Gas it decides the Mindestvorlauffrist as well: a Wechsel needs 10 WT, an
 /// Einzug has the NB correct the date (AWH GeLi Gas 2.0 Kap. 2.5.2, Kap. 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -197,6 +199,20 @@ impl Lieferbeginnanlass {
             Self::Umzug => "UMZUG",
             Self::Neuanlage => "NEUANLAGE",
             Self::EndeErsatzversorgung => "ENDE_ERSATZVERSORGUNG",
+        }
+    }
+
+    /// The `SG4 STS+7` DE 9013 code of the Strom Anmeldung 55001, whose
+    /// column admits `E01` Ein-/Auszug (Umzug) and `E03` Wechsel and nothing
+    /// else (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73). `None` for an Anlass the
+    /// 55001 cannot state — an Einzug in eine Neuanlage is not an Anmeldung
+    /// of an existing Marktlokation.
+    #[must_use]
+    pub const fn anmeldung_strom_transaktionsgrund(self) -> Option<&'static str> {
+        match self {
+            Self::Wechsel => Some("E03"),
+            Self::Umzug => Some("E01"),
+            Self::Neuanlage | Self::EndeErsatzversorgung => None,
         }
     }
 

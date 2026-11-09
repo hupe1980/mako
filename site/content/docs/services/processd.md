@@ -120,7 +120,9 @@ and policy to each other in both directions.
 | `POST /api/v1/sperr-orders` | `create-sperr-order` | `NB` |
 | `PUT /api/v1/sperr-orders/{id}/execute` · `/fail` | `execute-sperr-order` | `NB` |
 | `PUT /api/v1/sperr-orders/{id}/cancel` | `cancel-sperr-order` | `NB` |
-| `POST`/`GET /mcp` | `use-mcp`, then a per-tool action | any caller of the tenant |
+| `POST /mcp` | `use-mcp`, then a per-tool action | any caller of the tenant |
+| `GET /api/v1/policy` | `read-policy` | any caller of the tenant |
+| `GET /admin/einrichtung` | `read-config` | any caller of the tenant |
 
 Roles come from the `mako_roles` JWT claim, the tenant from `mako_tenant`, which
 must equal the deployment's own. The runner adds `/health/live`,
@@ -603,15 +605,28 @@ Initiates a GPKE Lieferbeginn (UTILMD 55001) with LFW24 Vorlauffrist validation.
 curl -X POST http://processd:8580/api/v1/start-supply \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{"malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01",
-       "bilanzkreis": "11XBK-STD------Y"}'
+  -d '{"malo_id": "51238696012", "lieferbeginn_datum": "2026-10-01",
+       "transaktionsgrund": "E03", "bilanzkreis": "11XBK-STD------Y",
+       "haushaltskunde": true, "enfg_grundlage": "ZG1",
+       "kunde": {"nachname": "Mustermann", "anschrift": {"strasse": "Hauptstraße",
+         "hausnummer": "1", "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"}}}'
 ```
 
-| Field | Required | Notes |
+| Field | Required | Notes (UTILMD AHB Strom 2.2 Kap. 8.2) |
 |---|---|---|
 | `malo_id` | ✓ | 11-digit Strom Marktlokations-ID |
 | `lieferbeginn_datum` | ✓ | ISO-8601 date (YYYY-MM-DD) |
+| `transaktionsgrund` | ✓ | `SG4 STS+7` — `E01` Ein-/Auszug (Umzug) or `E03` Wechsel, the two codes the column admits (S. 73); any other is `TRANSAKTIONSGRUND_UNZULAESSIG` |
 | `bilanzkreis` | ✓* | `SG8 SEQ+Z79` Produktpaket, Produkt-Code `9991000002082` |
+| `haushaltskunde` | ✓ | `SG8 SEQ+Z01 CCI+++Z15`/`Z18` Gruppenzuordnung (S. 83) |
+| `enfg_grundlage` | ✓ | `SG8 SEQ+Z75 CCI+Z61` — `ZF9`, `ZG0`, `ZG1` (S. 85) |
+| `enfg_grund` | with `ZF9` | `SG10 CAV` — `ZU5` … `ZV3`, beside `ZF9` only |
+| `kunde` | ✓ | `SG12 NAD+Z09` Kunde des LF and `NAD+Z04` his Korrespondenzanschrift — name, Straße, Ort, PLZ, Ländercode (S. 86) |
+
+A missing Kunde fact is a `422` with `code` `ANMELDEDATEN_UNVOLLSTAENDIG`
+naming each in `fehlend`; one the column cannot carry is
+`ANMELDEDATEN_UNGUELTIG` with `maengel`. The body processd forwards is makod's
+door type `mako_markt::commands::GpkeLieferbeginnAnmelden`.
 
 \* Optional only where the Strom fallback row of `[[lf.bilanzkreise]]` declares
 exactly one `standard` entry (the Gas Anmeldung reads the Gas row). UTILMD AHB Strom 2.2 Kap. 5.3 makes the Produktpaket Muss on a 55001, so
@@ -619,7 +634,8 @@ a request resolving to none is a `422` with `code` `MISSING_BILANZKREIS`.
 
 Every refusal is the shared problem body — `error`, `detail` (the sentence) and
 `code` (the machine-readable reason: `MISSING_MALO_ID`, `MISSING_LIEFERBEGINN`,
-`INVALID_DATE`, `RETROACTIVE_DATE`, `VORLAUFFRIST_VIOLATION`, and for Gas
+`TRANSAKTIONSGRUND_UNZULAESSIG`, `ANMELDEDATEN_UNVOLLSTAENDIG`,
+`ANMELDEDATEN_UNGUELTIG`, `MISSING_BILANZKREIS`, `INVALID_DATE`, `RETROACTIVE_DATE`, `VORLAUFFRIST_VIOLATION`, and for Gas
 `MISSING_ZAEHLPUNKT`, `MISSING_PROCESS_DATE`). Each supply body is a fixed
 struct: a key it does not declare is a `422` with `code` `unknown_field` and its
 `paths`, a mandatory key left out is a `422` whose `detail` names the missing
@@ -755,6 +771,8 @@ Antwortfrist sweep.
 | `deadline_source` | The Festlegung `deadline_at` came from |
 | `deadline_risk` | `unknown` \| `green` \| `amber` (< 24 h) \| `red` (past) |
 | `erc_code` | APERAK ERC code when an APERAK refused the message — not the Antwortcode of a business refusal |
+| `antwort_code` / `antwort_codeliste` | The Antwortcode the counterparty's business answer carried and the tree or Codeliste it named (`SG4 STS+E01` on a UTILMD, `SG2 AJT` on an ORDRSP), read from `data.antwortcode` / `data.codeliste` of the event. makod states them on the `de.mako.process.completed` of an answered Lieferbeginn (55002/55003, 44002/44003 and the other answers the LF Anmeldung receives); every other event leaves them unchanged. The two move as one pair |
+| `bedeutung` | The BDEW's wording of `antwort_code` within `antwort_codeliste` (`mako_pruefung::codes::lies`), on `get_process` and `GET /obs/processes/{process_id}`. Absent when the answer named no list or the list does not publish the code — never read from another tree |
 | `initiator_is_affiliate` | The Lieferant belongs to this operator's own undertaking |
 
 `completed_at` (not on the wire) is the time the first terminal event carries.
@@ -918,6 +936,24 @@ Vorlauffristen the *Lieferant* owes — 6 WT before the frühestmöglicher
 Sperrtermin, **12 WT** before a termingebundener one (Prozessschritt 1) — are
 recorded as `vorlauffrist_eingehalten` and counted as `vorlauffrist_verletzt`,
 never refused: Prozessschritt 2's checks do not include them.
+
+### `[policy] msb_vorlauf_lesart` {#policy-msb-vorlauf-lesart}
+
+Without a generelle Zustimmung of the MSB, the Sperrtermin is „vom NB so festzulegen,
+dass dem MSB noch eine fristgerechte Antwort auf Anfrage vor dem Sperrtermin
+möglich ist (s. dazu Fristen der SD-Schritte 3 und 4)" (BK6-24-174 Anlage 1b
+Kap. 3.5.1.2 Nr. 2, S. 106). Whether the Fristen of Nr. 3 and Nr. 4 add up is
+the operator's reading:
+
+| `msb_vorlauf_lesart` | Earliest Sperrtermin | Reading |
+|---|---|---|
+| `additiv` (default) | 6 WT after the order arrived | Anfrage ≥ 3 WT before the Sperrtermin (Nr. 3, S. 106), then the MSB's 3 WT to answer (Nr. 4, S. 107) |
+| `wortlaut` | 3 WT after the order arrived | Nr. 3 alone; the answer only has to be possible before the Sperrtermin |
+
+`GET /api/v1/sperr-orders` and `GET /api/v1/sperr-orders/{id}` state it per
+Sperrauftrag as `msb_fenster`: the date asked for, `fruehester_sperrtermin`,
+`eingehalten` and the `lesart` triple. processd records no Zustimmung, so the
+field is stated, not enforced.
 
 „Der NB führt bis zu zwei Sperrversuche innerhalb eines Sperrauftrags durch"
 (Prozessschritt 5): `PUT .../fail` records the first unsuccessful visit and
@@ -1093,6 +1129,9 @@ parity_window_days  = 90      # parity look-back window
 # erp_webhook_url = "https://erp.internal/hooks/sperr"
 # erp_hmac_secret = "env:PROCESSD_SPERR_ERP_HMAC_SECRET"   # required with erp_webhook_url
 
+[policy]
+msb_vorlauf_lesart = "additiv"      # or "wortlaut" — the Sperrtermin without MSB-Zustimmung
+
 # Required unless allow_insecure_no_auth = true.
 [oidc]
 issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -1127,6 +1166,7 @@ handler's `decide-queue` check runs as well.
 
 | Tool | Cedar action | Description |
 |------|------|-------------|
+| `get_policy` | `use-mcp` | The operator policy and posture this deployment runs under, as `GET /api/v1/policy` serves it |
 | `list_decisions` | `read-decisions` | Last N Anmeldung decisions with ERC codes and affiliate flag |
 | `get_decision` | `read-decisions` | Single Anmeldung decision by `process_id`, its Antwortcode with tree and BDEW wording |
 | `get_stp_rate` | `read-decisions` | Typed `{ stp_rate, window_days, target, compliant }`: the Anmeldung STP rate over N days against processd's own 95 % operating target, `null` when nothing was decided |
@@ -1136,7 +1176,7 @@ handler's `decide-queue` check runs as well.
 | `get_queue_entry` | `read-queue` | One `Freigabe` by UUID |
 | `approve_queue_entry` | `decide-queue` | Dispatch the entry's answer; takes `antwort_code` / `antwort_tree` / `antwort_codeliste` / `bemerkung` for an escalation, and the E/G facts the entry lists as missing |
 | `reject_queue_entry` | `decide-queue` | Dispatch the refusal with the operator's `antwort_code`, or `bemerkung` as the Begründung |
-| `get_process` | `read-process` | Full process projection — state, deadline, `deadline_source`, ERC code |
+| `get_process` | `read-process` | Full process projection — state, deadline, `deadline_source`, ERC code, the counterparty's Antwortcode with its list and `bedeutung` |
 | `list_processes_by_family` | `read-process` | One family, optionally one state; both are enumerated in the schema and an unknown value is refused |
 | `list_open_processes` | `read-process` | Open processes with given PIDs, earliest Frist first, a keyset page at a time (`nach` / `weiter`) |
 | `count_open_processes` | `read-process` | The same filter counted: open in total, Fristen ending before the Berlin day does, and the earliest of them |
@@ -1213,7 +1253,7 @@ Strom Teil 1 Kap. 2.3.2 Nr. 2; AWH WiM Gas 2.0 Kap. 3.5.2 Nr. 2):
 | Messlokation known to this NB | `ZC9` |
 | Versicherung über die Beauftragung durch den AN vorhanden | `ZB6` |
 | Mindestvorlaufzeit eingehalten — 15 WT, 7 WT bei erstmaliger Einrichtung | `E17`, naming the earliest reachable Zuordnungsbeginn |
-| Vertrag nach § 9 Abs. 1 Nr. 3 MsbG mit dem MSBN — `marktd` `msb-rahmenvertraege/check` for the order's Sparte, NB and MSBN, `abgeschlossen` and valid on the Zuordnungsbeginn | Escalate — `E_0201` publishes no code; also when the order names no NB or MSBN MP-ID. A `marktd` failure is a redelivery, never a finding |
+| Vertrag nach § 9 Abs. 1 Nr. 3 MsbG mit dem MSBN — `marktd` `msb-rahmenvertraege/check` for the order's Sparte, NB and MSBN, `abgeschlossen` and valid on the Zuordnungsbeginn | Escalate — `E_0201` publishes no code. The reason names `marktd`'s `befund`: no contract, one only `angeboten`, one `beendet`, or a Gas one still to be adapted to the Fassung GeLi Gas 3.0 Tenor 15 requires (`anpassung_erforderlich`); an order naming no NB or MSBN MP-ID escalates as an unknown Vertragslage. A `marktd` failure is a redelivery, never a finding |
 
 The metering technology is not a ground: §5 MsbG gives the Anschlussnutzer a
 free choice of MSB, §14 MsbG the right to switch.

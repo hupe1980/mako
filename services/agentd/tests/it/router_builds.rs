@@ -67,5 +67,19 @@ enable_all = true
     .expect("the configuration parses");
     let built = mako_service::build_for_test::<agentd::Agentd>(cfg).await;
     std::fs::remove_dir_all(&dir).ok();
-    let _app = built.expect("the router builds");
+    let app = built.expect("the router builds");
+
+    // The operator policy and the configuration findings are served
+    // read-only, through the same verifier as every other route.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    for path in ["/api/v1/policy", "/admin/einrichtung"] {
+        let resp = reqwest::get(format!("http://{addr}{path}"))
+            .await
+            .expect("the request is answered");
+        assert_eq!(resp.status(), 200, "{path}");
+    }
 }

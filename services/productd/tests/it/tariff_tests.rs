@@ -169,7 +169,7 @@ mod epex_tests {
         assert!(!is_plausible(&Decimal::from_str("-200.00").unwrap()));
     }
 
-    /// §41a requires D-1 prices published by ~13:00 CET.
+    /// A dynamic tariff (§ 41a Abs. 2 EnWG) is priced from the D-1 EPEX auction.
     /// Verify date parsing for YYYY-MM-DD format used in the API path.
     #[test]
     fn epex_date_path_param_parses() {
@@ -412,7 +412,7 @@ mod epex_status_logic_tests {
         );
     }
 
-    /// §41a: EPEX Day-Ahead prices are published by EPEX SPOT by ~13:00 CET.
+    /// EPEX SPOT publishes the day-ahead prices around 13:00 CET; § 41a EnWG sets no time.
     /// Operator alert threshold: 14:00 CET if tomorrow's prices are missing.
     #[test]
     fn alert_threshold_14_cet_semantics() {

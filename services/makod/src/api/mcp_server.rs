@@ -71,9 +71,7 @@ use rmcp::{
     prompt, prompt_handler, prompt_router, schemars,
     service::{Peer, RequestContext},
     tool, tool_handler, tool_router,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
+    transport::streamable_http_server::StreamableHttpServerConfig,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -120,6 +118,11 @@ pub struct MakodMcpState {
     pub process_store: Arc<SlateDbStore>,
     /// Deadline store — used by `list_overdue_deadlines` to surface expired process timers.
     pub deadline_store: SlateDbDeadlineStore,
+    /// The policy report built at boot — what `get_policy` returns.
+    pub policy: Arc<mako_service::policy::PolicyReport>,
+    /// makod's report and the daemons `[[einrichtung.dienst]]` names — what
+    /// `einrichtung_checkliste` asks, as `GET /admin/einrichtung/deployment`.
+    pub einrichtung: Arc<crate::api::einrichtung_api::EinrichtungState>,
 }
 
 // ── Tool parameter types ───────────────────────────────────────────────────────
@@ -150,15 +153,19 @@ pub struct SubmitCommandParams {
     ///
     /// | Command | Required fields |
     /// |---|---|
-    /// | `gpke.lieferbeginn.anmelden` | `malo_id` (11-digit), `lieferbeginn_datum` (YYYY-MM-DD) |
+    /// | `gpke.lieferbeginn.anmelden` | `malo_id` (11-digit), `lieferbeginn_datum` (YYYY-MM-DD), `transaktionsgrund` (`E01` Ein-/Auszug, `E03` Wechsel), `bilanzkreis`, `haushaltskunde`, `enfg_grundlage` (`ZF9`/`ZG0`/`ZG1`, with `enfg_grund` beside `ZF9`), `kunde`, optional `transaktionsgrund_ergaenzung` (`ZW4` default, `ZAP`) — `mako_markt::commands::GpkeLieferbeginnAnmelden`, no other key |
     /// | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum`, `transaktionsgrund`, optional `transaktionsgrund_ergaenzung` (default: the MaLo's energy direction) |
     /// | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `lfa_mp_id` (the Altlieferant) |
     /// | `geli.lieferbeginn.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund`, `bilanzkreis`, `abrechnungsintervall_monate`, `haushaltskunde`, `netznutzungsvertrag`, `netznutzung_zahler`, `gemeinderabatt_prozent`, `kunde`, `ablesekarte` — `mako_markt::commands::GeliLieferbeginnAnmelden`, no other key |
     /// | `geli.lieferende.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund` — `mako_markt::commands::GeliLieferendeAnmelden`, no other key |
     /// | `geli.kuendigung.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `lfa_mp_id` (the Altlieferant) — `mako_markt::commands::GeliKuendigungAnmelden`, no other key |
+    /// | `geli.stammdaten-aenderung.beantworten` | `malo_id` (gas), `antwort_code` (a code of the Antwort column's Codeliste — `E15` on a 44115) — `mako_markt::commands::GeliStammdatenAenderungBeantworten`, no other key |
+    /// | `geli.stammdaten-aenderung.senden` | `malo_id` (gas), `pid` (44112 or 44109), `empfaenger_mp_id`, `aenderungsdatum` / `vertragsbeginn` (YYYYMMDD), `gruppen` (the changed groups); on a 44109 the LF's `abrechnungsintervall_monate`, `haushaltskunde`, `kunde` — `mako_markt::commands::GeliStammdatenAenderungSenden`, no other key |
     /// | `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id` |
     /// | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
-    #[schemars(example = "{\"malo_id\": \"10001234558\", \"lieferbeginn_datum\": \"2026-10-01\"}")]
+    #[schemars(
+        example = "{\"malo_id\": \"51238696012\", \"lieferbeginn_datum\": \"2026-10-01\", \"transaktionsgrund\": \"E03\", \"bilanzkreis\": \"11XBK-LF-------9\", \"haushaltskunde\": true, \"enfg_grundlage\": \"ZG1\", \"kunde\": {\"nachname\": \"Mustermann\", \"anschrift\": {\"strasse\": \"Hauptstraße\", \"hausnummer\": \"1\", \"postleitzahl\": \"50667\", \"ort\": \"Köln\", \"landescode\": \"DE\"}}}"
+    )]
     pub payload: serde_json::Value,
 
     /// Optional stable key identifying this business request.
@@ -168,6 +175,21 @@ pub struct SubmitCommandParams {
     /// Reusing one key for a different command or payload is refused. When
     /// omitted a random UUID is echoed back and no replay record is kept.
     pub idempotency_key: Option<String>,
+}
+
+/// Parameters for `rehearse_command`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RehearseCommandParams {
+    /// Dotted command name — one of the rehearsable commands
+    /// (`gpke.lieferbeginn.anmelden`, `gpke.lieferende.anmelden`,
+    /// `gpke.kuendigung.anmelden`, `geli.lieferbeginn.anmelden`,
+    /// `geli.lieferende.anmelden`, `geli.kuendigung.anmelden`).
+    #[schemars(example = "\"geli.lieferbeginn.anmelden\"")]
+    pub command: String,
+    /// Marktrolle to rehearse as — required only for multi-role commands.
+    pub marktrolle: Option<String>,
+    /// The command's payload, exactly as `submit_command` takes it.
+    pub payload: serde_json::Value,
 }
 
 /// Parameters for `get_malo`.
@@ -525,6 +547,24 @@ impl MakodMcpHandler {
         } else {
             Err(McpError::invalid_request(
                 "Cedar policy denied AdminMaloRead".to_owned(),
+                None,
+            ))
+        }
+    }
+
+    /// Gate a tool on `AdminEinrichtung` — the action `GET /api/v1/policy`
+    /// enforces.
+    fn require_einrichtung(&self, parts: &axum::http::request::Parts) -> Result<(), McpError> {
+        let identity = caller(parts)?;
+        if self
+            .state
+            .cedar
+            .authorize_einrichtung(&identity, &self.state.tenant)
+        {
+            Ok(())
+        } else {
+            Err(McpError::invalid_request(
+                "Cedar policy denied AdminEinrichtung".to_owned(),
                 None,
             ))
         }
@@ -978,6 +1018,49 @@ impl MakodMcpHandler {
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
+    /// The operator policy and posture this deployment runs under.
+    #[tool(
+        description = "The operator policy and posture this makod deployment runs under: each [policy] setting (e.g. as4.unbekannte_absender) with its value, whether it was set or defaulted and the primary source of the value, the declared deployment.rollen, and every allow_* posture. Read-only; a setting changes only by editing makod.toml and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    #[instrument(skip(self, parts))]
+    async fn get_policy(
+        &self,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_einrichtung(&parts)?;
+        ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
+            .map(|block| CallToolResult::success(vec![block]))
+            .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// The deployment's readiness checklist — the value `GET
+    /// /admin/einrichtung/deployment` serves, from the same function.
+    #[tool(
+        description = "The deployment's readiness checklist: every daemon named under [[einrichtung.dienst]] asked for its configuration findings, folded with makod's own into one item per area (identities, certificates, Bilanzierung, access, reachability, format coverage, configuration), each green, amber, red or unknown with the findings that colour it — path, reference and source. An unreachable daemon is unknown, not failing; an answer that is not a report is kept verbatim in `berichte`. Read-only.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::einrichtung::Checkliste>()
+    )]
+    #[instrument(skip(self, parts))]
+    async fn einrichtung_checkliste(
+        &self,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_einrichtung(&parts)?;
+        let e = &self.state.einrichtung;
+        let andere = mako_service::einrichtung::abfragen(&e.http, &e.dienste).await;
+        serde_json::to_value(crate::api::einrichtung_api::deployment(
+            &e.einrichtung,
+            andere,
+        ))
+        .map(CallToolResult::structured)
+        .map_err(|err| McpError::internal_error(err.to_string(), None))
+    }
+
     /// Look up the MaKo processes a business key names.
     ///
     /// Returns every process the key is correlated with — its stream, workflow
@@ -1417,6 +1500,64 @@ Frist is its own outcome — processd `list_overdue_processes`.",
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
+    /// Rehearse a command: its door up to the pre-send check, the verdict and
+    /// the message it built, segment by segment with the MIG's names. Writes
+    /// nothing — no process, no outbox entry, no idempotency record.
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        description = "Rehearse a MaKo command before go-live: run its door up to the pre-send AHB check and return the verdict (`urteil`, the door's own refusal in `grund`) and the message it built, each segment named as its format version's profile names the place. Nothing is queued, sent or stored. Only commands whose door checks before it writes are rehearsable.",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::commands_api::probe::Probe>()
+    )]
+    #[instrument(skip(self), fields(command = %p.command))]
+    async fn rehearse_command(
+        &self,
+        Parameters(p): Parameters<RehearseCommandParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::commands_api::probe::{ProbeRefusal, rehearse, zulassen};
+
+        let command = p.command.to_lowercase();
+        let refused = |r: ProbeRefusal| match r {
+            ProbeRefusal::Engine(e) => McpError::internal_error(e, None),
+            r => McpError::invalid_params(format!("{}: {}", r.code(), r.sentence()), None),
+        };
+        let marktrolle =
+            zulassen(&self.state.commands, &command, p.marktrolle.as_deref()).map_err(&refused)?;
+        let identity = parts
+            .extensions
+            .get::<crate::cedar_authz::CallerIdentity>()
+            .cloned()
+            .ok_or_else(|| {
+                McpError::internal_error(
+                    "authenticated identity missing from request context".to_owned(),
+                    None,
+                )
+            })?;
+        if !self.state.cedar.authorize_rehearsal(
+            &identity,
+            &crate::cedar_authz::CommandResource {
+                name: &command,
+                marktrolle: &marktrolle,
+                pid: crate::commands_api::command_primary_pid(&command)
+                    .map_or(0, mako_engine::types::Pruefidentifikator::as_u32),
+                tenant: &self.state.commands.tenant_id.to_string(),
+            },
+        ) {
+            return Err(McpError::invalid_request(
+                format!("Cedar policy denied RehearseCommand for {command:?}"),
+                None,
+            ));
+        }
+        let probe = rehearse(&self.state.commands, &command, marktrolle, &p.payload)
+            .await
+            .map_err(refused)?;
+        serde_json::to_value(probe)
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
     /// The most recent permanently-failed (dead-lettered) messages, and how
     /// many the store holds in all.
     ///
@@ -1462,13 +1603,116 @@ pub struct GpkeLieferbeginnArgs {
     pub lieferbeginn_datum: String,
 }
 
+/// The `gpke-lieferbeginn` prompt's text: the 55001 body it tells the model to
+/// submit is a complete `mako_markt::commands::GpkeLieferbeginnAnmelden`, its
+/// contract facts marked as examples the user replaces, on one `payload: `
+/// line the prompt test reads back into the typed body.
+fn gpke_lieferbeginn_text(malo_id: &str, lieferbeginn_datum: &str) -> String {
+    let payload = serde_json::json!({
+        "malo_id": malo_id,
+        "lieferbeginn_datum": lieferbeginn_datum,
+        "transaktionsgrund": "E03",
+        "bilanzkreis": "11XBK-LF-------9",
+        "haushaltskunde": true,
+        "enfg_grundlage": "ZG1",
+        "kunde": {
+            "vorname": "Erika",
+            "nachname": "Mustermann",
+            "anschrift": {
+                "strasse": "Hauptstraße", "hausnummer": "1",
+                "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+            }
+        }
+    });
+    format!(
+        "I need to initiate a GPKE Lieferbeginn (electricity supplier change) \
+         for MaLo {malo_id} starting {lieferbeginn_datum}.\n\
+         \n\
+         Please:\n\
+         1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo is \
+            cached and show me the NB/MSB MP-IDs.\n\
+         2. Ask me for the contract facts the Anmeldung 55001 makes Muss \
+            (UTILMD AHB Strom 2.2 Kap. 8.2) — none has a default. The body below \
+            shows each with an example value; replace every one with the \
+            contract's: the transaktionsgrund (E01 Ein-/Auszug or E03 Wechsel), \
+            the bilanzkreis, haushaltskunde, enfg_grundlage (ZF9/ZG0/ZG1, with \
+            enfg_grund beside ZF9), the kunde with his Korrespondenzanschrift, and \
+            transaktionsgrund_ergaenzung only for a ruhende Marktlokation (ZAP).\n\
+         3. Call `submit_command` with command \"gpke.lieferbeginn.anmelden\" and \
+            the body, which takes no other key:\n\
+         payload: {payload}\n\
+         4. Report the process_id and status.\n\
+         5. Explain next steps — the answer Frist, a Bestätigung (PID 55002) or \
+            Ablehnung (PID 55003):\n{frist}",
+        frist = render_fristen(&[55_001]),
+    )
+}
+
 /// Arguments for the `geli-lieferbeginn` prompt.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct GeliLieferbeginnArgs {
     /// 11-digit gas Marktlokations-ID.
     pub malo_id: String,
-    /// Supply start date (YYYY-MM-DD).
-    pub lieferbeginn_datum: String,
+    /// Lieferbeginn (YYYYMMDD, gesetzliche deutsche Zeit) — the body's
+    /// `process_date`.
+    pub process_date: String,
+}
+
+/// The `geli-lieferbeginn` prompt's text: the 44001 body it tells the model to
+/// submit is a complete `mako_markt::commands::GeliLieferbeginnAnmelden`, its
+/// contract facts marked as examples the user replaces. The body's line starts
+/// with `payload: ` and holds the JSON alone, so the prompt test reads it back
+/// into the typed body.
+fn geli_lieferbeginn_text(malo_id: &str, process_date: &str) -> String {
+    let payload = serde_json::json!({
+        "malo_id": malo_id,
+        "process_date": process_date,
+        "transaktionsgrund": "E03",
+        "bilanzkreis": "THE0BFH000000001",
+        "abrechnungsintervall_monate": 12,
+        "haushaltskunde": true,
+        "netznutzungsvertrag": "LIEFERANT_NB",
+        "netznutzung_zahler": "LIEFERANT",
+        "gemeinderabatt_prozent": "0",
+        "kunde": {
+            "vorname": "Erika",
+            "nachname": "Mustermann",
+            "anschrift": {
+                "strasse": "Hauptstraße", "hausnummer": "1",
+                "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+            }
+        },
+        "ablesekarte": {
+            "vorname": "Erika",
+            "nachname": "Mustermann",
+            "anschrift": {
+                "strasse": "Hauptstraße", "hausnummer": "1",
+                "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+            }
+        }
+    });
+    format!(
+        "I need to initiate a GeLi Gas Lieferbeginn (gas supplier change) \
+         for gas MaLo {malo_id} starting {process_date}.\n\
+         \n\
+         Please:\n\
+         1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo is \
+            cached and show me the GNB MP-ID.\n\
+         2. Ask me for the contract facts the Anmeldung 44001 makes Muss \
+            (UTILMD AHB Gas 1.2 Kap. 5.6) — none has a default. The body below \
+            shows each with an example value; replace every one with the \
+            contract's: the transaktionsgrund, the bilanzkreis, \
+            abrechnungsintervall_monate (1, 3, 6 or 12), haushaltskunde, \
+            netznutzungsvertrag, netznutzung_zahler, gemeinderabatt_prozent, the \
+            kunde with his Korrespondenzanschrift and the ablesekarte.\n\
+         3. Call `submit_command` with command \"geli.lieferbeginn.anmelden\" and \
+            the body, which takes no other key:\n\
+         payload: {payload}\n\
+         4. Report the process_id and status.\n\
+         5. Explain next steps — the GNB's answer Frist (Saturday is not a \
+            Werktag; nor Sunday or a gesetzlicher Feiertag; German local time):\n{frist}",
+        frist = render_fristen(&[44_001]),
+    )
 }
 
 /// Arguments for the `wim-geraetewechsel` prompt.
@@ -1497,25 +1741,9 @@ impl MakodMcpHandler {
         &self,
         Parameters(args): Parameters<GpkeLieferbeginnArgs>,
     ) -> Vec<PromptMessage> {
-        let malo_id = &args.malo_id;
-        let date = &args.lieferbeginn_datum;
         vec![PromptMessage::new_text(
             Role::User,
-            format!(
-                "I need to initiate a GPKE Lieferbeginn (electricity supplier change) \
-                 for MaLo {malo_id} starting {date}.\n\
-                 \n\
-                 Please:\n\
-                 1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo is \
-                    cached and show me the NB/MSB MP-IDs.\n\
-                 2. If found, call `submit_command` with:\n\
-                    - command: \"gpke.lieferbeginn.anmelden\"\n\
-                    - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
-                 3. Report the process_id and status.\n\
-                 4. Explain next steps — the answer Frist, a Bestätigung (PID 55002) or \
-                    Ablehnung (PID 55003):\n{frist}",
-                frist = render_fristen(&[55_001]),
-            ),
+            gpke_lieferbeginn_text(&args.malo_id, &args.lieferbeginn_datum),
         )]
     }
 
@@ -1527,25 +1755,9 @@ impl MakodMcpHandler {
         &self,
         Parameters(args): Parameters<GeliLieferbeginnArgs>,
     ) -> Vec<PromptMessage> {
-        let malo_id = &args.malo_id;
-        let date = &args.lieferbeginn_datum;
         vec![PromptMessage::new_text(
             Role::User,
-            format!(
-                "I need to initiate a GeLi Gas Lieferbeginn (gas supplier change) \
-                 for gas MaLo {malo_id} starting {date}.\n\
-                 \n\
-                 Please:\n\
-                 1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo is \
-                    cached and show me the GNB MP-ID.\n\
-                 2. If found, call `submit_command` with:\n\
-                    - command: \"geli.lieferbeginn.anmelden\"\n\
-                    - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
-                 3. Report the process_id and status.\n\
-                 4. Explain next steps — the GNB's answer Frist (Saturday is not a \
-                    Werktag; nor Sunday or a gesetzlicher Feiertag; German local time):\n{frist}",
-                frist = render_fristen(&[44_001]),
-            ),
+            geli_lieferbeginn_text(&args.malo_id, &args.process_date),
         )]
     }
 
@@ -1692,6 +1904,13 @@ impl MakodMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for MakodMcpHandler {
+    /// The revisions every mako MCP server speaks, not the SDK's set.
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        mako_service::mcp::supported_revisions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         let configured = &self.state.commands.configured_marktrollen;
 
@@ -1965,10 +2184,12 @@ async fn mcp_auth_middleware(
 /// `/mcp`.
 ///
 /// The router is protected by the Cedar `CedarAuthorizer` middleware — every
-/// HTTP request (handshake + SSE stream) must carry a valid Bearer token.
+/// HTTP request must carry a valid Bearer token.
 ///
-/// Pass the same `shutdown` [`CancellationToken`] used by the rest of `makod`
-/// so in-flight MCP sessions are cleaned up during graceful shutdown.
+/// The server holds no session (`mako_service::mcp::service`), so shutdown
+/// needs no MCP-specific cleanup: a request ends with its answer, and the
+/// server's graceful shutdown drains the ones in flight. `_shutdown` is not
+/// handed to rmcp, whose token would answer them with an empty 500 instead.
 ///
 /// # How to mount
 ///
@@ -1976,20 +2197,18 @@ async fn mcp_auth_middleware(
 /// let http_app = existing_router
 ///     .merge(mcp_server::router(mcp_state, shutdown_token.clone()));
 /// ```
-pub fn router(state: Arc<MakodMcpState>, shutdown: CancellationToken) -> Router {
+pub fn router(state: Arc<MakodMcpState>, _shutdown: CancellationToken) -> Router {
     let config = StreamableHttpServerConfig::default()
         // No loopback restriction — `makod` runs behind a load-balancer or
         // Kubernetes Ingress. All requests still require a valid Bearer token.
         .disable_allowed_hosts()
-        .with_sse_keep_alive(Some(std::time::Duration::from_secs(30)))
-        .with_cancellation_token(shutdown);
+        .with_sse_keep_alive(Some(std::time::Duration::from_secs(30)));
 
-    let mcp_service = StreamableHttpService::new(
+    let mcp_service = mako_service::mcp::service(
         {
             let state = state.clone();
             move || Ok(MakodMcpHandler::new(state.clone()))
         },
-        Arc::new(LocalSessionManager::default()),
         config,
     );
 
@@ -2100,7 +2319,7 @@ fn next_steps_hint(command: &str) -> String {
     format!("{lead}\n{}", render_fristen(pids))
 }
 
-fn dispatch_error_to_string(e: crate::commands_api::DispatchError) -> String {
+pub(crate) fn dispatch_error_to_string(e: crate::commands_api::DispatchError) -> String {
     use crate::commands_api::DispatchError;
     match e {
         DispatchError::MaloNotFound(id) => {
@@ -2160,6 +2379,9 @@ fn dispatch_error_to_string(e: crate::commands_api::DispatchError) -> String {
         } => format!(
             "duplicate_invoice: Invoice '{invoice_ref}' was already issued by process {process_id}."
         ),
+        DispatchError::Geprobt => {
+            "rehearsed: the door stopped at its pre-send check and wrote nothing.".to_owned()
+        }
     }
 }
 
@@ -2236,6 +2458,7 @@ mod tool_inventory_tests {
             let gated = body.contains("authorize_")
                 || body.contains("require_malo_read")
                 || body.contains("require_partner_read")
+                || body.contains("require_einrichtung")
                 || body.contains("require_any_process_read");
             if !gated {
                 ungated.push(name);
@@ -2275,11 +2498,13 @@ mod tool_inventory_tests {
         names.sort();
 
         let mut expected = vec![
+            "einrichtung_checkliste",
             "get_format_version_coverage",
             "get_health",
             "get_malo",
             "get_outbox_status",
             "get_partner",
+            "get_policy",
             "get_process",
             "get_process_history",
             "list_active_processes",
@@ -2287,6 +2512,7 @@ mod tool_inventory_tests {
             "list_dead_letters",
             "list_overdue_deadlines",
             "list_partners",
+            "rehearse_command",
             "submit_command",
         ];
         expected.sort_unstable();
@@ -2628,6 +2854,88 @@ mod tool_inventory_tests {
             None
         );
         assert_eq!(super::rfc3339("gestern".to_owned()), None);
+    }
+}
+
+#[cfg(test)]
+mod prompt_payload_tests {
+    /// The `mako_markt::commands` constants a prompt may name whose body is
+    /// typed, with the check that body runs: deserialize the prompt's
+    /// `payload: ` line (refusing an unknown key) and return its `maengel()`.
+    type Pruefung = fn(&str) -> Result<Vec<String>, String>;
+    const TYPED: &[(&str, Pruefung)] = &[
+        (mako_markt::commands::GPKE_LIEFERBEGINN_ANMELDEN, |line| {
+            serde_json::from_str::<mako_markt::commands::GpkeLieferbeginnAnmelden>(line)
+                .map(|b| b.maengel())
+                .map_err(|e| e.to_string())
+        }),
+        (mako_markt::commands::GELI_LIEFERBEGINN_ANMELDEN, |line| {
+            serde_json::from_str::<mako_markt::commands::GeliLieferbeginnAnmelden>(line)
+                .map(|b| b.maengel())
+                .map_err(|e| e.to_string())
+        }),
+    ];
+
+    /// Each prompt text that submits a typed command, by the command.
+    fn prompt_texts() -> Vec<(&'static str, String)> {
+        vec![
+            (
+                mako_markt::commands::GPKE_LIEFERBEGINN_ANMELDEN,
+                super::gpke_lieferbeginn_text("51238696012", "2026-10-01"),
+            ),
+            (
+                mako_markt::commands::GELI_LIEFERBEGINN_ANMELDEN,
+                super::geli_lieferbeginn_text("51238696012", "20261201"),
+            ),
+        ]
+    }
+
+    /// The body a prompt tells the model to submit is the command's typed
+    /// body: read back from the prompt's own text, it deserializes — unknown
+    /// keys refused — and states every Muss fact, so a prompt naming a
+    /// renamed field or leaving one out fails here rather than as a `422` on
+    /// the model's first submit.
+    #[test]
+    fn every_prompt_submits_its_commands_typed_body() {
+        for (command, text) in prompt_texts() {
+            let (_, pruefen) = TYPED
+                .iter()
+                .find(|(c, _)| *c == command)
+                .unwrap_or_else(|| panic!("{command} has no typed body listed"));
+            let line = text
+                .lines()
+                .find_map(|l| l.trim_start().strip_prefix("payload: "))
+                .unwrap_or_else(|| panic!("{command}: the prompt states no payload line"));
+            let maengel = pruefen(line).unwrap_or_else(|e| panic!("{command}: {e}: {line}"));
+            assert!(maengel.is_empty(), "{command}: {maengel:?}");
+        }
+    }
+
+    /// No prompt names a typed command without being read back above: every
+    /// typed command spelled inside the `#[prompt_router]` impl has its text in
+    /// [`prompt_texts`]. A new prompt for one fails here until it is.
+    #[test]
+    fn no_prompt_names_a_typed_command_unchecked() {
+        let src = include_str!("mcp_server.rs");
+        let start = src.find("#[prompt_router]").expect("the prompt router");
+        let end = start + src[start..].find("\n}\n").expect("its impl closes");
+        // The text functions sit outside the router; what it spells inline is
+        // what nothing reads back.
+        let router = &src[start..end];
+        let checked: Vec<&str> = prompt_texts().iter().map(|(c, _)| *c).collect();
+        for (command, _) in TYPED {
+            if router.contains(&format!("\\\"{command}\\\"")) {
+                assert!(
+                    checked.contains(command),
+                    "a prompt spells {command} inline — build its text in a function \
+                     and add it to prompt_texts()"
+                );
+            }
+        }
+        // The text functions themselves name their command.
+        for (command, text) in prompt_texts() {
+            assert!(text.contains(command), "{command}");
+        }
     }
 }
 

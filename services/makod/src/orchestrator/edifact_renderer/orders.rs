@@ -65,11 +65,7 @@ pub(super) fn render_reqote(
     let causation_ref = msg_ref_from_uuid(&msg.causation_event_id.to_string());
     let message_ref = explicit_ref.as_deref().unwrap_or(causation_ref.as_str());
 
-    let release = active_release(MessageType::Reqote, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Reqote, ReleaseTrack::Short)?;
 
     let mut builder = builders::ReqoteBuilder::new(release)
         .sender(sender)
@@ -210,11 +206,7 @@ pub(super) fn render_orders(
     let causation_ref = msg_ref_from_uuid(&msg.causation_event_id.to_string());
     let message_ref = explicit_ref.as_deref().unwrap_or(causation_ref.as_str());
 
-    let release = active_release(MessageType::Orders, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Orders, ReleaseTrack::Short)?;
 
     let mut builder = builders::OrdersBuilder::new(release)
         .sender(sender)
@@ -360,11 +352,7 @@ pub(super) fn render_ordchg(
     // ORDCHG BDEW releases are `1.x` (no trailing letter), which parse to the
     // `Other` track rather than `Short` — asking for `Short` here silently
     // returned NoActiveProfile for every ORDCHG (39000/39001/39002).
-    let release = active_release(MessageType::Ordchg, ReleaseTrack::Other).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Ordchg, ReleaseTrack::Other)?;
 
     let mut builder = builders::OrdchgBuilder::new(release)
         .sender(sender)
@@ -424,7 +412,15 @@ pub(super) fn render_ordchg(
 /// | `order_reference` | no    | `SG1 RFF+ON` — the answered ORDERS' BGM DE 1004 |
 /// | `antwort_code` / `antwort_codeliste` | on an Antwortcode-PID | `SG2 AJT` DE 4465 / DE 1082 |
 /// | `document_date`| no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
+/// | `ausfuehrungsdatum` + `sparte` | 19001/19002 | `DTM+203` — the German day, begun in `sparte` |
+/// | `ansprechpartner` | 19001/19002 | `SG6 CTA+IC` + one `COM` per `kommunikation` entry |
+/// | `eigentuemer`  | 19016 with `Z07` | `SG3 NAD+VY` — the Eigentümer's MP-ID   |
+/// | `lieferadresse`| 19015 with `ZB5` | `SG3 NAD+Z22` Lieferadresse für Altgeräte |
 /// | `message_ref`  | no       | Derived from `causation_event_id` when absent |
+///
+/// The last four are the WiM Geräteübernahme answers' (ORDRSP AHB 1.1b Kap.
+/// 4.9.2 / 4.10); `mako-wim` decides which one an answer carries and refuses
+/// a missing one, so the renderer writes what the payload holds.
 pub(super) fn render_ordrsp(
     p: &serde_json::Value,
     msg: &OutboxMessage,
@@ -453,11 +449,7 @@ pub(super) fn render_ordrsp(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Ordrsp, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Ordrsp, ReleaseTrack::Short)?;
 
     let mut builder = builders::OrdrespBuilder::new(release.clone())
         .sender(sender)
@@ -500,6 +492,7 @@ pub(super) fn render_ordrsp(
     if let Some(d) = doc_date.as_deref() {
         builder = builder.document_date(d);
     }
+    builder = geraeteubernahme_angaben(builder, p, mt)?;
 
     // ── `SG2 AJT` — the Antwortcode, on every ORDRSP that carries a decision ──
     //
@@ -565,6 +558,82 @@ pub(super) fn render_ordrsp(
     finish_interchange(builder.serialize(), sender, receiver, msg)
 }
 
+/// The WiM Geräteübernahme answers' segments beyond the code: `DTM+203`,
+/// `SG6 CTA`/`COM`, `SG3 NAD+VY` and `SG3 NAD+Z22` — each from the payload
+/// field `mako-wim` wrote it to (see [`render_ordrsp`]).
+fn geraeteubernahme_angaben<S, R>(
+    mut builder: builders::OrdrespBuilder<S, R>,
+    p: &serde_json::Value,
+    mt: &'static str,
+) -> Result<builders::OrdrespBuilder<S, R>, RenderError> {
+    let text = |v: &serde_json::Value, field: &'static str| {
+        v.get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| RenderError::MissingField {
+                message_type: mt.into(),
+                field: field.into(),
+            })
+    };
+    if let Some(datum) = p
+        .get("ausfuehrungsdatum")
+        .and_then(serde_json::Value::as_str)
+    {
+        let sparte = match p.get("sparte").and_then(serde_json::Value::as_str) {
+            Some("strom") => mako_fristen::Sparte::Strom,
+            Some("gas") => mako_fristen::Sparte::Gas,
+            _ => {
+                return Err(RenderError::MissingField {
+                    message_type: mt.into(),
+                    field: "sparte (DTM+203 is a day boundary of the recipient's Sparte)".into(),
+                });
+            }
+        };
+        builder = builder.execution_date(prozessdatum_303(mt, "ausfuehrungsdatum", datum, sparte)?);
+    }
+    if let Some(kontakt) = p.get("ansprechpartner") {
+        let kanaele = kontakt
+            .get("kommunikation")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|k| {
+                let code = match k.get("art").and_then(serde_json::Value::as_str) {
+                    Some("email") => "EM",
+                    Some("telefon") => "TE",
+                    Some("telefax") => "FX",
+                    Some("weiteres_telefon") => "AJ",
+                    Some("handy") => "AL",
+                    other => {
+                        return Err(RenderError::InsufficientPayload {
+                            message_type: mt.into(),
+                            detail: format!("ansprechpartner: unknown COM channel {other:?}")
+                                .into(),
+                        });
+                    }
+                };
+                Ok((text(k, "adresse")?, code))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        builder = builder.contact(text(kontakt, "name")?, kanaele);
+    }
+    if let Some(mp_id) = p.get("eigentuemer").and_then(serde_json::Value::as_str) {
+        builder = builder.involved_party(mp_id);
+    }
+    if let Some(a) = p.get("lieferadresse") {
+        builder = builder.delivery_address(
+            text(a, "name")?,
+            text(a, "strasse")?,
+            text(a, "ort")?,
+            a.get("postleitzahl")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(""),
+            text(a, "land")?,
+        );
+    }
+    Ok(builder)
+}
+
 /// Render a QUOTES (Angebot) envelope — the MSB's answer to an ESA Werteanfrage
 /// (REQOTE 35003), UC 4.1 Nr. 2. Prüfidentifikator 15003 in BGM DE 1004.
 ///
@@ -609,11 +678,7 @@ pub(super) fn render_quotes(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Quotes, ReleaseTrack::Short).ok_or_else(|| {
-        RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        }
-    })?;
+    let release = release_for(msg, MessageType::Quotes, ReleaseTrack::Short)?;
 
     let mut builder = builders::QuotesBuilder::new(release)
         .sender(sender)

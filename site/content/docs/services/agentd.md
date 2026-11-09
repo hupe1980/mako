@@ -11,7 +11,10 @@ durable agent runtime: every model call and tool call is a journaled effect, so 
 run resumes after a crash and replays for audit. As an MCP client it offers
 protocol revision `2026-07-28` (`server/discover`), falls back to the
 `2025-11-25` `initialize` handshake for servers that do not speak it, and
-refuses a server that settles on any other revision.
+refuses a server that settles on any other revision. Every mako server declares
+exactly these two (`mako_service::mcp::REVISIONS`), so each connection settles
+on `2026-07-28`; the startup warning `MCP server negotiated down` names a server
+that does not.
 
 Port: **`:9580`**
 
@@ -38,6 +41,7 @@ Port: **`:9580`**
 | `GET /api/v1/agents` | Activated specialists and subscriptions. OIDC + `api:agent.list`; version and digest are in `/api/v1/agents/catalog` |
 | `GET /api/v1/agents/catalog` | Every specialist compiled in, as the Desk's Beipackzettel shows it: `titel`, `zweck`, active here or not, trigger, model, each tool with its reason, `nur_lesend`, and `bilanz` — agentplane's 30-day record (runs, outcomes, „hilfreich" verdicts, proposals `sent`/`edited`/`dismissed`), `null` when not active. OIDC + `api:agent.list` |
 | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
+| `GET /api/v1/policy` · `GET /admin/einrichtung` | The operator policy and the configuration findings the runner built at boot. OIDC + Cedar `read-policy` / `read-config` (`policies/agentd.cedar`, any caller of the tenant) |
 | `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, breached obligations, event delivery, and a skill's track record over a window — runs by outcome and each person's latest verdict per metric (`capabilities/{capability}/track-record`, `api:capability.track`) (OIDC required) |
 | `GET /health/live` · `GET /health/ready` · `GET /metrics` | Liveness, readiness, agentplane instruments (from the `mako_service` runner) |
 
@@ -260,6 +264,52 @@ person sends it. Each answer and Hinweis takes a „Hilfreich?" verdict, and a
 proposal records whether it was sent, edited or dismissed
 (`POST /api/v1/runs/{run}/bewertung`).
 
+### `[policy] agent_posture` {#policy-agent-posture}
+
+Whether a specialist may hold a grant to a mutating tool. agentd checks it over
+the specialists it registers before any of them runs, and refuses to start on a
+grant the posture does not admit.
+
+| `agent_posture` | Admits | Source |
+|---|---|---|
+| `advisory` (default) | no mutating grant | Regulation (EU) 2024/1689 Art. 6(1a), inserted by Regulation (EU) 2026/1744 Art. 1 point (8) |
+| `supervised` | a mutating grant with `requires_approval: true`; one without refuses | Annex III point 2 and Art. 6(1b), as inserted by the same point |
+
+Whether a plane that dispatches is a safety component of the gas or electricity
+supply is the operator's classification. `supervised` therefore requires
+`klassifizierung_ref`, a reference to the operator's own record of it, and
+refuses to start without one; the policy report names the reference. The
+shipped specialists hold no mutating grant, and `check-tool-grants` keeps it
+so.
+
+### A rule is stated only as a quote
+
+The assistant states no rule from memory. It calls agentd's own read-only
+`find_source` with words, which answers **addresses only** — document,
+edition, chapter or § — and `quote_source` with one address
+(`{doc: "APERAK AHB", edition: "1.1", at: "2.4.1"}`,
+`{doc: "EnWG", at: "§ 41f Abs. 5"}`), which answers the passage verbatim with
+its page, file and the document's SHA-256. An address the index does not hold
+is refused, never answered with the nearest passage: a code means something
+only in its own list, and several format releases bind at once, so the nearest
+passage is the plausible wrong one. A document held in more than one edition
+needs its edition named, so APERAK AHB 1.1 and its predecessor stay two
+addresses.
+
+Belegprüfung holds a sentence naming a §, „Kap." or an AHB/MIG chapter to that
+address: it is `belegt` only when it cites `agentd/quote_source` and one quote
+of the run is the passage at every address it names, document and edition
+included. A sentence about § 41f Abs. 5 EnWG beside a quote of Abs. 1 is
+„nicht belegt", and so is a chapter whose document the sentence does not name.
+
+The index is built on the operator's machine:
+`cargo xtask index-sources --download` fetches the consolidated EnWG and MsbG
+from gesetze-im-internet.de into `regulatories/gesetze/`, reads every
+EDI@Energy document of the mirror's manifest whose bytes still hash to the
+manifest's SHA-256 (one passage per chapter of its Inhaltsverzeichnis), and
+writes `regulatories/quellen-index.json`, gitignored with the mirror. A run
+that finds nothing writes nothing and fails.
+
 Proposals are computed before anyone asks. Every
 `[vorschlaege] intervall_secs` agentd starts one `desk-assistant` run per open
 entry („Was schlägst du vor?"), admitted once per kind and id — a second tick,
@@ -455,7 +505,7 @@ The `plane::` suite parses every manifest and refuses:
 outside the backticks, no negation, a tool-shaped backticked name — because a
 procedure naming an ungranted tool does not crash: agentplane reports the unknown
 tool to the model, which improvises. Run both ways, it holds the grants and the
-procedure to the **same set** — 159 grants across 29 manifests.
+procedure to the **same set** — 161 grants across 29 manifests.
 
 ---
 
@@ -473,7 +523,7 @@ graph TB
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 11 services, 169 tools"]
+    subgraph tools ["MCP Tools — 11 services, 178 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · processd"]
         T3["einsd · netzbilanzd · ..."]
@@ -703,6 +753,14 @@ addr = "0.0.0.0:9580"
 automatisch    = true   # default
 intervall_secs = 60     # default; how often processd's queue is read; 0 is refused
 
+# ── Quoting a rule ────────────────────────────────────────────────────────────
+# The passage index `cargo xtask index-sources` builds from your own
+# regulatories/ mirror; it is copyrighted text and never shipped. Absent or
+# unreadable, quote_source and find_source refuse every call (a startup
+# warning), and no sentence naming a rule is belegt.
+[quellen]
+index = "/var/lib/agentd/quellen-index.json"
+
 # ── Back-pressure ─────────────────────────────────────────────────────────────
 # Per-tenant, reserved in the store at admission, so it holds across instances.
 # A slot is released when a run seals, fails or *suspends*. Absent means
@@ -781,6 +839,8 @@ token   = "env:VAULT_TOKEN"
 # file cannot narrow one it inherited.
 [policy]
 # path = "/etc/agentd/policy.cedar"
+agent_posture = "advisory"          # or "supervised" — see below
+# klassifizierung_ref = "…"         # required under "supervised"
 
 # ── Tool transports ───────────────────────────────────────────────────────────
 # Every server a manifest grants a tool on must appear here, or startup fails.

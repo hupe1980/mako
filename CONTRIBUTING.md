@@ -49,6 +49,7 @@ every missing, unknown or invalid key:
 ```bash
 cargo run -p marktd -- --help          # usage, without reading any config
 cargo run -p marktd -- --print-config  # the merged config, secrets redacted
+cargo run -p marktd -- --check-config  # every finding with its path; exit 1 on a blocking one
 ```
 
 Each key can be overridden by `<SERVICE>_<KEY>`, nested keys joined with `__`

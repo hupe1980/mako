@@ -46,6 +46,8 @@ secrecy      = { version = "0.10", features = ["serde"] }
 # `openssl rand -base64 32` produces and the one C2SP `signed-note` uses on the
 # wire. Same version `mako-service` verifies Standard Webhooks signatures with.
 base64       = { version = "0.22" }
+# Belegprüfung reads the § and chapter addresses a sentence names.
+regex        = "1"
 agentplane = { version = "0.60", features = [
     # The declaration, and the wires that reach a model and a tool server.
     "manifest", "mcp", "providers",
@@ -79,7 +81,7 @@ async-trait = "0.1.91"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-mako-service = { workspace = true, features = ["testing"] }
+mako-service = { workspace = true, features = ["testing", "mcp"] }
 # The startup test answers the MCP handshake `build` performs with every peer.
 rmcp = { version = "3.1", features = ["server", "transport-streamable-http-server"] }
 # testkit brings FakeProvider, Faulty and the replay assertions. It carries no

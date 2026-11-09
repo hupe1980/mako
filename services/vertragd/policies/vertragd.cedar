@@ -44,6 +44,7 @@
 //
 // Operator, deployment:
 //   "read-policy"                  — GET  /api/v1/policy (the operator policy report)
+//   "read-config"                  — GET  /admin/einrichtung (the configuration findings)
 //
 // Operator, Verträge:
 //   "read-vertrag"                 — every contract GET, incl. /malo/{id}/produkte,
@@ -113,7 +114,8 @@ permit(
         Action::"read-stammdaten",
         Action::"read-outbound-tasks",
         Action::"use-mcp",
-        Action::"read-policy"
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

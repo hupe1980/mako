@@ -997,6 +997,10 @@ pub struct SettleInput {
     /// reservation (a zero-euro position states it on the receipt and the
     /// Gutschrift), or held (receipt `gehalten`, no Gutschrift, no payout).
     pub beihilfe: crate::settle::Beihilfeentscheidung,
+    /// `[beihilfevorbehalt] genehmigungen`: a recorded extension of the
+    /// EEG 2023 approval keeps the periods it covers on the EEG 2023 Fassung
+    /// ([`eeg_billing::Fassung::fuer_periode`]).
+    pub beihilfegenehmigungen: Vec<eeg_billing::Beihilfegenehmigung>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1556,6 +1560,9 @@ pub struct SettleOverrides {
     pub ausfallverguetung: crate::sect52::AusfallverguetungNutzung,
     /// The Beihilfevorbehalt decision — see [`SettleInput::beihilfe`].
     pub beihilfe: crate::settle::Beihilfeentscheidung,
+    /// The recorded state-aid approvals — see
+    /// [`SettleInput::beihilfegenehmigungen`].
+    pub beihilfegenehmigungen: Vec<eeg_billing::Beihilfegenehmigung>,
 }
 
 /// Build a [`SettleInput`] from a plant row and a billing period.
@@ -1718,6 +1725,7 @@ pub fn build_settle_input(
         // DB columns. `None` for non-biomass plants.
         biomasse: derive_biomasse(anlage),
         beihilfe: overrides.beihilfe,
+        beihilfegenehmigungen: overrides.beihilfegenehmigungen,
     })
 }
 
@@ -2649,6 +2657,10 @@ pub async fn run_settlement(
         // Getreide- und Mais-Höchstanteil and detects § 44 Güllekleinanlage
         // eligibility at every billing period.
         biomasse: input.biomasse.clone(),
+        // § 104 EEG 2027 (Entwurf): the Fassung of a period from 01.01.2027
+        // follows the recorded approvals — EEG 2023 under an extension of its
+        // approval, none tabled otherwise.
+        beihilfegenehmigungen: input.beihilfegenehmigungen.clone(),
     });
 
     // ── § 21 Abs. 1 Satz 1 Nr. 1 — override the money side, keep the § 52 side ─

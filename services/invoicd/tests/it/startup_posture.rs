@@ -71,3 +71,16 @@ fn an_insecure_deployment_starts_only_when_it_is_asked_for_by_name() {
         .check_auth_posture()
         .expect("allow_insecure_no_auth is the dev escape hatch");
 }
+
+/// A config with two defects reports both, not the first: the unauthenticated
+/// door and a negative auto-dispute threshold are each a finding at its path.
+#[test]
+fn a_config_with_two_defects_reports_both() {
+    use mako_service::Daemon as _;
+    let cfg = config(serde_json::json!({ "check": { "auto_dispute_threshold_eur": "-1" } }));
+    let pfade: Vec<String> = invoicd::server::Invoicd::validate(&cfg)
+        .into_iter()
+        .map(|b| b.pfad)
+        .collect();
+    assert_eq!(pfade, ["oidc", "check.auto_dispute_threshold_eur"]);
+}

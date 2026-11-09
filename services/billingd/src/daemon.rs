@@ -101,9 +101,13 @@ impl Daemon for Billingd {
         Ok(())
     }
 
-    fn validate(cfg: &config::BillingdConfig) -> anyhow::Result<()> {
-        cfg.check_auth_posture()?;
-        cfg.validate()
+    fn validate(cfg: &config::BillingdConfig) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = cfg.validate();
+        if let Err(e) = cfg.check_auth_posture() {
+            out.push(Befund::aus_fehler("oidc", e).bereich(Bereich::Zugriff));
+        }
+        out
     }
 
     fn policy(cfg: &config::BillingdConfig) -> mako_service::policy::PolicyReport {
@@ -219,8 +223,11 @@ impl Daemon for Billingd {
         .context("OIDC setup")?;
 
         let app = Router::new()
-            // Operator policy: GET /api/v1/policy (read-only; Cedar `read-policy`).
-            .merge(mako_service::policy::router(cfg.policy_report()))
+            // Readiness and operator policy: GET /admin/einrichtung (Cedar
+            // `read-config`) and GET /api/v1/policy (Cedar `read-policy`), read-only.
+            .merge(mako_service::einrichtung::router(Arc::clone(
+                &ctx.einrichtung,
+            )))
             .route(
                 "/api/v1/billing/{malo_id}/calculate",
                 post(handlers::post_calculate),

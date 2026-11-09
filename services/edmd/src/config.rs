@@ -325,34 +325,42 @@ mako_service::policy_choice! {
 }
 
 impl Config {
-    /// Refuse a config edmd cannot run as documented.
-    ///
-    /// # Errors
-    ///
-    /// No `[oidc]` without `allow_insecure_no_auth`, or
-    /// `[policy] physische_loeschung = true`, which this build cannot honour.
-    pub fn validate(&self) -> anyhow::Result<()> {
+    /// Every finding that keeps edmd from running as documented: no `[oidc]`
+    /// without `allow_insecure_no_auth`, and `[policy] physische_loeschung =
+    /// true`, which this build cannot honour.
+    pub fn validate(&self) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = Vec::new();
         // `OidcVerifier::disabled` admits every caller as `dev-admin` with all
         // roles, so an omitted `[oidc]` section leaves the whole API — GDPR
         // erasure and `POST /api/v1/query/sql` included — open to anyone who can
         // reach the port.
         if self.oidc.is_none() && !self.allow_insecure_no_auth {
-            anyhow::bail!(
-                "no [oidc] section configured. Without it every request is admitted as \
-                 `dev-admin` with all market roles and every Cedar check passes. \
-                 Configure [oidc], or set allow_insecure_no_auth = true to accept an \
-                 unauthenticated deployment."
+            out.push(
+                Befund::blockiert(
+                    "oidc",
+                    "no [oidc] section configured. Without it every request is admitted as \
+                     `dev-admin` with all market roles and every Cedar check passes. \
+                     Configure [oidc], or set allow_insecure_no_auth = true to accept an \
+                     unauthenticated deployment.",
+                )
+                .bereich(Bereich::Zugriff),
             );
         }
         if self.policy.physische_loeschung.get() == PhysischeLoeschung::Ja {
-            anyhow::bail!(
-                "[policy] physische_loeschung = true selects physical removal of erased rows \
-                 from the cold tier, and this build removes none: every Art. 17 erasure would \
-                 report a deletion it did not perform. Set physische_loeschung = false (the \
-                 subject mapping is destroyed and a tombstone refuses re-linking)."
+            out.push(
+                Befund::blockiert(
+                    "policy.physische_loeschung",
+                    "[policy] physische_loeschung = true selects physical removal of erased \
+                     rows from the cold tier, and this build removes none: every Art. 17 \
+                     erasure would report a deletion it did not perform. Set \
+                     physische_loeschung = false (the subject mapping is destroyed and a \
+                     tombstone refuses re-linking).",
+                )
+                .referenz_auf::<PhysischeLoeschung>(),
             );
         }
-        Ok(())
+        out
     }
 
     /// The policy and posture edmd runs under — logged, exported, recorded
@@ -772,7 +780,7 @@ mod tests {
     #[test]
     fn physische_loeschung_defaults_to_false_and_true_is_refused() {
         let cfg = minimal(serde_json::json!({}));
-        cfg.validate().expect("the default starts");
+        assert!(cfg.validate().is_empty(), "the default starts");
         let e = cfg.policy_report();
         let entry = e.get("physische_loeschung").expect("reported");
         assert_eq!(entry.value, "false");
@@ -785,8 +793,23 @@ mod tests {
         );
 
         let strict = minimal(serde_json::json!({"physische_loeschung": true}));
-        let err = strict.validate().unwrap_err().to_string();
-        assert!(err.contains("physische_loeschung = true"), "{err}");
+        let befunde = strict.validate();
+        assert_eq!(befunde.len(), 1, "{befunde:?}");
+        assert_eq!(befunde[0].pfad, "policy.physische_loeschung");
+        assert!(befunde[0].text.contains("physische_loeschung = true"));
+        assert_eq!(
+            befunde[0].referenz.as_deref(),
+            Some("@/docs/services/edmd.md#policy-physische-loeschung")
+        );
+    }
+
+    /// A config with two defects reports both, not the first.
+    #[test]
+    fn two_defects_are_both_reported() {
+        let mut cfg = minimal(serde_json::json!({"physische_loeschung": true}));
+        cfg.allow_insecure_no_auth = false;
+        let pfade: Vec<String> = cfg.validate().into_iter().map(|b| b.pfad).collect();
+        assert_eq!(pfade, ["oidc", "policy.physische_loeschung"]);
     }
 
     /// Object-store credentials must not reach a log through `Debug`, and a

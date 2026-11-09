@@ -22,6 +22,14 @@ fn config(extra: serde_json::Value) -> Config {
     serde_json::from_value(cfg).expect("the test configuration parses")
 }
 
+/// The `[lf]` findings as the boot refusal states them — the auth posture is
+/// the other tests' subject.
+fn lf_befunde(
+    cfg: &Config,
+) -> Result<Vec<mako_service::Befund>, mako_service::befund::Verweigerung> {
+    mako_service::befund::als_ergebnis(cfg.lf.validate())
+}
+
 fn oidc() -> serde_json::Value {
     serde_json::json!({
         "issuer": "https://login.example.test/v2.0",
@@ -80,9 +88,8 @@ fn an_insecure_deployment_starts_only_when_it_is_asked_for_by_name() {
 #[cfg(feature = "role-lf-gas")]
 #[test]
 fn startup_refuses_eog_auto_respond_without_an_abrechnungsintervall() {
-    use mako_service::Daemon as _;
     let cfg = config(serde_json::json!({ "lf": { "eog_auto_respond": true } }));
-    let err = processd::Processd::validate(&cfg)
+    let err = lf_befunde(&cfg)
         .expect_err("eog_auto_respond without an Abrechnungsintervall must not start");
     assert!(
         err.to_string().contains("eog_abrechnungsintervall_monate"),
@@ -91,17 +98,16 @@ fn startup_refuses_eog_auto_respond_without_an_abrechnungsintervall() {
     let cfg = config(serde_json::json!({
         "lf": { "eog_auto_respond": true, "eog_abrechnungsintervall_monate": 12 }
     }));
-    processd::Processd::validate(&cfg).expect("an interval the MIG admits starts");
+    lf_befunde(&cfg).expect("an interval the MIG admits starts");
 }
 
 /// UTILMD MIG Gas G1.2 S. 55 admits 1, 3, 6 and 12 months in `DTM+Z20`; any
 /// other value would render a 44014 the counterparty cannot read.
 #[test]
 fn startup_refuses_an_abrechnungsintervall_the_mig_does_not_admit() {
-    use mako_service::Daemon as _;
     for n in [0, 2, 24, 99] {
         let cfg = config(serde_json::json!({ "lf": { "eog_abrechnungsintervall_monate": n } }));
-        let err = processd::Processd::validate(&cfg).expect_err("refused");
+        let err = lf_befunde(&cfg).expect_err("refused");
         assert!(err.to_string().contains("1, 3, 6, 12"), "{n}: {err}");
     }
 }
@@ -112,7 +118,6 @@ fn startup_refuses_an_abrechnungsintervall_the_mig_does_not_admit() {
 /// KWKG list on a Gas row are refused at startup, naming the rows.
 #[test]
 fn startup_refuses_an_ambiguous_bilanzkreis_table() {
-    use mako_service::Daemon as _;
     let row = |sparte: &str, bg: Option<&str>, regime: &str| {
         let mut r = serde_json::json!({ "sparte": sparte, regime: ["BK1"] });
         if let Some(bg) = bg {
@@ -131,7 +136,7 @@ fn startup_refuses_an_ambiguous_bilanzkreis_table() {
     );
 
     let bg = Some("11YN-BG-EON----A");
-    processd::Processd::validate(&with(vec![
+    lf_befunde(&with(vec![
         row("strom", bg, "standard"),
         row("gas", bg, "standard"),
         row("STROM", None, "standard"),
@@ -139,7 +144,7 @@ fn startup_refuses_an_ambiguous_bilanzkreis_table() {
     ]))
     .expect("one row per Sparte and Bilanzierungsgebiet starts");
 
-    let err = processd::Processd::validate(&with(vec![
+    let err = lf_befunde(&with(vec![
         row("gas", None, "standard"),
         row("gas", None, "standard"),
     ]))
@@ -147,8 +152,33 @@ fn startup_refuses_an_ambiguous_bilanzkreis_table() {
     assert!(err.to_string().contains("rows 1 and 2"), "{err}");
 
     for regime in ["eeg", "kwkg"] {
-        let err = processd::Processd::validate(&with(vec![row("gas", bg, regime)]))
+        let err = lf_befunde(&with(vec![row("gas", bg, regime)]))
             .expect_err("an EEG/KWKG list on a Gas row");
         assert!(err.to_string().contains("sparte GAS"), "{regime}: {err}");
     }
+}
+
+/// A config with two defects reports both, not the first: an ambiguous
+/// Bilanzkreis table and a missing `[oidc]` are each a finding at its own
+/// path, so the operator fixes both before the next start.
+#[test]
+fn a_config_with_two_defects_reports_both() {
+    use mako_service::Daemon as _;
+    use mako_service::befund::Bereich;
+    let row = serde_json::json!({ "sparte": "gas", "standard": ["BK1"] });
+    let cfg = config(serde_json::json!({
+        "webhook": { "inbound_secret": "s3cret" },
+        "lf": { "bilanzkreise": [row.clone(), row] }
+    }));
+    let befunde = processd::Processd::validate(&cfg);
+    let pfade: Vec<(&str, Bereich)> = befunde
+        .iter()
+        .filter(|b| b.ist_blockiert())
+        .map(|b| (b.pfad.as_str(), b.bereich))
+        .collect();
+    assert!(
+        pfade.contains(&("lf.bilanzkreise[1]", Bereich::Bilanzierung)),
+        "{befunde:?}"
+    );
+    assert!(pfade.contains(&("oidc", Bereich::Zugriff)), "{befunde:?}");
 }

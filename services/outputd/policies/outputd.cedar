@@ -24,6 +24,9 @@
 //                         reads an issued document and its delivery evidence
 //   "report-delivery"   — POST /api/v1/deliveries/{id}/status — a channel
 //                         reporting whether a document arrived
+//   "read-policy"       — GET  /api/v1/policy — the operator policy report
+//   "read-config"       — GET  /admin/einrichtung — the configuration
+//                         findings the runner built at boot
 //
 // outputd shipped with the `cedar` feature enabled and **no policy file at
 // all**. Authentication established who was calling and nothing established
@@ -45,7 +48,9 @@ permit(
     principal,
     action in [
         Action::"read-template",
-        Action::"preview-template"
+        Action::"preview-template",
+        Action::"read-policy",
+        Action::"read-config"
     ],
     resource
 ) when {

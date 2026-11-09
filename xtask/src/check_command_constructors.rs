@@ -60,8 +60,6 @@ const UNWIRED: &[(&str, &str)] = &[
     ("GasSperrungLfCommand", "InitiateSperrung"),
     ("GasSperrungLfCommand", "SendStornierung"),
     ("GasSperrungNbCommand", "BestaetigueSperrung"),
-    ("GasStammdatenCommand", "SendAntwort"),
-    ("GasStammdatenCommand", "SendAenderung"),
     ("GasSupplierChangeCommand", "Activate"),
     ("GeliGasDatenabrufCommand", "NotifyDatenGeliefert"),
     ("GeliGasLfAnmeldungCommand", "Activate"),

@@ -137,21 +137,37 @@ pub struct EinsdConfig {
 /// `[beihilfevorbehalt]` — the state-aid approvals recorded so far.
 ///
 /// The Commission's approval of the EEG 2023 „bis zum 31. Dezember 2026
-/// befristet ist" (BT-Drs. 21/7867, Begründung zu § 104), so a payment for a
-/// supply period from 01.01.2027 has none until one is recorded here. What
-/// einsd does with an uncovered payment is `[policy] beihilfe_politik`.
+/// befristet ist" (BT-Drs. 21/7867, Begründung zu § 104; C(2022) 9900 final,
+/// SA.102084, recital (211)), so a payment for a supply period from
+/// 01.01.2027 has none until one is recorded here. What einsd does with an
+/// uncovered payment is `[policy] beihilfe_politik`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BeihilfevorbehaltConfig {
-    /// Each recorded approval: `eingang`, `gilt_ab`, optional `gilt_bis`,
-    /// `bundesanzeiger`, `umfang`.
-    #[serde(default)]
+    /// Each recorded approval: `regelung` (`eeg2023_verlaengerung` — a
+    /// short-term extension of the EEG 2023 approval, under which the periods
+    /// it covers settle on the EEG 2023 — or `eeg2027`), `eingang`, `gilt_ab`,
+    /// `gilt_bis` (required for an extension), `bundesanzeiger`. A list in
+    /// which an extension and an EEG 2027 approval cover the same day is
+    /// refused at load ([`eeg_billing::genehmigungen_pruefen`]).
+    #[serde(default, deserialize_with = "genehmigungen")]
     pub genehmigungen: Vec<eeg_billing::Beihilfegenehmigung>,
     /// Removed: the choice is `[policy] beihilfe_politik`. Named so a config
     /// still carrying it is refused at startup instead of running under the
     /// default while the operator believes their value is in force.
     #[serde(default)]
     pub politik: Option<String>,
+}
+
+/// Read `[beihilfevorbehalt] genehmigungen`, refusing a list the gate cannot
+/// read together.
+fn genehmigungen<'de, D>(d: D) -> Result<Vec<eeg_billing::Beihilfegenehmigung>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let liste = Vec::<eeg_billing::Beihilfegenehmigung>::deserialize(d)?;
+    eeg_billing::genehmigungen_pruefen(&liste).map_err(serde::de::Error::custom)?;
+    Ok(liste)
 }
 
 /// `[policy]` — einsd's operator settings.
@@ -191,26 +207,34 @@ mako_service::policy_choice! {
 }
 
 impl EinsdConfig {
-    /// Refuse a config einsd cannot run as documented: a removed key, or a
-    /// posture that serves payment obligations unauthenticated.
-    ///
-    /// # Errors
-    ///
-    /// Names the problem and what replaces a removed key.
-    pub fn validate(&self) -> anyhow::Result<()> {
+    /// Every finding that keeps einsd from running as documented: a removed
+    /// key, or a posture that serves payment obligations unauthenticated.
+    pub fn validate(&self) -> Vec<mako_service::Befund> {
+        use mako_service::befund::{Befund, Bereich};
+        let mut out = Vec::new();
         if let Some(old) = &self.beihilfevorbehalt.politik {
-            anyhow::bail!(
-                "einsd: `[beihilfevorbehalt] politik = {old:?}` is not read; the choice is \
-                 `[policy] beihilfe_politik` (verweigern | unter_vorbehalt | halten). Move the \
-                 value there."
+            out.push(
+                Befund::blockiert(
+                    "beihilfevorbehalt.politik",
+                    format!(
+                        "einsd: `[beihilfevorbehalt] politik = {old:?}` is not read; the choice is \
+                         `[policy] beihilfe_politik` (verweigern | unter_vorbehalt | halten). Move \
+                         the value there."
+                    ),
+                )
+                .referenz_auf::<BeihilfePolitik>(),
             );
         }
         // Settling a plant creates a payment obligation to the Anlagenbetreiber, so
         // the API is closed by default; running it open has to be stated explicitly.
         if self.oidc.is_none() && !self.allow_insecure_no_auth {
-            anyhow::bail!(
-                "einsd: no [oidc] section and allow_insecure_no_auth is not set — \
-                 refusing to serve the settlement API unauthenticated"
+            out.push(
+                Befund::blockiert(
+                    "oidc",
+                    "einsd: no [oidc] section and allow_insecure_no_auth is not set — \
+                     refusing to serve the settlement API unauthenticated",
+                )
+                .bereich(Bereich::Zugriff),
             );
         }
         // `OutboxWorker` signs only when it has a secret. With a webhook URL and
@@ -221,14 +245,18 @@ impl EinsdConfig {
             && self.erp_hmac_secret.is_none()
             && !self.allow_insecure_no_auth
         {
-            anyhow::bail!(
-                "einsd: erp_webhook_url is set but erp_hmac_secret is not — the outbox \
-                 worker signs only when it has a secret, so every de.eeg.* CloudEvent, \
-                 settlement amounts included, would reach the ERP unsigned. Configure \
-                 erp_hmac_secret, or set allow_insecure_no_auth = true"
+            out.push(
+                Befund::blockiert(
+                    "erp_hmac_secret",
+                    "einsd: erp_webhook_url is set but erp_hmac_secret is not — the outbox \
+                     worker signs only when it has a secret, so every de.eeg.* CloudEvent, \
+                     settlement amounts included, would reach the ERP unsigned. Configure \
+                     erp_hmac_secret, or set allow_insecure_no_auth = true",
+                )
+                .bereich(Bereich::Zugriff),
             );
         }
-        Ok(())
+        out
     }
 
     /// The policy and posture einsd runs under — logged, exported, recorded

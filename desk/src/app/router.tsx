@@ -8,6 +8,7 @@ import {
 import { lazy } from "react";
 import { AssistentView } from "../views/Assistent";
 import { DeadLettersView } from "../views/DeadLetters";
+import { EinrichtungView } from "../views/Einrichtung";
 import { FreigabenView } from "../views/Freigaben";
 import { FristenView } from "../views/Fristen";
 import { HeuteView } from "../views/Heute";
@@ -82,7 +83,15 @@ const freigaben = createRoute({
 const fristen = createRoute({
   getParentRoute: () => root,
   path: "/fristen",
+  validateSearch: (search: Record<string, unknown>): { id?: string } =>
+    typeof search.id === "string" && search.id ? { id: search.id } : {},
   component: FristenView,
+});
+
+const einrichtung = createRoute({
+  getParentRoute: () => root,
+  path: "/einrichtung",
+  component: EinrichtungView,
 });
 
 const deadLetters = createRoute({
@@ -125,6 +134,7 @@ const routeTree = root.addChildren(
         kunden,
         kunde,
         assistent,
+        einrichtung,
         gallery,
       ]
     : [
@@ -138,6 +148,7 @@ const routeTree = root.addChildren(
         kunden,
         kunde,
         assistent,
+        einrichtung,
       ],
 );
 

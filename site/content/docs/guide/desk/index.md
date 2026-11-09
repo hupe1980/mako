@@ -35,6 +35,13 @@ person may do; the Desk keeps no role map. Its CSP allows the bundle's own
 script and stylesheet only, plus a per-request nonce for the styles React
 Aria injects.
 
+The Desk reads one file at runtime, `/config.json` beside the bundle. It holds
+`handbuch`, the address of the operator manual a finding's settings link
+opens (default `https://hupe1980.github.io/mako`). Mount your own file over
+`/usr/share/nginx/html/config.json` to point it at a manual you host; a
+missing file or a value that is not an `https:` or same-origin address keeps
+the default.
+
 ## A process, by its business key
 
 Type a MaLo-ID, MeLo-ID or Vorgangsnummer on **Prozesse**, or anywhere press
@@ -48,7 +55,10 @@ Anfrage/Bestellung. Each is a card, ordered by its earliest pending Frist,
 leaving out any process the person's role may not read.
 
 Each card is titled the way an operator says it — „Lieferantenwechsel · Strom"
-— with the workflow and its ids under „Technische Angaben".
+— with the workflow and its ids under „Technische Angaben". Once the
+Marktpartner has answered, the card names its Antwortcode with the BDEW's
+wording from the list the answer named, that list as the source; a code the
+catalogue holds no wording for stands with its list and no meaning.
 
 Its **Verlauf** threads the market messages: received on the left, sent on the
 right, each with PID, Berlin time and document number, as the workflow
@@ -253,6 +263,14 @@ number the service capped shows as a floor („500+").
 
 **Fristen überschritten** lists every open process past its Antwortfrist, as
 the Prozessüberwachung has it, each with the Festlegung its deadline came from.
+It is laid out like Mail: the list on the left, the selected process with its
+Verlauf in the middle, and its Angaben — MaLo, PID, state, when the Frist
+ended, the Fundstelle, the Marktpartner-ID, the process id — on the right.
+<kbd>↑</kbd> <kbd>↓</kbd> move the selection and the detail follows,
+<kbd>↵</kbd> moves into the detail, <kbd>esc</kbd> returns to the row. The
+selection is in the address, so a link opens the same process. With less room
+the Angaben move under the detail; at a phone's width one pane shows at a time
+and „Zurück zur Liste" returns.
 
 **Dead Letters** (Netz) counts every message the Marktkommunikation could not
 take or deliver and lists the most recent. The Lieferant also sees
@@ -269,6 +287,8 @@ its proposals beneath. It opens the Beipackzettel.
 [![The Überblick](ueberblick-dark.png)](ueberblick-dark.png)
 [![Overdue processes](fristen-light.png)](fristen-light.png)
 [![Overdue processes](fristen-dark.png)](fristen-dark.png)
+[![Overdue processes, in English](fristen-englisch-light.png)](fristen-englisch-light.png)
+[![Overdue processes, in English](fristen-englisch-dark.png)](fristen-englisch-dark.png)
 
 ## Heute
 
@@ -379,6 +399,56 @@ on — under a process, a customer or a Freigabe — and is answered there.
 [![The command palette handing a question to the assistant](palette-fragen-light.png)](palette-fragen-light.png)
 [![The command palette handing a question to the assistant](palette-fragen-dark.png)](palette-fragen-dark.png)
 
+## Einrichtung: ready for go-live
+
+**Einrichtung** opens with the deployment's checklist, as the
+Marktkommunikation folds it from every service named under
+`[[einrichtung.dienst]]` (see [Einrichtung](@/docs/guide/einrichtung.md)): one
+item per area — Identitäten, Zertifikate, Bilanzierung, Zugriff,
+Erreichbarkeit, Formatabdeckung, Konfiguration — each with its Ampel as an icon
+and a word, and under it every finding in the reporting service's words, with
+the setting's path, a link to its entry in the manual where it is an operator
+setting, and the source chip of the rule. A service that cannot be asked is
+**nicht erreichbar** — unknown, not failing; one that answers with something
+other than a report has the answer shown as it came. The list asks again every
+15 seconds and on **Jetzt prüfen**; every colour and the verdict at the top are
+the service's.
+
+[![Einrichtung: the deployment checklist with a blocked identity, an unreachable service and an unreadable answer](einrichtung-light.png)](einrichtung-light.png)
+[![Einrichtung: the deployment checklist with a blocked identity, an unreachable service and an unreadable answer](einrichtung-dark.png)](einrichtung-dark.png)
+
+## Rehearse a message before go-live
+
+Below the checklist, the Probelauf: choose one of the messages a Lieferant
+sends first — Anmeldung, Abmeldung or Kündigung, Strom (55001, 55004, 55016)
+or Gas (44001, 44004, 44016) — check the facts, which start as the profiles'
+sample values, and start it with <kbd>⌘↵</kbd>. The Marktkommunikation builds
+the message through the same door a real one takes, holds it against its
+profile and the pre-send check, and **sends and stores nothing**.
+
+The answer is its own: **Besteht**, or **Abgelehnt** with the refusal the real
+command would get — before a message existed, or by the check on the built
+one. Below it the message itself, segment by segment: position, tag and MIG
+number, the AHB name of the place under the profile of the message's own
+format version (named above the grid), and the content, with the data element
+a finding names marked where it sits and the finding under it. A list of the
+findings moves focus to each segment; arrow keys move through the grid; the
+interchange as sent can be copied. A command the deployment cannot rehearse,
+or a Marktrolle it does not declare, is refused in the service's words.
+
+[![A Probelauf of a 44004 Abmeldung, refused by the pre-send check, the failing data element marked](probelauf-light.png)](probelauf-light.png)
+[![A Probelauf of a 44004 Abmeldung, refused by the pre-send check, the failing data element marked](probelauf-dark.png)](probelauf-dark.png)
+
+## At a phone's width
+
+Below 768 px the sidebar folds away: the button at the start of the top bar
+opens it as a sheet over the view, and esc, a tap outside or a choice closes
+it, the focus back on the button. Search shrinks to its icon, a list–detail
+view shows one pane at a time, and no view scrolls sideways.
+
+[![Einrichtung at a phone's width](telefon-einrichtung-light.png)](telefon-einrichtung-light.png)
+[![The views as a sheet at a phone's width](telefon-ansichten-dark.png)](telefon-ansichten-dark.png)
+
 ## One role at a time
 
 Holding several market roles, a person wears one at a time — **Netz** (NB),
@@ -393,7 +463,15 @@ service's Cedar policy.
 ## You and your keys
 
 Your name sits at the foot of the sidebar. Its menu shows the market roles you
-hold and sets the appearance: System, Hell or Dunkel, kept in this browser.
+hold and sets the appearance — System, Hell or Dunkel — and the **Sprache**,
+Deutsch or English; both are kept in this browser. In English the market's own
+vocabulary stays German — MaLo, Frist, Antwortfrist, PID, APERAK, Fundstelle
+names, Marktpartner-ID, the process names — because it is the word the
+Festlegungen and the counterparty use. Dates and numbers take the language's
+style (`02/11/2026, 11:00`), and every instant is still Berlin time. Every
+view, ⌘K, the shortcut sheet, the names of the Rollen and services and the
+question the Desk asks the assistant speak the chosen Sprache; what a service
+writes — a finding, a refusal, a reason — appears in its own words.
 <kbd>⌘/</kbd> lists every key the Desk answers to, from anywhere.
 
 [![The account menu](konto-light.png)](konto-light.png)

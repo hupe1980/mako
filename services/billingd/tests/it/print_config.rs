@@ -56,6 +56,45 @@ stromsteuer_ct_per_kwh = [
     assert!(stderr.contains("overlaps"), "{stderr}");
 }
 
+/// A config with two defects reports both from `--check-config --json`, each
+/// at its path, and exits non-zero.
+#[test]
+fn check_config_reports_every_defect_not_the_first() {
+    let toml = format!(
+        "{BASE}
+[billing_runs]
+run_hour_utc = 25
+
+[risk]
+sample_at = 50
+review_at = 40
+hold_at = 101
+"
+    );
+    let dir = std::env::temp_dir().join(format!("billingd-check-config-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("billingd.toml");
+    std::fs::write(&file, toml).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_billingd"))
+        .args(["--check-config", "--json"])
+        .env("BILLINGD_CONFIG", &file)
+        .env_remove("BILLINGD_DATABASE__URL")
+        .output()
+        .expect("run billingd --check-config");
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(!out.status.success());
+    let e: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON report");
+    let pfade: Vec<&str> = e["befunde"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["pfad"].as_str())
+        .collect();
+    for p in ["billing_runs.run_hour_utc", "risk", "risk.hold_at"] {
+        assert!(pfade.contains(&p), "{p} missing from {pfade:?}");
+    }
+}
+
 /// A valid config prints the policy it runs under, each value with its origin
 /// and source.
 #[test]

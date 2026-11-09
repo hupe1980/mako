@@ -27,6 +27,7 @@ pub mod metrics;
 pub mod oversight;
 pub mod policy;
 pub mod providers;
+pub mod quellen;
 pub mod readiness;
 pub mod runtime;
 pub mod schritte;

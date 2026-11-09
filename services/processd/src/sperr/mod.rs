@@ -56,10 +56,15 @@ pub mod worker;
 #[derive(Clone, Debug)]
 pub struct Tenant(pub String);
 
-/// The Sperrauftrag routes, carrying the `makod` client and the tenant they
-/// dispatch under. The caller adds the pool, OIDC and Cedar layers it shares
-/// with every other processd route.
-pub fn router(makod: Arc<MakodClient>, tenant: String) -> Router {
+/// `[policy] msb_vorlauf_lesart`, injected as an Axum `Extension` so an order
+/// view states the earliest Sperrtermin under the reading in force.
+#[derive(Clone, Copy, Debug)]
+pub struct Lesart(pub mako_service::policy::Policy<crate::config::MsbVorlaufLesart>);
+
+/// The Sperrauftrag routes, carrying the `makod` client, the tenant they
+/// dispatch under and the Sperrtermin reading. The caller adds the pool, OIDC
+/// and Cedar layers it shares with every other processd route.
+pub fn router(makod: Arc<MakodClient>, tenant: String, lesart: Lesart) -> Router {
     Router::new()
         .route("/api/v1/sperr-orders/stats", get(handlers::get_stats))
         .route(
@@ -81,4 +86,5 @@ pub fn router(makod: Arc<MakodClient>, tenant: String) -> Router {
         )
         .layer(Extension(makod))
         .layer(Extension(Tenant(tenant)))
+        .layer(Extension(lesart))
 }

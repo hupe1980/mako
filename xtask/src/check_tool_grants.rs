@@ -65,6 +65,16 @@ pub fn run(workspace_root: &Path) -> bool {
         return false;
     };
 
+    // agentd's own tools are compiled in rather than served over MCP, so they
+    // resolve a grant without counting towards the services' MCP surface.
+    let in_process = in_process_tools(workspace_root);
+    if in_process.is_empty() {
+        eprintln!("check-tool-grants: no tool declared in {IN_PROCESS} — has the layout changed?");
+        return false;
+    }
+    let mut resolvable = tools.clone();
+    resolvable.extend(in_process);
+
     let mut findings = Findings::default();
     let mut grants = 0usize;
 
@@ -83,7 +93,7 @@ pub fn run(workspace_root: &Path) -> bool {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        grants += check_manifest(&mut findings, &name, &src, &tools, POSTURE);
+        grants += check_manifest(&mut findings, &name, &src, &resolvable, POSTURE);
     }
 
     let failures = findings.len();
@@ -359,6 +369,25 @@ fn mcp_tools(workspace_root: &Path) -> BTreeMap<String, bool> {
     out
 }
 
+/// Where agentd declares the tools it serves itself, `tool://agentd/…`.
+const IN_PROCESS: &str = "services/agentd/src/plane/quellen.rs";
+
+/// agentd's compiled-in tools, from their `Werkzeug { name, read_only }`
+/// declarations — the server's own statement, as `read_only_hint` is for a
+/// service.
+fn in_process_tools(workspace_root: &Path) -> BTreeMap<String, bool> {
+    let src = std::fs::read_to_string(workspace_root.join(IN_PROCESS)).unwrap_or_default();
+    in_process_tools_in(&src)
+}
+
+fn in_process_tools_in(src: &str) -> BTreeMap<String, bool> {
+    let re = regex::Regex::new(r#"Werkzeug\s*\{\s*name:\s*"(\w+)",\s*read_only:\s*(true|false)"#)
+        .expect("werkzeug");
+    re.captures_iter(src)
+        .map(|c| (format!("agentd/{}", &c[1]), &c[2] == "true"))
+        .collect()
+}
+
 /// The sources that make up one service's MCP server, with their paths.
 ///
 /// Most daemons keep the server at `src/mcp_server.rs`; makod nests it under
@@ -490,7 +519,7 @@ fn per_service_claims(
     let (invoicd, makod, marktd) = (t("invoicd"), t("makod"), t("marktd"));
     let (netzbilanzd, processd) = (t("netzbilanzd"), t("processd"));
     let (productd, vertragd) = (t("productd"), t("vertragd"));
-    let _ = (marktd, processd); // no doc states these two as a number
+    let _ = processd; // no doc states processd's count as a number
 
     let (p_edmd, p_einsd) = (p("edmd"), p("einsd"));
     let p_netzbilanzd = p("netzbilanzd");
@@ -574,6 +603,10 @@ fn per_service_claims(
             format!("`accountingd` exposes **{accountingd} tools** at `/mcp`"),
         ),
         (
+            "site/content/docs/services/marktd.md",
+            format!("**Tools ({marktd})**, every one a read"),
+        ),
+        (
             "site/content/docs/services/productd.md",
             format!("**{productd} read-only tools** and **{p_productd} prompts**."),
         ),
@@ -593,6 +626,10 @@ fn per_service_claims(
         (
             "services/einsd/README.md",
             format!("## MCP server — `/mcp` ({einsd} tools, {p_einsd} prompts)"),
+        ),
+        (
+            "services/marktd/README.md",
+            format!("| **MCP** | {marktd} read-only tools and"),
         ),
         (
             "services/netzbilanzd/README.md",
@@ -985,6 +1022,22 @@ mod tests {
             vec!["obs_tool_router".to_owned(), "obs_prompt_router".to_owned()]
         );
         assert!(super::declared_routers("#[tool_router]\nimpl H {}\n").is_empty());
+    }
+
+    /// agentd's compiled-in tools are read from their declarations, with the
+    /// read-only flag as declared — the fact a grant's `mutates` must match.
+    #[test]
+    fn agentds_own_tools_are_read_from_their_declarations() {
+        let src = "pub const WERKZEUGE: &[Werkzeug] = &[\n\
+                   Werkzeug {\n name: \"quote_source\",\n read_only: true,\n },\n\
+                   Werkzeug { name: \"write_x\", read_only: false },\n];\n";
+        assert_eq!(
+            super::in_process_tools_in(src),
+            std::collections::BTreeMap::from([
+                ("agentd/quote_source".to_owned(), true),
+                ("agentd/write_x".to_owned(), false),
+            ])
+        );
     }
 
     /// Tools in a module router count, and one outside it is still refused.

@@ -29,13 +29,25 @@ async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
     Some((pool, container))
 }
 
+/// A Kunde with the name and address an Anmeldung's `SG12 NAD+Z09`/`Z04`
+/// names him by.
 pub(crate) async fn make_kunde(pool: &PgPool, tenant: &str) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO kunden (id, tenant, kundentyp, haushaltskunde) VALUES ($1, $2, 'B2C', true)",
+        "INSERT INTO kunden (id, tenant, kundentyp, haushaltskunde, geschaeftspartner)
+         VALUES ($1, $2, 'B2C', true, $3)",
     )
     .bind(id)
     .bind(tenant)
+    .bind(serde_json::json!({
+        "_typ": "GESCHAEFTSPARTNER",
+        "vorname": "Erika",
+        "nachname": "Mustermann",
+        "adresse": {
+            "strasse": "Hauptstraße", "hausnummer": "1",
+            "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+        }
+    }))
     .execute(pool)
     .await
     .expect("insert kunde");
@@ -71,10 +83,12 @@ pub(crate) fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
             lieferbeginn: d,
             lieferende: None,
             jahresverbrauch_kwh: None,
-            lieferbeginn_anlass: None,
+            lieferbeginn_anlass: Some(vertragd::domain::Lieferbeginnanlass::Wechsel),
             netznutzungsvertrag: None,
             netznutzung_zahler: None,
             gemeinderabatt_prozent: None,
+            enfg_grundlage: Some("ZG1".to_owned()),
+            enfg_grund: None,
             fulfillment_data: None,
         }],
     }
@@ -261,6 +275,11 @@ async fn a_kunde_without_master_data_yields_empty_buyer_terms() {
             .await
             .expect("create contract");
     activate(&pool, v.id).await;
+    sqlx::query("UPDATE kunden SET geschaeftspartner=NULL WHERE id=$1")
+        .bind(kunde)
+        .execute(&pool)
+        .await
+        .expect("clear the master data");
 
     let buyer = pg::fetch_rechnungsempfaenger_by_malo(&pool, MALO, tenant)
         .await
@@ -3098,6 +3117,8 @@ fn gas_vertrag(erp_id: &str, facts: bool) -> pg::CreateVersorgungsvertragInput {
         k.netznutzungsvertrag = Some(Netznutzungsvertrag::LieferantNb);
         k.netznutzung_zahler = Some(NetznutzungZahler::Lieferant);
         k.gemeinderabatt_prozent = Some(rust_decimal::Decimal::ZERO);
+    } else {
+        k.lieferbeginn_anlass = None;
     }
     input
 }
@@ -3156,6 +3177,61 @@ async fn a_gas_contract_enqueues_the_full_anmeldung() {
     assert!(k.anmeldung_maengel().is_empty());
 }
 
+/// The Lieferbeginn task of a Strom contract is the `start-supply` body
+/// processd reads, with the `SG4 STS+7` its Anlass decides and the Kunde's
+/// facts the 55001 makes Muss (UTILMD AHB Strom 2.2 Kap. 8.2); a contract
+/// without its Anlass or its Grundlage nach EnFG is refused naming them, and
+/// nothing is written.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_strom_contract_enqueues_the_full_anmeldung() {
+    let Some((pool, _pg)) = test_pool("strom_anmeldung").await else {
+        return;
+    };
+    let tenant = "t-strom";
+    let kunde = make_kunde(&pool, tenant).await;
+    let mut input = vertrag_input("STROM-1");
+    input.komponenten[0].lieferbeginn_anlass = Some(vertragd::domain::Lieferbeginnanlass::Umzug);
+    let created = pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &input)
+        .await
+        .expect("a full Strom contract is created");
+    assert_eq!(created.dispatched, 1);
+    let payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM outbound_tasks WHERE tenant=$1 AND kind='LIEFERBEGINN'",
+    )
+    .bind(tenant)
+    .fetch_one(&pool)
+    .await
+    .expect("the task");
+    assert_eq!(payload["endpoint"], "start-supply");
+    let req: processd::server::StartSupplyRequest =
+        mako_service::json_from_value(payload["body"].clone()).expect("processd's request");
+    assert_eq!(req.transaktionsgrund, "E01");
+    assert_eq!(req.haushaltskunde, Some(true));
+    assert_eq!(req.enfg_grundlage.as_deref(), Some("ZG1"));
+    let k = req.kunde.expect("the Kunde");
+    assert!(k.anmeldung_maengel().is_empty());
+
+    let mut ohne = vertrag_input("STROM-2");
+    ohne.komponenten[0].lieferbeginn_anlass = None;
+    ohne.komponenten[0].enfg_grundlage = None;
+    let err = pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &ohne)
+        .await
+        .expect_err("refused");
+    let msg = err.to_string();
+    for named in ["lieferbeginn_anlass", "enfg_grundlage", "55001"] {
+        assert!(msg.contains(named), "{named}: {msg}");
+    }
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM versorgungsvertraege WHERE tenant=$1 AND erp_contract_id='STROM-2'",
+    )
+    .bind(tenant)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(n, 0);
+}
+
 /// A gas contract that does not state the 44001's facts is refused naming
 /// them, and nothing is written.
 #[tokio::test]
@@ -3166,6 +3242,11 @@ async fn a_gas_contract_without_the_anmeldung_facts_is_refused() {
     };
     let tenant = "t-gas-2";
     let kunde = make_kunde(&pool, tenant).await;
+    sqlx::query("UPDATE kunden SET geschaeftspartner=NULL WHERE id=$1")
+        .bind(kunde)
+        .execute(&pool)
+        .await
+        .expect("a Kunde without a name");
     let err =
         pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &gas_vertrag("GAS-2", false))
             .await

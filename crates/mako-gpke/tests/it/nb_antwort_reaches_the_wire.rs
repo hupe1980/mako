@@ -173,6 +173,25 @@ fn a_bestaetigung_keeps_the_zuordnungsbeginn_beside_an_earlier_lieferende() {
     assert_eq!(payload["pid"], 55002);
     assert_eq!(payload["process_date"], "20260901");
     assert!(payload.get("lfa_lieferende").is_none());
+
+    // The date rides the completion, beside the Zuordnungsbeginn it precedes:
+    // the two ends of the interval marktd announces as the § 38 gap.
+    let completed = completed(&out).expect("the 55002 queues its completion");
+    assert_eq!(completed["pid"], 55002);
+    assert_eq!(completed["malo_id"], MALO);
+    assert_eq!(completed["accepted"], true);
+    assert_eq!(completed["process_date"], "20260901");
+    assert_eq!(completed["lfa_lieferende"], "20260815");
+}
+
+/// The `ProcessCompleted` notification the answer queued, if any.
+fn completed(
+    out: &mako_engine::workflow::WorkflowOutput<mako_gpke::SupplierChangeEvent>,
+) -> Option<&serde_json::Value> {
+    out.outbox
+        .iter()
+        .find(|o| &*o.message_type == "ProcessCompleted")
+        .map(|o| &o.payload)
 }
 
 /// The ordinary answer states none: the LFA releases exactly at the
@@ -181,6 +200,8 @@ fn a_bestaetigung_keeps_the_zuordnungsbeginn_beside_an_earlier_lieferende() {
 fn an_ordinary_bestaetigung_states_no_lieferende() {
     let out = answer(55001, LfAntwort::zustimmung("A51", "E_0623"));
     assert!(utilmd(&out).get("lfa_lieferende").is_none());
+    let completed = completed(&out).expect("the 55002 queues its completion");
+    assert!(completed.get("lfa_lieferende").is_none());
 }
 
 /// An **Ablehnung** leaves the Altlieferant exactly where it was, so no interval
@@ -196,4 +217,7 @@ fn an_ablehnung_never_reports_a_gap() {
     let payload = utilmd(&out);
     assert_eq!(payload["pid"], 55003);
     assert!(payload.get("lfa_lieferende").is_none());
+    let completed = completed(&out).expect("the 55003 queues its completion");
+    assert_eq!(completed["accepted"], false);
+    assert!(completed.get("lfa_lieferende").is_none());
 }

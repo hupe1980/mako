@@ -72,8 +72,8 @@
       "name": "desk-assistant",
       "titel": "Assistent im Desk",
       "zweck": "Beantwortet eine Frage zum Kunden, zur Marktlokation, zum Prozess oder zur Entscheidung auf dem Bildschirm, jeden Satz mit seiner Quelle.",
-      "version": "1.4.0",
-      "digest": "dbdcba664111f2f84a3290d3a6439789d349a671888da75700a0ba461aa5cc82",
+      "version": "1.5.0",
+      "digest": "0a003eb49ef78bba5a518a9b66fe20a8b8d06dc3ec3c07409fa0fcc154156c34",
       "ausloeser": [],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -108,6 +108,14 @@
         {
           "werkzeug": "accountingd/list_ledger",
           "wozu": "A customer account's ledger movements, newest first, each with its Beleg, and the balance the window opens at."
+        },
+        {
+          "werkzeug": "agentd/find_source",
+          "wozu": "The addresses — document, edition, chapter or § — whose passage holds the given words, best first. Addresses only, never text: quote one with quote_source."
+        },
+        {
+          "werkzeug": "agentd/quote_source",
+          "wozu": "The passage at one address, verbatim, with its page and the document's SHA-256. An address the index does not hold is refused, never answered with a nearby passage."
         },
         {
           "werkzeug": "processd/list_open_processes",

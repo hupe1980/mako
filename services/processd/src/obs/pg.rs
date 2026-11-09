@@ -19,7 +19,7 @@ pub const TERMINAL_STATE_SQL: &str = "'completed','rejected','failed'";
 /// query and miss three.
 const PROJECTION_COLUMNS: &str = "process_id, pid, family, workflow_name, state, malo_id, \
      partner_mp_id, mdm_role, deadline_at, deadline_source, deadline_risk, started_at, \
-     last_event_at, erc_code, initiator_is_affiliate, tenant";
+     last_event_at, erc_code, antwort_code, antwort_codeliste, initiator_is_affiliate, tenant";
 
 /// The single-row read, scoped to the tenant that owns the row.
 ///
@@ -44,12 +44,17 @@ const GET_SQL: &str = "WHERE process_id = $1 AND tenant = $2";
 /// - `deadline_source` travels with `deadline_at`, always, so a stored instant
 ///   can never lose the Festlegung it came from;
 /// - `completed_at` is the time the terminal event carries, never the time it
-///   was written, so a rebuild from the replay log reproduces the cycle time.
+///   was written, so a rebuild from the replay log reproduces the cycle time;
+/// - `antwort_code` and `antwort_codeliste` move as one pair, taken from the
+///   event that carries a code: a later event without one (a redelivered
+///   APERAK) keeps the answer, and a code never stands beside another
+///   answer's list.
 const UPSERT_SQL: &str = r"INSERT INTO process_projections
       (process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
        mdm_role, deadline_at, deadline_source, deadline_risk, started_at, last_event_at,
-       erc_code, initiator_is_affiliate, tenant, completed_at, updated_at)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+       erc_code, antwort_code, antwort_codeliste, initiator_is_affiliate, tenant,
+       completed_at, updated_at)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
           CASE WHEN $5 IN ('completed','rejected','failed') THEN $13 ELSE NULL END,
           now())
   ON CONFLICT (process_id) DO UPDATE SET
@@ -61,6 +66,12 @@ const UPSERT_SQL: &str = r"INSERT INTO process_projections
       deadline_risk          = EXCLUDED.deadline_risk,
       last_event_at          = GREATEST(EXCLUDED.last_event_at, process_projections.last_event_at),
       erc_code               = COALESCE(EXCLUDED.erc_code, process_projections.erc_code),
+      antwort_code           = CASE WHEN EXCLUDED.antwort_code IS NOT NULL
+                                    THEN EXCLUDED.antwort_code
+                                    ELSE process_projections.antwort_code END,
+      antwort_codeliste      = CASE WHEN EXCLUDED.antwort_code IS NOT NULL
+                                    THEN EXCLUDED.antwort_codeliste
+                                    ELSE process_projections.antwort_codeliste END,
       malo_id                = COALESCE(EXCLUDED.malo_id, process_projections.malo_id),
       partner_mp_id          = COALESCE(EXCLUDED.partner_mp_id, process_projections.partner_mp_id),
       mdm_role               = COALESCE(EXCLUDED.mdm_role, process_projections.mdm_role),
@@ -226,6 +237,8 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             .bind(p.started_at)
             .bind(p.last_event_at)
             .bind(&p.erc_code)
+            .bind(&p.antwort_code)
+            .bind(&p.antwort_codeliste)
             .bind(p.initiator_is_affiliate)
             .bind(&p.tenant)
             .execute(&self.pool)
@@ -487,6 +500,8 @@ fn row_to_projection(row: &sqlx::postgres::PgRow) -> Result<ProcessProjection, O
         started_at: row.try_get("started_at").map_err(db)?,
         last_event_at: row.try_get("last_event_at").map_err(db)?,
         erc_code: row.try_get("erc_code").map_err(db)?,
+        antwort_code: row.try_get("antwort_code").map_err(db)?,
+        antwort_codeliste: row.try_get("antwort_codeliste").map_err(db)?,
         initiator_is_affiliate: row.try_get("initiator_is_affiliate").unwrap_or(false),
         tenant: row.try_get("tenant").map_err(db)?,
     })
@@ -616,6 +631,8 @@ mod tests {
             "started_at",
             "last_event_at",
             "erc_code",
+            "antwort_code",
+            "antwort_codeliste",
             "initiator_is_affiliate",
             "tenant",
         ] {

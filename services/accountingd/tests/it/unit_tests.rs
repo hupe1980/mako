@@ -252,13 +252,14 @@ fn kinds_named(text: &str) -> std::collections::BTreeSet<&str> {
 }
 
 /// Every place that lists the Buchungsarten names all of them: the two MCP
-/// lists an agent books from, and the Desk's words for them. A kind missing
+/// lists an agent books from, and the Desk's words for them in each language. A kind missing
 /// there is one an agent is told it cannot book, or one the Desk shows raw.
 #[test]
 fn every_buchungsart_is_named_where_the_kinds_are_listed() {
     use accountingd::ledger::ENTRY_TYPES;
     const MCP: &str = include_str!("../../src/mcp_server.rs");
-    const DESK: &str = include_str!("../../../../desk/src/data/buchung.ts");
+    const DESK_DE: &str = include_str!("../../../../desk/src/i18n/de.ts");
+    const DESK_EN: &str = include_str!("../../../../desk/src/i18n/en.ts");
     let between = |text: &'static str, from: &str, to: &str| -> &'static str {
         let start = text
             .find(from)
@@ -277,7 +278,14 @@ fn every_buchungsart_is_named_where_the_kinds_are_listed() {
             "post_manual_booking",
             between(MCP, "Allowed entry_type:", "amount_ct:"),
         ),
-        ("desk/src/data/buchung.ts", between(DESK, "const ART", "};")),
+        (
+            "desk/src/i18n/de.ts",
+            between(DESK_DE, "buchungsarten: {", "abgelehnt:"),
+        ),
+        (
+            "desk/src/i18n/en.ts",
+            between(DESK_EN, "buchungsarten: {", "abgelehnt:"),
+        ),
     ];
     for (place, list) in lists {
         let named = kinds_named(list);

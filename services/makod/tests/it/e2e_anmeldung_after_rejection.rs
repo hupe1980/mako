@@ -121,13 +121,7 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
         .await
         .expect("seed MaLo cache");
 
-    let payload = serde_json::json!({
-        "malo_id": MALO_ID,
-        "lieferbeginn_datum": "2026-10-01",
-        // `SG8 SEQ+Z79` Produktpaket — Muss on a 55001 (UTILMD AHB Strom 2.2
-        // Kap. 5.3); the workflow refuses an Anmeldung without one.
-        "bilanzkreis": "11XBK-LF-------9",
-    });
+    let payload = anmeldung_55001();
 
     // ── First Anmeldung ───────────────────────────────────────────────────────
     let first = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload)
@@ -232,13 +226,7 @@ async fn a_follow_up_command_still_resolves_after_a_replacement_process_spawns()
         .await
         .expect("seed MaLo cache");
 
-    let payload = serde_json::json!({
-        "malo_id": MALO_ID,
-        "lieferbeginn_datum": "2026-10-01",
-        // `SG8 SEQ+Z79` Produktpaket — Muss on a 55001 (UTILMD AHB Strom 2.2
-        // Kap. 5.3); the workflow refuses an Anmeldung without one.
-        "bilanzkreis": "11XBK-LF-------9",
-    });
+    let payload = anmeldung_55001();
 
     let DispatchOutcome::Spawned {
         process_id: first_id,
@@ -294,4 +282,25 @@ async fn a_follow_up_command_still_resolves_after_a_replacement_process_spawns()
         ),
         "the follow-up command must resolve to the live process, got {activated:?}"
     );
+}
+
+/// A 55001 body with every fact its column makes Muss (UTILMD AHB Strom 2.2
+/// Kap. 8.2): the `SG4 STS+7` Transaktionsgrund, the `SG8 SEQ+Z79`
+/// Bilanzkreis, the Gruppenzuordnung, the Grundlage nach EnFG and the Kunde.
+fn anmeldung_55001() -> serde_json::Value {
+    serde_json::json!({
+        "malo_id": MALO_ID,
+        "lieferbeginn_datum": "2026-10-01",
+        "transaktionsgrund": "E03",
+        "bilanzkreis": "11XBK-LF-------9",
+        "haushaltskunde": true,
+        "enfg_grundlage": "ZG1",
+        "kunde": {
+            "nachname": "Mustermann",
+            "anschrift": {
+                "strasse": "Hauptstraße", "hausnummer": "1",
+                "postleitzahl": "50667", "ort": "Köln", "landescode": "DE"
+            }
+        },
+    })
 }

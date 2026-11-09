@@ -39,7 +39,7 @@ uuid               = { workspace = true }
 tokio              = { version = "1", features = ["full"] }
 tokio-util         = { workspace = true }
 tracing            = "0.1"
-mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "metrics"] }
+mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "metrics", "mcp"] }
 rmcp               = { workspace = true }
 schemars           = { workspace = true }
 reqwest            = { workspace = true }
@@ -61,6 +61,10 @@ testcontainers-modules = { workspace = true }
 # PostgreSQL via testcontainers in tests/*_integration.rs)
 tokio      = { version = "1", features = ["full"] }
 serde_json = { workspace = true }
+# The NB's answer to an Anmeldung, built by its workflow, is the event the
+# supply projection is held against.
+mako-engine = { workspace = true }
+mako-gpke   = { workspace = true }
 
 [lints]
 workspace = true
