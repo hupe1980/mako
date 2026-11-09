@@ -154,7 +154,8 @@ pub struct SubmitCommandParams {
     /// | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
     /// | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum` |
     /// | `geli.lieferbeginn.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund`, `bilanzkreis`, `abrechnungsintervall_monate`, `haushaltskunde`, `netznutzungsvertrag`, `netznutzung_zahler`, `gemeinderabatt_prozent`, `kunde`, `ablesekarte` — `mako_markt::commands::GeliLieferbeginnAnmelden`, no other key |
-    /// | `geli.lieferende.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD) |
+    /// | `geli.lieferende.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund` — `mako_markt::commands::GeliLieferendeAnmelden`, no other key |
+    /// | `geli.kuendigung.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `lfa_mp_id` (the Altlieferant) — `mako_markt::commands::GeliKuendigungAnmelden`, no other key |
     /// | `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id` |
     /// | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
     #[schemars(example = "{\"malo_id\": \"10001234558\", \"lieferbeginn_datum\": \"2026-10-01\"}")]

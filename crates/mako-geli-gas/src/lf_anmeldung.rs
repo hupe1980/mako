@@ -87,6 +87,20 @@ pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44004, 44016];
 /// no Produktpaket — the Strom `SG8 SEQ+Z79` shape is not sendable here.
 pub const ANMELDUNG_PID_MIT_BILANZKREIS: u32 = 44001;
 
+/// The Abmeldung NN — the one Anfrage whose `SG4 STS+7` Transaktionsgrund is
+/// Muss (UTILMD AHB Gas 1.2 Kap. 5.5, S. 40, `[2061]`).
+pub const ABMELDUNG_PID: u32 = 44004;
+
+/// The 44004 Transaktionsgründe that name the Beginn instead of the Ende.
+///
+/// „Aufhebung einer zukünftigen Zuordnung wegen Auszug des Kunden / … wegen
+/// Stilllegung / … wegen aufgehobenem Vertragsverhältnis": under these the
+/// column makes `DTM+92` „Beginn zum" Muss (Bedingung `[7]`), filled „mit dem
+/// ursprünglich vom NB bestätigten Beginndatum" (`[577]`), and `DTM+93` „Ende
+/// zum" only under every other code (`[11]`) — UTILMD AHB Gas 1.2 Kap. 5.5,
+/// S. 39–41.
+pub const ABMELDUNG_AUFHEBUNG_GRUENDE: &[&str] = &["ZG9", "ZH1", "ZH2"];
+
 /// Inbound response PIDs that resume this workflow.
 ///
 /// | PID   | Meaning                          |
@@ -490,6 +504,19 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                          macht SG10 CCI+Z19 (Bilanzkreis) zur Muss-Angabe.",
                     ));
                 }
+                let abmeldung = pid.as_u32() == ABMELDUNG_PID;
+                if abmeldung && transaktionsgrund.as_deref().is_none_or(str::is_empty) {
+                    return Err(WorkflowError::rejected(
+                        "Gas-Abmeldung 44004 ohne Transaktionsgrund: die UTILMD AHB Gas 1.2 \
+                         macht SG4 STS+7 zur Muss-Angabe ([2061]).",
+                    ));
+                }
+                // [7]/[11]: an Aufhebung names the confirmed Beginn, not an Ende.
+                let dtm_qualifier = (abmeldung
+                    && transaktionsgrund
+                        .as_deref()
+                        .is_some_and(|g| ABMELDUNG_AUFHEBUNG_GRUENDE.contains(&g)))
+                .then_some("92");
 
                 let event = GeliGasLfAnmeldungEvent::Initiated {
                     pruefidentifikator: pid,
@@ -514,6 +541,9 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                     // Bilanzkreis; GeLi Gas has no Produktpaket.
                     "bilanzkreis":       bilanzkreis,
                 });
+                if let Some(q) = dtm_qualifier {
+                    utilmd["dtm_qualifier"] = q.into();
+                }
                 if !stammdaten.is_empty() {
                     utilmd["stammdaten"] = serde_json::to_value(&stammdaten)
                         .map_err(|e| WorkflowError::rejected(e.to_string()))?;
@@ -763,5 +793,57 @@ mod tests {
             received_at: time::OffsetDateTime::now_utc(),
         };
         assert!(GeliGasLfAnmeldungWorkflow::handle(&state, cmd).is_err());
+    }
+
+    fn abmeldung(transaktionsgrund: Option<&str>) -> GeliGasLfAnmeldungCommand {
+        GeliGasLfAnmeldungCommand::InitiateAnmeldung {
+            pid: pid(ABMELDUNG_PID),
+            sender: mc("9800000000001"),
+            receiver: mc("9800357000005"),
+            malo_id: MaLo::new("51238696012"),
+            process_date: "20261231".to_owned(),
+            transaktionsgrund: transaktionsgrund.map(str::to_owned),
+            bilanzkreis: None,
+            stammdaten: Stammdaten::default(),
+            received_at: time::OffsetDateTime::now_utc(),
+        }
+    }
+
+    /// `SG4 STS+7` is Muss on the 44004 (`[2061]`): without it nothing is
+    /// written.
+    #[test]
+    fn a_44004_without_a_transaktionsgrund_is_refused() {
+        let state = GeliGasLfAnmeldungState::New;
+        for grund in [None, Some("")] {
+            let refused = GeliGasLfAnmeldungWorkflow::handle(&state, abmeldung(grund));
+            assert!(
+                refused.is_err_and(|e| e.to_string().contains("STS+7")),
+                "{grund:?}"
+            );
+        }
+    }
+
+    /// An Aufhebung names the confirmed Beginn (`DTM+92`, `[7]`); every other
+    /// Grund the Ende, the PID's own qualifier (`[11]`).
+    #[test]
+    fn an_aufhebung_44004_names_the_beginn() {
+        let state = GeliGasLfAnmeldungState::New;
+        for (grund, qualifier) in [
+            ("ZG9", Some("92")),
+            ("ZH1", Some("92")),
+            ("ZH2", Some("92")),
+            ("ZT5", None),
+            ("E01", None),
+        ] {
+            let out = GeliGasLfAnmeldungWorkflow::handle(&state, abmeldung(Some(grund)))
+                .expect("the 44004 is written");
+            let utilmd = &out.outbox[0].payload;
+            assert_eq!(utilmd["transaktionsgrund"], grund);
+            assert_eq!(
+                utilmd.get("dtm_qualifier").and_then(|v| v.as_str()),
+                qualifier,
+                "{grund}"
+            );
+        }
     }
 }

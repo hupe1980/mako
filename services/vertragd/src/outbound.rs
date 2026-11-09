@@ -299,15 +299,23 @@ pub fn lieferbeginn_body(
 ///
 /// The body is `processd`'s request type, as for [`lieferbeginn_body`]:
 /// `end-supply` takes `lieferende_datum` (ISO-8601), `end-supply-gas` a
-/// `YYYYMMDD` `process_date`.
+/// `YYYYMMDD` `process_date` and the Transaktionsgrund `grund` decides
+/// ([`crate::domain::Kuendigungsgrund::abmeldung_gas_transaktionsgrund`]).
 #[must_use]
-pub fn lieferende(komp_id: Uuid, sparte: &str, malo_id: &str, lieferende: Date) -> Task {
+pub fn lieferende(
+    komp_id: Uuid,
+    sparte: &str,
+    malo_id: &str,
+    lieferende: Date,
+    grund: crate::domain::Kuendigungsgrund,
+) -> Task {
     let payload = if sparte == "GAS" {
         processd_call(
             "end-supply-gas",
             serde_json::json!({
                 "malo_id": malo_id,
                 "process_date": compact_date(lieferende),
+                "transaktionsgrund": grund.abmeldung_gas_transaktionsgrund(),
             }),
         )
     } else {
@@ -1110,9 +1118,16 @@ mod tests {
 
     #[test]
     fn a_gas_lieferende_carries_a_compact_date() {
-        let t = lieferende(Uuid::nil(), "GAS", "51238696012", date!(2026 - 12 - 31));
+        let t = lieferende(
+            Uuid::nil(),
+            "GAS",
+            "51238696012",
+            date!(2026 - 12 - 31),
+            crate::domain::Kuendigungsgrund::Ordentlich,
+        );
         assert_eq!(t.payload["endpoint"], "end-supply-gas");
         assert_eq!(t.payload["body"]["process_date"], "20261231");
+        assert_eq!(t.payload["body"]["transaktionsgrund"], "ZT5");
         assert!(t.payload["body"].get("zaehlpunkt").is_none());
         assert!(t.payload["body"].get("lieferende_datum").is_none());
     }
@@ -1127,7 +1142,15 @@ mod tests {
     #[test]
     fn the_lieferende_key_is_the_component_and_its_date() {
         let komp = Uuid::nil();
-        let at = |d| lieferende(komp, "STROM", "51238696012", d);
+        let at = |d| {
+            lieferende(
+                komp,
+                "STROM",
+                "51238696012",
+                d,
+                crate::domain::Kuendigungsgrund::Ordentlich,
+            )
+        };
         assert_eq!(
             at(date!(2026 - 12 - 31)).dedupe_key,
             at(date!(2026 - 12 - 31)).dedupe_key,

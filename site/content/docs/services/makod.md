@@ -1213,8 +1213,8 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `gpke.abrechnung.annehmen` | `rechnung` (BO4E `RECHNUNG`) |
 | `gpke.abrechnung.ablehnen` | `rechnung`, `ablehnungsgrund` |
 | `geli.lieferbeginn.anmelden` | `malo_id`, `process_date` (YYYYMMDD), `transaktionsgrund`, `bilanzkreis`, `abrechnungsintervall_monate` (1, 3, 6 or 12), `haushaltskunde`, `netznutzungsvertrag` (`LIEFERANT_NB`/`KUNDE_NB`), `netznutzung_zahler` (`LIEFERANT`/`KUNDE`), `gemeinderabatt_prozent`, `kunde`, `ablesekarte` — no other key⁷ |
-| `geli.lieferende.anmelden` | `malo_id`, `process_date` (YYYYMMDD) |
-| `geli.kuendigung.anmelden` | `malo_id`, `process_date` |
+| `geli.lieferende.anmelden` | `malo_id`, `process_date` (YYYYMMDD), `transaktionsgrund` (`SG4 STS+7`, Muss; under `ZG9`/`ZH1`/`ZH2` the date is the confirmed Beginn, `DTM+92`) — no other key |
+| `geli.kuendigung.anmelden` | `malo_id`, `process_date`, `lfa_mp_id` — sent to that Altlieferant, never the GNB — no other key |
 | `wim.geraetewechsel.beauftragen` | `melo_id`², `process_date` (YYYYMMDD), `receiver_mp_id`, optional `pid` (default 55042) |
 | `wim.geraetewechsel.bestaetigen` | `melo_id`², optional `antwortcode` (default: the tree's unconditional Zustimmung), `bemerkung`, `abweichender_termin` (required with `Z01`) |
 | `wim.geraetewechsel.ablehnen` | `melo_id`², **`antwortcode`** (`E_0200`/`E_0201`/`E_0202`/`E_0240`), optional `bemerkung`, `abweichender_termin` (required with `Z12`) |

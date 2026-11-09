@@ -314,7 +314,8 @@ async fn end_supply_body_is_typed() {
 }
 
 /// `geli.lieferende.anmelden` is licensed to `LFG` alone and reads the
-/// Marktlokation and `process_date`, so that is what reaches `makod`.
+/// Marktlokation, `process_date` and the Transaktionsgrund, so that is what
+/// reaches `makod`.
 #[tokio::test]
 async fn end_supply_gas_body_is_typed() {
     let received = Arc::new(Mutex::new(Vec::new()));
@@ -323,12 +324,13 @@ async fn end_supply_gas_body_is_typed() {
     let valid = json!({
         "malo_id": "51238696012",
         "process_date": "20990101",
+        "transaktionsgrund": "ZT5",
     });
     assert_refusals(
         reqwest::Method::POST,
         &url,
         &valid,
-        &["malo_id", "process_date"],
+        &["malo_id", "process_date", "transaktionsgrund"],
     )
     .await;
     assert!(

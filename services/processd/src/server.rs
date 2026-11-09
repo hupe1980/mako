@@ -847,14 +847,18 @@ mod rest {
 
     /// `POST /api/v1/end-supply-gas` — GeLi Gas Lieferende (44004).
     ///
-    /// The fields `makod`'s `geli.lieferende.anmelden` reads: the Marktlokation
-    /// and the `YYYYMMDD` `process_date`.
+    /// The fields `makod`'s `geli.lieferende.anmelden` reads
+    /// (`mako_markt::commands::GeliLieferendeAnmelden`): the Marktlokation, the
+    /// `YYYYMMDD` `process_date` and the Transaktionsgrund the 44004 column makes
+    /// Muss (`SG4 STS+7`, UTILMD AHB Gas 1.2 Kap. 5.5).
     #[derive(Debug, serde::Deserialize)]
     pub struct EndSupplyGasRequest {
         /// Gas-MaLo-ID — `SG5 LOC+172`.
         pub malo_id: String,
         /// Lieferende, `YYYYMMDD` (gesetzliche deutsche Zeit).
         pub process_date: String,
+        /// `SG4 STS+7` DE 9013 — makod holds it against the column's codes.
+        pub transaktionsgrund: String,
     }
 
     /// Authorize `action` for the caller, or produce the `403`.
@@ -1934,8 +1938,8 @@ mod rest {
     /// `POST /api/v1/end-supply-gas` — ERP initiates a GeLi Gas Lieferende (44004).
     ///
     /// Forwards to makod `geli.lieferende.anmelden`, which is licensed to the
-    /// **Gas** supplier (`LFG`) and reads the Marktlokation and the `YYYYMMDD`
-    /// `process_date`.
+    /// **Gas** supplier (`LFG`) and reads the Marktlokation, the `YYYYMMDD`
+    /// `process_date` and the Transaktionsgrund.
     pub async fn end_supply_gas(
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1946,6 +1950,7 @@ mod rest {
         let EndSupplyGasRequest {
             malo_id,
             process_date,
+            transaktionsgrund,
         } = body;
         if malo_id.is_empty() {
             return Err(refuse("MISSING_MALO_ID", "\"malo_id\" is required"));
@@ -1967,10 +1972,17 @@ mod rest {
                 format!("\"process_date\" is not a YYYYMMDD date: {process_date:?}"),
             ));
         }
+        if transaktionsgrund.trim().is_empty() {
+            return Err(refuse(
+                "MISSING_TRANSAKTIONSGRUND",
+                "\"transaktionsgrund\" is required — SG4 STS+7 is Muss on the Abmeldung 44004",
+            ));
+        }
         // The fields `dispatch_geli_lf_anmeldung` reads, and no others.
         let payload = serde_json::json!({
             "malo_id": malo_id,
             "process_date": process_date,
+            "transaktionsgrund": transaktionsgrund.trim(),
         });
         end_supply_inner(
             state,

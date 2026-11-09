@@ -484,6 +484,42 @@ pub struct GeliLieferbeginnAnmelden {
     pub ablesekarte: crate::utilmd_stammdaten::Kunde,
 }
 
+/// The body of [`GELI_LIEFERENDE_ANMELDEN`] — the Abmeldung NN 44004, LF → NB
+/// (UTILMD AHB Gas 1.2 Kap. 5.5, S. 38–43).
+///
+/// The column makes `SG4 STS+7` Muss (`[2061]`), so the Transaktionsgrund is
+/// required; the door holds the rendered 44004 against its profile, which says
+/// which codes it admits.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeliLieferendeAnmelden {
+    /// The Marktlokation — `SG5 LOC+172`.
+    pub malo_id: String,
+    /// `YYYYMMDD` (gesetzliche deutsche Zeit): the Lieferende `SG4 DTM+93`, or
+    /// — under `ZG9`/`ZH1`/`ZH2`, the Aufhebung einer zukünftigen Zuordnung —
+    /// the Beginn the NB confirmed, `SG4 DTM+92` (Bedingungen `[7]`, `[577]`).
+    pub process_date: String,
+    /// `SG4 STS+7` DE 9013 — one of the codes the 44004 column admits.
+    pub transaktionsgrund: String,
+}
+
+/// The body of [`GELI_KUENDIGUNG_ANMELDEN`] — the Kündigung 44016, LFN → LFA
+/// (UTILMD AHB Gas 1.2 Kap. 5.3).
+///
+/// The Kündigung goes to the Altlieferant, not the grid operator (`GeLi` Gas 3.0
+/// Kap. 3.1), so the caller names him: nothing makod holds about the
+/// Marktlokation says who supplies it today.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeliKuendigungAnmelden {
+    /// The Marktlokation — `SG5 LOC+172`.
+    pub malo_id: String,
+    /// The Kündigungstermin `SG4 DTM+93`, `YYYYMMDD`.
+    pub process_date: String,
+    /// The Altlieferant's MP-ID — `NAD+MR` and the UNB recipient.
+    pub lfa_mp_id: String,
+}
+
 impl GeliLieferbeginnAnmelden {
     /// Every value the 44001 column cannot carry, each naming its segment —
     /// empty when the body is sendable.

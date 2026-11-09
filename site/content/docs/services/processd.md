@@ -682,7 +682,8 @@ Kap. 2.5.2 Nr. 1), enforced here; an Einzug passes with a
 
 `POST /api/v1/end-supply` takes `malo_id` and `lieferende_datum` (ISO-8601) and
 forwards `gpke.lieferende.anmelden` as `LF`. `POST /api/v1/end-supply-gas` takes
-`malo_id` and `process_date` (YYYYMMDD, `INVALID_DATE` otherwise) — the fields
+`malo_id`, `process_date` (YYYYMMDD, `INVALID_DATE` otherwise) and the
+`transaktionsgrund` the Abmeldung 44004 makes Muss (`SG4 STS+7`) — the fields
 `geli.lieferende.anmelden` reads — and forwards it as `LFG`, the only role that
 command is licensed to. All fields are mandatory; the notice period is
 `vertragd`'s to enforce.

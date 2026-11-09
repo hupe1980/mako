@@ -170,6 +170,20 @@ History before this file is in `git log`.
 
 ### Fixed
 
+- The GeLi Gas Kündigung 44016 went to the grid operator: the door resolved
+  the GNB from the MaLo cache for every Anfrage, while the Kündigung is the
+  Neulieferant's message to the Altlieferant (GeLi Gas 3.0 Kap. 3.1).
+  **Breaking:** `geli.kuendigung.anmelden` takes `lfa_mp_id` and sends to it;
+  its body is `mako_markt::commands::GeliKuendigungAnmelden` and refuses an
+  undeclared key.
+- The GeLi Gas Abmeldung 44004 carried no `SG4 STS+7`, which its column makes
+  Muss (UTILMD AHB Gas 1.2 Kap. 5.5, `[2061]`), so the pre-send gate
+  dead-lettered every one. **Breaking:** `geli.lieferende.anmelden`
+  (`GeliLieferendeAnmelden`) and processd's `POST /api/v1/end-supply-gas` take a
+  required `transaktionsgrund`; vertragd states it from the Kündigungsgrund
+  (`UMZUG` → `E01`, every other → `ZT5`); under `ZG9`/`ZH1`/`ZH2` the 44004
+  names the confirmed Beginn as `DTM+92` (Bedingungen `[7]`/`[11]`). Every
+  GeLi Gas LF Anfrage is now held against its profile before it is written.
 - `check-command-constructors` read a test module kept in its own file
   (`#[cfg(test)] mod name;`) as shipped code, so a variant only a test
   constructs passed as wired; such a file is now test code, as an inline

@@ -539,12 +539,19 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
 /// is rendered and checked against its profile — the check the pre-send gate
 /// runs — so nothing is written that the gate would dead-letter.
 ///
-/// ## The Abmeldung 44004 and the Kündigung 44016
+/// ## The Abmeldung 44004 — [`mako_markt::commands::GeliLieferendeAnmelden`]
 ///
-/// | Field             | Type   | Notes |
-/// |-------------------|--------|-------|
-/// | `malo_id`         | string | Gas Marktlokations-ID → `SG5 LOC+172` |
-/// | `process_date`    | string | Lieferende / Kündigungstermin (YYYYMMDD) |
+/// Sent to the grid operator. The Transaktionsgrund is Muss (`SG4 STS+7`,
+/// `[2061]`); under `ZG9`/`ZH1`/`ZH2` the date is the Beginn the NB confirmed
+/// and goes out as `DTM+92` (UTILMD AHB Gas 1.2 Kap. 5.5).
+///
+/// ## The Kündigung 44016 — [`mako_markt::commands::GeliKuendigungAnmelden`]
+///
+/// Sent to the Altlieferant named by `lfa_mp_id` (GeLi Gas 3.0 Kap. 3.1), never
+/// to the grid operator.
+///
+/// Every Anfrage is rendered and held against its profile before the spawn; a
+/// Transaktionsgrund the column does not admit is refused there.
 pub(super) async fn dispatch_geli_lf_anmeldung(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -570,66 +577,89 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
                 fehlend.join("; ")
             ))
         })?;
+        let receiver = gnb_of(state, &malo_id).await?;
         return spawn_geli_lf_anmeldung(
             state,
-            pid_code,
-            malo_id,
-            body.process_date,
-            Some(body.transaktionsgrund),
-            Some(body.bilanzkreis),
-            stammdaten,
+            LfAnfrage {
+                pid_code,
+                malo_id,
+                receiver,
+                process_date: body.process_date,
+                transaktionsgrund: Some(body.transaktionsgrund),
+                bilanzkreis: Some(body.bilanzkreis),
+                stammdaten,
+            },
         )
         .await;
     }
 
-    let malo_id = extract_malo_id(payload)?;
-    let process_date = payload
-        .get("process_date")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"process_date\" (YYYYMMDD in German local time)".to_owned(),
-            )
-        })?
-        .to_owned();
-    let transaktionsgrund = payload
-        .get("transaktionsgrund")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    if pid_code == mako_geli_gas::lf_anmeldung::ABMELDUNG_PID {
+        let body: mako_markt::commands::GeliLieferendeAnmelden =
+            mako_service::json_from_value(payload.clone()).map_err(|e| {
+                DispatchError::InvalidPayload(format!(
+                    "geli.lieferende.anmelden payload: {e} — `SG4 STS+7` is Muss on the \
+                     Abmeldung NN 44004 (UTILMD AHB Gas 1.2 Kap. 5.5)"
+                ))
+            })?;
+        let malo_id = extract_malo_id(&serde_json::json!({ "malo_id": body.malo_id }))?;
+        let receiver = gnb_of(state, &malo_id).await?;
+        return spawn_geli_lf_anmeldung(
+            state,
+            LfAnfrage {
+                pid_code,
+                malo_id,
+                receiver,
+                process_date: body.process_date,
+                transaktionsgrund: Some(body.transaktionsgrund),
+                bilanzkreis: None,
+                stammdaten: mako_engine::payload::Stammdaten::default(),
+            },
+        )
+        .await;
+    }
+
+    let body: mako_markt::commands::GeliKuendigungAnmelden =
+        mako_service::json_from_value(payload.clone()).map_err(|e| {
+            DispatchError::InvalidPayload(format!(
+                "geli.kuendigung.anmelden payload: {e} — the Kündigung 44016 goes to the \
+                 Altlieferant named by `lfa_mp_id` (GeLi Gas 3.0 Kap. 3.1)"
+            ))
+        })?;
+    let malo_id = extract_malo_id(&serde_json::json!({ "malo_id": body.malo_id }))?;
+    let lfa = rubo4e::identifiers::MarktpartnerId::new(body.lfa_mp_id.trim()).map_err(|e| {
+        DispatchError::InvalidPayload(format!(
+            "geli.kuendigung.anmelden: lfa_mp_id {:?} is not an MP-ID: {e}",
+            body.lfa_mp_id
+        ))
+    })?;
     spawn_geli_lf_anmeldung(
         state,
-        pid_code,
-        malo_id,
-        process_date,
-        transaktionsgrund,
-        None,
-        mako_engine::payload::Stammdaten::default(),
+        LfAnfrage {
+            pid_code,
+            malo_id,
+            receiver: MarktpartnerCode::new(lfa.to_string()),
+            process_date: body.process_date,
+            transaktionsgrund: None,
+            bilanzkreis: None,
+            stammdaten: mako_engine::payload::Stammdaten::default(),
+        },
     )
     .await
 }
 
-/// Spawn the LFN-side process for one Anfrage — the shared tail of
-/// [`dispatch_geli_lf_anmeldung`].
-async fn spawn_geli_lf_anmeldung(
+/// The grid operator of `malo_id`, from the MaLo cache — the receiver of a
+/// 44001 and a 44004.
+async fn gnb_of(
     state: &CommandsApiState,
-    pid_code: u32,
-    malo_id: MaLo,
-    process_date: String,
-    transaktionsgrund: Option<String>,
-    bilanzkreis: Option<String>,
-    stammdaten: mako_engine::payload::Stammdaten,
-) -> Result<DispatchOutcome, DispatchError> {
-    use mako_geli_gas::lf_anmeldung::WORKFLOW_NAME as GELI_LF_ANMELDUNG_WF;
-
-    // Resolve GNB MP-ID from MaLo cache.
+    malo_id: &MaLo,
+) -> Result<MarktpartnerCode, DispatchError> {
     let malo_record = state
         .malo_cache
         .get(&state.tenant_id.to_string(), malo_id.as_str())
         .await
         .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
         .ok_or_else(|| DispatchError::MaloNotFound(malo_id.to_string()))?;
-
-    let gnb_mp_id = malo_record
+    malo_record
         .data_market_location
         .data_market_location_network_operators
         .iter()
@@ -639,13 +669,43 @@ async fn spawn_geli_lf_anmeldung(
             DispatchError::InvalidPayload(format!(
                 "MaLo {malo_id} has no network_operator — GNB MP-ID cannot be resolved",
             ))
-        })?;
+        })
+}
+
+/// One LFN-side Anfrage as its door read it.
+struct LfAnfrage {
+    pid_code: u32,
+    malo_id: MaLo,
+    /// The GNB for a 44001/44004, the Altlieferant for a 44016.
+    receiver: MarktpartnerCode,
+    process_date: String,
+    transaktionsgrund: Option<String>,
+    bilanzkreis: Option<String>,
+    stammdaten: mako_engine::payload::Stammdaten,
+}
+
+/// Spawn the LFN-side process for one Anfrage — the shared tail of
+/// [`dispatch_geli_lf_anmeldung`].
+async fn spawn_geli_lf_anmeldung(
+    state: &CommandsApiState,
+    anfrage: LfAnfrage,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_geli_gas::lf_anmeldung::WORKFLOW_NAME as GELI_LF_ANMELDUNG_WF;
+    let LfAnfrage {
+        pid_code,
+        malo_id,
+        receiver,
+        process_date,
+        transaktionsgrund,
+        bilanzkreis,
+        stammdaten,
+    } = anfrage;
 
     let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
     let domain_cmd = GeliGasLfAnmeldungCommand::InitiateAnmeldung {
         pid,
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
-        receiver: gnb_mp_id,
+        receiver,
         malo_id: malo_id.clone(),
         process_date,
         // SG4 STS Transaktionsgrund (DE 9013), rendered as the outbound STS.
@@ -657,9 +717,10 @@ async fn spawn_geli_lf_anmeldung(
         stammdaten,
         received_at: time::OffsetDateTime::now_utc(),
     };
-    // The 44001 is rendered and held against its profile before anything is
-    // written — the check the pre-send gate runs.
-    if pid_code == mako_geli_gas::lf_anmeldung::ANMELDUNG_PID_MIT_BILANZKREIS {
+    // Every Anfrage is rendered and held against its profile before anything
+    // is written — the check the pre-send gate runs, which also says which
+    // Transaktionsgründe the column admits.
+    {
         use mako_engine::workflow::Workflow as _;
         let out = GeliGasLfAnmeldungWorkflow::handle(
             &mako_geli_gas::GeliGasLfAnmeldungState::New,

@@ -289,11 +289,111 @@ async fn a_44004_needs_no_zaehlpunkt() {
     dispatch_command(
         &state,
         "geli.lieferende.anmelden",
-        &serde_json::json!({ "malo_id": MALO_ID, "process_date": "20261231" }),
+        &serde_json::json!({
+            "malo_id": MALO_ID, "process_date": "20261231", "transaktionsgrund": "ZT5"
+        }),
     )
     .await
     .expect("the Abmeldung is accepted");
     let sent = utilmd(&state).await;
     assert_eq!(sent.len(), 1);
     assert!(sent[0].payload.get("zaehlpunkt").is_none());
+}
+
+/// What the profile in force says about the one UTILMD `body` makes `command`
+/// write: empty when it passes.
+async fn door_findings(command: &str, body: serde_json::Value) -> Vec<String> {
+    let state = lfg_state().await;
+    if let Err(e) = dispatch_command(&state, command, &body).await {
+        return vec![format!("{command} refused: {e:?}")];
+    }
+    let sent = utilmd(&state).await;
+    assert_eq!(sent.len(), 1, "{command}: one UTILMD");
+    let edi = wire(&sent[0]);
+    let parsed = edi_energy::parse(&edi.chars().map(|c| c as u8).collect::<Vec<u8>>())
+        .expect("the UTILMD parses back");
+    let report = edi_energy::EdiEnergyMessage::validate_on_date(&parsed, mako_fristen::heute())
+        .expect("validates");
+    let mut found: Vec<String> = report
+        .errors()
+        .iter()
+        .map(|e| e.message.to_string())
+        .collect();
+    if !found.is_empty() {
+        found.push(edi.replace('\'', "'\n"));
+    }
+    found
+}
+
+const LFA_MP_ID: &str = "9805550000010";
+
+/// The Abmeldung 44004 the door writes passes its column (UTILMD AHB Gas 1.2
+/// Kap. 5.5), under an Ende-Grund and under an Aufhebung, which names the
+/// confirmed Beginn instead.
+#[tokio::test]
+async fn a_44004_from_the_door_passes_its_profile() {
+    for (grund, date) in [("ZT5", "DTM+93:"), ("E01", "DTM+93:"), ("ZH2", "DTM+92:")] {
+        let body = serde_json::json!({
+            "malo_id": MALO_ID, "process_date": "20261231", "transaktionsgrund": grund
+        });
+        let found = door_findings("geli.lieferende.anmelden", body.clone()).await;
+        assert!(found.is_empty(), "44004 {grund}:\n{}", found.join("\n"));
+        let state = lfg_state().await;
+        dispatch_command(&state, "geli.lieferende.anmelden", &body)
+            .await
+            .expect("accepted");
+        let edi = wire(&utilmd(&state).await[0]);
+        assert!(edi.contains(&format!("STS+7++{grund}'")), "{edi}");
+        assert!(edi.contains(date), "{grund}: {edi}");
+    }
+}
+
+/// A 44004 without a Transaktionsgrund, or with one the column does not admit,
+/// is refused and nothing is written.
+#[tokio::test]
+async fn a_44004_needs_a_grund_its_column_admits() {
+    let state = lfg_state().await;
+    for body in [
+        serde_json::json!({ "malo_id": MALO_ID, "process_date": "20261231" }),
+        serde_json::json!({
+            "malo_id": MALO_ID, "process_date": "20261231", "transaktionsgrund": "E03"
+        }),
+    ] {
+        let refused = dispatch_command(&state, "geli.lieferende.anmelden", &body).await;
+        assert!(
+            matches!(&refused, Err(DispatchError::InvalidPayload(_))),
+            "{body}: {refused:?}"
+        );
+    }
+    assert!(utilmd(&state).await.is_empty());
+}
+
+/// The Kündigung 44016 goes to the Altlieferant the caller names — not to the
+/// grid operator — and passes its column (UTILMD AHB Gas 1.2 Kap. 5.3).
+#[tokio::test]
+async fn a_44016_goes_to_the_altlieferant_and_passes_its_profile() {
+    let body = serde_json::json!({
+        "malo_id": MALO_ID, "process_date": "20261231", "lfa_mp_id": LFA_MP_ID
+    });
+    let found = door_findings("geli.kuendigung.anmelden", body.clone()).await;
+    assert!(found.is_empty(), "44016:\n{}", found.join("\n"));
+
+    let state = lfg_state().await;
+    dispatch_command(&state, "geli.kuendigung.anmelden", &body)
+        .await
+        .expect("accepted");
+    let sent = utilmd(&state).await;
+    assert_eq!(sent[0].recipient.as_ref(), LFA_MP_ID);
+    assert!(wire(&sent[0]).contains(&format!("NAD+MR+{LFA_MP_ID}::332'")));
+
+    let refused = dispatch_command(
+        &state,
+        "geli.kuendigung.anmelden",
+        &serde_json::json!({ "malo_id": MALO_ID, "process_date": "20261231" }),
+    )
+    .await;
+    assert!(
+        matches!(&refused, Err(DispatchError::InvalidPayload(m)) if m.contains("lfa_mp_id")),
+        "{refused:?}"
+    );
 }

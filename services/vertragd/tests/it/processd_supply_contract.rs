@@ -15,7 +15,7 @@ use processd::{
 };
 use time::macros::date;
 use uuid::Uuid;
-use vertragd::domain::Lieferbeginnanlass;
+use vertragd::domain::{Kuendigungsgrund, Lieferbeginnanlass};
 use vertragd::outbound::{GasAnmeldung, lieferbeginn, lieferende};
 
 const MALO: &str = "51238696012";
@@ -125,19 +125,33 @@ fn every_lieferbeginn_body_is_the_request_processd_reads() {
 #[test]
 fn every_lieferende_body_is_the_request_processd_reads() {
     let komp = Uuid::nil();
-    let strom = lieferende(komp, "STROM", MALO, date!(2027 - 06 - 30));
+    let strom = lieferende(
+        komp,
+        "STROM",
+        MALO,
+        date!(2027 - 06 - 30),
+        Kuendigungsgrund::Ordentlich,
+    );
     let (endpoint, body) = call(&strom.payload);
     assert_eq!(endpoint, "end-supply");
     let req: EndSupplyRequest = mako_service::json_from_value(body).expect("end-supply body");
     assert_eq!(req.lieferende_datum, "2027-06-30");
 
-    let gas = lieferende(komp, "GAS", MALO, date!(2027 - 06 - 30));
-    let (endpoint, body) = call(&gas.payload);
-    assert_eq!(endpoint, "end-supply-gas");
-    let req: EndSupplyGasRequest =
-        mako_service::json_from_value(body).expect("end-supply-gas body");
-    assert_eq!(req.malo_id, MALO);
-    assert_eq!(req.process_date, "20270630");
+    for (grund, code) in [
+        (Kuendigungsgrund::Ordentlich, "ZT5"),
+        (Kuendigungsgrund::Preisanpassung, "ZT5"),
+        (Kuendigungsgrund::Lieferantenwechsel, "ZT5"),
+        (Kuendigungsgrund::Umzug, "E01"),
+    ] {
+        let gas = lieferende(komp, "GAS", MALO, date!(2027 - 06 - 30), grund);
+        let (endpoint, body) = call(&gas.payload);
+        assert_eq!(endpoint, "end-supply-gas");
+        let req: EndSupplyGasRequest =
+            mako_service::json_from_value(body).expect("end-supply-gas body");
+        assert_eq!(req.malo_id, MALO);
+        assert_eq!(req.process_date, "20270630");
+        assert_eq!(req.transaktionsgrund, code, "{grund:?}");
+    }
 }
 
 /// The check is the handler's: a key it does not declare refuses the body, so

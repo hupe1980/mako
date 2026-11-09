@@ -1268,7 +1268,8 @@ pub async fn kuendige_vertrag(
                 // re-issued to a different date must replace the reading order
                 // it scheduled, not sit behind it.
                 outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &ablesung).await?;
-                let task = outbound::lieferende(k.id, &k.sparte, malo_id, input.lieferende);
+                let task =
+                    outbound::lieferende(k.id, &k.sparte, malo_id, input.lieferende, input.grund);
                 // Superseding for the same reason: the key carries the date,
                 // and a task for another date that is still queued is obsolete.
                 outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &task).await?;
