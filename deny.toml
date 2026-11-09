@@ -96,6 +96,11 @@ version = "0.13"
 reason  = "jsonwebtoken 11.1 verifies on p256 0.13 while energy-api signs on the patched 0.14; the old subtree is verification-only."
 
 [[bans.skip]]
+name    = "constant_time_eq"
+version = "0.4"
+reason  = "blake3 (accountingd's Merkle proofs, datafusion's hash functions) pins constant_time_eq 0.4; zip 9.4.2, used only by the xtask build tool, moved to 0.6."
+
+[[bans.skip]]
 name    = "fancy-regex"
 version = "0.16"
 reason  = "syntect (via typst-library) pins fancy-regex 0.16; jsonschema uses 0.19. Syntax highlighting is unreachable from an invoice render."
