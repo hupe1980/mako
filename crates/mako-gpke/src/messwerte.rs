@@ -40,7 +40,7 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
-    types::{MaLo, MarktpartnerCode, MessageRef, MeteredInterval},
+    types::{MaLo, MarktpartnerCode, MessageRef, MeteredInterval, MeteredZaehlerstand},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
@@ -91,6 +91,10 @@ pub struct MesswerteLieferungData {
     /// truthful reading of what was recorded.
     #[serde(default)]
     pub reads: Vec<MeteredInterval>,
+    /// The Zählerstände the delivery carried, each at its `DTM+7`
+    /// Nutzungszeitpunkt.
+    #[serde(default)]
+    pub zaehlerstaende: Vec<MeteredZaehlerstand>,
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -114,6 +118,9 @@ pub enum MesswerteLieferungEvent {
         /// The readings the delivery carried.
         #[serde(default)]
         reads: Vec<MeteredInterval>,
+        /// The Zählerstände the delivery carried.
+        #[serde(default)]
+        zaehlerstaende: Vec<MeteredZaehlerstand>,
     },
     /// AHB validation passed; data is available for downstream use.
     ValidationPassed {
@@ -234,6 +241,9 @@ pub enum MesswerteLieferungCommand {
         /// the process still records the delivery, because an MSCONS that
         /// arrived and could not be decoded is a fact an operator has to see.
         reads: Vec<MeteredInterval>,
+        /// The decoded Zählerstände, each at its `SG10 DTM+7`
+        /// Nutzungszeitpunkt (MSCONS MIG 2.5, S. 35).
+        zaehlerstaende: Vec<MeteredZaehlerstand>,
         /// `true` if AHB validation passed.
         validation_passed: bool,
         /// Human-readable validation errors (if any).
@@ -272,13 +282,19 @@ impl CommandPayload for MesswerteLieferungCommand {}
 ///
 /// `sparte` is stated rather than left to `edmd`'s default because this crate
 /// is the Strom half of MSCONS ingest; the Gas PIDs are `mako-geli-gas`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 fn erp_payload(
     pid: Pruefidentifikator,
     sender: &MarktpartnerCode,
     location_id: &MaLo,
     message_ref: &MessageRef,
     reads: &[MeteredInterval],
+    zaehlerstaende: &[MeteredZaehlerstand],
     bestellung_ref: Option<&str>,
+    document_date: &str,
 ) -> serde_json::Value {
     serde_json::json!({
         "pid": pid.as_u32(),
@@ -286,6 +302,9 @@ fn erp_payload(
         "sender": sender.as_str(),
         "message_ref": message_ref.as_str(),
         "sparte": "STROM",
+        // The `DTM+137` Nachrichtendatum, for the Lastgang PIDs whose
+        // Versions-Tupel ends in it — what `edmd` orders deliveries by.
+        "mscons_version": mako_engine::types::messwesen_version(pid.as_u32(), document_date),
         // `SG1 RFF+AGI` on a 13027 — which ESA subscription these values are.
         "bestellung_ref": bestellung_ref,
         "reads": reads
@@ -297,7 +316,12 @@ fn erp_payload(
                 "quality": r.quality(),
                 "obis_code": r.obis_code,
                 "melo_id": r.melo_id,
+                "herkunft": r.herkunft(),
             }))
+            .collect::<Vec<_>>(),
+        "zaehlerstaende": zaehlerstaende
+            .iter()
+            .map(MeteredZaehlerstand::payload)
             .collect::<Vec<_>>(),
     })
 }
@@ -325,6 +349,7 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                 document_date,
                 message_ref,
                 reads,
+                zaehlerstaende,
             } => MesswerteLieferungState::DatenErhalten(MesswerteLieferungData {
                 pruefidentifikator: *pruefidentifikator,
                 sender: sender.clone(),
@@ -332,6 +357,7 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                 document_date: document_date.clone(),
                 message_ref: message_ref.clone(),
                 reads: reads.clone(),
+                zaehlerstaende: zaehlerstaende.clone(),
             }),
             MesswerteLieferungEvent::ValidationPassed { .. } => match state {
                 MesswerteLieferungState::DatenErhalten(data) => {
@@ -359,6 +385,7 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                 document_date,
                 message_ref,
                 reads,
+                zaehlerstaende,
                 validation_passed,
                 validation_errors,
                 bestellung_ref,
@@ -377,7 +404,9 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                     &location_id,
                     &message_ref,
                     &reads,
+                    &zaehlerstaende,
                     bestellung_ref.as_deref(),
+                    &document_date,
                 );
                 let mut events = vec![MesswerteLieferungEvent::MsconsDatenErhalten {
                     pruefidentifikator: pid,
@@ -386,6 +415,7 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                     document_date,
                     message_ref: message_ref.clone(),
                     reads,
+                    zaehlerstaende,
                 }];
                 let outbox = if validation_passed {
                     events.push(MesswerteLieferungEvent::ValidationPassed { message_ref });
@@ -410,6 +440,82 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
 mod tests {
     use super::*;
 
+    /// The `edmd` payload of a 13025 carries the version its Versions-Tupel
+    /// names (the `DTM+137` Nachrichtendatum) and the origin each value
+    /// states; a 13017 Zählerstand is not versioned and carries none.
+    #[test]
+    fn a_lastgang_payload_carries_its_version_and_origin() {
+        let read = MeteredInterval {
+            obis_code: Some("1-1:1.29.0".to_owned()),
+            melo_id: None,
+            dtm_from: "2026-07-01T00:00:00+00:00".to_owned(),
+            dtm_to: "2026-07-01T00:15:00+00:00".to_owned(),
+            quantity: "0.25".to_owned(),
+            unit: None,
+            qualifier: "220".to_owned(),
+            plausibilisierung: vec!["Z83".to_owned()],
+        };
+        let payload = |pid: u32| {
+            let out = GpkeMesswerteLieferungWorkflow::handle(
+                &MesswerteLieferungState::New,
+                MesswerteLieferungCommand::ReceiveMscons {
+                    pid: Pruefidentifikator::new(pid).unwrap(),
+                    sender: MarktpartnerCode::new("9900357000004"),
+                    location_id: MaLo::new("51238696012"),
+                    document_date: "202607020800+00".to_owned(),
+                    message_ref: MessageRef::new("MSC-1"),
+                    reads: vec![read.clone()],
+                    zaehlerstaende: vec![],
+                    validation_passed: true,
+                    validation_errors: vec![],
+                    bestellung_ref: None,
+                },
+            )
+            .unwrap();
+            out.outbox[0].payload.clone()
+        };
+        let lastgang = payload(13_025);
+        assert_eq!(lastgang["mscons_version"], "20260702080000");
+        assert_eq!(lastgang["reads"][0]["herkunft"], "KUNDENSELBSTABLESUNG");
+        assert!(payload(13_017)["mscons_version"].is_null());
+    }
+
+    /// A 13017 carries its Zählerstände to `edmd`, each with the origin it
+    /// states.
+    #[test]
+    fn a_zaehlerstand_reaches_the_payload_with_its_origin() {
+        let stand = MeteredZaehlerstand {
+            obis_code: Some("1-1:1.8.0".to_owned()),
+            melo_id: Some("DE0001234567890123456789012345678".to_owned()),
+            at: "2026-06-30T22:00:00+00:00".to_owned(),
+            value: "14230.5".to_owned(),
+            unit: None,
+            qualifier: "220".to_owned(),
+            plausibilisierung: vec!["Z83".to_owned()],
+        };
+        let out = GpkeMesswerteLieferungWorkflow::handle(
+            &MesswerteLieferungState::New,
+            MesswerteLieferungCommand::ReceiveMscons {
+                pid: Pruefidentifikator::new(13_017).unwrap(),
+                sender: MarktpartnerCode::new("9900357000004"),
+                location_id: MaLo::new("DE0001234567890123456789012345678"),
+                document_date: "202607020800+00".to_owned(),
+                message_ref: MessageRef::new("MSC-1"),
+                reads: vec![],
+                zaehlerstaende: vec![stand],
+                validation_passed: true,
+                validation_errors: vec![],
+                bestellung_ref: None,
+            },
+        )
+        .unwrap();
+        let z = &out.outbox[0].payload["zaehlerstaende"][0];
+        assert_eq!(z["at"], "2026-06-30T22:00:00+00:00");
+        assert_eq!(z["value"], "14230.5");
+        assert_eq!(z["quality"], "MEASURED");
+        assert_eq!(z["herkunft"], "KUNDENSELBSTABLESUNG");
+    }
+
     #[test]
     fn verlauf_states_the_inbound_mscons() {
         let erhalten = MesswerteLieferungEvent::MsconsDatenErhalten {
@@ -418,6 +524,7 @@ mod tests {
             location_id: MaLo::new("51238696012"),
             document_date: "20260101".to_owned(),
             reads: vec![],
+            zaehlerstaende: vec![],
             message_ref: MessageRef::new("MSC-1"),
         };
         assert_eq!(

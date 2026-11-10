@@ -260,11 +260,10 @@ impl VorlaufShape {
                 } else {
                     VorlaufVerdict::TooLate {
                         shortfall_wt: crate::werktage_between(latest_uet, uebertragungstag, cal),
-                        // The earliest Zuordnungsende this ÜT can still reach:
-                        // the day after the next Werktag.
-                        earliest_possible: crate::next_werktag(uebertragungstag, cal)
-                            .next_day()
-                            .unwrap_or(uebertragungstag),
+                        earliest_possible: fruehester_termin_nach_tag_vor_dem_letzten_werktag(
+                            uebertragungstag,
+                            cal,
+                        ),
                     }
                 }
             }
@@ -300,6 +299,27 @@ impl VorlaufShape {
             }
         }
     }
+}
+
+/// The earliest date a message transmitted on `uebertragungstag` can still
+/// name under „spätester ÜT ist der Tag vor dem letzten WT vor dem …": the day
+/// after the first Werktag **strictly after** the ÜT.
+///
+/// A full Werktag has to lie between the ÜT and the date. An ÜT on a Monday
+/// reaches Wednesday, never Tuesday — Tuesday's last Werktag before it is the
+/// Monday itself, and the day before that is the Sunday.
+///
+/// # Panics
+///
+/// Only if date arithmetic overflows the Gregorian calendar.
+#[must_use]
+pub fn fruehester_termin_nach_tag_vor_dem_letzten_werktag(
+    uebertragungstag: Date,
+    cal: HolidayCalendar,
+) -> Date {
+    crate::next_werktag(uebertragungstag.next_day().expect("date overflow"), cal)
+        .next_day()
+        .expect("date overflow")
 }
 
 /// `Ok` while `uebertragungstag` is at or before `latest_uet`, else `TooLate`
@@ -362,6 +382,25 @@ pub const ANMELDUNG_WT: u32 = 15;
 /// gewünschtes Zuordnungsende fixed to the Folgetag 00:00 des
 /// Geräteausbaudatums.
 pub const ABMELDUNG_WT: u32 = 20;
+
+/// The MSBN reports the Gesamtvorgang (IFTSTA 21010 / 21009) by this
+/// Werktag after the Zuordnungsbeginn the NB confirmed: „spätester ÜT ist der
+/// 10. WT nach dem in Nr. 2 vom NB bestätigten Zuordnungsbeginn" (WiM Teil 1
+/// Kap. 2.3.2 Nr. 7, S. 28).
+pub const MITTEILUNG_GESAMTVORGANG_WT: u32 = 10;
+
+/// The NB reports that no Gesamtvorgang arrived (IFTSTA 21013) by this
+/// Werktag after the confirmed Zuordnungsbeginn: „Spätester ÜT ist der 11. WT
+/// nach dem in Nr. 2 vom NB bestätigten Zuordnungsbeginn" (WiM Teil 1
+/// Kap. 2.3.2 Nr. 16, S. 30).
+pub const SCHEITERN_GESAMTVORGANG_WT: u32 = 11;
+
+/// The Zuordnungsende an LFA may state in its `A34` answer to the NB's
+/// Abmeldeanfrage (Fall b) lies at least this many Werktage after the ÜT of the
+/// Anmeldung — otherwise it is „ein Zuordnungsende, das nicht mindestens 1 WT
+/// nach dem ÜT der Anmeldung liegt" and the Zuordnungsbeginn of the Anmeldung
+/// stands (GPKE Teil 2 Kap. 2.1.2 Nr. 10, S. 23).
+pub const LFA_ZUORDNUNGSENDE_FALL_B_WT: u32 = 1;
 
 /// The WiM Realisierungskorridor, in Werktagen either side of the confirmed
 /// Zuordnungstermin (WiM Teil 1 Kap. 2.3.2 Nr. 5/6 and 2.5.2 Nr. 1/2).
@@ -654,7 +693,7 @@ pub const WIM: &[VorlaufObligation] = &[
         pid_gas: Some(21_009),
         name: "Mitteilung über Gesamtvorgang (MSBN → NB)",
         anchor: Anchor::BestaetigterZuordnungsbeginn,
-        shape: VorlaufShape::LatestWerktageAfter(10),
+        shape: VorlaufShape::LatestWerktageAfter(MITTEILUNG_GESAMTVORGANG_WT),
         source: "WiM Strom Teil 1 Kap. 2.3.2 Nr. 7 — spätester ÜT ist der 10. WT nach dem vom \
                  NB bestätigten Zuordnungsbeginn",
     },
@@ -664,7 +703,7 @@ pub const WIM: &[VorlaufObligation] = &[
         pid_gas: Some(21_013),
         name: "Mitteilung über das Scheitern des Gesamtvorgangs (NB → MSBN)",
         anchor: Anchor::BestaetigterZuordnungsbeginn,
-        shape: VorlaufShape::LatestWerktageAfter(11),
+        shape: VorlaufShape::LatestWerktageAfter(SCHEITERN_GESAMTVORGANG_WT),
         source: "WiM Strom Teil 1 Kap. 2.3.2 Nr. 16 — spätester ÜT ist der 11. WT nach dem vom \
                  NB bestätigten Zuordnungsbeginn",
     },
@@ -926,15 +965,109 @@ pub fn realisierungskorridor(
         ..=crate::add_werktage(bestaetigter_termin, REALISIERUNGSKORRIDOR_WT, cal)
 }
 
+/// The latest clock time on the letzter Werktag vor dem Zuordnungsbeginn at
+/// which the NB's Ankündigung der Zuordnung des E/G zur Marktlokation (UTILMD
+/// 55013) may arrive — GPKE Teil 2 Kap. 2.3.2.2 Nr. 1 Frist I. (S. 35).
+pub const EOG_ANKUENDIGUNG_SPAETESTENS: time::Time = time::macros::time!(13:00);
+
+/// Whether the NB's Ankündigung der Zuordnung des E/G zur Marktlokation
+/// (UTILMD 55013), received at `uez`, kept its Frist — `E_0615` Prüfschritt 30
+/// „Wurden die Fristen zur Anmeldung eingehalten?" (EBD 4.3 Kap. 6.7.1, S. 89).
+///
+/// GPKE Teil 2 Kap. 2.3.2.2 Nr. 1 (S. 35 f.) states two Fristen, chosen by the
+/// Zuordnungsbeginn:
+///
+/// - **I.** „sofern der Zuordnungsbeginn des E/G in der Zukunft liegt, gilt:
+///   Frühester ÜZ ist 00:00 Uhr und spätester 13:00 Uhr des letzten WT vor dem
+///   Zuordnungsbeginn des E/G" — a window on one day, decided here.
+/// - **II.** „sofern der Zuordnungsbeginn des E/G nicht in der Zukunft liegt,
+///   gilt: Unverzüglich" — measured from when the Zuordnungsgrund arose, which
+///   no message carries, so `None`.
+///
+/// The Zuordnungsbeginn is the start of its day in gesetzlicher deutscher
+/// Zeit; „in der Zukunft" compares the instant of receipt against it.
+///
+/// # Panics
+///
+/// Only if date arithmetic underflows the Gregorian calendar.
+#[must_use]
+pub fn eog_ankuendigung_fristgerecht(
+    uez: time::OffsetDateTime,
+    zuordnungsbeginn: Date,
+    cal: HolidayCalendar,
+) -> Option<bool> {
+    if uez >= crate::berlin_midnight(zuordnungsbeginn) {
+        return None;
+    }
+    let letzter_wt = crate::sub_werktage(zuordnungsbeginn, 1, cal);
+    Some(
+        crate::berlin_date(uez) == letzter_wt
+            && uez <= crate::berlin_at(letzter_wt, EOG_ANKUENDIGUNG_SPAETESTENS),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use time::Month;
 
+    /// GPKE Teil 2 Kap. 2.3.2.2 Nr. 1: a Zuordnungsbeginn in the future takes
+    /// the window 00:00–13:00 Uhr of the letzter WT before it; one not in the
+    /// future is „unverzüglich", which no message lets anyone measure.
+    #[test]
+    fn the_eog_ankuendigung_window_is_the_morning_of_the_last_werktag() {
+        use time::macros::datetime;
+        // Zuordnungsbeginn Mon 16.11.2026 → letzter WT Fri 13.11.2026 (CET).
+        let zb = d(2026, Month::November, 16);
+        let ok = |uez| eog_ankuendigung_fristgerecht(uez, zb, CAL);
+        assert_eq!(ok(datetime!(2026-11-13 08:00 UTC)), Some(true));
+        assert_eq!(ok(datetime!(2026-11-13 12:00 UTC)), Some(true), "13:00 MEZ");
+        assert_eq!(ok(datetime!(2026-11-13 12:01 UTC)), Some(false));
+        assert_eq!(
+            ok(datetime!(2026-11-12 22:59 UTC)),
+            Some(false),
+            "the day before"
+        );
+        assert_eq!(ok(datetime!(2026-11-13 23:30 UTC)), Some(false), "Saturday");
+        assert_eq!(
+            ok(datetime!(2026-11-15 23:00 UTC)),
+            None,
+            "Zuordnungsbeginn reached"
+        );
+        assert_eq!(ok(datetime!(2026-11-20 09:00 UTC)), None);
+    }
+
     const CAL: HolidayCalendar = HolidayCalendar::BdewMaKo;
 
     fn d(y: i32, m: Month, day: u8) -> Date {
         Date::from_calendar_date(y, m, day).expect("valid date")
+    }
+
+    /// The date a too-late ÜT is pointed to must itself pass: a Monday ÜT
+    /// reaches Wednesday, a Saturday ÜT Tuesday, and the day before is refused.
+    #[test]
+    fn the_earliest_date_named_after_a_late_uet_passes_the_check() {
+        let shape = VorlaufShape::TagVorDemLetztenWerktagVor;
+        for (uet, erwartet) in [
+            (d(2026, Month::November, 9), d(2026, Month::November, 11)),
+            (d(2026, Month::November, 14), d(2026, Month::November, 17)),
+            // Fri before the 3. Oktober Saturday → Mon 05.10. is the Werktag.
+            (d(2026, Month::October, 2), d(2026, Month::October, 6)),
+        ] {
+            assert_eq!(
+                fruehester_termin_nach_tag_vor_dem_letzten_werktag(uet, CAL),
+                erwartet,
+                "ÜT {uet}"
+            );
+            assert!(shape.check(uet, erwartet, CAL).is_ok(), "ÜT {uet}");
+            let davor = erwartet.previous_day().expect("valid");
+            match shape.check(uet, davor, CAL) {
+                VorlaufVerdict::TooLate {
+                    earliest_possible, ..
+                } => assert_eq!(earliest_possible, erwartet, "ÜT {uet}"),
+                other => panic!("ÜT {uet}, {davor}: {other:?}"),
+            }
+        }
     }
 
     /// „3 Monate und 3 WT vor" is not „3 Monate vor": the Werktage move the

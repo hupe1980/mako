@@ -18,9 +18,11 @@
 //                          Kontoauszug, open items, Vorauszahlung, payment plans,
 //                          interest charges, business-partner aggregates
 //   "read-banking"       — GET  a SEPA mandate or Zahlungsinformation, the
-//                          collection entries of a run, an EEG payout and its
-//                          pain.001 XML. Split from "read-account" because these
-//                          expose the IBAN and the instructions that move money.
+//                          collection entries of a run. Split from
+//                          "read-account" because these expose the IBAN and the
+//                          instructions that move money.
+//   "read-eeg-payouts"   — GET  the EEG payout orders and a payout's pain.001 XML,
+//                          MCP `list_eeg_payouts` — the Netzbetreiber's payments
 //   "read-books"         — GET  the trial balance, aging, the dunning list, the
 //                          period seals and the audit proofs. Book-level reads
 //                          that span the whole tenant rather than one customer.
@@ -59,7 +61,7 @@
 // against every account due that day, `import_payments` books a ZAHLUNG per
 // CAMT.054 entry, `update_abschlag` rewrites the monthly advance and the SEPA
 // billing day, and `run_sepa_collection` emits a bank-submittable pain.008
-// carrying every mandate's IBAN — five of thirteen tools.
+// carrying every mandate's IBAN — five of eighteen tools.
 //
 // `mcp_server::tool_action` therefore maps every tool to the action its REST
 // twin enforces, `mcp_server::mcp_auth_middleware` checks it before the frame
@@ -134,13 +136,14 @@ permit(
 // The EEG and KWKG payments are the Netzbetreiber's: § 19 Abs. 1 EEG 2023 gives
 // the plant operator its claim „gegen den Netzbetreiber", and § 13 Abs. 1 EnFG
 // has the ÜNB reimburse „ihren nachgelagerten Verteilernetzbetreibern". Running
-// a payout and recording its pain.002 status, reading what was paid and what is
-// owed back, recording an Aufrechnung that counts as paid and recording a plant
+// a payout and recording its pain.002 status, reading the payout orders, what
+// was paid and what is owed back, recording an Aufrechnung that counts as paid and recording a plant
 // operator's repayment of an overpayment are held to NB; LF and MSB pay no EEG.
 permit(
     principal,
     action in [
         Action::"run-payout",
+        Action::"read-eeg-payouts",
         Action::"read-enfg",
         Action::"record-aufrechnung",
         Action::"record-rueckzahlung"
@@ -222,7 +225,8 @@ permit(
 // keeps the reads its roles grant.
 //
 // The action list is every action of this file except the reads
-// (`read-account`, `read-banking`, `read-books`, `read-enfg`, `read-policy`,
+// (`read-account`, `read-banking`, `read-books`, `read-eeg-payouts`,
+// `read-enfg`, `read-policy`,
 // `read-config`) and `use-mcp`;
 // `the_advisory_forbid_names_every_mutating_action` pins it to the actions the
 // handlers check.

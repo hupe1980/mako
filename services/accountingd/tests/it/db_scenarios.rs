@@ -23,10 +23,10 @@ use sqlx::PgPool;
 use time::macros::date;
 use uuid::Uuid;
 
-const TENANT: &str = "accountingd-db-test";
+pub(crate) const TENANT: &str = "accountingd-db-test";
 
 /// Connects the satellite pool (migrated) and the doubleentry ledger.
-async fn setup() -> Option<(PgPool, PgLedger, PgContainer)> {
+pub(crate) async fn setup() -> Option<(PgPool, PgLedger, PgContainer)> {
     let (url, container) = pg_container().await?;
     let pool = PgPool::connect(&url).await.ok()?;
     sqlx::migrate!("./migrations").run(&pool).await.ok()?;
@@ -40,7 +40,7 @@ async fn setup() -> Option<(PgPool, PgLedger, PgContainer)> {
     Some((pool, ledger, container))
 }
 
-fn uniq(prefix: &str) -> String {
+pub(crate) fn uniq(prefix: &str) -> String {
     format!("{prefix}-{}", &Uuid::new_v4().simple().to_string()[..12])
 }
 
@@ -50,7 +50,7 @@ fn uniq(prefix: &str) -> String {
 /// but wrong for anything that parses the identifier — the free-text payment
 /// resolver compares whole normalised tokens, and a real MaLo-ID has nothing to
 /// normalise away.
-fn uniq_malo() -> String {
+pub(crate) fn uniq_malo() -> String {
     let hex = Uuid::new_v4().simple().to_string();
     let digits: String = hex.chars().filter(char::is_ascii_digit).take(10).collect();
     format!("5{digits:0<10}")
@@ -896,7 +896,12 @@ async fn the_journal_proves_it_is_append_only() {
 /// ⅓ of the arrears (so `2× Abschlag = ⅔ arrears ≤ arrears` clears it). Tests
 /// that exercise the gate itself override `abschlag_ct` / `jahresabschluss_runs`
 /// via [`set_abschlag`] / [`set_annual_bill`].
-async fn seed_stufe3(pool: &PgPool, ledger: &PgLedger, malo: &str, amount_ct: i64) -> Uuid {
+pub(crate) async fn seed_stufe3(
+    pool: &PgPool,
+    ledger: &PgLedger,
+    malo: &str,
+    amount_ct: i64,
+) -> Uuid {
     let account_id = pg::upsert_account(pool, malo, "LF1", TENANT).await.unwrap();
     pg::post_entry(
         ledger,
@@ -963,7 +968,7 @@ async fn set_annual_bill(pool: &PgPool, malo: &str, billing_year: i16, annual_bi
     .unwrap();
 }
 
-fn contains(cands: &[(Uuid, String, String, i64)], case: Uuid) -> bool {
+pub(crate) fn contains(cands: &[(Uuid, String, String, i64)], case: Uuid) -> bool {
     cands.iter().any(|(id, ..)| *id == case)
 }
 
@@ -1973,7 +1978,8 @@ async fn no_consumption_basis_is_conservatively_excluded() {
 
 /// The Postgres container guard a test holds until it ends — dropping it removes
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
-type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+pub(crate) type PgContainer =
+    testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
 
 /// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
 /// container guard. `None` when Docker is unavailable (tests skip gracefully).
@@ -2329,6 +2335,7 @@ async fn changing_the_iban_rekeys_the_lookup_hash() {
             abschlag_ct: None,
             billing_day: None,
             address: Default::default(),
+            verbraucher: None,
         },
     )
     .await
@@ -2362,6 +2369,7 @@ async fn changing_the_iban_rekeys_the_lookup_hash() {
             abschlag_ct: Some(9_900),
             billing_day: None,
             address: Default::default(),
+            verbraucher: None,
         },
     )
     .await
@@ -2981,6 +2989,7 @@ async fn account_postal_address_round_trips() {
                 post_code: Some("04107".to_owned()),
                 country_subdivision: Some("SN".to_owned()),
             },
+            verbraucher: None,
         },
     )
     .await
@@ -3014,6 +3023,7 @@ async fn account_postal_address_round_trips() {
             abschlag_ct: Some(4_200),
             billing_day: None,
             address: Default::default(),
+            verbraucher: None,
         },
     )
     .await
@@ -3719,7 +3729,7 @@ async fn a_paid_up_customer_is_not_dunned_again_for_the_mahngebuehr() {
     .await
     .unwrap();
 
-    let first = pg::run_auto_dunning(&ledger, &pool, TENANT, 14, 500, 1000, 1500)
+    let first = pg::run_auto_dunning(&ledger, &pool, TENANT, 14, &crate::receivables::STUFEN)
         .await
         .unwrap();
     assert_eq!(
@@ -3770,7 +3780,7 @@ async fn a_paid_up_customer_is_not_dunned_again_for_the_mahngebuehr() {
         .await
         .unwrap();
 
-    let second = pg::run_auto_dunning(&ledger, &pool, TENANT, 14, 500, 1000, 1500)
+    let second = pg::run_auto_dunning(&ledger, &pool, TENANT, 14, &crate::receivables::STUFEN)
         .await
         .unwrap();
     assert_eq!(
@@ -3815,6 +3825,7 @@ async fn a_payment_plan_schedule_carries_the_year_and_clamps_the_day() {
             billing_day: 15,
             first_due_date: "2026-11-30".to_owned(),
             dunning_case_id: None,
+            abwendung_lock_id: None,
             note: None,
             operator_sub: None,
         },
@@ -3862,6 +3873,7 @@ async fn a_payment_plan_schedule_carries_the_year_and_clamps_the_day() {
             billing_day: 28,
             first_due_date: "2026-01-31".to_owned(),
             dunning_case_id: None,
+            abwendung_lock_id: None,
             note: None,
             operator_sub: None,
         },
@@ -3911,6 +3923,7 @@ async fn a_payment_plan_with_no_instalment_size_is_refused() {
         billing_day: 1,
         first_due_date: "2026-05-01".to_owned(),
         dunning_case_id: None,
+        abwendung_lock_id: None,
         note: None,
         operator_sub: None,
     };
@@ -4599,5 +4612,67 @@ async fn enfg_zahlungen_serve_settled_payouts_and_aufrechnungen_only() {
             (Quelle::Auszahlung, "TR-PAID"),
             (Quelle::Aufrechnung, "TR-SET-OFF"),
         ]
+    );
+}
+
+/// An escalation resolves the old Mahnstufe and opens the next one in one
+/// transaction. The dunning run selects only open cases, so an old case
+/// resolved on its own — the next one then failing to open — is never
+/// escalated again: the customer simply stops being dunned.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_escalation_that_fails_leaves_the_old_mahnstufe_open() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let account_id = pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+    let stufe1 = pg::create_dunning_case_announced(
+        &pool,
+        TENANT,
+        account_id,
+        &malo,
+        "LF1",
+        1,
+        4_500,
+        date!(2026 - 07 - 15),
+        None,
+    )
+    .await
+    .expect("Mahnstufe 1");
+
+    sqlx::raw_sql("ALTER TABLE event_outbox RENAME TO event_outbox_away")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let escalated = pg::escalate_dunning_case_announced(
+        &pool,
+        stufe1,
+        TENANT,
+        account_id,
+        &malo,
+        "LF1",
+        2,
+        4_500,
+        date!(2026 - 07 - 29),
+        None,
+    )
+    .await;
+    sqlx::raw_sql("ALTER TABLE event_outbox_away RENAME TO event_outbox")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(escalated.is_err());
+    let resolved: Option<time::OffsetDateTime> =
+        sqlx::query_scalar("SELECT resolved_at FROM dunning_cases WHERE id = $1")
+            .bind(stufe1)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        resolved.is_none(),
+        "the old Mahnstufe stays open until the next one exists"
     );
 }

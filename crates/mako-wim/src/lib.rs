@@ -130,6 +130,7 @@ pub mod ersteinbau;
 pub mod esa;
 pub mod esa_wertebestellung;
 pub mod geraeteubernahme;
+pub mod geraeteubernahme_msbn;
 pub mod geraetewechsel;
 pub mod insrpt;
 pub mod invoic;
@@ -217,26 +218,15 @@ pub use weiterverpflichtung::{
 /// | 55168 | `wim-device-change` | Verpflichtungsanfrage / Aufforderung (NB → gMSB) | any |
 /// | 17001, 17009 | `wim-geraeteubernahme` | Geräteübernahme ORDERS (MSBN → MSBA) | any |
 /// | 39002 | `wim-wertebestellung` | ESA Stornierung der Bestellung (ORDCHG) | **Msb only** |
-/// | 19001, 19002 | `wim-geraeteubernahme` | ORDRSP Bestellbestätigung/Ablehnung (MSBA → MSBN) | **nMSB only** |
-/// | 19015, 19016 | `wim-geraeteubernahme` | ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung | any |
+/// | 19001, 19002 | `wim-geraeteubernahme-msbn` | ORDRSP Bestellbestätigung/Ablehnung (MSBA → MSBN) | MSB roles |
+/// | 19015, 19016 | `wim-geraeteubernahme-msbn` | ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung | MSB roles |
 ///
-/// ## Role-conditional PIDs (ORDRSP 19001/19002)
+/// ## The MSBN's side
 ///
-/// GPKE Konfiguration claims 19001/19002 on an NB instance — it receives them
-/// after sending ORDERS 17134/17135 — and WiM Geräteübernahme claims them on an
-/// nMSB instance. Only one reading can win, so
-/// the WiM one is registered when [`DeploymentRoles`] contains
-/// [`Marktrolle::Nmsb`]. Use [`DeploymentRoles::nmsb()`] and
-/// [`DeploymentRoles::nb()`] rather than a catch-all role set on a deployment
-/// that is both.
-///
-/// 19015/19016 are **not** gated: nothing else claims them.
-///
-/// The workflow is the MSBA's: it receives the ORDERS and sends the ORDRSP. The
-/// MSBN side — sending 17001/17009 and receiving the answer — is not built, so
-/// makod's dispatcher has no arm for an inbound 19001/19002/19015/19016 and
-/// dead-letters one as not dispatchable; the registration keeps the router
-/// naming the workflow.
+/// The ORDRSP 19001/19002 and 19015/19016 answer ORDERS the MSBN sent;
+/// [`geraeteubernahme_msbn`] runs that side under the ORDERS' `BGM` DE 1004,
+/// which the answer echoes in `SG1 RFF+ON`. Nothing else claims them: the NB's
+/// Einrichtung 17134 is answered by no ORDRSP (GPKE Teil 3 Kap. 1.3.7.2).
 ///
 /// [`DeploymentRoles`]: mako_engine::marktrolle::DeploymentRoles
 /// [`Marktrolle::Nmsb`]: mako_engine::marktrolle::Marktrolle::Nmsb
@@ -258,6 +248,9 @@ impl mako_engine::builder::EngineModule for WimModule {
             ),
             WorkflowDriver::of::<geraeteubernahme::WimGeraeteubernahmeWorkflow>(
                 geraeteubernahme::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<geraeteubernahme_msbn::WimGeraeteubernahmeMsbnWorkflow>(
+                geraeteubernahme_msbn::WORKFLOW_NAME,
             ),
             WorkflowDriver::of::<ersteinbau::WimErsteinbauWorkflow>(ersteinbau::WORKFLOW_NAME),
             WorkflowDriver::of::<wertebestellung::WimWertebestellungWorkflow>(
@@ -346,21 +339,20 @@ impl mako_engine::builder::EngineModule for WimModule {
             router.register(pid, geraeteubernahme::WORKFLOW_NAME);
         }
 
-        // ORDRSP 19015/19016 — Bestätigung/Ablehnung der Gerätewechselabsicht,
-        // the MSBA's answer to the ORDERS 17009. No other module claims them,
-        // so they are registered unconditionally.
-        for pid in [19_015_u32, 19_016] {
-            router.register(pid, geraeteubernahme::WORKFLOW_NAME);
-        }
-
-        // ORDRSP 19001/19002 — Bestellbestätigung/Ablehnung, the answer to
-        // ORDERS 17001. GPKE Konfiguration claims the same two PIDs on an NB
-        // instance, so the MSBN reading is registered only when the Nmsb role is
-        // declared; `register_with_module` then panics at build() rather than
-        // silently letting one module overwrite the other.
-        if !roles.is_all() && roles.contains(mako_engine::marktrolle::Marktrolle::Nmsb) {
-            for pid in [19_001_u32, 19_002] {
-                router.register_with_module(pid, "wim-geraeteubernahme", "wim");
+        // ORDRSP 19001/19002 and 19015/19016 — the MSBA's answers to the
+        // MSBN's 17001 resp. 17009 (ORDRSP AHB 1.1b Kap. 4.9, 4.10). Only a
+        // MSB receives them, on the MSBN's own workflow.
+        if roles.is_all()
+            || [
+                mako_engine::marktrolle::Marktrolle::Msb,
+                mako_engine::marktrolle::Marktrolle::Nmsb,
+                mako_engine::marktrolle::Marktrolle::Amsb,
+            ]
+            .into_iter()
+            .any(|r| roles.contains(r))
+        {
+            for &pid in geraeteubernahme_msbn::ANTWORT_PIDS {
+                router.register(pid, geraeteubernahme_msbn::WORKFLOW_NAME);
             }
         }
 
@@ -574,8 +566,9 @@ impl mako_engine::builder::EngineModule for WimModule {
         // ORDERS 17011 Änderung der Technik runs NB, LF → MSB (ORDERS AHB 1.1b
         // Kap. 4.12): the MSB receives it (`ReceiveAuftrag`), so it routes only
         // for a MSB role; the NB or LF sends it and receives the ORDRSP
-        // 19005/19006. 17118 (MSB → MSB Bestellung Konfigurationsänderung)
-        // stays registered here as before. The ESA order PIDs (17007/17008,
+        // 19005/19006. 17118 (MSB → weiterer MSB Bestellung einer
+        // Konfigurationsänderung) is GPKE Teil 3's, registered by `mako-gpke`
+        // on `gpke-konfiguration-aenderung`. The ESA order PIDs (17007/17008,
         // ORDRSP 19011–19014) belong to `wertebestellung`.
         let msb = {
             use mako_engine::marktrolle::Marktrolle;
@@ -695,9 +688,10 @@ mod tests {
     /// overview 4.0 lfd. Nr. 25540–25640), and the PIDs beside it are other
     /// Anwendungsfälle: 17103 Brennwert and 17104 Anfrage vom MSB Gas
     /// (`geli-gas-datenabruf`), 17126 Stammdaten Messlokation Gas (no owner), and
-    /// 17118 Konfigurationsänderung, which WiM routes to `wim-technik-aenderung`.
-    /// A WiM registration of any of them would turn a foreign Anwendungsfall into
-    /// a WiM process.
+    /// 17118 Bestellung einer Konfigurationsänderung, which the Anwendungsübersicht
+    /// 4.0 (lfd. Nr. 22600) files under GPKE Teil 3 and `mako-gpke` routes to
+    /// `gpke-konfiguration-aenderung`. A WiM registration of any of them would
+    /// turn a foreign Anwendungsfall into a WiM process.
     #[test]
     fn wim_routes_no_orders_stammdaten_pid() {
         for roles in [
@@ -708,18 +702,13 @@ mod tests {
         ] {
             let mut router = PidRouter::new();
             WimModule.register_pids_with_roles(&mut router, &roles);
-            for pid in (17_101..=17_133).filter(|p| *p != 17_118) {
+            for pid in 17_101..=17_133 {
                 assert_eq!(
                     router.route(pid),
                     None,
                     "WiM must not route ORDERS {pid} ({roles:?})"
                 );
             }
-            assert_eq!(
-                router.route(17_118),
-                Some(technik_aenderung::WORKFLOW_NAME),
-                "17118 is the Konfigurationsänderung ({roles:?})"
-            );
         }
     }
 }

@@ -39,7 +39,7 @@ use axum::{
 use mako_markt::cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent};
 use mako_service::ApiError;
 use sqlx::PgPool;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 /// Newtype wrapper for the inbound webhook secret so it can be used as an axum
 /// Extension.  `None` means signature verification is disabled.
@@ -50,19 +50,10 @@ pub struct InboundWebhookSecret(pub Option<String>);
 ///
 /// Request body: CloudEvents 1.0 JSON (`application/cloudevents+json`).
 /// Signature headers: `webhook-id`, `webhook-timestamp`, `webhook-signature`.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-)]
 pub async fn ingest_event(
     State(state): State<Arc<AppState>>,
     Extension(secret): Extension<InboundWebhookSecret>,
     Extension(pool): Extension<PgPool>,
-    Extension(nelo_repo): Extension<Arc<PgNeLoRepository>>,
-    Extension(tranche_repo): Extension<Arc<PgTrancheRepository>>,
-    Extension(tr_repo): Extension<Arc<PgTechnischeRessourceRepository>>,
-    Extension(sr_repo): Extension<Arc<crate::pg::PgSteuerbareRessourceRepository>>,
-    Extension(melo_msb_repo): Extension<Arc<crate::pg::PgMeloMsbRepository>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
@@ -236,10 +227,52 @@ pub async fn ingest_event(
         }
     };
 
+    // GPKE Teil 4 / GeLi Gas Stammdatenänderung apply — object-generic, on the
+    // same transaction. The workflow tags the ProcessCompleted with the
+    // `objekt` marker; it is routed to the matching typed-column patch.
+    // Non-MaLo object IDs (MeLo DE+31, NeLo EIC, Tranche) are not valid
+    // MaLo-IDs, so this runs off the raw `malo_id` string. A failed apply rolls
+    // the marker back: committed alone, it would answer makod's redelivery as a
+    // duplicate and the change would never be applied.
+    let mut stammdaten_events = Vec::new();
+    if ce_type_for_vs == mako_events::mako::PROCESS_COMPLETED
+        && let Some(pid) = pid_for_vs
+        && let Some(object_id) = data_for_vs.get("malo_id").and_then(|v| v.as_str())
+        && let Some(patch_val) = data_for_vs.get("stammdaten_patch")
+    {
+        let objekt = data_for_vs
+            .get("objekt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("MARKTLOKATION");
+        let aenderungsdatum = data_for_vs.get("aenderungsdatum").and_then(|v| v.as_str());
+        match apply_object_stammdaten(
+            &mut tx,
+            &state.tenant,
+            objekt,
+            object_id,
+            pid,
+            aenderungsdatum,
+            patch_val,
+        )
+        .await
+        {
+            Ok(evts) => stammdaten_events = evts,
+            Err(e) => {
+                return ApiError::internal(anyhow::Error::from(e).context(format!(
+                    "event_ingest: Stammdatenänderung apply for event {event_id_for_vs} failed — rolling back"
+                )))
+                .into_response();
+            }
+        }
+    }
+
     // 6. Durable, persist-before-fan-out: the relayed event and every derived
     //    event are enqueued on the same transaction as the idempotency marker,
     //    so a crash can never leave the marker committed without the events.
-    for evt in std::iter::once(&markt_event).chain(derived.iter()) {
+    for evt in std::iter::once(&markt_event)
+        .chain(derived.iter())
+        .chain(stammdaten_events.iter())
+    {
         if let Err(e) = crate::outbox::enqueue(&mut *tx, evt).await {
             return ApiError::internal(anyhow::Error::from(e).context(format!(
                 "event_ingest: durable enqueue for event {event_id_for_vs}"
@@ -254,42 +287,6 @@ pub async fn ingest_event(
                 .context(format!("event_ingest: commit for event {event_id_for_vs}")),
         )
         .into_response();
-    }
-
-    // 7. Secondary applies on other master-data objects. These run after the
-    //    commit and stay best-effort by contract — the object repositories own
-    //    their own pools and cannot join the ingest transaction.
-    //
-    // GPKE Teil 4 / GeLi Gas Stammdatenänderung apply — object-generic. The
-    // workflow tags the ProcessCompleted with the `objekt` marker; we route it to
-    // the matching typed-column patch_stammdaten. Non-MaLo object IDs (MeLo
-    // DE+31, NeLo EIC, Tranche) are not valid MaLo-IDs, so this runs off the raw
-    // `malo_id` string.
-    if ce_type_for_vs == mako_events::mako::PROCESS_COMPLETED
-        && let Some(pid) = pid_for_vs
-        && let Some(object_id) = data_for_vs.get("malo_id").and_then(|v| v.as_str())
-        && let Some(patch_val) = data_for_vs.get("stammdaten_patch")
-    {
-        let objekt = data_for_vs
-            .get("objekt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("MARKTLOKATION");
-        let aenderungsdatum = data_for_vs.get("aenderungsdatum").and_then(|v| v.as_str());
-        apply_object_stammdaten(
-            &state,
-            &pool,
-            nelo_repo.as_ref(),
-            tranche_repo.as_ref(),
-            tr_repo.as_ref(),
-            sr_repo.as_ref(),
-            melo_msb_repo.as_ref(),
-            objekt,
-            object_id,
-            pid,
-            aenderungsdatum,
-            patch_val,
-        )
-        .await;
     }
 
     StatusCode::ACCEPTED.into_response()
@@ -596,7 +593,10 @@ pub async fn derive_supply_state(
         // `old_supplier` names which assignment ends; absent, every running one
         // does, which is what an untranchierte Marktlokation's Lieferende means.
         let old_supplier = data.get("old_supplier").and_then(|v| v.as_str());
-        Vs::end_supply_tx(
+        // `false` when this ending is already recorded — a deployment that is
+        // NB and LF at once confirms it from both sides' processes, and the
+        // § 38 gap is announced once.
+        transitioned = Vs::end_supply_tx(
             conn,
             &malo_id,
             tenant,
@@ -606,7 +606,9 @@ pub async fn derive_supply_state(
             process_id,
         )
         .await?;
-        transitioned = true;
+        if !transitioned {
+            return Ok(events);
+        }
 
         // `still_supplied` is the Tranchen guard: on a tranchierte
         // Marktlokation one LFA leaving does not leave the Marktlokation
@@ -933,7 +935,9 @@ pub(crate) fn marktrole_from_workflow(workflow_name: Option<&str>) -> Option<Str
 }
 
 /// Apply a GPKE Teil 4 / GeLi Gas Stammdatenänderung to the typed columns of the
-/// target master-data object, dispatching by the `objekt` marker.
+/// target master-data object, dispatching by the `objekt` marker, **on the
+/// ingest's transaction**. Returns the stammdaten-changed CloudEvents to
+/// enqueue beside it.
 ///
 /// Object-generic counterpart of the MaLo-only path: the workflow tags the
 /// `ProcessCompleted` with `objekt` (`MARKTLOKATION` / `MESSLOKATION` /
@@ -941,38 +945,31 @@ pub(crate) fn marktrole_from_workflow(workflow_name: Option<&str>) -> Option<Str
 /// the matching `patch_stammdaten`. §14a SR/TR objects carry no grounded generic
 /// attributes (source-gated) and fall through to an acknowledged-only log.
 ///
-/// Non-fatal by contract: the CloudEvent is already acknowledged, so every
-/// failure or unknown object is logged, never propagated.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-)]
+/// An unknown object, an invalid id or an empty patch is a no-op; a database
+/// failure is returned, so the caller rolls the idempotency marker back and
+/// makod redelivers.
 async fn apply_object_stammdaten(
-    state: &AppState,
-    pool: &sqlx::PgPool,
-    nelo_repo: &PgNeLoRepository,
-    tranche_repo: &PgTrancheRepository,
-    tr_repo: &PgTechnischeRessourceRepository,
-    sr_repo: &crate::pg::PgSteuerbareRessourceRepository,
-    melo_msb_repo: &crate::pg::PgMeloMsbRepository,
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
     objekt: &str,
     object_id: &str,
     pid: u32,
     aenderungsdatum: Option<&str>,
     patch_val: &serde_json::Value,
-) {
+) -> Result<Vec<MarktEvent>, mako_markt::error::MdmError> {
+    use crate::pg::{
+        MsbDetails, PgMaloRepository, PgMeloMsbRepository, PgMeloRepository,
+        PgSteuerbareRessourceRepository,
+    };
     use mako_markt::repository::{
         MaloStammdatenPatch, MeloStammdatenPatch, NeloStammdatenPatch,
         SteuerbareRessourceStammdatenPatch, TechnischeRessourceStammdatenPatch,
         TrancheStammdatenPatch,
     };
 
-    // Emit a stammdaten-changed CloudEvent after a successful typed patch —
-    // durable enqueue to the outbox (best-effort logging: these are secondary
-    // events derived from an already-persisted primary ingest).
-    let emit = |ce_type: &'static str, is_malo: bool| {
-        let evt = MarktEvent::new(
-            &state.tenant,
+    let event = |ce_type: &'static str, is_malo: bool| {
+        MarktEvent::new(
+            tenant,
             ce_type,
             object_id.to_owned(),
             serde_json::json!({
@@ -983,20 +980,21 @@ async fn apply_object_stammdaten(
             }),
         )
         .with_extensions(EventExtensions {
-            marktmaloid: if is_malo {
-                Some(object_id.to_owned())
-            } else {
-                None
-            },
+            marktmaloid: is_malo.then(|| object_id.to_owned()),
             makopid: Some(pid),
             ..Default::default()
-        });
-        async move {
-            if let Err(e) = crate::outbox::enqueue(pool, &evt).await {
-                error!(error = %e, ce_type, "event_ingest: stammdaten enqueue failed");
-            }
-        }
+        })
     };
+    let changed = |applied: bool, what: &str| {
+        if !applied {
+            debug!(
+                object_id,
+                pid, what, "event_ingest: Stammdatenänderung for an unknown object — no-op"
+            );
+        }
+        applied
+    };
+    let mut out = Vec::new();
 
     match objekt {
         // The Paket-ID change is carried on the MaLo (LOC+Z16).
@@ -1006,24 +1004,17 @@ async fn apply_object_stammdaten(
                     object_id,
                     "event_ingest: Stammdatenänderung with invalid MaLo-ID — skipped"
                 );
-                return;
+                return Ok(out);
             };
             let patch: MaloStammdatenPatch =
                 serde_json::from_value(patch_val.clone()).unwrap_or_default();
-            if patch.is_empty() {
-                return;
-            }
-            match state.malo_repo.patch_stammdaten(&malo_id, &patch).await {
-                Ok(true) => emit(mako_events::markt::MALO_STAMMDATEN_GEAENDERT, true).await,
-                Ok(false) => {
-                    debug!(
-                        object_id,
-                        pid, "event_ingest: MaLo Stammdatenänderung for unknown MaLo — no-op"
-                    )
-                }
-                Err(e) => {
-                    warn!(object_id, pid, error = %e, "event_ingest: MaLo patch_stammdaten failed (non-fatal)")
-                }
+            if !patch.is_empty()
+                && changed(
+                    PgMaloRepository::patch_stammdaten_tx(conn, &malo_id, &patch).await?,
+                    "MaLo",
+                )
+            {
+                out.push(event(mako_events::markt::MALO_STAMMDATEN_GEAENDERT, true));
             }
         }
         "MESSLOKATION" => {
@@ -1032,7 +1023,7 @@ async fn apply_object_stammdaten(
                     object_id,
                     "event_ingest: Stammdatenänderung with invalid MeLo-ID — skipped"
                 );
-                return;
+                return Ok(out);
             };
             // The real MeLo Änderungsmeldung payload is the MSB-Zuordnung
             // (zugeordneter Messstellenbetreiber); record it on the dated
@@ -1040,122 +1031,83 @@ async fn apply_object_stammdaten(
             if let Some(msb) = patch_val.get("zugeordneter_msb").and_then(|v| v.as_str())
                 && let Some(valid_from) = aenderungsdatum.and_then(parse_civil_date)
             {
-                match melo_msb_repo
-                    .assign_msb(&state.tenant, object_id, msb, valid_from)
-                    .await
-                {
-                    Ok(()) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
-                    Err(e) => {
-                        warn!(object_id, pid, error = %e, "event_ingest: MeLo assign_msb failed (non-fatal)")
-                    }
-                }
+                PgMeloMsbRepository::assign_msb_tx(
+                    conn,
+                    tenant,
+                    object_id,
+                    msb,
+                    valid_from,
+                    MsbDetails::default(),
+                )
+                .await?;
+                out.push(event(mako_events::markt::STAMMDATEN_GEAENDERT, false));
             }
             // Defensive typed-column patch (Netzebene/Regelzone are not carried by
             // the MeLo Änderungsmeldung today, so this is a rarely-firing no-op).
             let patch: MeloStammdatenPatch =
                 serde_json::from_value(patch_val.clone()).unwrap_or_default();
-            if patch.is_empty() {
-                return;
-            }
-            match state.melo_repo.patch_stammdaten(&melo_id, &patch).await {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
-                Ok(false) => {
-                    debug!(
-                        object_id,
-                        pid, "event_ingest: MeLo Stammdatenänderung for unknown MeLo — no-op"
-                    )
-                }
-                Err(e) => {
-                    warn!(object_id, pid, error = %e, "event_ingest: MeLo patch_stammdaten failed (non-fatal)")
-                }
+            if !patch.is_empty()
+                && changed(
+                    PgMeloRepository::patch_stammdaten_tx(conn, &melo_id, &patch).await?,
+                    "MeLo",
+                )
+            {
+                out.push(event(mako_events::markt::STAMMDATEN_GEAENDERT, false));
             }
         }
         "NETZLOKATION" => {
             let patch: NeloStammdatenPatch =
                 serde_json::from_value(patch_val.clone()).unwrap_or_default();
-            if patch.is_empty() {
-                return;
-            }
-            match nelo_repo
-                .patch_stammdaten(object_id, &state.tenant, &patch)
-                .await
+            if !patch.is_empty()
+                && changed(
+                    PgNeLoRepository::patch_stammdaten_tx(conn, object_id, tenant, &patch).await?,
+                    "NeLo",
+                )
             {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
-                Ok(false) => {
-                    debug!(
-                        object_id,
-                        pid, "event_ingest: NeLo Stammdatenänderung for unknown NeLo — no-op"
-                    )
-                }
-                Err(e) => {
-                    warn!(object_id, pid, error = %e, "event_ingest: NeLo patch_stammdaten failed (non-fatal)")
-                }
+                out.push(event(mako_events::markt::STAMMDATEN_GEAENDERT, false));
             }
         }
         "TRANCHE" => {
             let patch: TrancheStammdatenPatch =
                 serde_json::from_value(patch_val.clone()).unwrap_or_default();
-            if patch.is_empty() {
-                return;
-            }
-            match tranche_repo
-                .patch_stammdaten(object_id, &state.tenant, &patch)
-                .await
+            if !patch.is_empty()
+                && changed(
+                    PgTrancheRepository::patch_stammdaten_tx(conn, object_id, tenant, &patch)
+                        .await?,
+                    "Tranche",
+                )
             {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
-                Ok(false) => {
-                    debug!(
-                        object_id,
-                        pid, "event_ingest: Tranche Stammdatenänderung for unknown Tranche — no-op"
-                    )
-                }
-                Err(e) => {
-                    warn!(object_id, pid, error = %e, "event_ingest: Tranche patch_stammdaten failed (non-fatal)")
-                }
+                out.push(event(mako_events::markt::STAMMDATEN_GEAENDERT, false));
             }
         }
         "TECHNISCHE_RESSOURCE" => {
             let patch: TechnischeRessourceStammdatenPatch =
                 serde_json::from_value(patch_val.clone()).unwrap_or_default();
-            if patch.is_empty() {
-                return;
-            }
-            match tr_repo
-                .patch_stammdaten(object_id, &state.tenant, &patch)
-                .await
-            {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
-                Ok(false) => {
-                    debug!(
-                        object_id,
-                        pid, "event_ingest: TR Stammdatenänderung for unknown TR — no-op"
+            if !patch.is_empty()
+                && changed(
+                    PgTechnischeRessourceRepository::patch_stammdaten_tx(
+                        conn, object_id, tenant, &patch,
                     )
-                }
-                Err(e) => {
-                    warn!(object_id, pid, error = %e, "event_ingest: TR patch_stammdaten failed (non-fatal)")
-                }
+                    .await?,
+                    "TR",
+                )
+            {
+                out.push(event(mako_events::markt::STAMMDATEN_GEAENDERT, false));
             }
         }
         "STEUERBARE_RESSOURCE" => {
             let patch: SteuerbareRessourceStammdatenPatch =
                 serde_json::from_value(patch_val.clone()).unwrap_or_default();
-            let Some(kp) = patch.konfigurationsprodukte else {
-                return;
-            };
-            match sr_repo
-                .replace_sr_konfigurationsprodukte(object_id, &state.tenant, kp)
-                .await
-            {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
-                Ok(false) => {
-                    debug!(
-                        object_id,
-                        pid, "event_ingest: SR Stammdatenänderung for unknown SR — no-op"
+            if let Some(kp) = patch.konfigurationsprodukte
+                && changed(
+                    PgSteuerbareRessourceRepository::replace_sr_konfigurationsprodukte_tx(
+                        conn, object_id, tenant, kp,
                     )
-                }
-                Err(e) => {
-                    warn!(object_id, pid, error = %e, "event_ingest: SR replace_sr_konfigurationsprodukte failed (non-fatal)")
-                }
+                    .await?,
+                    "SR",
+                )
+            {
+                out.push(event(mako_events::markt::STAMMDATEN_GEAENDERT, false));
             }
         }
         // MeLo standorteigenschaften deep attributes still travel in
@@ -1168,6 +1120,7 @@ async fn apply_object_stammdaten(
             "event_ingest: Stammdatenänderung apply for this object is source-gated (§14a AHB) — acknowledged only"
         ),
     }
+    Ok(out)
 }
 
 #[cfg(test)]

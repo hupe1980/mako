@@ -136,6 +136,12 @@ Commands:
                         no view outside the untranslated list writes its own words
   check-error-tuples  Refuse any hand-built `(StatusCode::<non-2xx>, …)` tuple outside
                         `#[cfg(test)]` items under services/*/src — fail with an `ApiError`
+  check-event-durability  Refuse a hand-built CloudEvent envelope, a publish with no durable
+                        row or stated retry behind it, and a marker-shaped write on a pool
+                        beside an outbox enqueue
+  check-process-verdict  Refuse a decision on `de.mako.process.completed` that reads neither
+                        `data.accepted`/`data.outcome` nor the response PID, and an agent
+                        trigger on it that does not point at the verdict
   dep-age             Report each direct dependency's pin against crates.io (network; a
                         report, never a failure; --recorded <file> reads a saved response)
   import-profiles     Regenerate the profiles from the mirrored BDEW documents
@@ -177,6 +183,7 @@ mod check_db_suites;
 mod check_desk;
 mod check_dynamic_sql;
 mod check_error_tuples;
+mod check_event_durability;
 mod check_event_payloads;
 mod check_event_verlauf;
 mod check_expected_tenant;
@@ -188,6 +195,7 @@ mod check_mcp_surface;
 mod check_occupancy;
 mod check_outbox_notify;
 mod check_policy_settings;
+mod check_process_verdict;
 mod check_prompt_tools;
 mod check_publish_order;
 mod check_quotations;
@@ -308,6 +316,8 @@ fn main() {
         Some("check-sts-codes") => root_task(check_sts_codes::run),
         Some("check-desk") => root_task(check_desk::run),
         Some("check-error-tuples") => root_task(check_error_tuples::run),
+        Some("check-process-verdict") => root_task(check_process_verdict::run),
+        Some("check-event-durability") => root_task(check_event_durability::run),
         Some("validate-ebd-codes") => validate_ebd_codes(),
         Some("validate-profiles") => validate_profiles(),
         Some("import-profiles") => import_profiles(),

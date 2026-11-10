@@ -563,6 +563,26 @@ fn liste_sender_rolle(payload: &serde_json::Value) -> Result<String, DispatchErr
         })
 }
 
+/// How the answered list was ordered — the second half of the tree selection
+/// (EBD 4.3 publishes one tree per Einzelanforderung and per gültige
+/// Abonnierung). Absent is passed on as unknown, and the workflow refuses it
+/// wherever the family has two trees; a spelling it does not know is refused
+/// here.
+fn liste_anforderungsart(
+    payload: &serde_json::Value,
+) -> Result<Option<mako_mabis::listenabgleich::Anforderungsart>, DispatchError> {
+    match payload.get("anforderungsart").and_then(|v| v.as_str()) {
+        None => Ok(None),
+        Some(raw) => mako_mabis::listenabgleich::Anforderungsart::parse(raw)
+            .map(Some)
+            .ok_or_else(|| {
+                DispatchError::InvalidPayload(format!(
+                    "\"anforderungsart\" \"{raw}\" is neither einzelanforderung nor abonnement"
+                ))
+            }),
+    }
+}
+
 /// Dispatch `mabis.liste.korrigieren` — the **Korrekturliste** leg of a MaBiS
 /// Clearingliste (BK6-24-174 Anlage 3, Clearingverfahren).
 ///
@@ -572,6 +592,7 @@ fn liste_sender_rolle(payload: &serde_json::Value) -> Result<String, DispatchErr
 /// |-------|----------|-------------|
 /// | `malo_id` | Yes | the business key the list's process runs under |
 /// | `sender_rolle` | Yes | `"NB"` or `"ÜNB"` — selects the Entscheidungsbaum |
+/// | `anforderungsart` | Yes, but for the DZÜ-Liste | `einzelanforderung` / `abonnement` — selects it with the role |
 /// | `positionen` | No | disputed positions; **absent means none**, which is still a reply |
 ///
 /// Each position is `{ "malo": "…", "grund": "ergaenzt" \| "falsche_zuordnung" \|
@@ -588,6 +609,7 @@ pub(super) async fn dispatch_mabis_liste_korrigieren(
 
     let business_key = liste_business_key(payload)?;
     let sender_rolle = liste_sender_rolle(payload)?;
+    let anforderungsart = liste_anforderungsart(payload)?;
 
     let mut positionen: Vec<Korrekturposition> = Vec::new();
     for entry in payload
@@ -628,6 +650,7 @@ pub(super) async fn dispatch_mabis_liste_korrigieren(
         "mabis-listenabgleich",
         move || ListenabgleichCommand::SendKorrektur {
             sender_rolle,
+            anforderungsart,
             positionen,
         },
     )
@@ -643,6 +666,7 @@ pub(super) async fn dispatch_mabis_liste_korrigieren(
 /// |-------|----------|-------------|
 /// | `malo_id` | Yes | the business key the list's process runs under |
 /// | `sender_rolle` | Yes | `"NB"` or `"ÜNB"` — selects the Entscheidungsbaum |
+/// | `anforderungsart` | Yes, but for the DZÜ-Liste | `einzelanforderung` / `abonnement` — selects it with the role |
 /// | `abonnement_bestellt` | No | „Wurde das Abonnement bestellt?" |
 /// | `zeitraum_plausibel` | No | „Ist der Zeitraum plausibel?" |
 /// | `mabis_zp_passt` | No | „Entspricht der MaBiS-ZP dem angefragten?" |
@@ -661,6 +685,7 @@ pub(super) async fn dispatch_mabis_liste_ablehnen(
 ) -> Result<DispatchOutcome, DispatchError> {
     let business_key = liste_business_key(payload)?;
     let sender_rolle = liste_sender_rolle(payload)?;
+    let anforderungsart = liste_anforderungsart(payload)?;
     let fact = |name: &str| payload.get(name).and_then(serde_json::Value::as_bool);
 
     let (abonnement_bestellt, zeitraum_plausibel) =
@@ -674,6 +699,7 @@ pub(super) async fn dispatch_mabis_liste_ablehnen(
         "mabis-listenabgleich",
         move || ListenabgleichCommand::SendGesamtAblehnung {
             sender_rolle,
+            anforderungsart,
             abonnement_bestellt,
             zeitraum_plausibel,
             mabis_zp_passt,
@@ -682,6 +708,133 @@ pub(super) async fn dispatch_mabis_liste_ablehnen(
         },
     )
     .await
+}
+
+pub(super) fn cmd_mabis_liste_senden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_mabis_liste_senden(s, p))
+}
+
+/// Dispatch `mabis.liste.senden` — the Netzbetreiber distributes a
+/// Lieferantenclearingliste 55065 or an LF-AACL 55201 and waits for the
+/// Lieferant's Korrekturliste 55066 / 55202 (Anwendungsübersicht der
+/// Prüfidentifikatoren 4.0, lfd. Nr. 7110/7120 and 9610/9620).
+///
+/// # Payload fields
+///
+/// | Field | Required | Description |
+/// |-------|----------|-------------|
+/// | `pid` | Yes | `55065` or `55201` |
+/// | `anforderungsart` | Yes | `einzelanforderung` / `abonnement` — selects the tree the LF answers from |
+/// | `anfrage_referenz` | Yes | `BGM` DE 1004 of the LF's ORDERS (`SG1 RFF+AAV`) |
+/// | `receiver_mp_id` | Yes | the Lieferant |
+/// | `bilanzierungsmonat` | Yes | `YYYY-MM` (`DTM+157`) |
+/// | `listennummer` | Yes | `SG4 IDE+Z01`; the process runs under it |
+/// | `mabis_zp_id` | Yes | `SG5 LOC+Z15` |
+/// | `zeitreihen_version` | Yes | `SG8 RFF+AUU` |
+/// | `mitglieder` | Yes | one entry per Marktlokation (`mako_engine::payload::ListenMitglied`) |
+pub(super) async fn dispatch_mabis_liste_senden(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let require = |field: &str| -> Result<String, DispatchError> {
+        payload
+            .get(field)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| DispatchError::InvalidPayload(format!("\"{field}\" is required")))
+    };
+    let pid_code = payload
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|p| matches!(p, 55_065 | 55_201))
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "\"pid\" is required: 55065 (Lieferantenclearingliste) or 55201 (LF-AACL)"
+                    .to_owned(),
+            )
+        })?;
+    let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
+    let art_raw = require("anforderungsart")?;
+    let anforderungsart =
+        mako_mabis::listenabgleich::Anforderungsart::parse(&art_raw).ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "\"anforderungsart\" \"{art_raw}\" is neither einzelanforderung nor abonnement \
+                 — EBD 4.3 answers each from its own tree"
+            ))
+        })?;
+    let listennummer = require("listennummer")?;
+    let mitglieder: Vec<mako_engine::payload::ListenMitglied> = serde_json::from_value(
+        payload
+            .get("mitglieder")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|e| DispatchError::InvalidPayload(format!("\"mitglieder\": {e}")))?;
+    let monat = require("bilanzierungsmonat")?;
+    parse_bilanzierungsmonat(&monat)?;
+
+    let business_key = mako_mabis::listenabgleich::liste_key(&listennummer);
+    let occupancy = find_occupying_process::<MabisListenabgleichWorkflow>(
+        state,
+        &business_key,
+        mako_mabis::LISTENABGLEICH_WORKFLOW_NAME,
+    )
+    .await?;
+    if let Some(dup_id) = occupancy.process {
+        return Err(DispatchError::DuplicateProcess {
+            process_id: dup_id,
+            malo_id: business_key,
+        });
+    }
+
+    let command = ListenabgleichCommand::SendListe {
+        pid,
+        sender_rolle: "NB".to_owned(),
+        anforderungsart: Some(anforderungsart),
+        anfrage_referenz: require("anfrage_referenz")?,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: MarktpartnerCode::new(require("receiver_mp_id")?),
+        billing_period: BillingPeriod::new(monat),
+        listennummer,
+        mabis_zaehlpunkt: require("mabis_zp_id")?,
+        zeitreihen_version: require("zeitreihen_version")?,
+        positionen: mitglieder,
+    };
+    // The workflow is pure: its `handle` on a fresh process yields the list
+    // the spawn writes, and a list the pre-send AHB gate would dead-letter is
+    // refused here, naming what the record lacks.
+    let geplant = <MabisListenabgleichWorkflow as mako_engine::workflow::Workflow>::handle(
+        &mako_mabis::ListenabgleichState::New,
+        command.clone(),
+    )
+    .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+    super::eog_stammdaten::refuse_what_the_gate_refuses(
+        state,
+        &latest_format_version(),
+        &geplant.outbox,
+    )?;
+
+    let process_id = spawn_process::<MabisListenabgleichWorkflow>(
+        &state.store,
+        state.tenant_id,
+        WorkflowId::new(
+            mako_mabis::LISTENABGLEICH_WORKFLOW_NAME,
+            latest_format_version(),
+        ),
+        command,
+        &[],
+        &[business_key.as_str()],
+    )
+    .await
+    .map_err(DispatchError::Engine)?;
+    Ok(DispatchOutcome::Spawned { process_id })
 }
 
 #[cfg(test)]

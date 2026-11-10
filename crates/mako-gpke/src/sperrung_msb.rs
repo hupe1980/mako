@@ -30,14 +30,21 @@
 //! the NB) would otherwise resume the NB's own Sperrauftrag with the MSB's copy
 //! of the Anfrage; under its own workflow name the two sides never meet.
 //!
-//! The answer leg — ORDRSP 19118/19119, whose `SG2 AJT` names a code of
-//! `E_0488` (ORDRSP AHB 1.1b Kap. 4.3.1) — is not built here: `mako-pruefung`
-//! does not carry `E_0488`, and a code is defined only by its tree.
+//! # The answer
+//!
+//! [`SperrungMsbCommand::SendAntwort`] answers out of `E_0488` „Anfrage
+//! prüfen" (EBD 4.3 Kap. 6.12.2, S. 242–243): the code's Cluster picks the
+//! PID — Zustimmung (`A01`, `A04`, `A05`) rides 19118, Ablehnung (`A02`,
+//! `A03`) 19119 — and the ORDRSP carries `BGM+Z51`, `SG1 RFF+ON` the 17116's
+//! `BGM` DE 1004 (Hinweis `[529]`), `SG2 AJT` the code with „EBD Nr. E_0488",
+//! and beside `A02`/`A03` the problem named in `SG2 FTX+AAP` (`[33]`) —
+//! ORDRSP AHB 1.1b Kap. 4.3.1, S. 17–18.
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
+    outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -47,6 +54,16 @@ pub const WORKFLOW_NAME: &str = "gpke-sperrung-msb";
 
 /// ORDERS 17116 „Anfrage Sperrung", NB → MSB (ORDERS AHB 1.1b Kap. 4.3, S. 25).
 pub const ANFRAGE_PID: u32 = 17_116;
+
+/// ORDRSP 19118 „Bestätigung Anfrage Sperrung", MSB → NB.
+pub const BESTAETIGUNG_PID: u32 = 19_118;
+
+/// ORDRSP 19119 „Ablehnung Anfrage Sperrung", MSB → NB.
+pub const ABLEHNUNG_PID: u32 = 19_119;
+
+/// `BGM` DE 1001 of the answer: `Z51` „Sperrung" — the only value the 19118 /
+/// 19119 columns admit (ORDRSP AHB 1.1b Kap. 4.3.1, S. 17).
+pub const BGM_SPERRUNG: &str = "Z51";
 
 /// The MSB's answer window on an Anfrage Sperrung — 3 WT nach dem ÜT
 /// (GPKE Teil 2 Kap. 3.5.1.2 Nr. 4), read from [`mako_fristen::antwort`].
@@ -64,10 +81,87 @@ pub fn antwortfrist(eingang: time::OffsetDateTime) -> Option<time::OffsetDateTim
 pub struct AnfrageSperrung {
     /// The NB asking — `NAD+MS`.
     pub netzbetreiber: MarktpartnerCode,
+    /// The MSB asked — `NAD+MR`; the answer's sender.
+    pub msb: MarktpartnerCode,
     /// The Marktlokation to be gesperrt — `SG2 LOC+172`.
     pub malo: MaLo,
+    /// The ORDERS' Dokumentennummer — `BGM` DE 1004, which the answer echoes in
+    /// `SG1 RFF+ON` (ORDRSP AHB 1.1b Kap. 4.3.1, Hinweis `[529]`).
+    pub dokumentennummer: String,
     /// Interchange reference of the inbound ORDERS.
     pub message_ref: MessageRef,
+}
+
+/// The MSB's answer as sent.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AntwortSperrung {
+    /// 19118 or 19119 — picked by the code's Cluster.
+    pub pid: Pruefidentifikator,
+    /// The `E_0488` code.
+    pub antwortcode: String,
+    /// Reference of the outbound ORDRSP.
+    pub message_ref: MessageRef,
+}
+
+/// The answer PID and the published code for `antwortcode` out of the tree
+/// `codeliste` names.
+///
+/// # Errors
+///
+/// The code is not published in `codeliste`, sits off the agreement axis, or
+/// needs the problem named and `freitext` is empty.
+pub fn antwort_auf_anfrage(
+    codeliste: &str,
+    antwortcode: &str,
+    freitext: Option<&str>,
+) -> Result<(u32, &'static mako_pruefung::codes::AntwortCode), WorkflowError> {
+    let code = mako_pruefung::codes::lookup(codeliste, antwortcode).ok_or_else(|| {
+        WorkflowError::validation(format!(
+            "{antwortcode:?} is not published in {codeliste} (EBD 4.3)"
+        ))
+    })?;
+    let pid = match code.ist_zustimmung() {
+        Some(true) => BESTAETIGUNG_PID,
+        Some(false) => ABLEHNUNG_PID,
+        None => {
+            return Err(WorkflowError::validation(format!(
+                "{antwortcode:?} of {codeliste} is neither a Zustimmung nor an Ablehnung"
+            )));
+        }
+    };
+    if code.braucht_bemerkung && freitext.is_none_or(|t| t.trim().is_empty()) {
+        return Err(WorkflowError::validation(format!(
+            "{antwortcode:?} of {codeliste} requires the problem named — SG2 FTX+AAP is Muss \
+             beside it (ORDRSP AHB 1.1b Kap. 4.3.1)"
+        )));
+    }
+    Ok((pid, code))
+}
+
+/// The ORDRSP 19118 / 19119 payload — ORDRSP AHB 1.1b Kap. 4.3.1.
+#[must_use]
+pub fn antwort_outbox(
+    anfrage: &AnfrageSperrung,
+    antwort: &AntwortSperrung,
+    codeliste: &str,
+    freitext: Option<&str>,
+) -> PendingOutbox {
+    PendingOutbox::new(
+        "ORDRSP",
+        anfrage.netzbetreiber.as_str(),
+        serde_json::json!({
+            "pid": antwort.pid.as_u32(),
+            "sender": anfrage.msb.as_str(),
+            "receiver": anfrage.netzbetreiber.as_str(),
+            "message_ref": antwort.message_ref.as_str(),
+            "document_code": BGM_SPERRUNG,
+            "document_id": antwort.message_ref.as_str(),
+            "order_reference": anfrage.dokumentennummer,
+            "antwort_code": antwort.antwortcode,
+            "antwort_codeliste": codeliste,
+            "antwort_freitext": freitext,
+        }),
+    )
 }
 
 /// Events of the MSB-side Anfrage Sperrung.
@@ -86,6 +180,13 @@ pub enum SperrungMsbEvent {
         /// The findings.
         reason: String,
     },
+    /// The MSB answered with ORDRSP 19118 / 19119.
+    AntwortGesendet {
+        /// The answer.
+        antwort: AntwortSperrung,
+        /// The tree the code was read from (`E_0488`).
+        codeliste: String,
+    },
     /// The 3-WT window passed without an answer: the Festlegung counts that as
     /// the Zustimmung „MSB hat Durchführung der Sperrung und Entsperrung durch
     /// NB zugestimmt“ (GPKE Teil 2 Kap. 3.5.1.2 Nr. 4).
@@ -102,6 +203,7 @@ impl EventPayload for SperrungMsbEvent {
         match self {
             Self::AnfrageEingegangen { .. } => "SperrungMsbAnfrageEingegangen",
             Self::AnfrageUngueltig { .. } => "SperrungMsbAnfrageUngueltig",
+            Self::AntwortGesendet { .. } => "SperrungMsbAntwortGesendet",
             Self::ZustimmungFingiert { .. } => "SperrungMsbZustimmungFingiert",
         }
     }
@@ -113,7 +215,22 @@ impl EventPayload for SperrungMsbEvent {
                 pid: Some(pid.as_u32()),
                 message_ref: Some(anfrage.message_ref.as_str().to_owned()),
             }),
+            Self::AntwortGesendet { antwort, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(antwort.pid.as_u32()),
+                message_ref: Some(antwort.message_ref.as_str().to_owned()),
+            }),
             Self::AnfrageUngueltig { .. } | Self::ZustimmungFingiert { .. } => None,
+        }
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet { antwort, codeliste } => Some(Antwortcode {
+                code: antwort.antwortcode.clone(),
+                codeliste: Some(codeliste.clone()),
+            }),
+            _ => None,
         }
     }
 }
@@ -121,7 +238,8 @@ impl EventPayload for SperrungMsbEvent {
 /// State of the MSB-side Anfrage Sperrung.
 ///
 /// ```text
-/// New → Offen → ZustimmungFingiert   (3 WT passed without an answer)
+/// New → Offen → Beantwortet          (ORDRSP 19118 / 19119 sent)
+///            ↘ ZustimmungFingiert   (3 WT passed without an answer)
 ///     ↘ Ungueltig                    (AHB check failed)
 /// ```
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -139,6 +257,13 @@ pub enum SperrungMsbState {
     },
     /// The Frist passed: the Festlegung counts the silence as Zustimmung.
     ZustimmungFingiert(AnfrageSperrung),
+    /// The MSB answered with ORDRSP 19118 / 19119.
+    Beantwortet {
+        /// The Anfrage.
+        anfrage: AnfrageSperrung,
+        /// The answer.
+        antwort: AntwortSperrung,
+    },
 }
 
 impl SperrungMsbState {
@@ -150,13 +275,17 @@ impl SperrungMsbState {
             Self::Offen(_) => "Offen",
             Self::Ungueltig { .. } => "Ungueltig",
             Self::ZustimmungFingiert(_) => "ZustimmungFingiert",
+            Self::Beantwortet { .. } => "Beantwortet",
         }
     }
 
     /// Whether the process has ended.
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::Ungueltig { .. } | Self::ZustimmungFingiert(_))
+        matches!(
+            self,
+            Self::Ungueltig { .. } | Self::ZustimmungFingiert(_) | Self::Beantwortet { .. }
+        )
     }
 }
 
@@ -181,6 +310,15 @@ pub enum SperrungMsbCommand {
         validation_passed: bool,
         /// The findings when it did not.
         validation_errors: Vec<String>,
+    },
+    /// The MSB answers out of `E_0488`.
+    SendAntwort {
+        /// The `E_0488` code; its Cluster picks 19118 or 19119.
+        antwortcode: String,
+        /// `SG2 FTX+AAP` — the problem named, Muss beside `A02`/`A03`.
+        freitext: Option<String>,
+        /// Reference of the outbound ORDRSP.
+        message_ref: MessageRef,
     },
     /// A registered deadline fired.
     TimeoutExpired {
@@ -231,6 +369,13 @@ impl Workflow for GpkeSperrungMsbWorkflow {
                 SperrungMsbState::Offen(anfrage) => SperrungMsbState::ZustimmungFingiert(anfrage),
                 other => other,
             },
+            SperrungMsbEvent::AntwortGesendet { antwort, .. } => match state {
+                SperrungMsbState::Offen(anfrage) => SperrungMsbState::Beantwortet {
+                    anfrage,
+                    antwort: antwort.clone(),
+                },
+                other => other,
+            },
         }
     }
 
@@ -261,6 +406,33 @@ impl Workflow for GpkeSperrungMsbWorkflow {
                 }
                 Ok(events.into())
             }
+            SperrungMsbCommand::SendAntwort {
+                antwortcode,
+                freitext,
+                message_ref,
+            } => {
+                let SperrungMsbState::Offen(anfrage) = state else {
+                    return Err(WorkflowError::invalid_state("Offen", state.label()));
+                };
+                let codeliste = mako_pruefung::codes::EBD_ANFRAGE_SPERRUNG_MSB;
+                let (pid, _) = antwort_auf_anfrage(codeliste, &antwortcode, freitext.as_deref())?;
+                let antwort = AntwortSperrung {
+                    pid: Pruefidentifikator::new(pid)
+                        .map_err(|e| WorkflowError::validation(format!("answer PID {pid}: {e}")))?,
+                    antwortcode,
+                    message_ref,
+                };
+                let outbox = vec![
+                    antwort_outbox(anfrage, &antwort, codeliste, freitext.as_deref()).caused_by(0),
+                ];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![SperrungMsbEvent::AntwortGesendet {
+                        antwort,
+                        codeliste: codeliste.to_owned(),
+                    }],
+                    outbox,
+                ))
+            }
             SperrungMsbCommand::TimeoutExpired { deadline_id, label } => {
                 if !window_open(&label, state) {
                     return Ok(WorkflowOutput::events(vec![]));
@@ -280,7 +452,9 @@ mod tests {
             pid: Pruefidentifikator::new(ANFRAGE_PID).expect("five digits"),
             anfrage: AnfrageSperrung {
                 netzbetreiber: MarktpartnerCode::new("9900357000004"),
+                msb: MarktpartnerCode::new("9900555000005"),
                 malo: MaLo::new("51238696012"),
+                dokumentennummer: "SPERR-4711".to_owned(),
                 message_ref: MessageRef::new("ORD-17116"),
             },
             validation_passed: true,
@@ -353,5 +527,78 @@ mod tests {
             },
         );
         assert!(err.is_err());
+    }
+
+    fn antwort(code: &str, freitext: Option<&str>) -> SperrungMsbCommand {
+        SperrungMsbCommand::SendAntwort {
+            antwortcode: code.to_owned(),
+            freitext: freitext.map(str::to_owned),
+            message_ref: MessageRef::new("ORDRSP-1"),
+        }
+    }
+
+    /// A Zustimmung of `E_0488` rides 19118 and ends the process before the
+    /// window; the ORDRSP names the 17116 by its `BGM` DE 1004.
+    #[test]
+    fn a_zustimmung_is_answered_with_19118_and_ends_the_process() {
+        let offen = run(SperrungMsbState::New, anfrage());
+        let out = GpkeSperrungMsbWorkflow::handle(&offen, antwort("A05", None)).expect("accepted");
+        assert_eq!(out.outbox.len(), 1);
+        let p = &out.outbox[0].payload;
+        assert_eq!(&*out.outbox[0].message_type, "ORDRSP");
+        assert_eq!(p["pid"], 19_118);
+        assert_eq!(p["document_code"], "Z51");
+        assert_eq!(p["order_reference"], "SPERR-4711");
+        assert_eq!(p["antwort_codeliste"], "E_0488");
+        assert_eq!(p["sender"], "9900555000005");
+        let ende = out
+            .events
+            .iter()
+            .fold(offen, GpkeSperrungMsbWorkflow::apply);
+        assert!(
+            matches!(ende, SperrungMsbState::Beantwortet { .. }),
+            "{ende:?}"
+        );
+        assert!(ende.is_terminal());
+        // The window finds the process answered and records nothing.
+        let fired = GpkeSperrungMsbWorkflow::handle(
+            &ende,
+            SperrungMsbCommand::TimeoutExpired {
+                deadline_id: DeadlineId::new(),
+                label: ANTWORT_WINDOW_LABEL.into(),
+            },
+        )
+        .expect("accepted");
+        assert!(fired.events.is_empty());
+    }
+
+    /// An Ablehnung rides 19119, and `A02`/`A03` need the problem named.
+    #[test]
+    fn an_ablehnung_rides_19119_and_names_the_problem() {
+        let offen = run(SperrungMsbState::New, anfrage());
+        assert!(GpkeSperrungMsbWorkflow::handle(&offen, antwort("A02", None)).is_err());
+        let out = GpkeSperrungMsbWorkflow::handle(
+            &offen,
+            antwort(
+                "A02",
+                Some("Verhinderungsgrund an der Marktlokation angezeigt"),
+            ),
+        )
+        .expect("accepted");
+        assert_eq!(out.outbox[0].payload["pid"], 19_119);
+        assert_eq!(
+            out.outbox[0].payload["antwort_freitext"],
+            "Verhinderungsgrund an der Marktlokation angezeigt"
+        );
+    }
+
+    /// A code `E_0488` does not publish is refused.
+    #[test]
+    fn a_code_outside_e_0488_is_refused() {
+        let offen = run(SperrungMsbState::New, anfrage());
+        assert!(GpkeSperrungMsbWorkflow::handle(&offen, antwort("A06", None)).is_err());
+        assert!(
+            GpkeSperrungMsbWorkflow::handle(&SperrungMsbState::New, antwort("A05", None)).is_err()
+        );
     }
 }

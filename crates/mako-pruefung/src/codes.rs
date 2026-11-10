@@ -274,6 +274,19 @@ pub const WIRE_CODELISTEN: &[(&str, &str, &str)] = &[
     (EBD_GERAETEWECHSELABSICHT_GAS, "G_0059", "G_0060"),
     (EBD_BESTELLUNG_GERAETEUEBERNAHME_GAS, "G_0061", "G_0074"),
     (EBD_GESAMTVORGANG_GAS, "G_0055", "G_0055"),
+    // ── Anforderung / Reklamation von Werten (EBD 4.3 Kap. 8.18–8.23) ──────
+    (EBD_ANFORDERUNG_WERT_NB, "S_0073", "S_0073"),
+    (EBD_ANFORDERUNG_WERT_NB_MSB, "S_0074", "S_0074"),
+    (EBD_ANFORDERUNG_WERT_LF, "S_0075", "S_0075"),
+    (EBD_ANFORDERUNG_WERT_LF_MSB, "S_0074", "S_0074"),
+    (EBD_ANFORDERUNG_WERT_MSB, "S_0074", "S_0074"),
+    (EBD_REKLAMATION_WERTE_NB, "S_0076", "S_0076"),
+    (EBD_REKLAMATION_WERTE_NB_MSB, "S_0077", "S_0077"),
+    (EBD_REKLAMATION_WERTE_LF, "S_0078", "S_0078"),
+    (EBD_REKLAMATION_WERTE_LF_MSB, "S_0077", "S_0077"),
+    (EBD_REKLAMATION_WERTE_UENB, "S_0079", "S_0079"),
+    // ── MMM Allokationsliste Gas (EBD 4.3 Kap. 11.1.1) ─────────────────────
+    (EBD_ABONNEMENT_ALLOKATIONSLISTE, "G_0001", "G_0001"),
     (EBD_WIM_RECHNUNG_NB_GAS, "G_0083", "G_0083"),
     (EBD_WIM_RECHNUNG_MSBN_GAS, "G_0084", "G_0084"),
     (EBD_WIM_RECHNUNG_MELO_GAS, "G_0083", "G_0083"),
@@ -1962,6 +1975,441 @@ pub const E_0443_CODES: &[AntwortCode] = &[
         "An der genannten Adresse betreibt der NB keinen Stromanschluss (Prüfschritt 40)"
     ),
 ];
+
+// ── E_3003 / E_3004 — Geschäftsdatenanfrage Gas (17101 / 17126 → ORDRSP 19101) ─
+
+/// `G_0049` — „ORDRSP_Ablehnung der Anforderung von Stammdaten", the Codeliste
+/// of `E_3003` „Geschäftsdatenanfrage zu Stammdaten prüfen" (AD:
+/// Geschäftsdatenanfrage vom LF an NB, EBD 4.3 Kap. 13.19.1.1, S. 756). The
+/// Gas NB's ORDRSP 19101 to a Lieferant names it in `SG2 AJT` DE 1082 (ORDRSP
+/// AHB 1.1b, S. 7, `[4] ∧ [493]`).
+pub const CODELISTE_GDA_STAMMDATEN_LF_GAS: &str = "G_0049";
+const G_0049: Option<&'static str> = Some(CODELISTE_GDA_STAMMDATEN_LF_GAS);
+
+/// `G_0049` — its one code.
+pub const G_0049_CODES: &[AntwortCode] = &[code!(
+    "Z15",
+    G_0049,
+    Ablehnung,
+    "Ablehnung keine Berechtigung"
+)];
+
+/// `E_3004` — „Geschäftsdatenanfrage zu Stammdaten prüfen", the Gas NB's check
+/// of a Messstellenbetreiber's Anfrage (EBD 4.3 Kap. 13.20.1, S. 757, „AD:
+/// Geschäftsdatenanfrage vom MSB an NB", „entspricht NB der Sparte Gas").
+pub const EBD_GDA_STAMMDATEN_MSB_GAS: &str = "E_3004";
+const E_3004: Option<&'static str> = Some(EBD_GDA_STAMMDATEN_MSB_GAS);
+
+/// `E_3004` — **Ablehnungscodes only**: the positive exits are „Stammdaten
+/// versenden", the UTILMD 44060.
+pub const E_3004_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_3004,
+        Ablehnung,
+        "Keine Berechtigung (Prüfschritt 30)"
+    ),
+    code!(
+        "A02",
+        E_3004,
+        Ablehnung,
+        "An der genannten Adresse betreibt der NB keinen Gasanschluss (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_3004,
+        Ablehnung,
+        "Keine nME verbaut (Prüfschritt 50)"
+    ),
+];
+
+// ── E_0488 / E_1001 — Anfrage Sperrung (17116 → ORDRSP 19118/19119) ─────────
+
+/// `E_0488` — „Anfrage prüfen", the MSB's check of the NB's Anfrage Sperrung
+/// Strom (EBD 4.3 Kap. 6.12.2, S. 242–243). The answer is ORDRSP 19118
+/// (Zustimmung) or 19119 (Ablehnung), `SG2 AJT` DE 1082 „EBD Nr. E_0488"
+/// (ORDRSP AHB 1.1b Kap. 4.3.1, S. 18).
+pub const EBD_ANFRAGE_SPERRUNG_MSB: &str = "E_0488";
+const E_0488: Option<&'static str> = Some(EBD_ANFRAGE_SPERRUNG_MSB);
+
+/// `E_0488` — `A02`/`A03` carry „Das identifizierte Problem ist in der Antwort
+/// zu beschreiben/benennen", and the 19119 column makes `SG2 FTX+AAP` Muss
+/// beside them (`[33]`).
+pub const E_0488_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0488,
+        Zustimmung,
+        "Generelle Zustimmung des MSB für die Sperrung/Entsperrung liegt vor (Prüfschritt 1)"
+    ),
+    code!(
+        "A02",
+        E_0488,
+        Ablehnung,
+        "Verhinderungsgrund liegt vor (Prüfschritt 2)",
+        bemerkung
+    ),
+    code!(
+        "A03",
+        E_0488,
+        Ablehnung,
+        "Es liegt ein technischer Ablehnungsgrund vor (Prüfschritt 3)",
+        bemerkung
+    ),
+    code!(
+        "A04",
+        E_0488,
+        Zustimmung,
+        "MSB hat Durchführung der Sperrung und Entsperrung unter Mitwirkung des MSB zugestimmt (Prüfschritt 4)"
+    ),
+    code!(
+        "A05",
+        E_0488,
+        Zustimmung,
+        "MSB hat Durchführung der Sperrung und Entsperrung durch NB zugestimmt (Prüfschritt 4)"
+    ),
+];
+
+/// `E_1001` — „Anfrage prüfen (Basiert auf Strom EBD: E_0488_Anfrage
+/// prüfen)", the gMSB's check of the GNB's Anfrage Sperrung Gas (EBD 4.3 Kap.
+/// 18.2.2, S. 814–815); `SG2 AJT` DE 1082 „EBD Nr. E_1001" when the
+/// recipient's MP-ID is of the Sparte Gas (ORDRSP AHB 1.1b Kap. 4.3.1, S. 18,
+/// `[493]`).
+pub const EBD_ANFRAGE_SPERRUNG_MSB_GAS: &str = "E_1001";
+const E_1001: Option<&'static str> = Some(EBD_ANFRAGE_SPERRUNG_MSB_GAS);
+
+/// `E_1001` — the Strom tree renumbered (Prüfschritte 10–40); `FTX+AAP` is
+/// Muss beside `A02`/`A03` (`[43]`).
+pub const E_1001_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_1001,
+        Zustimmung,
+        "Generelle Zustimmung des MSB für die Sperrung/Entsperrung liegt vor (Prüfschritt 10)"
+    ),
+    code!(
+        "A02",
+        E_1001,
+        Ablehnung,
+        "Verhinderungsgrund liegt vor (Prüfschritt 20)",
+        bemerkung
+    ),
+    code!(
+        "A03",
+        E_1001,
+        Ablehnung,
+        "Es liegt ein technischer Ablehnungsgrund vor (Prüfschritt 30)",
+        bemerkung
+    ),
+    code!(
+        "A04",
+        E_1001,
+        Zustimmung,
+        "MSB hat Durchführung der Sperrung und Entsperrung unter Mitwirkung des MSB zugestimmt (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_1001,
+        Zustimmung,
+        "MSB hat Durchführung der Sperrung und Entsperrung durch NB zugestimmt (Prüfschritt 40)"
+    ),
+];
+
+// ── E_0442 — Geschäftsdatenanfrage zu Werten (17102 → ORDRSP 19102) ─────────
+
+/// `E_0442` — „Geschäftsdatenanfrage zu Werten prüfen", the MSB's check of a
+/// Lieferant's Anfrage von Werten 17102 (EBD 4.3 Kap. 6.25.2, S. 313). The
+/// positive exit is „Werte versenden" — MSCONS, no code — so every code is a
+/// refusal on ORDRSP 19102, `SG2 AJT` DE 1082 „EBD Nr. E_0442" (ORDRSP AHB 1.1b
+/// Kap. 4.1.3, S. 10, `[492]`).
+pub const EBD_GDA_WERTE_MSB: &str = "E_0442";
+const E_0442: Option<&'static str> = Some(EBD_GDA_WERTE_MSB);
+
+/// `E_0442` — the tree prints no „Cluster:" line; each code ends the Anfrage
+/// unanswered by values.
+pub const E_0442_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0442,
+        Ablehnung,
+        "Falscher Prozess — der WiM Geschäftsprozess „Reklamation von Werten beim MSB“ ist zu verwenden (Prüfschritt 1)"
+    ),
+    code!(
+        "A02",
+        E_0442,
+        Ablehnung,
+        "Keine Berechtigung (Prüfschritt 2)"
+    ),
+    code!(
+        "A03",
+        E_0442,
+        Ablehnung,
+        "Es wurden Werte angefragt, die es auf der genannten Marktlokation, Messlokation oder Tranche nicht geben kann (Prüfschritt 3)"
+    ),
+    code!(
+        "A04",
+        E_0442,
+        Ablehnung,
+        "Die angefragten Werte sind nicht vorhanden (Prüfschritt 4)"
+    ),
+];
+
+// ── E_0219–E_0225 — Anforderung Wert (17004 → ORDRSP 19007) ─────────────────
+//
+// EBD 4.3 Kap. 8.18–8.20 (S. 611–612): each tree publishes one Codeliste with
+// the one code `Z19`. The 19007 column names the Codeliste by the recipient's
+// Marktrolle — `S_0073` NB, `S_0074` MSB, `S_0075` LF (ORDRSP AHB 1.1b Kap.
+// 4.13, S. 56–57, `[15]`/`[14]`/`[4]`).
+
+/// `E_0219` — Anforderung Wert vom NB, Codeliste `S_0073`.
+pub const EBD_ANFORDERUNG_WERT_NB: &str = "E_0219";
+const E_0219: Option<&'static str> = Some(EBD_ANFORDERUNG_WERT_NB);
+/// `E_0220` — Anforderung Wert vom NB, Codeliste `S_0074`.
+pub const EBD_ANFORDERUNG_WERT_NB_MSB: &str = "E_0220";
+const E_0220: Option<&'static str> = Some(EBD_ANFORDERUNG_WERT_NB_MSB);
+/// `E_0221` — Anforderung Wert vom LF, Codeliste `S_0075`.
+pub const EBD_ANFORDERUNG_WERT_LF: &str = "E_0221";
+const E_0221: Option<&'static str> = Some(EBD_ANFORDERUNG_WERT_LF);
+/// `E_0222` — Anforderung Wert vom LF, Codeliste `S_0074`.
+pub const EBD_ANFORDERUNG_WERT_LF_MSB: &str = "E_0222";
+const E_0222: Option<&'static str> = Some(EBD_ANFORDERUNG_WERT_LF_MSB);
+/// `E_0225` — Anforderung vom MSB der Marktlokation, Codeliste `S_0074`.
+pub const EBD_ANFORDERUNG_WERT_MSB: &str = "E_0225";
+const E_0225: Option<&'static str> = Some(EBD_ANFORDERUNG_WERT_MSB);
+
+/// `E_0219` — `S_0073`.
+pub const E_0219_CODES: &[AntwortCode] = &[code!(
+    "Z19",
+    E_0219,
+    Ablehnung,
+    "Ablehnung – Unzulässiger Sollablesezeitpunkt"
+)];
+/// `E_0220` — `S_0074`.
+pub const E_0220_CODES: &[AntwortCode] = &[code!(
+    "Z19",
+    E_0220,
+    Ablehnung,
+    "Ablehnung – Unzulässiger Sollablesezeitpunkt"
+)];
+/// `E_0221` — `S_0075`.
+pub const E_0221_CODES: &[AntwortCode] = &[code!(
+    "Z19",
+    E_0221,
+    Ablehnung,
+    "Ablehnung – Unzulässiger Sollablesezeitpunkt"
+)];
+/// `E_0222` — `S_0074`.
+pub const E_0222_CODES: &[AntwortCode] = &[code!(
+    "Z19",
+    E_0222,
+    Ablehnung,
+    "Ablehnung – Unzulässiger Sollablesezeitpunkt"
+)];
+/// `E_0225` — `S_0074`.
+pub const E_0225_CODES: &[AntwortCode] = &[code!(
+    "Z19",
+    E_0225,
+    Ablehnung,
+    "Ablehnung – Unzulässiger Sollablesezeitpunkt"
+)];
+
+// ── E_0226–E_0230 — Reklamation von Werten (17113 → ORDRSP 19114) ───────────
+//
+// EBD 4.3 Kap. 8.21–8.23 (S. 612–613): `Z54`/`Z55` each. The 19114 column
+// names the Codeliste by the recipient's Marktrolle — `S_0076` NB, `S_0077`
+// MSB, `S_0078` LF, `S_0079` ÜNB (ORDRSP AHB 1.1b Kap. 4.8, S. 40).
+
+/// `E_0226` — Reklamation vom NB, Codeliste `S_0076`.
+pub const EBD_REKLAMATION_WERTE_NB: &str = "E_0226";
+const E_0226: Option<&'static str> = Some(EBD_REKLAMATION_WERTE_NB);
+/// `E_0227` — Reklamation vom NB, Codeliste `S_0077`.
+pub const EBD_REKLAMATION_WERTE_NB_MSB: &str = "E_0227";
+const E_0227: Option<&'static str> = Some(EBD_REKLAMATION_WERTE_NB_MSB);
+/// `E_0228` — Reklamation vom LF, Codeliste `S_0078`.
+pub const EBD_REKLAMATION_WERTE_LF: &str = "E_0228";
+const E_0228: Option<&'static str> = Some(EBD_REKLAMATION_WERTE_LF);
+/// `E_0229` — Reklamation vom LF, Codeliste `S_0077`.
+pub const EBD_REKLAMATION_WERTE_LF_MSB: &str = "E_0229";
+const E_0229: Option<&'static str> = Some(EBD_REKLAMATION_WERTE_LF_MSB);
+/// `E_0230` — Reklamation vom ÜNB, Codeliste `S_0079`.
+pub const EBD_REKLAMATION_WERTE_UENB: &str = "E_0230";
+const E_0230: Option<&'static str> = Some(EBD_REKLAMATION_WERTE_UENB);
+
+macro_rules! reklamation_werte {
+    ($tree:expr) => {
+        &[
+            code!(
+                "Z54",
+                $tree,
+                Ablehnung,
+                "Ablehnung – Keine Messwertänderung durchgeführt."
+            ),
+            code!(
+                "Z55",
+                $tree,
+                Ablehnung,
+                "Ablehnung – Prüfung zur Klärung des Sachverhalts veranlasst."
+            ),
+        ]
+    };
+}
+/// `E_0226` — `S_0076`.
+pub const E_0226_CODES: &[AntwortCode] = reklamation_werte!(E_0226);
+/// `E_0227` — `S_0077`.
+pub const E_0227_CODES: &[AntwortCode] = reklamation_werte!(E_0227);
+/// `E_0228` — `S_0078`.
+pub const E_0228_CODES: &[AntwortCode] = reklamation_werte!(E_0228);
+/// `E_0229` — `S_0077`.
+pub const E_0229_CODES: &[AntwortCode] = reklamation_werte!(E_0229);
+/// `E_0230` — `S_0079`.
+pub const E_0230_CODES: &[AntwortCode] = reklamation_werte!(E_0230);
+
+// ── E_0526 / E_0527 / E_0539 — GPKE Teil 3 Konfiguration ─────────────────────
+
+/// `E_0526` — „Bestellung prüfen", the MSB der direkt betroffenen Lokation
+/// (EBD 4.3 Kap. 6.29.3, S. 323–325). ORDRSP 19132 (to a NB, `[15]`) and 19120
+/// name it (ORDRSP AHB 1.1b Kap. 4.4.2 / 4.4.4).
+pub const EBD_KONFIGURATION_BESTELLUNG: &str = "E_0526";
+const E_0526: Option<&'static str> = Some(EBD_KONFIGURATION_BESTELLUNG);
+
+/// `E_0526` — `A99` needs the problem named (`FTX+AAP`, `[28]`).
+pub const E_0526_CODES: &[AntwortCode] = &[
+    code!(
+        "A07",
+        E_0526,
+        Zustimmung,
+        "Die Einrichtung der Konfiguration ist grundsätzlich möglich (Prüfschritt 90)"
+    ),
+    code!(
+        "A01",
+        E_0526,
+        Ablehnung,
+        "Die bestellte Konfiguration liegt bereits vor (Prüfschritt 10)"
+    ),
+    code!(
+        "A08",
+        E_0526,
+        Ablehnung,
+        "Die Vorlauffrist wurde nicht eingehalten (Prüfschritt 25)"
+    ),
+    code!(
+        "A02",
+        E_0526,
+        Ablehnung,
+        "Es besteht an der Lokation bereits eine Konfiguration; die Bestellnummer zur bestehenden Konfiguration ist nicht enthalten (Prüfschritt 40)"
+    ),
+    code!(
+        "A04",
+        E_0526,
+        Ablehnung,
+        "Angebot ist nicht mehr gültig (Prüfschritt 60)"
+    ),
+    code!(
+        "A05",
+        E_0526,
+        Ablehnung,
+        "Die vorhandene Gerätetechnik erlaubt die Konfiguration zum bestellten Zeitpunkt nicht (Prüfschritt 70)"
+    ),
+    code!(
+        "A06",
+        E_0526,
+        Ablehnung,
+        "Bestellte Konfiguration ist dem MSB nicht bekannt (Prüfschritt 80)"
+    ),
+    code!(
+        "A99",
+        E_0526,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 90)",
+        bemerkung
+    ),
+];
+
+/// `E_0527` — „Bestellung", the weiterer MSB (EBD 4.3 Kap. 6.29.4, S.
+/// 326–327). ORDRSP 19132 (to a MSB, `[14]`) and 19127 name it.
+pub const EBD_KONFIGURATION_BESTELLUNG_WEITERER_MSB: &str = "E_0527";
+const E_0527: Option<&'static str> = Some(EBD_KONFIGURATION_BESTELLUNG_WEITERER_MSB);
+
+/// `E_0527`.
+pub const E_0527_CODES: &[AntwortCode] = &[
+    code!(
+        "A03",
+        E_0527,
+        Zustimmung,
+        "Die Einrichtung der Konfiguration ist grundsätzlich möglich (Prüfschritt 30)"
+    ),
+    code!(
+        "A01",
+        E_0527,
+        Ablehnung,
+        "Die bestellte Konfiguration liegt bereits vor (Prüfschritt 10)"
+    ),
+    code!(
+        "A02",
+        E_0527,
+        Ablehnung,
+        "Die vorhandene Gerätetechnik erlaubt die Konfiguration zum bestellten Zeitpunkt nicht (Prüfschritt 20)"
+    ),
+    code!(
+        "A99",
+        E_0527,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 30)",
+        bemerkung
+    ),
+];
+
+/// `E_0539` — „Beendigung prüfen", the weiterer MSB (EBD 4.3 Kap. 6.31.2, S.
+/// 337); `E_0541`–`E_0543` and `E_0571` say „Es ist das EBD E_0539 zu nutzen"
+/// (S. 338). ORDRSP 19131 (to a MSB, `[14]`) and 19127 name it.
+pub const EBD_KONFIGURATION_BEENDIGUNG_WEITERER_MSB: &str = "E_0539";
+const E_0539: Option<&'static str> = Some(EBD_KONFIGURATION_BEENDIGUNG_WEITERER_MSB);
+
+/// `E_0539`.
+pub const E_0539_CODES: &[AntwortCode] = &[
+    code!(
+        "A03",
+        E_0539,
+        Zustimmung,
+        "Bestätigung der Beendigung (Prüfschritt 40)"
+    ),
+    code!(
+        "A04",
+        E_0539,
+        Ablehnung,
+        "Die Vorlauffrist wurde nicht eingehalten (Prüfschritt 15)"
+    ),
+    code!(
+        "A02",
+        E_0539,
+        Ablehnung,
+        "Es handelt sich um eine Bestellung, die nicht beendet werden kann (Prüfschritt 30)"
+    ),
+    code!(
+        "A99",
+        E_0539,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 40)",
+        bemerkung
+    ),
+];
+
+// ── E_0803 / G_0001 — Abonnement der Allokationsliste Gas (17110 → 19110) ───
+
+/// `E_0803` — „Abonnement prüfen", the GNB's check of an Anforderung der
+/// marktlokationsscharfen Allokationsliste Gas, published through Codeliste
+/// `G_0001` „ORDRSP Abl. der Anforderung" (EBD 4.3 Kap. 11.1.1, S. 696); ORDRSP
+/// 19110 names `G_0001` (ORDRSP AHB 1.1b Kap. 4.2, S. 15).
+pub const EBD_ABONNEMENT_ALLOKATIONSLISTE: &str = "E_0803";
+const E_0803: Option<&'static str> = Some(EBD_ABONNEMENT_ALLOKATIONSLISTE);
+
+/// `E_0803` / `G_0001`.
+pub const E_0803_CODES: &[AntwortCode] = &[code!(
+    "Z34",
+    E_0803,
+    Ablehnung,
+    "Ablehnung wg. Fristüberschreitung"
+)];
 
 // ── Lookup ───────────────────────────────────────────────────────────────────
 
@@ -5791,6 +6239,25 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_BESTELLUNG, E_0595_CODES),
     (EBD_GDA_STAMMDATEN_LF, E_0441_CODES),
     (EBD_GDA_STAMMDATEN_MSB, E_0443_CODES),
+    (CODELISTE_GDA_STAMMDATEN_LF_GAS, G_0049_CODES),
+    (EBD_GDA_STAMMDATEN_MSB_GAS, E_3004_CODES),
+    (EBD_ANFRAGE_SPERRUNG_MSB, E_0488_CODES),
+    (EBD_ANFRAGE_SPERRUNG_MSB_GAS, E_1001_CODES),
+    (EBD_GDA_WERTE_MSB, E_0442_CODES),
+    (EBD_ANFORDERUNG_WERT_NB, E_0219_CODES),
+    (EBD_ANFORDERUNG_WERT_NB_MSB, E_0220_CODES),
+    (EBD_ANFORDERUNG_WERT_LF, E_0221_CODES),
+    (EBD_ANFORDERUNG_WERT_LF_MSB, E_0222_CODES),
+    (EBD_ANFORDERUNG_WERT_MSB, E_0225_CODES),
+    (EBD_REKLAMATION_WERTE_NB, E_0226_CODES),
+    (EBD_REKLAMATION_WERTE_NB_MSB, E_0227_CODES),
+    (EBD_REKLAMATION_WERTE_LF, E_0228_CODES),
+    (EBD_REKLAMATION_WERTE_LF_MSB, E_0229_CODES),
+    (EBD_REKLAMATION_WERTE_UENB, E_0230_CODES),
+    (EBD_KONFIGURATION_BESTELLUNG, E_0526_CODES),
+    (EBD_KONFIGURATION_BESTELLUNG_WEITERER_MSB, E_0527_CODES),
+    (EBD_KONFIGURATION_BEENDIGUNG_WEITERER_MSB, E_0539_CODES),
+    (EBD_ABONNEMENT_ALLOKATIONSLISTE, E_0803_CODES),
     (EBD_NETZNUTZUNGSRECHNUNG, E_0406_CODES),
     // WiM Strom — Messstellenbetrieb.
     (EBD_KUENDIGUNG_MSB, E_0200_CODES),
@@ -5884,6 +6351,58 @@ pub const VORPRUEFUNG_TREES: &[(&str, &str)] = &[
 /// to the consequence: such a tree must publish no Zustimmungscode.
 pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
     (
+        EBD_GDA_WERTE_MSB,
+        "ORDRSP: the positive exit is „Werte versenden\u{201c} — MSCONS, no code; only \
+         the Ablehnung rides ORDRSP 19102 (EBD 4.3 Kap. 6.25.2)",
+    ),
+    (
+        EBD_ANFORDERUNG_WERT_NB,
+        "ORDRSP: S_0073 lists only the Ablehnung of the 19007; the values ride MSCONS \
+         (EBD 4.3 Kap. 8.18.1)",
+    ),
+    (
+        EBD_ANFORDERUNG_WERT_NB_MSB,
+        "ORDRSP: S_0074 lists only the Ablehnung of the 19007 (EBD 4.3 Kap. 8.18.2)",
+    ),
+    (
+        EBD_ANFORDERUNG_WERT_LF,
+        "ORDRSP: S_0075 lists only the Ablehnung of the 19007 (EBD 4.3 Kap. 8.19.1)",
+    ),
+    (
+        EBD_ANFORDERUNG_WERT_LF_MSB,
+        "ORDRSP: S_0074 lists only the Ablehnung of the 19007 (EBD 4.3 Kap. 8.19.2)",
+    ),
+    (
+        EBD_ANFORDERUNG_WERT_MSB,
+        "ORDRSP: S_0074 lists only the Ablehnung of the 19007 (EBD 4.3 Kap. 8.20.1)",
+    ),
+    (
+        EBD_REKLAMATION_WERTE_NB,
+        "ORDRSP: S_0076 lists only the Ablehnung der Reklamation 19114; a granted one \
+         is answered with corrected values (EBD 4.3 Kap. 8.21.1)",
+    ),
+    (
+        EBD_REKLAMATION_WERTE_NB_MSB,
+        "ORDRSP: S_0077 lists only the Ablehnung der Reklamation 19114 (EBD 4.3 Kap. 8.21.2)",
+    ),
+    (
+        EBD_REKLAMATION_WERTE_LF,
+        "ORDRSP: S_0078 lists only the Ablehnung der Reklamation 19114 (EBD 4.3 Kap. 8.22.1)",
+    ),
+    (
+        EBD_REKLAMATION_WERTE_LF_MSB,
+        "ORDRSP: S_0077 lists only the Ablehnung der Reklamation 19114 (EBD 4.3 Kap. 8.22.2)",
+    ),
+    (
+        EBD_REKLAMATION_WERTE_UENB,
+        "ORDRSP: S_0079 lists only the Ablehnung der Reklamation 19114 (EBD 4.3 Kap. 8.23.1)",
+    ),
+    (
+        EBD_ABONNEMENT_ALLOKATIONSLISTE,
+        "ORDRSP: G_0001 lists only the Ablehnung 19110; the positive answer is the \
+         MSCONS 13013 Allokationsliste (EBD 4.3 Kap. 11.1.1)",
+    ),
+    (
         CODELISTE_ABLEHNUNG_ANFRAGE_MALO_STRUKTUR_GAS,
         "UTILMD: G_0036 is the Ablehnung 44182's list; the Antwort 44181 draws its ZG2 \
          from G_0035 (UTILMD AHB Gas 1.2 Kap. 5.12.3, EBD 4.3 Kap. 13.13.1.1–2)",
@@ -5904,6 +6423,17 @@ pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
         "UTILMD: the Zustimmung is „Stammdaten versenden\u{201c} — the UTILMD \
          55035/55095/55060, which carries no code from this tree; only the \
          Ablehnung rides ORDRSP 19101 (EBD 4.3 Kap. 6.26.1)",
+    ),
+    (
+        CODELISTE_GDA_STAMMDATEN_LF_GAS,
+        "UTILMD: G_0049 is the ORDRSP 19101's list; the positive exit of E_3003 is \
+         the UTILMD 44035, which carries no code (EBD 4.3 Kap. 13.19.1.1)",
+    ),
+    (
+        EBD_GDA_STAMMDATEN_MSB_GAS,
+        "UTILMD: the Zustimmung is „Stammdaten versenden\u{201c} — the UTILMD 44060, \
+         which carries no code from this tree; only the Ablehnung rides ORDRSP 19101 \
+         (EBD 4.3 Kap. 13.20.1)",
     ),
     (
         EBD_ESA_ANFRAGE,

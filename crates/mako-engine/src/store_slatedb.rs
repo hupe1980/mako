@@ -2465,9 +2465,13 @@ impl InboxStore for SlateDbInboxStore {
 /// or unreachable — is returned to the caller as [`EngineError::DeadLetter`],
 /// so it can keep the message instead.
 ///
+/// Each record is written with its `DeadLetterRecorded` notice
+/// ([`dead_letter_notice`](crate::dead_letter::dead_letter_notice)) in one
+/// transaction, so the ERP sees every dead letter the queue holds.
+///
 /// ```rust,no_run
 /// # async fn example(store: mako_engine::store_slatedb::SlateDbStore) {
-/// let dl_sink = store.as_dead_letter_sink();
+/// let dl_sink = store.as_dead_letter_sink(mako_engine::ids::TenantId::new());
 /// // Wire dl_sink into EngineBuilder::with_dead_letter_sink(dl_sink).
 /// # }
 /// ```
@@ -2476,6 +2480,11 @@ impl InboxStore for SlateDbInboxStore {
 #[derive(Clone)]
 pub struct SlateDbDeadLetterSink {
     db: Db,
+    /// The tenant the [`DEAD_LETTER_RECORDED`] notice of each record is
+    /// written for.
+    ///
+    /// [`DEAD_LETTER_RECORDED`]: crate::dead_letter::DEAD_LETTER_RECORDED
+    tenant_id: crate::ids::TenantId,
 }
 
 impl std::fmt::Debug for SlateDbDeadLetterSink {
@@ -2490,7 +2499,7 @@ impl SlateDbDeadLetterSink {
     /// metric and log emitted.
     fn record(
         reason: &crate::dead_letter::DeadLetterReason,
-    ) -> Result<(String, Vec<u8>), EngineError> {
+    ) -> Result<(String, uuid::Uuid, String, Vec<u8>), EngineError> {
         let label = reason.label();
         let detail = reason.to_string();
 
@@ -2510,19 +2519,79 @@ impl SlateDbDeadLetterSink {
         );
 
         let now = OffsetDateTime::now_utc();
-        let uuid = uuid::Uuid::new_v4().to_string();
-        let key = dr_key(now, &uuid);
+        let id = uuid::Uuid::new_v4();
+        let key = dr_key(now, &id.to_string());
+        // RFC 3339, the form every reader parses; `Display` is not it.
+        let rejected_at = now
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|e| EngineError::dead_letter(format!("format instant: {e}")))?;
         let record = DeadLetterRecord {
-            // RFC 3339, the form every reader parses; `Display` is not it.
-            rejected_at: now
-                .format(&time::format_description::well_known::Rfc3339)
-                .map_err(|e| EngineError::dead_letter(format!("format instant: {e}")))?,
+            rejected_at: rejected_at.clone(),
             reason_label: label.to_owned(),
             reason_detail: detail,
         };
         let bytes = serde_json::to_vec(&record)
             .map_err(|e| EngineError::dead_letter(format!("serialise record: {e}")))?;
-        Ok((key, bytes))
+        Ok((key, id, rejected_at, bytes))
+    }
+
+    /// Write the record for `reason`, its [`DEAD_LETTER_RECORDED`] notice and
+    /// `answers` in one transaction, with the outbox count they move.
+    ///
+    /// Every outbox write moves the one `_count/om` key, so concurrent
+    /// rejections, acknowledges and appends conflict routinely; a conflict is
+    /// retried against the fresh count rather than refused. Each retry follows
+    /// a commit that won, so a rejection storm drains rather than spins.
+    ///
+    /// [`DEAD_LETTER_RECORDED`]: crate::dead_letter::DEAD_LETTER_RECORDED
+    async fn persist(
+        &self,
+        reason: &crate::dead_letter::DeadLetterReason,
+        answers: &[crate::outbox::OutboxMessage],
+    ) -> Result<(), EngineError> {
+        const MAX_RETRIES: usize = 4096;
+        let (key, id, rejected_at, bytes) = Self::record(reason)?;
+        let mut entries = answers.to_vec();
+        entries.extend(crate::dead_letter::dead_letter_notice(
+            self.tenant_id,
+            id,
+            &rejected_at,
+            reason,
+        ));
+        let fail = |e: &slatedb::Error| {
+            tracing::error!(
+                reason = reason.label(),
+                error = %e,
+                "dead letter: could not persist the record, its notice and its answer",
+            );
+            EngineError::dead_letter(slatedb_error_kind_str(e))
+        };
+        for _attempt in 0..MAX_RETRIES {
+            let txn = self
+                .db
+                .begin(IsolationLevel::SerializableSnapshot)
+                .await
+                .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
+            txn.put(key.as_bytes(), &bytes)
+                .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
+            if !entries.is_empty() {
+                let count = read_om_count_txn(&txn).await?;
+                txn.put(
+                    OM_COUNT_KEY,
+                    (count + entries.len() as u64).to_le_bytes().as_slice(),
+                )
+                .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
+                write_outbox_entries_txn(&txn, &entries)?;
+            }
+            match txn.commit().await {
+                Ok(_) => return Ok(()),
+                Err(e) if e.kind() == ErrorKind::Transaction => tokio::task::yield_now().await,
+                Err(e) => return Err(fail(&e)),
+            }
+        }
+        Err(EngineError::dead_letter(
+            "dead letter: transaction conflict, too many retries",
+        ))
     }
 }
 
@@ -2531,20 +2600,7 @@ impl crate::dead_letter::DeadLetterSink for SlateDbDeadLetterSink {
         &'a self,
         reason: &'a crate::dead_letter::DeadLetterReason,
     ) -> crate::dead_letter::RejectFuture<'a> {
-        Box::pin(async move {
-            let (key, bytes) = Self::record(reason)?;
-            let mut batch = WriteBatch::new();
-            batch.put(key.as_bytes(), &bytes);
-            self.db.write(batch).await.map_err(|e| {
-                tracing::error!(
-                    reason = reason.label(),
-                    error = %e,
-                    "dead letter: could not persist the record",
-                );
-                EngineError::dead_letter(slatedb_error_kind_str(&e))
-            })?;
-            Ok(())
-        })
+        Box::pin(self.persist(reason, &[]))
     }
 
     fn reject_answered<'a>(
@@ -2552,37 +2608,7 @@ impl crate::dead_letter::DeadLetterSink for SlateDbDeadLetterSink {
         reason: &'a crate::dead_letter::DeadLetterReason,
         answers: &'a [crate::outbox::OutboxMessage],
     ) -> crate::dead_letter::RejectFuture<'a> {
-        Box::pin(async move {
-            if answers.is_empty() {
-                return self.reject(reason).await;
-            }
-            let (key, bytes) = Self::record(reason)?;
-            // One transaction: the dead letter and the outbox entries that
-            // answer it, with the outbox count they move.
-            let txn = self
-                .db
-                .begin(IsolationLevel::SerializableSnapshot)
-                .await
-                .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
-            txn.put(key.as_bytes(), &bytes)
-                .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
-            let count = read_om_count_txn(&txn).await?;
-            txn.put(
-                OM_COUNT_KEY,
-                (count + answers.len() as u64).to_le_bytes().as_slice(),
-            )
-            .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
-            write_outbox_entries_txn(&txn, answers)?;
-            txn.commit().await.map_err(|e| {
-                tracing::error!(
-                    reason = reason.label(),
-                    error = %e,
-                    "dead letter: could not persist the record and its answer",
-                );
-                EngineError::dead_letter(slatedb_error_kind_str(&e))
-            })?;
-            Ok(())
-        })
+        Box::pin(self.persist(reason, answers))
     }
 }
 
@@ -2610,12 +2636,14 @@ fn dr_key(ts: OffsetDateTime, uuid: &str) -> String {
 }
 
 impl SlateDbStore {
-    /// Create a dead-letter sink that writes each rejection before
+    /// Create a dead-letter sink that writes each rejection, and the
+    /// `DeadLetterRecorded` notice for `tenant_id` beside it, before
     /// returning; see [`SlateDbDeadLetterSink`].
     #[must_use]
-    pub fn as_dead_letter_sink(&self) -> SlateDbDeadLetterSink {
+    pub fn as_dead_letter_sink(&self, tenant_id: crate::ids::TenantId) -> SlateDbDeadLetterSink {
         SlateDbDeadLetterSink {
             db: self.db.clone(),
+            tenant_id,
         }
     }
 
@@ -2910,7 +2938,7 @@ mod tests {
         use crate::dead_letter::DeadLetterSink as _;
         let store = make_store().await;
         store
-            .as_dead_letter_sink()
+            .as_dead_letter_sink(crate::ids::TenantId::new())
             .reject(&crate::dead_letter::DeadLetterReason::UnknownPid {
                 pid: crate::ids::Pid::new(55001),
                 context: crate::dead_letter::AuditContext::now(),
@@ -2946,7 +2974,7 @@ mod tests {
             serde_json::json!({}),
         );
         store
-            .as_dead_letter_sink()
+            .as_dead_letter_sink(crate::ids::TenantId::new())
             .reject_answered(
                 &crate::dead_letter::DeadLetterReason::UnknownPid {
                     pid: crate::ids::Pid::new(55001),
@@ -2958,8 +2986,13 @@ mod tests {
             .unwrap();
         assert_eq!(store.list_dead_letters(10).await.unwrap().len(), 1);
         let queued = store.pending_now(10).await.unwrap();
-        assert_eq!(queued.len(), 1);
-        assert_eq!(queued[0].message_id, answer.message_id);
+        assert_eq!(queued.len(), 2, "the answer and the dead-letter notice");
+        assert!(queued.iter().any(|m| m.message_id == answer.message_id));
+        assert!(
+            queued
+                .iter()
+                .any(|m| &*m.message_type == crate::dead_letter::DEAD_LETTER_RECORDED)
+        );
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────

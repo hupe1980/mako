@@ -151,33 +151,7 @@ const COUNTING_CALLS: &[&str] = &[
 
 /// Admitted Werktage-count literals in code, by path and a fragment of the
 /// call. The list may only shrink: an entry whose call is gone fails as stale.
-const COUNT_EXEMPT: &[Exempt] = &[
-    Exempt {
-        path: "crates/mako-pruefung/src/lf/abmeldung.rs",
-        fragment: "add_werktage(erster_wt, 4,",
-        reason: "a position, not a Frist: the 5. Werktag of the month is the first Werktag \
-                 plus four. Open: the 5 belongs in a named, sourced constant",
-    },
-    Exempt {
-        path: "crates/mako-wim/src/geraetewechsel.rs",
-        fragment: "deadline_at_werktage(received_at, 1,",
-        reason: "the NB's answer to a Gesamtvorgang report (WiM Teil 1 Kap. 2.3.2 Nr. 8); the \
-                 21009 / 21010 rows of `mako_fristen::antwort` publish it — open: read it from \
-                 there",
-    },
-    Exempt {
-        path: "services/processd/src/nb_module.rs",
-        fragment: "add_werktage(uet, 1,",
-        reason: "the Zuordnungsende floor of E_0623 Fall b, one Werktag after the ÜT — open: \
-                 read it from a catalogued row",
-    },
-    Exempt {
-        path: "services/processd/src/server.rs",
-        fragment: "add_werktage(today_berlin, 1,",
-        reason: "the earliest Lieferbeginn the NB's 1. WT answer leaves — open: derive it from \
-                 the 55001 row of `mako_fristen::antwort`",
-    },
-];
+const COUNT_EXEMPT: &[Exempt] = &[];
 
 /// One finding: path, line, literal excerpt.
 type Finding = (String, usize, String);

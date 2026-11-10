@@ -29,7 +29,7 @@
 //! workflow crate link the EDIFACT profiles.
 
 use edi_energy::{Completion, MessageType, Profile, ReleaseRegistry, SkeletonParties};
-use edifact_rs::{OwnedSegment, ValidationSeverity};
+use edifact_rs::OwnedSegment;
 use rubo4e::current::{
     Adresse, Energierichtung, Geschaeftspartner, Mengeneinheit, NetznutzungRechnungsart,
     NetznutzungRechnungstyp, Rechnung, Rechnungsposition, Steuerart, Steuerbetrag, Waehrungscode,
@@ -888,12 +888,7 @@ impl<'p> Seeder<'p> {
 /// reason to send a value the AHB's format refuses — an amount with three
 /// Nachkommastellen where `[930]` admits two is rounded by nobody.
 fn refuses(i: &edifact_rs::ValidationIssue) -> bool {
-    matches!(
-        i.severity,
-        ValidationSeverity::Error | ValidationSeverity::Critical
-    ) || i
-        .rule_id()
-        .is_some_and(|r| r.starts_with(edi_energy::profile::validate::FMT_PREFIX))
+    edi_energy::profile::validate::bars_sending(i)
 }
 
 /// `CUX` states EUR; an amount in another currency is not this invoice's.

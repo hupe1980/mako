@@ -351,7 +351,13 @@ fn to_reads(tenant: &str, batch: &WireBatch) -> anyhow::Result<Vec<MeterRead>> {
     // like any other unparseable one, so one broken producer does not wedge the
     // partition.
     let sparte = match batch.sparte.as_deref() {
-        None => Sparte::Strom,
+        None => {
+            return Err(anyhow::anyhow!(
+                "malo {}: no sparte; expected one of {:?}",
+                batch.malo_id,
+                Sparte::CODES
+            ));
+        }
         Some(raw) => raw.trim().parse::<Sparte>().map_err(|_| {
             anyhow::anyhow!(
                 "malo {}: unknown sparte `{raw}`; expected one of {:?}",
@@ -425,6 +431,7 @@ fn to_reads(tenant: &str, batch: &WireBatch) -> anyhow::Result<Vec<MeterRead>> {
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: None,
             mscons_version: batch.mscons_version,
+            ablesung_herkunft: None,
         });
     }
     Ok(reads)
@@ -532,5 +539,20 @@ mod tests {
         );
         assert!(to_reads("T1", &batch("KOHLE", "MEASURED")).is_err());
         assert!(to_reads("T1", &batch("STROM", "GUESSED")).is_err());
+    }
+
+    /// A batch naming no Sparte is refused like one naming an unknown Sparte:
+    /// filed as electricity, a gas batch lands in the wrong unit.
+    #[test]
+    fn a_batch_without_a_sparte_is_refused() {
+        let batch: WireBatch = serde_json::from_value(serde_json::json!({
+            "malo_id": "51238696012",
+            "intervals": [
+                {"from": "2026-07-01T00:00:00Z", "to": "2026-07-01T00:15:00Z",
+                 "value_kwh": "1.25", "quality": "MEASURED"}
+            ]
+        }))
+        .expect("wire shape");
+        assert!(to_reads("T1", &batch).is_err());
     }
 }

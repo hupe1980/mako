@@ -23,3 +23,4 @@ mod temporal_constraints_integration;
 mod tenant_isolation_integration;
 mod utilmd_stammdaten_integration;
 mod versorgung_integration;
+mod write_and_event_commit_together;

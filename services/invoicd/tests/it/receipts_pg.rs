@@ -1,5 +1,5 @@
 //! Real-PostgreSQL tests for `invoic_receipts` — the § 147 AO audit trail and
-//! the ERP outbox.
+//! the ERP notification it concludes with.
 //!
 //! Uses testcontainers (self-managing Docker); skipped gracefully when no
 //! Docker daemon is reachable.
@@ -16,18 +16,13 @@ use time::macros::datetime;
 use uuid::Uuid;
 
 use invoicd::pg::ReceiptRow;
-use invoicd::pg::receipts::{
-    DEAD_LETTER_ATTEMPTS, claim_erp_pending, dead_letter_erp, dispatch_target, record_erp_failure,
-    store_antwort, upsert_receipt,
-};
+use invoicd::pg::receipts::{dispatch_target, store_antwort, upsert_receipt};
 
 /// Container guard the test holds until it ends — dropping it removes the
 /// container (no leak, no external reaper).
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
 
 const TENANT: &str = "9900111000002";
-/// Long enough that a second claim in the same test cannot re-take the rows.
-const LEASE: i64 = 30;
 
 async fn pg_pool() -> Option<(sqlx::PgPool, PgContainer)> {
     use testcontainers::ImageExt;
@@ -51,6 +46,9 @@ async fn pg_pool() -> Option<(sqlx::PgPool, PgContainer)> {
         .run(&pool)
         .await
         .expect("apply invoicd schema");
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
     Some((pool, container))
 }
 
@@ -245,187 +243,6 @@ async fn a_redispatch_finds_the_message_reference_and_pid() {
     );
 }
 
-/// A permanently rejected receipt leaves the outbox for good. The attempt cap
-/// is what makes it unselectable: `erp_next_attempt_at` is `NOT NULL` and
-/// cannot carry a sentinel.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_dead_lettered_receipt_is_never_claimed_again() {
-    let (pool, _guard) = pool_or_skip!();
-
-    let id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(id))
-        .await
-        .expect("persist the receipt");
-
-    let pending = claim_erp_pending(&pool, TENANT, 10, 0)
-        .await
-        .expect("claim");
-    assert_eq!(pending.len(), 1, "a fresh receipt is due immediately");
-
-    dead_letter_erp(&pool, TENANT, id)
-        .await
-        .expect("dead-letter");
-
-    let attempts: i16 =
-        sqlx::query_scalar("SELECT erp_attempts FROM invoic_receipts WHERE process_id = $1")
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .expect("read attempts");
-    assert_eq!(attempts, DEAD_LETTER_ATTEMPTS);
-
-    let pending = claim_erp_pending(&pool, TENANT, 10, 0)
-        .await
-        .expect("claim");
-    assert!(
-        pending.is_empty(),
-        "a dead-lettered row is out of the outbox"
-    );
-}
-
-/// The retry budget terminates **without any outcome write at all**.
-///
-/// Every claim is an attempt, and the claim is what counts it. This is the
-/// property that survives the bad day: a worker killed between the POST and the
-/// outcome update, or a database that refuses the update, records nothing — and
-/// when the counter lived in that update, the row came back due with its budget
-/// untouched and the ERP was POSTed the same receipt every lease period for
-/// ever. Not one `record_erp_failure` or `dead_letter_erp` runs here.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn the_retry_budget_terminates_even_when_no_outcome_is_ever_recorded() {
-    let (pool, _guard) = pool_or_skip!();
-
-    let id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(id))
-        .await
-        .expect("persist the receipt");
-
-    // A zero lease makes the row due again at once, so this is the retry loop
-    // compressed in time.
-    for attempt in 0..DEAD_LETTER_ATTEMPTS {
-        let claimed = claim_erp_pending(&pool, TENANT, 10, 0)
-            .await
-            .expect("claim");
-        assert_eq!(claimed.len(), 1, "attempt {attempt} should still be due");
-        assert_eq!(
-            claimed[0].erp_attempts, attempt,
-            "the claim must report the attempts made before this one"
-        );
-    }
-
-    let attempts: i16 =
-        sqlx::query_scalar("SELECT erp_attempts FROM invoic_receipts WHERE process_id = $1")
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .expect("read attempts");
-    assert_eq!(attempts, DEAD_LETTER_ATTEMPTS, "the budget is exhausted");
-
-    let pending = claim_erp_pending(&pool, TENANT, 10, 0)
-        .await
-        .expect("claim");
-    assert!(
-        pending.is_empty(),
-        "the receipt is still being POSTed to the ERP after its budget ran out — the \
-         attempt counter did not advance because no outcome write ever landed"
-    );
-}
-
-/// The back-off schedule is `record_erp_failure`'s only job, and an over-large
-/// terminal delay would raise `interval out of range` — aborting the very
-/// UPDATE that raises the counter, leaving the row at 4 and retrying for ever.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn the_terminal_backoff_is_an_interval_postgresql_accepts() {
-    let (pool, _guard) = pool_or_skip!();
-
-    let id = Uuid::new_v4();
-    upsert_receipt(&pool, &receipt(id))
-        .await
-        .expect("persist the receipt");
-
-    for attempt in 0..DEAD_LETTER_ATTEMPTS {
-        record_erp_failure(&pool, TENANT, id, attempt)
-            .await
-            .unwrap_or_else(|e| panic!("attempt {attempt} must be schedulable: {e}"));
-    }
-
-    let attempts: i16 =
-        sqlx::query_scalar("SELECT erp_attempts FROM invoic_receipts WHERE process_id = $1")
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .expect("read attempts");
-    assert_eq!(
-        attempts, 0,
-        "scheduling a back-off must not touch the counter — the claim owns it"
-    );
-}
-
-/// A claimed batch is not claimable again while its lease holds.
-///
-/// A pooled `SELECT … FOR UPDATE SKIP LOCKED` does not give this: sqlx runs it
-/// in an implicit transaction that commits before the caller sees the rows, so
-/// a second worker — a rolling deploy is enough — claims the same batch and the
-/// ERP gets every event twice.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_claimed_batch_is_leased_against_a_second_worker() {
-    let (pool, _guard) = pool_or_skip!();
-
-    for _ in 0..3 {
-        upsert_receipt(&pool, &receipt(Uuid::new_v4()))
-            .await
-            .expect("persist");
-    }
-
-    let first = claim_erp_pending(&pool, TENANT, 10, LEASE)
-        .await
-        .expect("first worker claims");
-    assert_eq!(first.len(), 3);
-
-    let second = claim_erp_pending(&pool, TENANT, 10, LEASE)
-        .await
-        .expect("second worker tries");
-    assert!(
-        second.is_empty(),
-        "a leased batch must not be handed to a second worker: {second:?}"
-    );
-}
-
-/// The claim never crosses a tenant boundary, and it reports the state the
-/// event carries.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn the_claim_is_tenant_scoped_and_carries_the_dispatch_state() {
-    let (pool, _guard) = pool_or_skip!();
-
-    let mine = Uuid::new_v4();
-    let mut row = receipt(mine);
-    row.dispatched_at = Some(OffsetDateTime::now_utc());
-    row.findings = serde_json::json!([{ "kind": "TariffDeviation" }, { "kind": "PeriodInvalid" }]);
-    upsert_receipt(&pool, &row).await.expect("persist mine");
-
-    let mut theirs = receipt(Uuid::new_v4());
-    theirs.tenant = "9900999000009".to_owned();
-    upsert_receipt(&pool, &theirs)
-        .await
-        .expect("persist theirs");
-
-    let claimed = claim_erp_pending(&pool, TENANT, 10, LEASE)
-        .await
-        .expect("claim");
-    assert_eq!(claimed.len(), 1, "another tenant's receipt is not claimed");
-    let row = &claimed[0];
-    assert_eq!(row.process_id, mine);
-    assert!(row.dispatched, "the answer went out");
-    // `jsonb_array_length` returns int4; without the `::bigint` cast the whole
-    // claim failed to decode and the outbox looked permanently empty.
-    assert_eq!(row.findings_count, 2);
-}
-
 /// A dispute resolution has its time and its decider or neither — a
 /// `Resolved` outcome without them loses when, and by whom, it was closed.
 #[tokio::test]
@@ -479,5 +296,77 @@ async fn a_resolution_cannot_be_recorded_without_its_timestamp() {
     assert!(
         unattributed.is_err(),
         "a 'Resolved' row without its decider must be refused"
+    );
+}
+
+/// The receipt event commits with the receipt's conclusion and survives an ERP
+/// outage: undelivered while the ERP is down, delivered once when it returns.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_receipt_event_survives_an_erp_outage_and_is_delivered_once() {
+    let (pool, _guard) = pool_or_skip!();
+    let id = Uuid::new_v4();
+    upsert_receipt(&pool, &receipt(id)).await.expect("persist");
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("invoicd", TENANT),
+        mako_events::invoic::RECEIPT_SETTLED,
+        id.to_string(),
+        serde_json::json!({ "process_id": id.to_string(), "dispatched": true }),
+    );
+    invoicd::pg::receipts::conclude(
+        &pool,
+        TENANT,
+        id,
+        Some(OffsetDateTime::now_utc()),
+        Some(&ce),
+    )
+    .await
+    .expect("conclude");
+
+    let fast = mako_service::outbox::OutboxConfig {
+        lease: std::time::Duration::ZERO,
+        backoff: vec![std::time::Duration::ZERO],
+        ..Default::default()
+    };
+    // The ERP is down: nothing listens on port 9.
+    mako_service::outbox::OutboxWorker::new(pool.clone(), "http://127.0.0.1:9/erp", None)
+        .with_config(fast.clone())
+        .flush_once()
+        .await
+        .expect("flush");
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM event_outbox WHERE ce_type = $1 AND delivered_at IS NULL",
+    )
+    .bind(mako_events::invoic::RECEIPT_SETTLED)
+    .fetch_one(&pool)
+    .await
+    .expect("the receipt event is on record");
+    assert_eq!(pending, 1, "the event survives the outage");
+
+    // The ERP returns.
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = std::sync::Arc::clone(&calls);
+    let app = axum::Router::new().route(
+        "/erp",
+        axum::routing::post(move || {
+            let seen = std::sync::Arc::clone(&seen);
+            async move {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                axum::http::StatusCode::OK
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/erp", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let worker = mako_service::outbox::OutboxWorker::new(pool.clone(), url, None).with_config(fast);
+    worker.flush_once().await.expect("flush");
+    worker.flush_once().await.expect("flush");
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "delivered exactly once"
     );
 }

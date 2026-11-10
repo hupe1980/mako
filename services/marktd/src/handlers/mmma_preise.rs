@@ -337,13 +337,7 @@ fn import_month(q: &ImportTriggerQuery, today: Date) -> Result<Date, String> {
 ///   ]
 /// }
 /// ```
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-)]
 pub async fn post_import_trigger(
-    Extension(gas_repo): Extension<MmmaGasRepoExt>,
-    Extension(strom_repo): Extension<MmmStromRepoExt>,
     Extension(import_cfg): Extension<MmmaImportCfgExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
@@ -371,8 +365,6 @@ pub async fn post_import_trigger(
         &http,
         &import_cfg.gas_url,
         &import_cfg.strom_url,
-        &gas_repo,
-        &strom_repo,
         &tenant,
         &crate::mmma_worker::EventSink { pool: &pool },
     )

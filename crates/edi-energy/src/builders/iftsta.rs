@@ -32,6 +32,9 @@ struct IftstaBuilderInner {
     vorgangsnummer: Option<String>,
     order_reference: Option<String>,
     vertragsende: Option<String>,
+    referenz_nachricht: Option<String>,
+    referenz_vorgang: Option<String>,
+    fertigstellung: Option<String>,
 }
 
 /// Fluent builder for `IFTSTA` (International Multimodal Status Report) messages.
@@ -90,6 +93,9 @@ impl IftstaBuilder<Unset, Unset> {
                 vorgangsnummer: None,
                 order_reference: None,
                 vertragsende: None,
+                referenz_nachricht: None,
+                referenz_vorgang: None,
+                fertigstellung: None,
             },
         }
     }
@@ -191,6 +197,15 @@ impl<S, R> IftstaBuilder<S, R> {
         self
     }
 
+    /// Set the SG15 `STS` DE 9013 alone, where the Anwendungsfall fixes the
+    /// code and names no Codeliste — the 21013 „Statusmeldung MSBN / MSBA /
+    /// LF" carries `STS+Z10+Z13+E17` (IFTSTA AHB 2.1 Kap. 6.2).
+    pub fn status_code(mut self, code: impl Into<String>) -> Self {
+        self.inner.sts_pruefschritt = Some(code.into());
+        self.inner.sts_codeliste = None;
+        self
+    }
+
     /// Set the SG14 `LOC+172` Meldepunkt — the Zählpunktbezeichnung of the
     /// Messlokation.
     ///
@@ -241,6 +256,28 @@ impl<S, R> IftstaBuilder<S, R> {
     /// refused rather than padded to UTC midnight.
     pub fn vertragsende(mut self, date: impl Into<String>) -> Self {
         self.inner.vertragsende = Some(date.into());
+        self
+    }
+
+    /// Set the SG15 `RFF+ACW` Referenz Nachrichtennummer — the `BGM` DE 1004
+    /// of the IFTSTA this one answers (IFTSTA MIG 2.1, Nr 00021).
+    pub fn referenz_nachricht(mut self, dokumentennummer: impl Into<String>) -> Self {
+        self.inner.referenz_nachricht = Some(dokumentennummer.into());
+        self
+    }
+
+    /// Set the SG15 `RFF+ADY` Referenz Vorgangsnummer — the `CNI` DE 1490 of
+    /// the Vorgang in that IFTSTA (IFTSTA MIG 2.1, Nr 00022).
+    pub fn referenz_vorgang(mut self, vorgangsnummer: impl Into<String>) -> Self {
+        self.inner.referenz_vorgang = Some(vorgangsnummer.into());
+        self
+    }
+
+    /// Set the SG15 `DTM+293` Fertigstellungsdatum/-zeit — format `303`, the
+    /// UTC instant `CCYYMMDDHHMM` the reported takeover begins (IFTSTA AHB 2.1
+    /// Kap. 6.2: 21010 / 21012).
+    pub fn fertigstellung(mut self, instant: impl Into<String>) -> Self {
+        self.inner.fertigstellung = Some(instant.into());
         self
     }
 
@@ -315,18 +352,25 @@ impl<S, R> IftstaBuilder<S, R> {
         // reason rides `STS+Z21+105`, not `STS+Z21+:105` (IFTSTA MIG 2.1
         // example `STS+Z21+Z13+A01:E_0526'`).
         if let (Some(cat), Some(reason)) = (&self.inner.sts_category, &self.inner.sts_reason) {
-            if let (Some(code), Some(liste)) =
-                (&self.inner.sts_pruefschritt, &self.inner.sts_codeliste)
-            {
-                emit_comp!(w, "STS", [cat], [reason], [code, liste]);
-            } else {
-                emit_comp!(w, "STS", [cat], [reason]);
+            match (&self.inner.sts_pruefschritt, &self.inner.sts_codeliste) {
+                (Some(code), Some(liste)) => {
+                    emit_comp!(w, "STS", [cat], [reason], [code, liste]);
+                }
+                (Some(code), None) => emit_comp!(w, "STS", [cat], [reason], [code]),
+                _ => emit_comp!(w, "STS", [cat], [reason]),
             }
         }
         // ── SG15 RFF+Z13 — Prüfidentifikator ─────────────────────────────────
         if let Some(pid) = self.inner.pruefidentifikator {
             let pid_str = pid.to_string();
             emit_comp!(w, "RFF", ["Z13", &pid_str]);
+        }
+        // ── SG15 RFF+ACW / RFF+ADY — the IFTSTA and Vorgang answered ─────────
+        if let Some(r) = &self.inner.referenz_nachricht {
+            emit_comp!(w, "RFF", ["ACW", r]);
+        }
+        if let Some(r) = &self.inner.referenz_vorgang {
+            emit_comp!(w, "RFF", ["ADY", r]);
         }
         // ── SG15 RFF+AVE — Referenz auf die Marktlokation ────────────────────
         if let Some(malo) = &self.inner.marktlokation {
@@ -335,6 +379,14 @@ impl<S, R> IftstaBuilder<S, R> {
         // ── SG15 RFF+AGI — Beantragungsnummer (ref to the Bestellung) ────────
         if let Some(order_ref) = &self.inner.order_reference {
             emit_comp!(w, "RFF", ["AGI", order_ref]);
+        }
+        // ── SG15 DTM+293 — Fertigstellungsdatum/-zeit ────────────────────────
+        if let Some(t) = &self.inner.fertigstellung {
+            emit_comp!(
+                w,
+                "DTM",
+                ["293", &super::ccyymmddhhmm_utc("293", t)?, "303"]
+            );
         }
         // ── SG15 DTM+76 — Lieferdatum/-zeit, geplant ─────────────────────────
         //

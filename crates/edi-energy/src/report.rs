@@ -364,6 +364,23 @@ impl EdiEnergyReport {
         self.inner.is_valid()
     }
 
+    /// The findings that keep the message from being sent: every error and
+    /// every Formatbedingung finding
+    /// ([`bars_sending`][crate::profile::validate::bars_sending]).
+    pub fn sending_refusals(&self) -> impl Iterator<Item = &ValidationIssue> {
+        self.inner
+            .iter_issues()
+            .filter(|i| crate::profile::validate::bars_sending(i))
+    }
+
+    /// Returns `true` when nothing keeps the message from being sent — no
+    /// error and no Formatbedingung finding. Stricter than
+    /// [`is_valid`][Self::is_valid], which is the receiver's question.
+    #[must_use]
+    pub fn is_sendable(&self) -> bool {
+        self.sending_refusals().next().is_none()
+    }
+
     /// Returns `true` if there is at least one error-level issue.
     #[must_use]
     pub fn has_errors(&self) -> bool {

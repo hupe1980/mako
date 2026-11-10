@@ -238,6 +238,8 @@ impl ErpAdapter for WebhookErpAdapter {
         let mut builder = self
             .client
             .post(&self.erp_url)
+            // durable: the ERP worker drains the engine outbox and retries the message
+            // until this returns Ok.
             .header("Content-Type", "application/cloudevents+json")
             .header("X-Idempotency-Key", &event.idempotency_key);
 
@@ -538,7 +540,8 @@ where
 
                 // For APERAK rejections, promote the structured ERC code from
                 // `payload["error_code"]` into the typed `AperakRejected.erc_code`
-                // field so the CloudEvents `makoerc` extension is populated.
+                // field so the CloudEvents `makoerc` extension is populated; for a
+                // failed process, `payload["reason"]` into `ProcessFailed.reason`.
                 let event_type = match raw_event_type {
                     mako_engine::erp::ErpEventType::AperakRejected { .. } => {
                         let erc_code = msg
@@ -547,6 +550,16 @@ where
                             .and_then(|v| v.as_str())
                             .map(mako_engine::erc::ErcCode::new);
                         mako_engine::erp::ErpEventType::AperakRejected { erc_code }
+                    }
+                    mako_engine::erp::ErpEventType::ProcessFailed { .. } => {
+                        mako_engine::erp::ErpEventType::ProcessFailed {
+                            reason: msg
+                                .payload
+                                .get("reason")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .into(),
+                        }
                     }
                     other => other,
                 };
@@ -756,6 +769,11 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
         // GPKE Teil 2 § 2.1.2 Nr. 4 — the LFA released the Marktlokation, or
         // its window lapsed and the Festlegung released it for them.
         "LfaAntwortAufAbmeldeanfrage" => ErpEventType::AbmeldeanfrageBeantwortet,
+        // A process whose Marktnachricht could not be delivered; the worker
+        // promotes `payload["reason"]` into the typed field.
+        "ProcessFailed" => ErpEventType::ProcessFailed { reason: "".into() },
+        // Written beside every dead-letter record, in its transaction.
+        mako_engine::dead_letter::DEAD_LETTER_RECORDED => ErpEventType::DeadLetterRecorded,
         _ => return None,
     })
 }
@@ -830,6 +848,9 @@ mod tests {
             "DispatchConfirmed",
             "GabiFinalAllocationOverdue",
             "LfaAntwortAufAbmeldeanfrage",
+            "ProcessFailed",
+            // Written by the dead-letter sink beside each record.
+            mako_engine::dead_letter::DEAD_LETTER_RECORDED,
         ] {
             let event = map_message_type_to_erp_event(msg_type).unwrap_or_else(|| {
                 panic!(
@@ -927,6 +948,8 @@ mod terminal_outcome_tests {
             "MaloIdentified",
             "DispatchConfirmed",
             "LfaAntwortAufAbmeldeanfrage",
+            "ProcessFailed",
+            mako_engine::dead_letter::DEAD_LETTER_RECORDED,
         ] {
             assert!(
                 is_erp_notification(erp_type),

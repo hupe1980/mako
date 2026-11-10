@@ -3,12 +3,12 @@
 //! The **NB side** of a disconnection: what this grid operator was asked to do
 //! and what its field team did. agentd's `sperrd-agent` subscribes to the glob.
 //!
-//! Delivery is the platform's transactional outbox — written in the same
-//! transaction as the state change it announces where that is possible, and
-//! after it where the state change is a fact about the physical world that must
-//! not be rolled back by an enqueue failure.
+//! Delivery is the platform's transactional outbox, and every event is written
+//! in the transaction of the state change it announces: an order moved without
+//! its event is never moved again, so an event enqueued afterwards on its own
+//! is one a failure loses for good. The builders here return the CloudEvent;
+//! the transaction that changes the order enqueues it.
 
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::sperr::pg::{CreateOrderRequest, Outcome};
@@ -17,14 +17,15 @@ fn source(tenant: &str) -> String {
     mako_service::source("processd", tenant)
 }
 
-/// A Sperr-/Entsperrauftrag entered the queue.
-///
-/// Enqueued after the insert rather than inside it: the order is already
-/// visible to the field team and a lost announcement is replayable, while
-/// rolling the order back because the outbox was unavailable would drop a
-/// market message the Lieferant is waiting on.
-pub async fn auftrag_eingegangen(pool: &PgPool, tenant: &str, id: Uuid, req: &CreateOrderRequest) {
-    let ce = mako_service::CloudEvent::new(
+/// A Sperr-/Entsperrauftrag entered the queue — enqueued by
+/// [`crate::sperr::pg::create_order_pg`] in the transaction that inserts it.
+#[must_use]
+pub fn auftrag_eingegangen(
+    tenant: &str,
+    id: Uuid,
+    req: &CreateOrderRequest,
+) -> mako_service::CloudEvent {
+    mako_service::CloudEvent::new(
         source(tenant),
         mako_events::sperr::AUFTRAG_EINGEGANGEN,
         &req.malo_id,
@@ -39,23 +40,23 @@ pub async fn auftrag_eingegangen(pool: &PgPool, tenant: &str, id: Uuid, req: &Cr
             "fruehestens_am": req.fruehestens_am.map(|d| d.to_string()),
             "arbeitszeit":    req.arbeitszeit.map(|a| a.code()),
         }),
-    );
-    enqueue(pool, &ce, id).await;
+    )
 }
 
-/// A Sperrversuch that did not succeed and left the order in the queue.
+/// A Sperrversuch that did not succeed and left the order in the queue —
+/// enqueued by [`crate::sperr::pg::report_outcome`] with the attempt.
 ///
 /// Not `FEHLGESCHLAGEN`: nothing has been reported to the Lieferant, because
 /// GPKE Teil 2 § 3.5.1.2 Nr. 5 still owes them a second visit.
-pub async fn versuch_gescheitert(
-    pool: &PgPool,
+#[must_use]
+pub fn versuch_gescheitert(
     tenant: &str,
     id: Uuid,
     malo_id: &str,
     reason: &str,
     sperrversuche: i32,
-) {
-    let ce = mako_service::CloudEvent::new(
+) -> mako_service::CloudEvent {
+    mako_service::CloudEvent::new(
         source(tenant),
         mako_events::sperr::VERSUCH_GESCHEITERT,
         malo_id,
@@ -66,8 +67,7 @@ pub async fn versuch_gescheitert(
             "sperrversuche": sperrversuche,
             "verbleibend":   crate::sperr::pg::MAX_SPERRVERSUCHE - sperrversuche,
         }),
-    );
-    enqueue(pool, &ce, id).await;
+    )
 }
 
 /// A pending order ran past the § 3.5.1.2 Nr. 1 execution window.
@@ -98,14 +98,16 @@ pub async fn ausfuehrung_ueberfaellig(
         .map_err(Into::into)
 }
 
-/// The field team reported a terminal outcome.
-pub async fn outcome(
-    pool: &PgPool,
+/// The field team reported a terminal outcome — enqueued by
+/// [`crate::sperr::pg::report_outcome`] in the transaction that makes the
+/// order terminal.
+#[must_use]
+pub fn outcome(
     tenant: &str,
     id: Uuid,
     outcome: &Outcome<'_>,
-    iftsta_dispatched: bool,
-) {
+    iftsta_queued: bool,
+) -> mako_service::CloudEvent {
     let (ce_type, detail) = match outcome {
         Outcome::Executed {
             at,
@@ -133,7 +135,7 @@ pub async fn outcome(
     };
     // The subject is the order, not the MaLo: an order id is what every other
     // route in this service takes, and a MaLo can carry several over time.
-    let ce = mako_service::CloudEvent::new(
+    mako_service::CloudEvent::new(
         source(tenant),
         ce_type,
         id.to_string(),
@@ -141,11 +143,10 @@ pub async fn outcome(
             "order_id":           id.to_string(),
             "status":             outcome.status().as_str(),
             "iftsta_code":        outcome.status().iftsta_code(),
-            "iftsta_dispatched":  iftsta_dispatched,
+            "iftsta_queued":      iftsta_queued,
             "detail":             detail,
         }),
-    );
-    enqueue(pool, &ce, id).await;
+    )
 }
 
 /// A pending order was withdrawn.
@@ -177,7 +178,7 @@ pub async fn storniert(
     mako_service::outbox::enqueue(tx, &ce).await
 }
 
-/// An IFTSTA 21039 exhausted its retry budget.
+/// An IFTSTA 21039 was dead-lettered, or is past its Frist undelivered.
 ///
 /// The one state in this service that needs a human: the Lieferant has not been
 /// told the outcome, and their `gpke-sperrung-lf` process cannot close.
@@ -201,29 +202,13 @@ pub async fn iftsta_ausstehend(
             // The attempts actually made, not the cap: this order may have been
             // escalated on its deadline while still inside its retry budget.
             "attempts":   order.attempts,
-            "max_attempts": crate::sperr::pg::IFTSTA_MAX_ATTEMPTS,
+            "max_attempts": mako_service::outbox::OutboxConfig::default().max_attempts,
             "last_error": order.last_error,
             "impact": "the Lieferant has not received the Auftragsstatus; their \
                        gpke-sperrung-lf process cannot reach a terminal state",
         }),
     );
     mako_service::outbox::enqueue(tx, &ce).await
-}
-
-/// Enqueue an announcement whose state change has already committed.
-async fn enqueue(pool: &PgPool, ce: &mako_service::CloudEvent, id: Uuid) {
-    let res = async {
-        let mut tx = pool.begin().await?;
-        mako_service::outbox::enqueue(&mut tx, ce).await?;
-        tx.commit().await
-    }
-    .await;
-    if let Err(e) = res {
-        tracing::error!(
-            order_id = %id, ce_type = %ce.ce_type, error = %e,
-            "processd sperr: state change committed but the CloudEvent was NOT announced — replay it"
-        );
-    }
 }
 
 #[cfg(test)]

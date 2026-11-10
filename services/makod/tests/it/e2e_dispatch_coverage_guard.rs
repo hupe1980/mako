@@ -18,8 +18,7 @@
 //! content carries the PID), falling back to a synthetic template for reply
 //! families that have no fixture at all.
 //!
-//! Reach today: **351 registrations**. Every registration it cannot
-//! exercise is a Prüfidentifikator with no AHB profile entry — the
+//! Every registration it cannot exercise is a Prüfidentifikator with no AHB profile entry — the
 //! `KNOWN_PROFILE_GAPS` set from `e2e_ahb_rule_coverage_guard` — plus the
 //! send-only entries below. That is one root cause with three downstream
 //! effects: no profile entry means validation passes vacuously,
@@ -53,21 +52,12 @@ const LOC: &str = "51238696012";
 /// the AHB-coverage guard still see the process, and so the outbound render
 /// path keeps a name to resolve.
 ///
-/// This list must only ever shrink. Implementing a receiver makes the PID reach
-/// an arm, and the test then fails until the entry is removed — so it cannot go
-/// stale in the quiet direction.
+/// This list must only ever shrink, and [`SEND_ONLY_CEILING`] holds it there.
+/// Implementing a receiver makes the PID reach an arm, and the test then fails
+/// until the entry is removed; an entry whose `(pid, workflow)` the router does
+/// not register fails `every_send_only_entry_is_a_registration` — so it cannot
+/// go stale in either direction.
 const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
-    // ── Registered, received, but not answerable ─────────────────────────────
-    // 55557 (Änderung MSB-Abrechnungsdaten, GPKE Teil 4) has no Antwort mapping
-    // in `response_pid_for`, so `gpke-supplier-change` cannot carry it to
-    // completion: spawning it yields a process the registered deadline
-    // turns into a false `Rejected`. It stays registered so the router resolves
-    // it; the receiving implementation is the missing piece.
-    (
-        55557,
-        "gpke-supplier-change",
-        "Änderung MSB-Abr.-Daten (GPKE Teil 4) — no Antwort mapping, receiver not implemented",
-    ),
     // No MaBiS MSCONS PID is send-only any more.
     //
     // A participant that *files* a Summenzeitreihe also receives one — the
@@ -76,21 +66,6 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
     // would drop every inbound version without a trace. 13010–13012 likewise:
     // the LF and the MSB receive the normierte Profile and may answer with an
     // ORDERS 17211 Reklamation, which is what `mabis-profile` exists for.
-    // ── WiM Geräteübernahme: the MSBA's answers ──────────────────────────────
-    // mako implements the MSBA: it receives ORDERS 17001/17009 and sends these.
-    // The MSBN that sends the ORDERS and receives the answer is not built, so
-    // no process waits for one. (19001/19002 are the same at an Nmsb
-    // deployment; under every role at once GPKE Konfiguration claims them.)
-    (
-        19015,
-        "wim-geraeteubernahme",
-        "Bestätigung Gerätewechselabsicht (MSBA → MSBN) — MSBN receiver not implemented",
-    ),
-    (
-        19016,
-        "wim-geraeteubernahme",
-        "Ablehnung Gerätewechselabsicht (MSBA → MSBN) — MSBN receiver not implemented",
-    ),
     // ── MMM Allokationsliste Anforderungen ───────────────────────────────────
     (
         17110,
@@ -107,98 +82,20 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
         "gpke-allokationsliste",
         "Anforderung bilanzierte Menge (NB → ÜNB) — dropped by ORDERS fv20261001, do not implement",
     ),
-    // ── Sperrprozesse ────────────────────────────────────────────────────────
-    // The Strom MSB receives 17116 in `gpke-sperrung-msb`; the Gas gMSB has no
-    // receiver yet, and the GNB-side workflow still names the PID.
-    (
-        17116,
-        "geli-gas-sperrung-nb",
-        "Anfrage Sperrung (GNB → gMSB) — gMSB receiver not implemented",
-    ),
-    // ── GPKE Teil 3 Konfigurationsänderung ORDERS Anfragen (LF → NB/MSB) ─────
-    // mako implements the LF side: it sends these and ingests the ORDRSP /
-    // IFTSTA answers. The NB/MSB receiving side is a separate workflow that
-    // does not exist yet.
-    (
-        17120,
-        "gpke-konfiguration-aenderung",
-        "Bestellung Änderung Prognosegrundlage — NB receiver not implemented",
-    ),
-    (
-        17121,
-        "gpke-konfiguration-aenderung",
-        "Bestellung Änderung (NB → MSB) — MSB receiver not implemented",
-    ),
-    (
-        17122,
-        "gpke-konfiguration-aenderung",
-        "Reklamation einer Definition — NB receiver not implemented",
-    ),
-    (
-        17123,
-        "gpke-konfiguration-aenderung",
-        "Bestellung Änderung Zählzeitdefinition — NB receiver not implemented",
-    ),
-    (
-        17128,
-        "gpke-konfiguration-aenderung",
-        "Reklamation einer Konfiguration — MSB receiver not implemented",
-    ),
-    (
-        17129,
-        "gpke-konfiguration-aenderung",
-        "Bestellung Beendigung Konfiguration — MSB receiver not implemented",
-    ),
-    (
-        17130,
-        "gpke-konfiguration-aenderung",
-        "Bestellung Konfiguration (ohne Angebot) — MSB receiver not implemented",
-    ),
-    (
-        17131,
-        "gpke-konfiguration-aenderung",
-        "Bestellung Angebot Konfiguration — MSB receiver not implemented",
-    ),
-    (
-        17133,
-        "gpke-konfiguration-aenderung",
-        "Bestellung Änderung Abrechnungsdaten — NB receiver not implemented",
-    ),
-    // ── GPKE Teil 3 Konfigurationsänderung, registered under WiM ────────────
-    // The MSB receives the 17011 Auftrag in `wim-technik-aenderung`
-    // (`ReceiveAuftrag`). 17118 is not a Technikänderung: the Anwendungsübersicht
-    // 4.0 (lfd. Nr. 22600–23180) files it under GPKE Teil 3 „Bestellung einer
-    // Konfiguration", answered by ORDRSP 19127 out of `E_0527` / `E_0539`.
-    (
-        17118,
-        "wim-technik-aenderung",
-        "Bestellung Konfigurationsänderung (MSB → MSB, GPKE Teil 3) — registered under the wrong workflow, receiver not implemented",
-    ),
-    // ── MaBiS Listenabgleich replies ─────────────────────────────────────────
-    // mako implements the *receiver of the list*: it ingests 55065/55195/55201/
-    // 55223 and answers with `mabis.liste.korrigieren` / `mabis.liste.ablehnen`.
-    // The four Antwort codes are registered so the router resolves them, but the
-    // leg that *reads* an incoming Korrekturliste — mako standing as the NB or
-    // ÜNB that sent the list — has no command.
-    (
-        55066,
-        "mabis-listenabgleich",
-        "Korrekturliste zur Lieferantenclearingliste (LF → NB/ÜNB) — list-sender receiver not implemented",
-    ),
+    // ── MaBiS Listenabgleich replies addressed to the ÜNB ────────────────────
+    // The NB answers the ÜNB's Bilanzierungsgebietsclearingliste 55195 and
+    // DZÜ-Liste 55223 with these (Anwendungsübersicht 4.0 lfd. Nr. 7340 / 8170,
+    // NB an ÜNB). Their receiver is the ÜNB that distributed the list, and mako
+    // deploys no ÜNB. 55066 / 55202 resume the NB's own list (`SendListe`).
     (
         55196,
         "mabis-listenabgleich",
-        "Korrekturliste zur Bilanzierungsgebietsclearingliste (NB → ÜNB) — list-sender receiver not implemented",
-    ),
-    (
-        55202,
-        "mabis-listenabgleich",
-        "Korrekturliste zur LF-AACL (LF → NB) — list-sender receiver not implemented",
+        "Antwort auf Bilanzierungsgebietsclearingliste (NB → ÜNB) — receiver is a ÜNB",
     ),
     (
         55224,
         "mabis-listenabgleich",
-        "Korrekturliste zur DZÜ-Liste (NB → ÜNB) — list-sender receiver not implemented",
+        "Antwort auf DZÜ-Liste (NB → ÜNB) — receiver is a ÜNB",
     ),
     // ── MaBiS ZP-lifecycle Weiterleitungen ───────────────────────────────────
     // Prozessschritt 4 is addressed to the **BKV**: „Der BIKO leitet nur den
@@ -231,6 +128,37 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
         "Weiterleitung monatliche AAÜZ, BKV des anfNB (Deaktivierung) — addressed to the BKV, not to this deployment",
     ),
 ];
+
+/// The most entries [`SEND_ONLY_PIDS`] may hold. Lower it with every entry a
+/// receiver removes; it never rises.
+const SEND_ONLY_CEILING: usize = 21;
+
+#[test]
+fn send_only_pids_do_not_grow() {
+    assert!(
+        SEND_ONLY_PIDS.len() <= SEND_ONLY_CEILING,
+        "SEND_ONLY_PIDS holds {} entries, above its ceiling of {SEND_ONLY_CEILING}. A PID \
+         a counterparty sends mako is owed a receiver, not an entry here.",
+        SEND_ONLY_PIDS.len()
+    );
+}
+
+/// An entry names a `(pid, workflow)` the router registers. One that does not
+/// is never exercised by the guard below and can only hide a regression.
+#[test]
+fn every_send_only_entry_is_a_registration() {
+    let pairs = registered_pairs();
+    let stale: Vec<String> = SEND_ONLY_PIDS
+        .iter()
+        .filter(|(pid, wf, _)| !pairs.iter().any(|(p, w)| p == pid && w == wf))
+        .map(|(pid, wf, _)| format!("  PID {pid} → {wf}"))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "SEND_ONLY_PIDS names registrations the router does not make — delete them:\n{}",
+        stale.join("\n")
+    );
+}
 
 /// A conformant message carrying `pid`, addressed to this tenant: the newest
 /// profile's own skeleton of the Anwendungsfall, so every registered
@@ -401,8 +329,8 @@ async fn every_registered_pid_reaches_a_dispatch_arm() {
         }
     }
 
-    // Ratchet: 351 registrations are exercised today. A drop means fixtures
-    // moved or the lookup broke, which would hollow the guard out silently.
+    // Ratchet on the registrations exercised. A drop means fixtures moved or
+    // the lookup broke, which would hollow the guard out silently.
     assert!(
         exercised >= 440,
         "only {exercised} PIDs were exercised (expected >= 440) — fixture \
@@ -421,8 +349,8 @@ async fn every_registered_pid_reaches_a_dispatch_arm() {
         gaps.is_empty(),
         "these PIDs are registered in the router but never reach a dispatch \
          arm, so an inbound message carrying one is silently dropped:\n{}\n\n\
-         Either add the dispatch arm, or — if mako only ever *sends* this PID — \
-         add it to SEND_ONLY_PIDS with the role whose receiver is missing.",
+         Add the dispatch arm: a registered PID a counterparty sends is owed a \
+         receiver.",
         gaps.join("\n")
     );
 }

@@ -37,7 +37,6 @@
 //! | [`handler`] | The inbound webhook pipeline |
 //! | [`server`] | Router, operator API, [`mako_service::Daemon`] impl |
 //! | [`pg`] | The receipt store |
-//! | [`erp_outbox`] | Retry worker for ERP notifications |
 //! | [`payment_overdue`] | `de.invoic.payment.overdue` worker |
 //! | [`mcp_server`] | Read-only MCP surface |
 //!
@@ -61,7 +60,6 @@
 )]
 
 pub mod config;
-pub mod erp_outbox;
 pub mod handler;
 pub mod mcp_server;
 pub mod payment_overdue;

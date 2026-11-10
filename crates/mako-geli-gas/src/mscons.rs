@@ -26,7 +26,10 @@ use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
-    types::{MaLo, MarktpartnerCode, MessageRef, MeteredInterval, Pruefidentifikator},
+    types::{
+        MaLo, MarktpartnerCode, MessageRef, MeteredInterval, MeteredZaehlerstand,
+        Pruefidentifikator,
+    },
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
@@ -75,6 +78,9 @@ pub struct GasMsconsDatenData {
     /// The readings the delivery carried.
     #[serde(default)]
     pub reads: Vec<MeteredInterval>,
+    /// The Zählerstände the delivery carried (PID 13002).
+    #[serde(default)]
+    pub zaehlerstaende: Vec<MeteredZaehlerstand>,
     /// Abrechnungsbrennwert in kWh/m³ (PID 13007 only).
     ///
     /// Extracted from `QTY+Z08` in the EDIFACT MSCONS interchange.
@@ -119,6 +125,9 @@ pub enum GasMsconsDatenEvent {
         /// The readings the delivery carried.
         #[serde(default)]
         reads: Vec<MeteredInterval>,
+        /// The Zählerstände the delivery carried (PID 13002).
+        #[serde(default)]
+        zaehlerstaende: Vec<MeteredZaehlerstand>,
         /// Abrechnungsbrennwert in kWh/m³ (PID 13007 only, from `QTY+Z08`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         brennwert_kwh_per_m3: Option<String>,
@@ -245,6 +254,9 @@ pub enum GasMsconsDatenCommand {
         message_ref: MessageRef,
         /// The decoded `SG9`/`SG10` readings the message carried.
         reads: Vec<MeteredInterval>,
+        /// The decoded Zählerstände, each at its `SG10 DTM+7`
+        /// Nutzungszeitpunkt (MSCONS MIG 2.5, S. 35).
+        zaehlerstaende: Vec<MeteredZaehlerstand>,
         /// `true` if AHB validation passed.
         validation_passed: bool,
         /// Human-readable validation errors (if any).
@@ -261,6 +273,9 @@ pub enum GasMsconsDatenCommand {
         ///
         /// BO4E `Gasqualitaet` wire value: `"H_GAS"` | `"L_GAS"`; `None` when absent.
         gasqualitaet: Option<String>,
+        /// `DTM+137` Nachrichtendatum, verbatim (format 303). It versions a
+        /// 13008 Lastgang (MSCONS AHB 3.2 Kap. 5.1).
+        nachrichtendatum: String,
     },
 }
 
@@ -282,9 +297,11 @@ fn erp_payload(
     location_id: &MaLo,
     message_ref: &MessageRef,
     reads: &[MeteredInterval],
+    zaehlerstaende: &[MeteredZaehlerstand],
     brennwert_kwh_per_m3: Option<&str>,
     zustandszahl: Option<&str>,
     gasqualitaet: Option<&str>,
+    nachrichtendatum: &str,
 ) -> serde_json::Value {
     serde_json::json!({
         "pid": pid.as_u32(),
@@ -292,6 +309,9 @@ fn erp_payload(
         "sender": sender.as_str(),
         "message_ref": message_ref.as_str(),
         "sparte": "GAS",
+        // The `DTM+137` Nachrichtendatum, for the Lastgang Gas whose
+        // Versions-Tupel ends in it — what `edmd` orders deliveries by.
+        "mscons_version": mako_engine::types::messwesen_version(pid.as_u32(), nachrichtendatum),
         "brennwert_kwh_per_m3": brennwert_kwh_per_m3,
         "zustandszahl": zustandszahl,
         "gasqualitaet": gasqualitaet,
@@ -304,7 +324,12 @@ fn erp_payload(
                 "quality": r.quality(),
                 "obis_code": r.obis_code,
                 "melo_id": r.melo_id,
+                "herkunft": r.herkunft(),
             }))
+            .collect::<Vec<_>>(),
+        "zaehlerstaende": zaehlerstaende
+            .iter()
+            .map(MeteredZaehlerstand::payload)
             .collect::<Vec<_>>(),
     })
 }
@@ -330,6 +355,7 @@ impl Workflow for GeliGasMsconsWorkflow {
                 sender,
                 location_id,
                 reads,
+                zaehlerstaende,
                 message_ref,
                 brennwert_kwh_per_m3,
                 zustandszahl,
@@ -341,6 +367,7 @@ impl Workflow for GeliGasMsconsWorkflow {
                         sender: sender.clone(),
                         location_id: location_id.clone(),
                         reads: reads.clone(),
+                        zaehlerstaende: zaehlerstaende.clone(),
                         message_ref: message_ref.clone(),
                         brennwert_kwh_per_m3: brennwert_kwh_per_m3.clone(),
                         zustandszahl: zustandszahl.clone(),
@@ -376,11 +403,13 @@ impl Workflow for GeliGasMsconsWorkflow {
                 location_id,
                 message_ref,
                 reads,
+                zaehlerstaende,
                 validation_passed,
                 validation_errors,
                 brennwert_kwh_per_m3,
                 zustandszahl,
                 gasqualitaet,
+                nachrichtendatum,
             } => {
                 if !MSCONS_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
@@ -396,15 +425,18 @@ impl Workflow for GeliGasMsconsWorkflow {
                     &location_id,
                     &message_ref,
                     &reads,
+                    &zaehlerstaende,
                     brennwert_kwh_per_m3.as_deref(),
                     zustandszahl.as_deref(),
                     gasqualitaet.as_deref(),
+                    &nachrichtendatum,
                 );
                 let erhalten_event = GasMsconsDatenEvent::MsconsDatenErhalten {
                     pruefidentifikator: pid,
                     sender,
                     location_id,
                     reads,
+                    zaehlerstaende,
                     message_ref: message_ref.clone(),
                     brennwert_kwh_per_m3: brennwert_kwh_per_m3.clone(),
                     zustandszahl: zustandszahl.clone(),
@@ -446,11 +478,13 @@ mod tests {
                 location_id: MaLo::new("51238696012"),
                 message_ref: MessageRef::new("MSC-1"),
                 reads: vec![],
+                zaehlerstaende: vec![],
                 validation_passed: true,
                 validation_errors: vec![],
                 brennwert_kwh_per_m3: None,
                 zustandszahl: None,
                 gasqualitaet: None,
+                nachrichtendatum: String::new(),
             },
         )
         .unwrap();
@@ -474,5 +508,42 @@ mod tests {
             .verlauf(),
             None
         );
+    }
+
+    /// The `edmd` payload of a 13008 carries the version its Versions-Tupel
+    /// names and the origin each value states.
+    #[test]
+    fn a_lastgang_gas_payload_carries_its_version_and_origin() {
+        let read = MeteredInterval {
+            obis_code: Some("7-20:99.33.17".to_owned()),
+            melo_id: None,
+            dtm_from: "2026-07-01T04:00:00+00:00".to_owned(),
+            dtm_to: "2026-07-01T05:00:00+00:00".to_owned(),
+            quantity: "12.5".to_owned(),
+            unit: None,
+            qualifier: "220".to_owned(),
+            plausibilisierung: vec!["Z83".to_owned()],
+        };
+        let out = GeliGasMsconsWorkflow::handle(
+            &GasMsconsDatenState::New,
+            GasMsconsDatenCommand::ReceiveMscons {
+                pid: Pruefidentifikator::new(13_008).unwrap(),
+                sender: MarktpartnerCode::new("9800000000004"),
+                location_id: MaLo::new("51238696012"),
+                message_ref: MessageRef::new("MSC-1"),
+                reads: vec![read],
+                zaehlerstaende: vec![],
+                validation_passed: true,
+                validation_errors: vec![],
+                brennwert_kwh_per_m3: None,
+                zustandszahl: None,
+                gasqualitaet: None,
+                nachrichtendatum: "202607020800+00".to_owned(),
+            },
+        )
+        .unwrap();
+        let payload = &out.outbox[0].payload;
+        assert_eq!(payload["mscons_version"], "20260702080000");
+        assert_eq!(payload["reads"][0]["herkunft"], "KUNDENSELBSTABLESUNG");
     }
 }

@@ -127,12 +127,11 @@ fn render_and_validate(payload: serde_json::Value) -> String {
     let parsed = edi_energy::parse(&rendered.bytes).expect("rendered UTILMD must parse");
     let report = parsed.validate().expect("validation must run");
     assert!(
-        report.errors().is_empty(),
+        report.is_sendable(),
         "PID {pid} does not pass its own AHB:\n{}\n{}",
         wire.replace('\'', "'\n"),
         report
-            .errors()
-            .iter()
+            .sending_refusals()
             .map(|i| format!("  [{}] {}", i.rule_id.as_deref().unwrap_or("-"), i.message))
             .collect::<Vec<_>>()
             .join("\n"),
@@ -160,6 +159,32 @@ fn bestaetigung_anmeldung_passes_the_ahb() {
     assert!(wire.contains(&format!("CAV+Z91:{MSB}::Z39:Z19'")), "{wire}");
     // `CAV+ZF0` has one place: the Messlokations-Datenblock.
     assert_eq!(wire.matches("CAV+ZF0:").count(), 1, "{wire}");
+}
+
+/// Validity is the receiver's question; what this file asks is whether the
+/// answer may be sent. A Marktlokations-ID with a wrong check digit leaves the
+/// 55002 valid — a Formatbedingung finding is a warning — and the receiver
+/// answers it „Z35 Format nicht eingehalten" (APERAK AHB 1.1 Kap. 2.1.2.1,
+/// S. 12), so it bars sending.
+#[test]
+fn a_formatbedingung_finding_bars_the_answer() {
+    let mut payload = antwort_payload(55002, true);
+    payload["malo"] = serde_json::json!("51238696782");
+    let rendered = render_to_wire_bytes(&outbox(payload), &registry()).expect("renders");
+    let report = edi_energy::parse(&rendered.bytes)
+        .expect("parses")
+        .validate()
+        .expect("validation runs");
+    assert!(report.is_valid(), "{:?}", report.errors());
+    assert!(!report.is_sendable());
+    assert!(
+        report
+            .sending_refusals()
+            .filter_map(|i| i.rule_id())
+            .any(|r| r.starts_with("FMT-55002-") && r.ends_with("-950")),
+        "{:?}",
+        report.sending_refusals().collect::<Vec<_>>()
+    );
 }
 
 /// The other five Antwort-PIDs `response_pid_for` derives.

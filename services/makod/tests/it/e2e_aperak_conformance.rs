@@ -78,11 +78,10 @@ fn render_and_validate(pending: PendingOutbox) -> String {
     let parsed = edi_energy::parse(&rendered.bytes).expect("rendered APERAK must parse");
     let report = parsed.validate().expect("validation must run");
     assert!(
-        report.errors().is_empty(),
+        report.is_sendable(),
         "APERAK failed its own AHB:\n{wire}\n{}",
         report
-            .errors()
-            .iter()
+            .sending_refusals()
             .map(|i| format!("  [{}] {}", i.rule_id().unwrap_or("-"), i.message))
             .collect::<Vec<_>>()
             .join("\n"),
@@ -233,12 +232,11 @@ fn the_supplier_change_workflow_enqueues_a_renderable_aperak() {
     let parsed = edi_energy::parse(&rendered.bytes).expect("parses");
     let report = parsed.validate().expect("validation runs");
     assert!(
-        report.errors().is_empty(),
+        report.is_sendable(),
         "the workflow's own APERAK fails the AHB:\n{}\n{}",
         String::from_utf8_lossy(&rendered.bytes).replace('\'', "'\n"),
         report
-            .errors()
-            .iter()
+            .sending_refusals()
             .map(|i| format!("  [{}] {}", i.rule_id.as_deref().unwrap_or("-"), i.message))
             .collect::<Vec<_>>()
             .join("\n"),

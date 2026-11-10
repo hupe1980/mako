@@ -124,6 +124,7 @@ test-edmd-db:
     {{ just_executable() }} suite edmd router_builds --include-ignored
     {{ just_executable() }} suite edmd mcp_round_trips --include-ignored
     {{ just_executable() }} suite edmd kafka_ingest --include-ignored --test-threads=1
+    {{ just_executable() }} suite edmd sharing_participation --include-ignored
 
 # Handler + SQL integration tests for einsd (EEG settlement).
 test-einsd-db:
@@ -135,6 +136,8 @@ test-einsd-db:
 test-accountingd-db:
     {{ just_executable() }} suite accountingd db_scenarios --include-ignored --test-threads=1
     {{ just_executable() }} suite accountingd eeg_payout --include-ignored --test-threads=1
+    {{ just_executable() }} suite accountingd receivables --include-ignored --test-threads=1
+    {{ just_executable() }} suite accountingd sharing_booking --include-ignored
     {{ just_executable() }} suite accountingd router_builds --include-ignored
     {{ just_executable() }} suite accountingd mcp_round_trips --include-ignored
 
@@ -150,10 +153,12 @@ test-outputd-db:
 test-vertragd-db:
     {{ just_executable() }} suite vertragd dispatch_integration --include-ignored --test-threads=1
     {{ just_executable() }} suite vertragd bo4e_bodies --include-ignored --test-threads=1
+    {{ just_executable() }} suite vertragd inbound_marker --include-ignored --test-threads=1
 
 # Catalog integration tests for productd.
 test-productd-db:
     {{ just_executable() }} suite productd catalog_integration --include-ignored --test-threads=1
+    {{ just_executable() }} suite productd angebot_acceptance --include-ignored --test-threads=1
 
 # All marktd integration suites (VersorgungsStatus, MeLo graph, ESA, registries,
 # durable fan-out, MaBiS-Zählpunkt, temporal constraints, tenant isolation, and
@@ -165,10 +170,11 @@ test-marktd-db:
         fanout_durable_integration:: mabis_zp_integration:: \
         temporal_constraints_integration:: tenant_isolation_integration:: \
         overlap_is_a_client_error:: konfigurationsprodukte_body:: \
-        utilmd_stammdaten_integration:: lokationsbuendel_integration::
+        utilmd_stammdaten_integration:: lokationsbuendel_integration:: \
+        write_and_event_commit_together::
 
 # invoicd's receipt store — the § 147 AO / GoBD audit trail, its per-tenant
-# uniqueness and the ERP re-dispatch lease.
+# uniqueness and the outbox delivery of the receipt event.
 test-invoicd-db:
     {{ just_executable() }} suite invoicd receipts_pg --include-ignored --test-threads=1
 
@@ -497,7 +503,7 @@ ci:
     RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
 
 [private]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-prompt-tools check-tool-grants check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -1069,6 +1075,19 @@ check-sts-codes:
 # error, the schema's own text handed to the caller. Absolute: any tuple fails.
 check-error-tuples:
     cargo xtask check-error-tuples
+
+# A consumer of `de.mako.process.completed` reads the verdict. One type carries
+# the Bestätigung and the Ablehnung; branching on the type alone reads every
+# refused Anmeldung as a supply that started.
+check-process-verdict:
+    cargo xtask check-process-verdict
+
+# An event commits with the work it reports. Refuse a hand-built CloudEvent
+# envelope, a publish with nothing durable behind it and no stated retry, and a
+# marker written on a pool beside an outbox enqueue — committed alone, it says
+# „done" with no event, and every later pass skips the row it marked.
+check-event-durability:
+    cargo xtask check-event-durability
 
 # Refuse a specialist procedure that tells a model to call a tool the manifest
 # does not grant. `check-tool-grants` validates the grant list; this validates

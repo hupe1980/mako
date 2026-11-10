@@ -118,6 +118,12 @@ pub fn router(ctx: Arc<Ctx>, enforcer: Arc<CedarEnforcer>) -> Router {
             "/api/v1/malo/{malo_id}/produkte",
             get(vertraege::malo_produkte),
         )
+        // The § 14a EnWG module state, valid-time. billingd selects the
+        // Modul 1/2/3 reductions from it.
+        .route(
+            "/api/v1/malo/{malo_id}/sect14a",
+            get(vertraege::malo_sect14a).post(vertraege::record_sect14a),
+        )
         .route(
             "/api/v1/vertraege/billing-candidates",
             get(vertraege::billing_candidates),

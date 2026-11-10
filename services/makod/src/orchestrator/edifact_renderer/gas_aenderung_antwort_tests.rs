@@ -20,6 +20,38 @@ use mako_geli_gas::{
 const VERANTWORTLICHER: &str = "9870012345678";
 const BERECHTIGTER: &str = "9807317000007";
 const MALO: &str = "51238696012";
+/// A Zählpunktbezeichnung: the Meldepunkt of an Änderung the MSB sends about
+/// its Messlokation.
+const MELO: &str = "DE0000000000000000000000000000042";
+
+/// The Meldepunkt of the Änderung `aenderung_pid`: a Messlokation where the
+/// active Gas column formats its `LOC+172` as a Zählpunktbezeichnung
+/// (`[951]`) — the 44116 the MSB sends, UTILMD AHB Gas 1.2 Kap. 5.11.5,
+/// S. 130 — a Marktlokation otherwise.
+fn meldepunkt(aenderung_pid: u32) -> &'static str {
+    let profile = edi_energy::ReleaseRegistry::global()
+        .profile_for_date_and_track(
+            edi_energy::MessageType::Utilmd,
+            mako_fristen::heute(),
+            edi_energy::ReleaseTrack::Gas,
+        )
+        .expect("the active Gas profile");
+    let af = profile
+        .anwendungsfall(aenderung_pid)
+        .expect("the Änderung column");
+    let meldepunkt_nr = af
+        .elements
+        .iter()
+        .find(|e| e.de == "3227" && e.operands.iter().any(|o| o.code.as_deref() == Some("172")))
+        .map(|e| e.nr.clone())
+        .expect("the column has a Meldepunkt");
+    let zaehlpunkt = af.elements.iter().any(|e| {
+        e.nr == meldepunkt_nr
+            && e.de == "3225"
+            && e.operands.iter().any(|o| o.operand.contains("[951]"))
+    });
+    if zaehlpunkt { MELO } else { MALO }
+}
 
 /// The Antwort the workflow queues for the Änderung `aenderung_pid` answered
 /// with `code`.
@@ -30,7 +62,7 @@ fn antwort(aenderung_pid: u32, code: &str) -> PendingOutbox {
             pid: Pruefidentifikator::new(aenderung_pid).expect("pid"),
             sender: MarktpartnerCode::new(VERANTWORTLICHER),
             receiver: MarktpartnerCode::new(BERECHTIGTER),
-            location_id: MaLo::new(MALO),
+            location_id: MaLo::new(meldepunkt(aenderung_pid)),
             aenderungsdatum: "20261201".to_owned(),
             patch: serde_json::json!({}),
             vertragsbeginn: Some("20250101".to_owned()),
@@ -112,9 +144,12 @@ fn every_antwort_auf_aenderung_renders_its_code_and_passes_its_column() {
             "{aenderung} → {antwort_pid}: {text}"
         );
         assert!(text.contains("RFF+TN:AEND-VG-1'"), "{antwort_pid}: {text}");
-        let findings =
-            crate::orchestrator::edifact_renderer::utilmd_ahb_findings(&pending, TenantId::new())
-                .expect("the Antwort renders and parses");
+        let findings = crate::orchestrator::edifact_renderer::utilmd_ahb_findings(
+            &pending,
+            TenantId::new(),
+            &crate::orchestrator::commands_api::latest_format_version(),
+        )
+        .expect("the Antwort renders and parses");
         assert!(
             findings.is_empty(),
             "{aenderung} → {antwort_pid}: {findings:#?}"
@@ -151,9 +186,12 @@ fn an_ablehnung_renders_from_its_columns_codeliste() {
     let pending = antwort(44120, "E13");
     let text = wire(&pending);
     assert!(text.contains("STS+E01++E13:G_0025'"), "{text}");
-    let findings =
-        crate::orchestrator::edifact_renderer::utilmd_ahb_findings(&pending, TenantId::new())
-            .expect("renders");
+    let findings = crate::orchestrator::edifact_renderer::utilmd_ahb_findings(
+        &pending,
+        TenantId::new(),
+        &crate::orchestrator::commands_api::latest_format_version(),
+    )
+    .expect("renders");
     assert!(findings.is_empty(), "{findings:#?}");
 }
 

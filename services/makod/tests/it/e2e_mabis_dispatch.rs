@@ -342,8 +342,11 @@ async fn every_listenabgleich_list_reaches_its_arm() {
     }
 }
 
+/// The answers to the NB's own lists (55066 / 55202) reach the arm that
+/// resumes the list; the answers to the ÜNB's lists (55196 / 55224) are owed
+/// to a ÜNB and stay coverage gaps here.
 #[tokio::test]
-async fn listenabgleich_reply_pids_are_reported_as_coverage_gaps() {
+async fn listenabgleich_replies_resume_the_nbs_list_and_the_uenbs_stay_gaps() {
     for familie in mako_mabis::LISTEN_FAMILIEN {
         let outcome = dispatch(
             &utilmd(familie.antwort),
@@ -351,16 +354,22 @@ async fn listenabgleich_reply_pids_are_reported_as_coverage_gaps() {
             familie.antwort,
         )
         .await;
-        match outcome {
-            IngestOutcome::Skipped { reason, .. } => assert_eq!(
-                reason, "pid_not_in_listenabgleich_listen",
-                "reply PID {} has no command, so it must be reported as a coverage gap",
+        let reason = match outcome {
+            IngestOutcome::Skipped { reason, .. } => reason,
+            other => panic!("{}: no list was sent, got {other:?}", familie.antwort),
+        };
+        if familie.baeume("NB").is_some() {
+            assert!(
+                !reason.starts_with("pid_not_in_"),
+                "{} answers the NB's list and reaches its arm: {reason}",
                 familie.antwort
-            ),
-            other => panic!(
-                "expected a coverage-gap skip for {}, got {other:?}",
+            );
+        } else {
+            assert_eq!(
+                reason, "pid_not_in_listenabgleich_for_this_role",
+                "{} is owed to a ÜNB",
                 familie.antwort
-            ),
+            );
         }
     }
 }

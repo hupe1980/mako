@@ -48,12 +48,14 @@
 //! | `--webhook-secret` | `EDMD_WEBHOOK_SECRET` | *(optional)* |
 //! | `--inbound-secret` | `EDMD_INBOUND_SECRET` | *(optional)* |
 
+pub mod bundesland_cache;
 pub mod config;
 pub mod confirmation;
 pub mod domain;
 pub mod handler;
 pub mod kafka_ingest;
 pub mod mcp_server;
+mod mscons_ingest;
 pub(crate) mod outbox;
 pub mod server;
 pub mod smgw;

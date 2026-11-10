@@ -20,7 +20,7 @@ use crate::{
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ContrlMessageResponse {
-    /// UCM — message acknowledgement (`action_code = "4"` = accepted, `"7"` = rejected).
+    /// UCM — message response (`action_code = "4"` = rejected, `"7"` = acknowledged).
     pub ucm: Ucm,
     /// SG2 — per-segment error reports (only present when message is rejected).
     pub segment_errors: Vec<ContrlSegmentError>,
@@ -255,9 +255,13 @@ fn parse_message_responses(segments: &[edifact_rs::Segment<'_>]) -> Vec<ContrlMe
 
 /// UN/EDIFACT CONTRL acknowledgement codes (DE 0083).
 ///
-/// - `4`: acknowledged (interchange accepted)
-/// - `7`: interchange rejected — at least one functional group rejected
-/// - `8`: interchange rejected — the entire interchange is rejected
+/// - `4`: „Diese Ebene und alle tieferen Ebenen zurückgewiesen" — the
+///   Syntaxfehlermeldung
+/// - `7`: „Übertragung bestätigt (keine Syntaxfehler)" — the
+///   Empfangsbestätigung
+/// - `8`: a UN/EDIFACT code the CONTRL MIG 2.0b does not use
+///
+/// CONTRL MIG 2.0b, UCI, S. 5; CONTRL AHB 1.0 Kap. 3.1, S. 24.
 const VALID_UCI_CODES: &[&str] = &["4", "7", "8"];
 
 /// Build the CONTRL semantic rule pack (Layer 5).
@@ -274,10 +278,8 @@ fn contrl_semantic_pack() -> ProfileRulePack {
 /// `SEM-CONTRL-SYNTAX-CODE-UNKNOWN` — Validate the `UCI` acknowledgement code
 /// (DE 0083).
 ///
-/// UN/EDIFACT defines exactly three valid values:
-/// - `4` — acknowledged (interchange accepted)
-/// - `7` — interchange rejected (group-level)
-/// - `8` — interchange rejected (interchange-level)
+/// The values accepted are those of [`VALID_UCI_CODES`]: `4` (rejected), `7`
+/// (acknowledged) and `8`.
 ///
 /// Any other value indicates a malformed CONTRL message.
 fn rule_sem_contrl_syntax_code(
@@ -296,17 +298,17 @@ fn rule_sem_contrl_syntax_code(
                     ValidationSeverity::Error,
                     format!(
                         "UCI acknowledgement code '{code}' is not in the UN/EDIFACT \
-                         defined set (4=accepted, 7=rejected-group, 8=rejected-interchange)"
+                         defined set (4=rejected, 7=acknowledged, 8)"
                     ),
                 )
                 .with_span(seg.span)
                 .with_rule_id("SEM-CONTRL-SYNTAX-CODE-UNKNOWN")
                 .with_segment("UCI")
                 .with_suggestion(
-                    "Valid UN/EDIFACT UCI acknowledgement codes (DE 0083): \
-                     4 = interchange received, \
-                     7 = rejected at functional-group level, \
-                     8 = rejected at interchange level",
+                    "Valid UCI acknowledgement codes (DE 0083): \
+                     4 = Diese Ebene und alle tieferen Ebenen zurückgewiesen, \
+                     7 = Übertragung bestätigt (keine Syntaxfehler) — \
+                     CONTRL MIG 2.0b, UCI",
                 ),
             );
         }

@@ -389,6 +389,7 @@ pub(crate) async fn post_iot_reads(
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
             mscons_version: None,
+            ablesung_herkunft: None,
         });
         stored += 1;
     }

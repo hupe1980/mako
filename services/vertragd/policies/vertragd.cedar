@@ -48,6 +48,7 @@
 //
 // Operator, Verträge:
 //   "read-vertrag"                 — every contract GET, incl. /malo/{id}/produkte,
+//                                    /malo/{id}/sect14a,
 //                                    billing-candidates, expiring, Kündigungsfrist,
 //                                    Preisgarantie
 //   "create-vertrag"               — POST /api/v1/kunden/{id}/vertraege
@@ -56,6 +57,7 @@
 //   "stornieren-vertrag"           — POST /api/v1/vertraege/{id}/stornieren
 //   "tarifwechsel-vertrag"         — POST /api/v1/vertraege/{id}/tarifwechsel
 //   "write-preisgarantie"          — PUT  /api/v1/vertraege/{id}/preisgarantie
+//   "write-netzentgeltmodule"      — POST /api/v1/malo/{id}/sect14a (§ 14a EnWG module state)
 //
 // Operator, Rahmenverträge:
 //   "read-rahmenvertrag"           — GET  /api/v1/rahmenvertraege[/{id}[/malos]],
@@ -146,6 +148,7 @@ permit(
         Action::"stornieren-vertrag",
         Action::"tarifwechsel-vertrag",
         Action::"write-preisgarantie",
+        Action::"write-netzentgeltmodule",
         Action::"create-rahmenvertrag",
         Action::"kuendigen-rahmenvertrag",
         Action::"write-stammdaten",

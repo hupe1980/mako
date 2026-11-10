@@ -2549,7 +2549,7 @@ impl BillingProvider for SolarProvider {
 /// `eeg_billing::calculate_settlement()` for version-aware §51/§52/§44b rules.
 ///
 /// **Fallback path**: when only `quantities.eeg` is set, uses the simplified
-/// EEG credit note formula (Vergütung, Marktprämie, Managementprämie, KWKG).
+/// EEG credit note formula (Vergütung, Marktprämie, Managementprämie).
 /// This is suitable for LF-side Gutschrift documents where plant-specific
 /// regulatory details (§52 sanctions, §44b biogas quota) are not relevant.
 ///
@@ -2599,9 +2599,8 @@ impl BillingProvider for EegProvider {
             .as_ref()
             .map_or(Decimal::ZERO, |m| m.einspeisung_kwh);
         let p = &self.product;
-        let has_verguetung = p.eeg_verguetungssatz_ct_per_kwh.is_some()
-            || p.eeg_marktpraemie_ct_per_kwh.is_some()
-            || p.kwkg_zuschlag_ct_per_kwh.is_some();
+        let has_verguetung =
+            p.eeg_verguetungssatz_ct_per_kwh.is_some() || p.eeg_marktpraemie_ct_per_kwh.is_some();
         if kwh > Decimal::ZERO && !has_verguetung {
             return vec![BillingWarning {
                 code: "KEIN_VERGUETUNGSSATZ",
@@ -2609,7 +2608,7 @@ impl BillingProvider for EegProvider {
                 message: format!(
                     "es wurden {kwh} kWh eingespeist, das Produkt nennt aber weder \
                      Einspeisevergütung (eeg_verguetungssatz_ct_per_kwh) noch Marktprämie \
-                     (eeg_marktpraemie_ct_per_kwh) noch KWKG-Zuschlag — die Gutschrift \
+                     (eeg_marktpraemie_ct_per_kwh) — die Gutschrift \
                      enthielte keine einzige Vergütungsposition. Satz hinterlegen, oder \
                      0.0 setzen, wenn für diesen Zeitraum tatsächlich nichts zu vergüten ist."
                 ),
@@ -2716,20 +2715,6 @@ impl BillingProvider for EegProvider {
                 .with_legal_basis("Direktvermarktungsvertrag")
                 .with_tag("eeg_managementpraemie")
                 .with_tag("eeg"),
-            );
-        }
-        if let Some(kwkg_ct) = product.kwkg_zuschlag_ct_per_kwh {
-            positions.push(
-                BillingPosition::debit(
-                    "KWKG Zuschlag",
-                    kwh,
-                    "kWh",
-                    kwkg_ct / dec!(100),
-                    PositionCategory::Credit,
-                )
-                .with_legal_basis("§7 KWKG 2023")
-                .with_tag("kwkg_zuschlag")
-                .with_tag("kwkg"),
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──

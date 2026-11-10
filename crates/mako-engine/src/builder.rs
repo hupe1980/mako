@@ -891,6 +891,10 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                         window_secs  = self.max_retry_window.as_secs(),
                         "outbox worker: retry budget exhausted; dead-lettering message",
                     );
+                    let reason = format!("delivery exhausted after {} attempts", msg.attempt_count);
+                    if !self.announce_failure(&msg, &reason).await {
+                        continue;
+                    }
                     // The entry is deleted only once its dead letter is
                     // written: acknowledging first would leave nothing of the
                     // message if the record then failed.
@@ -900,10 +904,7 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                             message_id: msg.message_id,
                             message_type: msg.message_type.to_string(),
                             recipient: msg.recipient.to_string(),
-                            last_error: format!(
-                                "delivery exhausted after {} attempts",
-                                msg.attempt_count
-                            ),
+                            last_error: reason,
                             attempts: msg.attempt_count,
                         })
                         .await
@@ -993,6 +994,9 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                             error        = %e,
                             "outbox worker: permanent send failure; dead-lettering without retry",
                         );
+                        if !self.announce_failure(&msg, &e.to_string()).await {
+                            continue;
+                        }
                         if let Err(de) = self
                             .dead_letter_sink
                             .reject(&crate::dead_letter::DeadLetterReason::OutboxExhausted {
@@ -1157,6 +1161,34 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
     /// propagated — the delivery itself has already been acknowledged.
     ///
     /// [`fristen::discharges_delivery_window`]: mako_fristen::discharges_delivery_window
+    /// Enqueue the [`PROCESS_FAILED`](crate::outbox::PROCESS_FAILED) notice for
+    /// `msg`, whose delivery is being given up. `false` when it could not be
+    /// written: the caller then leaves `msg` queued, so the next poll gives it
+    /// up again and retries the notice — whose id is derived from `msg`'s, so
+    /// the retry enqueues the same one.
+    ///
+    /// Without the notice a process whose Marktnachricht never reached the
+    /// counterparty looks, to every consumer, like one still waiting for an
+    /// answer. A notice is never written for a notice.
+    async fn announce_failure(&self, msg: &crate::outbox::OutboxMessage, reason: &str) -> bool {
+        if &*msg.message_type == crate::outbox::PROCESS_FAILED {
+            return true;
+        }
+        let notice = crate::outbox::process_failed_notice(msg, reason);
+        match self.store.enqueue(&[notice]).await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::error!(
+                    message_id = %msg.message_id,
+                    error = %e,
+                    "outbox worker: process-failure notice not written; the message stays in \
+                     the outbox and is given up again on the next poll",
+                );
+                false
+            }
+        }
+    }
+
     async fn discharge_delivery_window(&self, msg: &crate::outbox::OutboxMessage) {
         let open = match self.deadline_store.for_stream(&msg.stream_id).await {
             Ok(deadlines) => deadlines,
@@ -2928,6 +2960,11 @@ mod tests {
                 message_id: msg.message_id.to_string().into(),
             })
         }
+
+        // The failure notice is the ERP worker's, as in makod.
+        fn handles(&self, msg: &crate::outbox::OutboxMessage) -> bool {
+            &*msg.message_type != crate::outbox::PROCESS_FAILED
+        }
     }
 
     async fn drive_worker<S: As4Sender>(
@@ -2961,11 +2998,19 @@ mod tests {
     async fn a_missing_renderer_dead_letters_without_retrying() {
         let stream_id = crate::ids::StreamId::new("test-renderer-missing");
         let msg = outbox_message(&stream_id, "MSCONS");
+        let process_id = msg.process_id;
         let (outbox, sink) = drive_worker(NoRenderer, msg).await;
 
-        assert!(
-            outbox.pending_now(10).await.unwrap().is_empty(),
-            "the message must be acknowledged, not left for another attempt",
+        // The message is acknowledged, not left for another attempt; what is
+        // left is the notice that its process failed.
+        let pending = outbox.pending_now(10).await.unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|m| (&*m.message_type, m.process_id))
+                .collect::<Vec<_>>(),
+            vec![(crate::outbox::PROCESS_FAILED, process_id)],
+            "a given-up Marktnachricht leaves its process's failure notice",
         );
         let rejections = sink
             .0

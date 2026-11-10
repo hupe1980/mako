@@ -140,12 +140,48 @@ impl PgSteuerbareRessourceRepository {
             .collect())
     }
 
+    /// Lock an SR's row on the caller's transaction and return its
+    /// `konfigurationsprodukte`: `None` when the SR does not exist, `Some(None)`
+    /// when it carries no list.
+    pub async fn lock_konfigurationsprodukte_tx(
+        conn: &mut sqlx::PgConnection,
+        sr_id: &str,
+        tenant: &str,
+    ) -> Result<Option<Option<serde_json::Value>>, MdmError> {
+        sqlx::query_scalar(
+            r"SELECT konfigurationsprodukte FROM steuerbare_ressourcen
+              WHERE sr_id = $1 AND tenant = $2
+              FOR UPDATE",
+        )
+        .bind(sr_id)
+        .bind(tenant)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))
+    }
+
     /// Replace the `konfigurationsprodukte` array for an existing SR.
     ///
     /// Returns `Ok(true)` when the SR was found and updated,
     /// `Ok(false)` when the SR does not exist (caller should return 404).
     pub async fn replace_sr_konfigurationsprodukte(
         &self,
+        sr_id: &str,
+        tenant: &str,
+        konfigurationsprodukte: serde_json::Value,
+    ) -> Result<bool, MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::replace_sr_konfigurationsprodukte_tx(&mut conn, sr_id, tenant, konfigurationsprodukte)
+            .await
+    }
+
+    /// [`Self::replace_sr_konfigurationsprodukte`] on the caller's transaction.
+    pub async fn replace_sr_konfigurationsprodukte_tx(
+        conn: &mut sqlx::PgConnection,
         sr_id: &str,
         tenant: &str,
         konfigurationsprodukte: serde_json::Value,
@@ -170,7 +206,7 @@ impl PgSteuerbareRessourceRepository {
         .bind(sr_id)
         .bind(tenant)
         .bind(&konfigurationsprodukte)
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?
         .rows_affected();
@@ -375,6 +411,21 @@ impl PgDeviceRepository {
         tenant: &str,
         konfigurationen: Vec<GeraetKonfiguration>,
     ) -> Result<bool, MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::upsert_geraet_konfigurationen_tx(&mut conn, geraet_id, tenant, konfigurationen).await
+    }
+
+    /// [`Self::upsert_geraet_konfigurationen`] on the caller's transaction.
+    pub async fn upsert_geraet_konfigurationen_tx(
+        conn: &mut sqlx::PgConnection,
+        geraet_id: &str,
+        tenant: &str,
+        konfigurationen: Vec<GeraetKonfiguration>,
+    ) -> Result<bool, MdmError> {
         let now = time::OffsetDateTime::now_utc();
         // Set server-side updated_at on every entry (caller value is ignored).
         let timestamped: Vec<GeraetKonfiguration> = konfigurationen
@@ -398,7 +449,7 @@ impl PgDeviceRepository {
         .bind(&json)
         .bind(geraet_id)
         .bind(tenant)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -635,6 +686,21 @@ impl PgTechnischeRessourceRepository {
         tenant: &str,
         patch: &mako_markt::repository::TechnischeRessourceStammdatenPatch,
     ) -> Result<bool, MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::patch_stammdaten_tx(&mut conn, tr_id, tenant, patch).await
+    }
+
+    /// [`Self::patch_stammdaten`] on the caller's transaction.
+    pub async fn patch_stammdaten_tx(
+        conn: &mut sqlx::PgConnection,
+        tr_id: &str,
+        tenant: &str,
+        patch: &mako_markt::repository::TechnischeRessourceStammdatenPatch,
+    ) -> Result<bool, MdmError> {
         if patch.is_empty() {
             return Ok(false);
         }
@@ -676,7 +742,7 @@ impl PgTechnischeRessourceRepository {
         .bind(patch.verbrauchsart.as_deref())
         .bind(patch.ist_fernschaltbar)
         .bind(&doc_patch)
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?
         .rows_affected();

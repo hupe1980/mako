@@ -68,30 +68,30 @@ perform it afterwards:
 ```mermaid
 flowchart LR
     H["handler<br/>one transaction"] --> W1["contract write"]
-    H --> W2["outbound_tasks"]
-    H --> W3["event_outbox"]
-    W2 --> OW["outbound worker<br/>backoff · dead-letter"]
-    W3 --> XW["outbox worker<br/>HMAC-signed"]
+    H --> W2["event_outbox<br/>commands + events"]
+    W2 --> OW["command workers<br/>one per peer"]
+    W2 --> XW["event worker<br/>HMAC-signed"]
     OW --> P["processd"]
     OW --> E["edmd"]
     OW --> A["accountingd"]
     XW --> ERP["ERP webhook"]
 ```
 
-**`outbound_tasks`** carries every service-to-service call — `LIEFERBEGINN`,
-`LIEFERENDE`, `ABLESUNG_BEGINN`, `ABLESUNG_ENDE`, `ABRECHNUNGSKONTO` — with
-backoff from 30 s to an hour, dead-lettered after eight attempts, claimed with
-`FOR UPDATE SKIP LOCKED`. **A refusal is dead-lettered at once**: a 4xx other
-than 408 or 429 is the peer's answer to that body, and a retry would send the
-same body, so the task stops with the answer in `last_error`. **A delivered call
-is never repeated**: once the peer
-answers, a failing local follow-up is recorded in `last_error`, not retried as a
-second UTILMD 55001. A unique `dedupe_key` makes the enqueue exactly-once: a
-repeatable action keys on what makes it distinct
-(`ABLESUNG_ENDE:{komp}:{geplant_am}`), a one-shot one does not
-(`LIEFERBEGINN:{komp}`).
+Every service-to-service call — `LIEFERBEGINN`, `LIEFERENDE`,
+`ABLESUNG_BEGINN`, `ABLESUNG_ENDE`, `ABRECHNUNGSKONTO` — is a
+`mako_service::outbox` command in `event_outbox`, keyed
+`{tenant}/{dedupe_key}` and delivered under the shared policy (8 attempts,
+30 s × 4ⁿ capped at 2 h, then dead-lettered; a 4xx other than 429 dead-letters
+at once). The key makes the enqueue exactly-once: a repeatable action keys on
+what makes it distinct (`ABLESUNG_ENDE:{komp}:{geplant_am}`), a one-shot one
+does not (`LIEFERBEGINN:{komp}`). **A delivered call is never repeated**: the
+follow-up write (the component `ANGEMELDET` with processd's `process_id`, the
+edmd reading order on the component) runs in a savepoint of the transaction
+that marks the delivery done, and a failure there is recorded in the row's
+`last_error`, not retried as a second UTILMD 55001. A Stornierung or a
+withdrawn Kündigung parks the commands not yet delivered.
 
-**`event_outbox`** carries every `de.vertrag.*` CloudEvent, statutory notices
+The same table carries every `de.vertrag.*` CloudEvent, statutory notices
 included. A crash costs a retry, never an obligation; what retries could not
 discharge is the operator's queue:
 
@@ -141,12 +141,13 @@ policy reads only `context.*`. A denial is a `403`.
 | `manage-portal-identitaeten` | `POST /kunden/{id}/identitaeten`, `DELETE …/{sub}` |
 | `export-kunde` | `GET /kunden/{id}/export` (DSGVO Art. 15/20) |
 | `anonymize-kunde` | `POST /kunden/{id}/anonymize` (DSGVO Art. 17) |
-| `read-vertrag` | every contract `GET` — `/malo/{id}/produkte`, `billing-candidates`, `expiring`, `by-malo`, Kündigungsfrist, Preisgarantie |
+| `read-vertrag` | every contract `GET` — `/malo/{id}/produkte`, `/malo/{id}/sect14a`, `billing-candidates`, `expiring`, `by-malo`, Kündigungsfrist, Preisgarantie |
 | `create-vertrag` | `POST /kunden/{id}/vertraege` |
 | `kuendigen-vertrag` | `POST /vertraege/{id}/kuendigen`, `/widerruf-kuendigung` |
 | `stornieren-vertrag` | `POST /vertraege/{id}/stornieren` |
 | `tarifwechsel-vertrag` | `POST /vertraege/{id}/tarifwechsel` |
 | `write-preisgarantie` | `PUT /vertraege/{id}/preisgarantie` |
+| `write-netzentgeltmodule` | `POST /malo/{id}/sect14a` |
 | `read-rahmenvertrag` | `GET /rahmenvertraege[/{id}[/malos]]`, `GET /kunden/{id}/rahmenvertraege` |
 | `create-rahmenvertrag` | `POST /kunden/{id}/rahmenvertraege` |
 | `kuendigen-rahmenvertrag` | `POST /rahmenvertraege/{id}/kuendigen` |
@@ -457,6 +458,26 @@ the same change is idempotent; refused are a change dated behind a later slice,
 and a same-date replay that flips `initiator` while the § 41 Abs. 5 notice is
 still owed (it would drop the notice and the Sonderkündigungsrecht).
 
+### The § 14a EnWG module state lives here too
+
+Which BK8-22/010-A Netzentgelt modules the Anschlussnutzer holds — `MODUL_1`
+(pauschal) or `MODUL_2` (prozentual) as the base, `MODUL_3` (zeitvariabel)
+beside Modul 1 — is stored per component as valid-time slices
+(`komponenten_sect14a`, `ks_no_overlap`):
+
+```http
+POST /api/v1/malo/{malo_id}/sect14a
+{ "module": ["MODUL_1", "MODUL_3"], "gueltig_ab": "2026-11-15" }
+
+GET /api/v1/malo/{malo_id}/sect14a?from=2026-11-01&to=2026-11-30
+```
+
+A new state ends the slice in force on `gueltig_ab`; a state dated behind a
+later one is `409`. A combination the Festlegung does not offer is stored as
+recorded — `billingd` refuses it when it bills, rather than the record dropping
+a module. `billingd` selects the reductions it bills from this, never from the
+product.
+
 ## DSGVO
 
 ### Art. 15 / Art. 20 — access and portability
@@ -513,7 +534,7 @@ AO; `anonymization_log` records what, by whom and why.
 
 | Worker | Cadence | What it does |
 |---|---|---|
-| Outbound | 5 s | Drains `outbound_tasks`, up to 64 per wake-up |
+| Outbound | per `mako_service::outbox` | One command worker each for processd, edmd and accountingd |
 | Outbox | per `mako_service::outbox` | Delivers `de.vertrag.*` to the ERP webhook |
 | Preisanpassung | daily | Sends the § 41 Abs. 5 notice for every scheduled Tarifwechsel whose notice is still owed, issues it as a document where `outputd` is configured, and logs at `ERROR` every change that took effect **without** its notice |
 | Auto-renewal | daily | Announces the extension once per term, then applies it |

@@ -243,14 +243,13 @@ use mako_gpke::{
     GpkeAnfrageBestellungWorkflow, GpkeAnkuendigungZuordnungLfWorkflow,
     GpkeBeendigungZuordnungWorkflow, GpkeDatenabrufMsbWorkflow, GpkeDatenabrufWorkflow,
     GpkeGeschaeftsdatenanfrageWorkflow, GpkeKonfigurationAenderungWorkflow,
-    GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
-    GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow, GpkePartinWorkflow,
-    GpkeSperrungLfWorkflow, GpkeSperrungMsbWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
-    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow,
-    KommunikationsdatenCommand, KonfigurationAenderungCommand, KonfigurationCommand,
-    LfAbmeldungCommand, LfAnmeldungCommand, MesswerteLieferungCommand, NeuanlageCommand,
-    SperrungCommand, SperrungLfCommand, SperrungMsbCommand, SupplierChangeCommand,
-    UtiltsKonfigCommand, WerteAnfrage,
+    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow,
+    GpkeNeuanlageWorkflow, GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungMsbWorkflow,
+    GpkeSperrungWorkflow, GpkeStornierungCommand, GpkeStornierungWorkflow,
+    GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow, KommunikationsdatenCommand,
+    KonfigurationAenderungCommand, LfAbmeldungCommand, LfAnmeldungCommand,
+    MesswerteLieferungCommand, NeuanlageCommand, SperrungCommand, SperrungLfCommand,
+    SperrungMsbCommand, SupplierChangeCommand, UtiltsKonfigCommand, WerteAnfrage,
 };
 use mako_mabis::{
     BillingCommand, ClearinglisteCommand, Datenstatus, IFTSTA_ABWEISUNG_PID,
@@ -276,6 +275,7 @@ mod gabi_gas;
 mod geli_gas;
 mod gpke;
 mod mabis;
+mod msb_eingang;
 mod wim;
 
 pub use emob::*;
@@ -283,6 +283,7 @@ pub use gabi_gas::*;
 pub use geli_gas::*;
 pub use gpke::*;
 pub use mabis::*;
+pub use msb_eingang::*;
 pub use wim::*;
 // ── Known format versions ─────────────────────────────────────────────────────
 
@@ -600,7 +601,12 @@ pub(crate) fn mscons_intervals(
                     let (Some(dtm_from), Some(dtm_to), Some(quantity)) =
                         (find("163"), find("164"), q.qty.value.clone())
                     else {
-                        skipped += 1;
+                        // A Zählerstand is dated by its `DTM+7` and decoded by
+                        // [`mscons_zaehlerstaende`]; it is not an undated
+                        // interval.
+                        if find("7").is_none() || q.qty.value.is_none() {
+                            skipped += 1;
+                        }
                         continue;
                     };
                     out.push(MeteredInterval {
@@ -615,12 +621,88 @@ pub(crate) fn mscons_intervals(
                             .clone()
                             .or_else(|| obis_code.as_deref().and_then(unit_for_obis)),
                         qualifier: q.qty.qualifier.clone(),
+                        // `SG10 STS+Z33` Plausibilisierungshinweis, DE 9013 in
+                        // C556 (MSCONS MIG 2.5, S. 38) — up to four per value.
+                        plausibilisierung: q
+                            .status
+                            .iter()
+                            .filter(|s| s.category.as_deref() == Some("Z33"))
+                            .filter_map(|s| s.reason_code.clone())
+                            .collect(),
                     });
                 }
             }
         }
     }
     (out, skipped)
+}
+
+/// Decode every `SG10` Zählerstand in an MSCONS — a register value dated by
+/// its `DTM+7` Nutzungszeitpunkt rather than a `DTM+163`/`164` span.
+///
+/// MSCONS MIG 2.5 makes the Nutzungszeitpunkt the instant a Zählerstand is
+/// processed at (S. 35) and says of the `DTM+9` Ablesedatum and the `DTM+60`
+/// Ausführungs-/Änderungszeitpunkt „Für die weitere prozessuale Verarbeitung
+/// des Wertes ist ausschließlich der Nutzungszeitpunkt relevant." (S. 34,
+/// S. 36). A value with neither a span nor a Nutzungszeitpunkt is counted as
+/// undated rather than filed at a guessed instant.
+pub(crate) fn mscons_zaehlerstaende(
+    msg: &edi_energy::messages::mscons::MsconsMessage,
+) -> (Vec<mako_engine::types::MeteredZaehlerstand>, usize) {
+    use mako_engine::types::MeteredZaehlerstand;
+
+    let mut out = Vec::new();
+    let mut undated = 0usize;
+    for dp in msg.delivery_points() {
+        for series in &dp.time_series {
+            let melo_id = series
+                .loc
+                .location_id
+                .as_deref()
+                .filter(|id| id.len() == 33)
+                .map(str::to_owned);
+            for item in &series.items {
+                let obis_code = item
+                    .pia
+                    .as_ref()
+                    .and_then(|p| p.item_number.as_deref())
+                    .map(str::to_owned);
+                for q in &item.quantities {
+                    let find = |qualifier: &str| {
+                        q.dtm
+                            .iter()
+                            .find(|d| d.qualifier == qualifier)
+                            .and_then(|d| {
+                                dtm303_to_rfc3339(d.value.as_deref()?, d.format.as_deref())
+                            })
+                    };
+                    // An interval value belongs to `mscons_intervals`.
+                    if find("163").is_some() && find("164").is_some() {
+                        continue;
+                    }
+                    let (Some(at), Some(value)) = (find("7"), q.qty.value.clone()) else {
+                        undated += 1;
+                        continue;
+                    };
+                    out.push(MeteredZaehlerstand {
+                        obis_code: obis_code.clone(),
+                        melo_id: melo_id.clone(),
+                        at,
+                        value,
+                        unit: q.qty.unit.clone(),
+                        qualifier: q.qty.qualifier.clone(),
+                        plausibilisierung: q
+                            .status
+                            .iter()
+                            .filter(|s| s.category.as_deref() == Some("Z33"))
+                            .filter_map(|s| s.reason_code.clone())
+                            .collect(),
+                    });
+                }
+            }
+        }
+    }
+    (out, undated)
 }
 
 // ── IFTSTA extraction helpers ─────────────────────────────────────────────────
@@ -678,16 +760,20 @@ fn build_wim_iftsta_command(
     let (validation_passed, validation_errors) = ahb_verdict(msg);
     // The Gesamtvorgang leg is not informational: it is what makes a Zuordnung
     // constitutive (WiM Teil 1 Kap. 2.1.1). 21009/21010 report the outcome and
-    // 21011/21012/21013 answer it, and the date rides `SG15 DTM+2380`.
+    // 21011/21012/21013 answer it; the takeover rides `SG15 DTM+293` on 21010
+    // and 21012 (IFTSTA AHB 2.1 Kap. 6.2, `[521]`).
     let code = pid.as_u32();
     if mako_wim::geraetewechsel::GESAMTVORGANG_PIDS.contains(&code) {
-        let zuordnungsbeginn = iftsta_zuordnungsbeginn(i);
+        let zuordnungsbeginn = iftsta_zuordnungsbeginn(i)?;
         return Ok(match code {
             mako_wim::geraetewechsel::GESAMTVORGANG_ERFOLG_PID
             | mako_wim::geraetewechsel::GESAMTVORGANG_SCHEITERN_PID => {
                 DeviceChangeCommand::ReceiveGesamtvorgang {
                     pid,
                     zuordnungsbeginn,
+                    // `BGM` DE 1004 and `SG14 CNI` DE 1490 — what the NB's
+                    // 21011 / 21012 names in `RFF+ACW` / `RFF+ADY`.
+                    referenz: iftsta_referenz(i),
                     message_ref: MessageRef::new(msg.message_ref()),
                     // The ÜT of Nr. 7 — the door's receipt instant, so the
                     // pure workflow never reads a clock.
@@ -697,6 +783,7 @@ fn build_wim_iftsta_command(
             _ => DeviceChangeCommand::ReceiveZuordnungsantwort {
                 pid,
                 zuordnungsbeginn,
+                received_at,
             },
         });
     }
@@ -715,22 +802,38 @@ fn build_wim_iftsta_command(
     })
 }
 
-/// `SG15 DTM+2380` — the day the MSBN actually takes over
-/// („Zeitpunkt, ab dem der MSBN tatsächlich den Messstellenbetrieb übernimmt",
-/// IFTSTA AHB 2.1 § 6.2 Bedingung `[521]`).
+/// `SG15 DTM+293` — the day the MSBN actually takes over („Zeitpunkt, ab dem
+/// der MSBN tatsächlich den Messstellenbetrieb übernimmt", IFTSTA AHB 2.1
+/// Kap. 6.2 Bedingung `[521]`), on 21010 and 21012.
 ///
-/// The AHB carries it as `CCYYMMDDHHMMZZZ` (DE 2379 = `303`), so only the first
-/// eight digits are the date. `DTM+137` is the document date and `DTM+293` the
-/// Fertigstellungszeitpunkt of a *failed* Gesamtvorgang — neither is a
-/// Zuordnungsbeginn, so the qualifier is matched exactly rather than taking the
-/// first `DTM` in the message.
-fn iftsta_zuordnungsbeginn(i: &edi_energy::messages::iftsta::IftstaMessage) -> Option<String> {
-    i.segments()
+/// DE 2379 is `303`: the UTC instant the German day begins, 00:00 in Strom and
+/// the Gastag's 06:00 in Gas, so its first eight digits are the day before in
+/// Strom. The two boundaries never share an instant, so the Sparte whose day
+/// it begins decides it; an instant that begins no German day is refused.
+fn iftsta_zuordnungsbeginn(
+    i: &edi_energy::messages::iftsta::IftstaMessage,
+) -> Result<Option<String>, EngineError> {
+    let dtm = i.dtm().iter().find(|d| d.qualifier == "293");
+    prozesstag(dtm, mako_fristen::Sparte::Strom)
+        .or_else(|_| prozesstag(dtm, mako_fristen::Sparte::Gas))
+}
+
+/// The report a Gesamtvorgang IFTSTA is: its `BGM` DE 1004 and its `SG14 CNI`
+/// DE 1490, both Muss (IFTSTA AHB 2.1 Kap. 6.2).
+fn iftsta_referenz(
+    i: &edi_energy::messages::iftsta::IftstaMessage,
+) -> Option<mako_wim::geraetewechsel::IftstaReferenz> {
+    let dokumentennummer = i.bgm()?.document_id.clone()?;
+    let vorgangsnummer = i
+        .segments()
         .iter()
-        .filter(|s| s.tag == "DTM")
-        .find(|s| s.component_str(0, 0) == Some("2380"))
-        .and_then(|s| s.component_str(0, 1))
-        .map(|raw| raw.chars().filter(char::is_ascii_digit).take(8).collect())
+        .find(|s| s.tag == "CNI")
+        .and_then(|s| s.component_str(0, 0))?
+        .to_owned();
+    Some(mako_wim::geraetewechsel::IftstaReferenz {
+        dokumentennummer,
+        vorgangsnummer,
+    })
 }
 
 /// The Messlokation an inbound WiM IFTSTA addresses — `LOC`, component 1.
@@ -978,6 +1081,7 @@ coverage_table! {
     gabi_gas_nomination_registry,
     geli_gas_datenabruf_ablehnung_registry,
     geli_gas_datenabruf_receive_registry,
+    geli_gas_geschaeftsdatenanfrage_registry,
     geli_gas_gnb_antwort_registry,
     geli_gas_lf_anmeldung_registry,
     geli_gas_mscons_registry,
@@ -985,6 +1089,7 @@ coverage_table! {
     geli_gas_registry(time::OffsetDateTime::UNIX_EPOCH),
     geli_gas_sperrprozesse_invoic_registry,
     geli_gas_sperrung_lf_registry,
+    geli_gas_sperrung_msb_registry,
     geli_gas_sperrung_nb_registry,
     geli_gas_sperrung_nb_response_registry,
     geli_gas_sperrung_nb_stornierung_registry,
@@ -1007,10 +1112,11 @@ coverage_table! {
     gpke_geschaeftsdatenanfrage_registry,
     gpke_eog_registry(time::OffsetDateTime::UNIX_EPOCH),
     gpke_konfiguration_aenderung_registry,
-    gpke_konfiguration_registry,
+    gpke_konfiguration_auftrag_registry,
     gpke_abrechnungsdaten_registry,
     gpke_lf_abmeldung_registry,
     gpke_lf_anmeldung_registry,
+    gpke_lf_neuanlage_antwort_registry,
     gpke_messwerte_registry,
     gpke_neuanlage_registry,
     gpke_partin_registry,
@@ -1028,6 +1134,7 @@ coverage_table! {
     mabis_anforderung_registry,
     mabis_clearingliste_registry,
     mabis_listenabgleich_registry,
+    mabis_listenabgleich_korrektur_registry,
     mabis_profil_registry,
     mabis_registry,
     mabis_summenzeitreihe_registry(time::OffsetDateTime::UNIX_EPOCH),
@@ -1046,6 +1153,7 @@ coverage_table! {
     wim_weiterverpflichtung_registry(mako_engine::types::Sparte::Strom),
     wim_ersteinbau_registry(),
     wim_wertebestellung_registry,
+    wim_geraeteubernahme_msbn_registry,
 }
 
 // ── EDIFACT → BO4E anti-corruption layer ─────────────────────────────────────
@@ -2474,5 +2582,99 @@ mod coverage_table_tests {
             "no BDEW format version is registered in the compiled edi-energy \
              profile registry — every adapter would reject every message"
         );
+    }
+}
+
+#[cfg(test)]
+mod mscons_interval_tests {
+    use super::*;
+
+    /// A 13016 Energiemenge whose one value the customer read off the meter.
+    ///
+    /// `SG10 STS+Z33++Z83` is the Plausibilisierungshinweis „Kundenselbstablesung"
+    /// (MSCONS MIG 2.5, S. 38: DE 9015 `Z33` in C601, DE 9013 `Z83` in C556 at
+    /// the third element position).
+    fn energiemenge(sts: &str) -> edi_energy::messages::mscons::MsconsMessage {
+        let raw = format!(
+            "UNA:+.? 'UNB+UNOC:3+9900357000004:500+9900357000011:500+260702:0800+1'\
+             UNH+1+MSCONS:D:04B:UN:2.5'BGM+7+DOK13016+9'\
+             DTM+137:202607020800?+00:303'RFF+Z13:13016'\
+             NAD+MS+9900357000004::293'NAD+MR+9900357000011::293'UNS+D'NAD+DP'\
+             LOC+172+51238696012'LIN+1'PIA+5+1-1?:1.29.0:SRW'\
+             QTY+220:1234.5'DTM+163:202605312200?+00:303'DTM+164:202606302200?+00:303'\
+             {sts}UNT+16+1'UNZ+1+1'"
+        );
+        match edi_energy::parse(raw.as_bytes()).expect("the MSCONS parses") {
+            AnyMessage::Mscons(m) => m,
+            _ => panic!("an MSCONS"),
+        }
+    }
+
+    #[test]
+    fn a_customer_self_read_is_carried_on_the_interval() {
+        let (reads, skipped) = mscons_intervals(&energiemenge("STS+Z33++Z83'"));
+        assert_eq!(skipped, 0);
+        assert_eq!(reads.len(), 1);
+        assert_eq!(reads[0].plausibilisierung, ["Z83"]);
+        assert_eq!(reads[0].herkunft(), Some("KUNDENSELBSTABLESUNG"));
+    }
+
+    /// A 13017 Zählerstand the customer read: dated by its `DTM+7`
+    /// Nutzungszeitpunkt, not by the `DTM+9` Ablesedatum beside it.
+    fn zaehlerstand(dtm: &str) -> edi_energy::messages::mscons::MsconsMessage {
+        let raw = format!(
+            "UNA:+.? 'UNB+UNOC:3+9900357000004:500+9900357000011:500+260702:0800+1'\
+             UNH+1+MSCONS:D:04B:UN:2.5'BGM+7+DOK13017+9'\
+             DTM+137:202607020800?+00:303'RFF+Z13:13017'\
+             NAD+MS+9900357000004::293'NAD+MR+9900357000011::293'UNS+D'NAD+DP'\
+             LOC+172+DE0001234567890123456789012345678'LIN+1'PIA+5+1-1?:1.8.0:SRW'\
+             QTY+220:14230.5'{dtm}STS+Z33++Z83'UNT+15+1'UNZ+1+1'"
+        );
+        match edi_energy::parse(raw.as_bytes()).expect("the MSCONS parses") {
+            AnyMessage::Mscons(m) => m,
+            _ => panic!("an MSCONS"),
+        }
+    }
+
+    #[test]
+    fn a_zaehlerstand_is_dated_by_its_nutzungszeitpunkt() {
+        let msg = zaehlerstand("DTM+9:20260630:102'DTM+7:202606302200?+00:303'");
+        let (reads, skipped) = mscons_intervals(&msg);
+        assert!(reads.is_empty(), "a Zählerstand is no interval");
+        assert_eq!(skipped, 0, "a Zählerstand is not undated");
+        let (staende, undated) = mscons_zaehlerstaende(&msg);
+        assert_eq!(undated, 0);
+        assert_eq!(staende.len(), 1);
+        assert_eq!(staende[0].at, "2026-06-30T22:00:00+00:00");
+        assert_eq!(staende[0].value, "14230.5");
+        assert_eq!(staende[0].obis_code.as_deref(), Some("1-1:1.8.0"));
+        assert_eq!(
+            staende[0].melo_id.as_deref(),
+            Some("DE0001234567890123456789012345678")
+        );
+        assert_eq!(staende[0].herkunft(), Some("KUNDENSELBSTABLESUNG"));
+    }
+
+    /// Without a Nutzungszeitpunkt the value has no instant to be filed at:
+    /// the Ablesedatum alone is not one.
+    #[test]
+    fn a_zaehlerstand_without_a_nutzungszeitpunkt_is_undated() {
+        let msg = zaehlerstand("DTM+9:20260630:102'");
+        let (staende, undated) = mscons_zaehlerstaende(&msg);
+        assert!(staende.is_empty());
+        assert_eq!(undated, 1);
+        assert_eq!(mscons_intervals(&msg).1, 1);
+    }
+
+    /// Another Plausibilisierungshinweis says why a value is plausible, not who
+    /// obtained it, and a value without one states no origin at all.
+    #[test]
+    fn only_z83_names_an_origin() {
+        let (reads, _) = mscons_intervals(&energiemenge("STS+Z33++Z84'"));
+        assert_eq!(reads[0].plausibilisierung, ["Z84"]);
+        assert_eq!(reads[0].herkunft(), None);
+        let (reads, _) = mscons_intervals(&energiemenge(""));
+        assert!(reads[0].plausibilisierung.is_empty());
+        assert_eq!(reads[0].herkunft(), None);
     }
 }

@@ -1434,7 +1434,7 @@ async fn statutory_aw_cuts_are_driven_by_recorded_facts_not_stored_rates() {
     .execute(&pool)
     .await;
     assert!(
-        over_cap.is_err(),
+        over_cap.is_err_and(|e| e.to_string().contains("sst_max_vollsatz")),
         "a Stromsteuerbefreiung above 2,05 ct/kWh must be rejected by the CHECK"
     );
 
@@ -2497,7 +2497,7 @@ async fn the_marktwert_series_follows_the_plants_vintage() {
             year: 2026,
             serie: eeg_billing::Marktwertserie::Monatsmarktwert,
             month: Some(6),
-            erzeugungsart: "SOLAR_FREIFLAECHE",
+            erzeugungsart: "SOLAR",
             avg_ct_kwh: dec!(3),
             vorlaeufig: false,
             source: "test",
@@ -2511,7 +2511,7 @@ async fn the_marktwert_series_follows_the_plants_vintage() {
             year: 2026,
             serie: eeg_billing::Marktwertserie::Jahresmarktwert,
             month: None,
-            erzeugungsart: "SOLAR_FREIFLAECHE",
+            erzeugungsart: "SOLAR",
             avg_ct_kwh: dec!(5),
             vorlaeufig: true,
             source: "test",
@@ -2611,7 +2611,7 @@ async fn the_zuschlag_date_decides_and_the_other_series_is_not_a_fallback() {
             year: 2026,
             serie: eeg_billing::Marktwertserie::Monatsmarktwert,
             month: Some(6),
-            erzeugungsart: "DEFAULT",
+            erzeugungsart: "SOLAR",
             avg_ct_kwh: dec!(3),
             vorlaeufig: false,
             source: "test",
@@ -2657,6 +2657,586 @@ async fn the_zuschlag_date_decides_and_the_other_series_is_not_a_fallback() {
         "price_missing",
         "no Jahresmarktwert exists, and the Monatsmarktwert is not a substitute for it"
     );
+}
+
+/// Anlage 1 Nr. 3.3.1 EEG 2023 makes „MW" of a Wind an Land, Wind auf See or
+/// Solar plant its own Energieträger's value, the spot price weighted by that
+/// Energieträger's Online-Hochrechnung; only the Nr. 3.2 Energieträger take
+/// „der tatsächliche Monatsmittelwert des Spotmarktpreises". So a solar plant
+/// with no `SOLAR` row is `price_missing` — the `DEFAULT` row and the EPEX mean
+/// are not its MW — while a Biomasse plant takes the spot mean. A row stored
+/// under a solar Bauform would never be read, so it is refused.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_solar_plant_takes_no_spot_mean_as_its_monatsmarktwert() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("mw_solar_spot").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO eeg_anlagen
+           (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+            erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+            foerderendedatum, einspeiser_id)
+         VALUES
+           ('TR-MW-PV',  $1, '51238696781', 2021, '2021-06-01', 80,
+            'SOLAR_FREIFLAECHE', 8.00, 'DIREKTVERMARKTUNG', 8.00, '2041-12-31', 'EB-1'),
+           ('TR-MW-BIO', $1, '51238696781', 2021, '2021-06-01', 80,
+            'WASSERKRAFT', 8.00, 'DIREKTVERMARKTUNG', 8.00, '2041-12-31', 'EB-1')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("seed");
+    let import = |erzeugungsart: &'static str, ct| {
+        let pool = pool.clone();
+        async move {
+            einsd::pg::upsert_marktwert(
+                &pool,
+                einsd::pg::MarktwertImport {
+                    year: 2026,
+                    serie: eeg_billing::Marktwertserie::Monatsmarktwert,
+                    month: Some(6),
+                    erzeugungsart,
+                    avg_ct_kwh: ct,
+                    vorlaeufig: false,
+                    source: "test",
+                },
+            )
+            .await
+        }
+    };
+    import("DEFAULT", dec!(3)).await.expect("DEFAULT row");
+    let settle = |tr_id: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
+                .await
+                .expect("fetch")
+                .expect("plant exists");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                6,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    epex_avg_ct_kwh: Some(dec!(4)),
+                    ..Default::default()
+                },
+            )
+            .expect("build settle input");
+            let mut tx = pool.begin().await.expect("begin");
+            let res = einsd::pg::run_settlement(&mut tx, input)
+                .await
+                .expect("settle");
+            tx.commit().await.expect("commit");
+            res
+        }
+    };
+
+    assert_eq!(
+        settle("TR-MW-PV").await.status,
+        "price_missing",
+        "neither the DEFAULT row nor the EPEX mean is „MW Solar“"
+    );
+    // 8 − 3 (the DEFAULT spot row) = 5 ct on 1000 kWh.
+    assert_eq!(
+        settle("TR-MW-BIO").await.settlement_eur,
+        Some(dec!(50.00)),
+        "Nr. 3.2: Wasserkraft takes the spot mean"
+    );
+
+    let err = import("SOLAR_FREIFLAECHE", dec!(2))
+        .await
+        .expect_err("a Bauform row would never be read");
+    assert!(format!("{err:#}").contains("SOLAR"), "{err:#}");
+    import("SOLAR", dec!(2)).await.expect("MW Solar");
+    // 8 − 2 = 6 ct on 1000 kWh.
+    assert_eq!(settle("TR-MW-PV").await.settlement_eur, Some(dec!(60.00)));
+}
+
+/// § 53c cuts the AW by „die Höhe der pro Kilowattstunde gewährten
+/// Stromsteuerbefreiung", so the figure has to be one per plant and day, and a
+/// month has to have one figure. A retried POST must not double the row, two
+/// rows on one day or overlapping periods are refused by the schema, a later
+/// row closes the open one in the same transaction, and a month the figure
+/// changes in is refused rather than settled at the `billing_date` rate.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_sect53c_figure_is_one_per_day_and_one_per_month() {
+    use rust_decimal::dec;
+    use time::macros::date;
+    let Some((pool, _pg)) = test_pool("sect53c_unique").await else {
+        return;
+    };
+    seed_plant(&pool, "P-SST", TENANT, "", "").await;
+    let record = |ct, von, bis| {
+        let pool = pool.clone();
+        async move {
+            einsd::pg::record_stromsteuerbefreiung(
+                &pool,
+                TENANT,
+                "P-SST",
+                ct,
+                "§9 Abs. 1 Nr. 1 StromStG",
+                von,
+                bis,
+            )
+            .await
+        }
+    };
+    let count = || {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM eeg_stromsteuerbefreiungen WHERE tr_id = 'P-SST'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("count")
+        }
+    };
+
+    let a = record(dec!(2.05), date!(2026 - 01 - 01), None)
+        .await
+        .expect("first figure");
+    assert!(a.neu);
+    // A retried POST returns the row on file.
+    let again = record(dec!(2.05), date!(2026 - 01 - 01), None)
+        .await
+        .expect("retry");
+    assert_eq!((again.id, again.neu), (a.id, false));
+    assert_eq!(count().await, 1, "a retry must not double the row");
+
+    // A different figure on the same day is refused, by the writer and the schema.
+    record(dec!(1.00), date!(2026 - 01 - 01), None)
+        .await
+        .expect_err("two figures on one day");
+    let raw = sqlx::query(
+        "INSERT INTO eeg_stromsteuerbefreiungen
+             (tr_id, tenant, befreiung_ct_kwh, rechtsgrundlage, effective_from)
+         VALUES ('P-SST', $1, 1.00, 'x', '2026-01-01')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await;
+    assert!(raw.is_err(), "the schema refuses a second row on one day");
+    let overlap = sqlx::query(
+        "INSERT INTO eeg_stromsteuerbefreiungen
+             (tr_id, tenant, befreiung_ct_kwh, rechtsgrundlage, effective_from)
+         VALUES ('P-SST', $1, 1.00, 'x', '2026-02-01')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await;
+    assert!(
+        overlap.is_err_and(|e| e.to_string().contains("sst_keine_ueberlappung")),
+        "the schema refuses a period overlapping the open row"
+    );
+
+    // A later figure closes the open one the day before it starts.
+    let b = record(dec!(1.50), date!(2026 - 04 - 15), None)
+        .await
+        .expect("correction");
+    assert_eq!(b.geschlossen, Some(a.id));
+    let until: Option<time::Date> =
+        sqlx::query_scalar("SELECT effective_until FROM eeg_stromsteuerbefreiungen WHERE id = $1")
+            .bind(a.id)
+            .fetch_one(&pool)
+            .await
+            .expect("read");
+    assert_eq!(until, Some(date!(2026 - 04 - 14)));
+    // A figure overlapping a later one is refused.
+    record(dec!(1.00), date!(2026 - 03 - 01), None)
+        .await
+        .expect_err("overlaps the row from 15.04.");
+
+    // March has one figure; April changes on the 15th and is refused.
+    let settle = |month| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "P-SST")
+                .await
+                .expect("fetch")
+                .expect("plant");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                month,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    ..Default::default()
+                },
+            )
+            .expect("input");
+            let mut tx = pool.begin().await.expect("begin");
+            einsd::pg::run_settlement(&mut tx, input).await
+        }
+    };
+    assert_eq!(settle(3).await.expect("March").status, "calculated");
+    let err = settle(4).await.expect_err("April has two §53c figures");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("§53c") && msg.contains("2026-04-15"), "{msg}");
+}
+
+/// § 44b Abs. 1 Satz 3 EEG 2023, in the Fassung § 101 Abs. 2 Satz 2 applies
+/// until the Commission's approval of 18.09.2025 — that of 24.02.2025 —
+/// exempts a § 44 plant from the 45 %-Quote and nothing else. A 120 kW plant on 90 %
+/// Gülle is a Güllekleinanlage (§ 44 Abs. 2 Nr. 2: „höchstens 150 Kilowatt")
+/// and is not capped; the same plant on Energiepflanzen is; a tendered plant
+/// is capped before the approval and spared after it, because the Nr. 2 limb
+/// for a „Zuschlag nach § 39" is the current Fassung's. The settlement and the MCP quota tool read one predicate.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_sect44b_quote_spares_a_sect44_plant_and_no_other() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("sect44b_limbs").await else {
+        return;
+    };
+    for (tr_id, brennstoff, guelle, leistung, modell, zuschlag) in [
+        (
+            "TR-GUELLE",
+            "GUELLE",
+            dec!(0.90),
+            dec!(120),
+            "DIREKTVERMARKTUNG",
+            None,
+        ),
+        (
+            "TR-NAWARO",
+            "PFLANZLICHE_BIOMASSE",
+            dec!(0.10),
+            dec!(120),
+            "DIREKTVERMARKTUNG",
+            None,
+        ),
+        (
+            "TR-ZUSCHLAG",
+            "PFLANZLICHE_BIOMASSE",
+            dec!(0.10),
+            dec!(500),
+            "AUSSCHREIBUNG",
+            Some("B-2025-1"),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO eeg_anlagen
+               (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+                erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+                ausschreibungs_zuschlag_id, gebotstermin, zuschlag_datum, foerderendedatum,
+                einspeiser_id, biomasse_hauptbrennstoff, biomasse_guelle_anteil,
+                biogas_quota_kwh_ytd, biogas_quota_ytd_year)
+             VALUES ($1, $2, '51238696781', 2023, '2024-06-01', $3,
+                     'BIOGAS', 19.00, $4, 19.00, $5, '2025-10-01', '2025-12-10',
+                     '2044-12-31', 'EB-1', $6, $7, 5000000, 2026)",
+        )
+        .bind(tr_id)
+        .bind(TENANT)
+        .bind(leistung)
+        .bind(modell)
+        .bind(zuschlag)
+        .bind(brennstoff)
+        .bind(guelle)
+        .execute(&pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed {tr_id}: {e}"));
+    }
+    // The Commission approved § 44b Abs. 1 Satz 3 on 18.09.2025: June 2025
+    // settles under the Fassung of 24.02.2025, March 2026 under the current one.
+    for (tr_id, jahr, monat, gekappt) in [
+        ("TR-GUELLE", 2026, 3, false),
+        ("TR-NAWARO", 2026, 3, true),
+        ("TR-ZUSCHLAG", 2025, 6, true),
+        ("TR-ZUSCHLAG", 2026, 3, false),
+    ] {
+        sqlx::query(
+            "UPDATE eeg_anlagen SET biogas_quota_kwh_ytd = 5000000, biogas_quota_ytd_year = $2
+              WHERE tr_id = $1",
+        )
+        .bind(tr_id)
+        .bind(jahr)
+        .execute(&pool)
+        .await
+        .expect("quota used up");
+        let periode = einsd::pg::abrechnungsmonat(jahr, monat).expect("month");
+        let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
+            .await
+            .expect("fetch")
+            .expect("plant");
+        assert_eq!(
+            einsd::pg::sect44b_quote_gilt_fuer(&anlage, periode),
+            Ok(gekappt),
+            "{tr_id} {jahr}-{monat}: the MCP predicate"
+        );
+        let input = einsd::pg::build_settle_input(
+            TENANT,
+            &anlage,
+            &regelbesteuert(),
+            jahr,
+            monat,
+            einsd::pg::SettleOverrides {
+                einspeisemenge_kwh: Some(dec!(10000)),
+                jahresmarktwert_ct_kwh: Some(dec!(5)),
+                ..Default::default()
+            },
+        )
+        .expect("input");
+        let mut tx = pool.begin().await.expect("begin");
+        einsd::pg::run_settlement(&mut tx, input)
+            .await
+            .expect("settle");
+        tx.commit().await.expect("commit");
+        let positions: serde_json::Value = sqlx::query_scalar(
+            "SELECT positions_json FROM settlement_receipts
+              WHERE tr_id = $1 AND billing_year = $2 AND billing_month = $3",
+        )
+        .bind(tr_id)
+        .bind(jahr)
+        .bind(monat)
+        .fetch_one(&pool)
+        .await
+        .expect("receipt");
+        let quote = positions.to_string().contains("§44b Abs. 1");
+        assert_eq!(
+            quote, gekappt,
+            "{tr_id} {jahr}-{monat}: the settlement — {positions}"
+        );
+    }
+}
+
+/// § 39i Abs. 1 Satz 1 EEG 2023 reads the award year in Nr. 1 and 4 and the
+/// Gebotstermin in Nr. 2 and 3. A tendered Biogasanlage is settled against the
+/// Nummer its two dates name: a Gebotstermin of 01.10.2025 awarded on
+/// 10.12.2025 is Nr. 3 (30 %), so a 28 % share keeps the claim. Without its
+/// Gebotstermin, or named by Nr. 3 and Nr. 4 at once (awarded in 2026), the
+/// cap is not decided and the period is refused — the award date alone used
+/// to stand in for the Gebotstermin.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_sect39i_cap_reads_the_gebotstermin_and_the_award_year() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("sect39i_dates").await else {
+        return;
+    };
+    for (tr_id, gebotstermin, zuschlag) in [
+        ("TR-NR3", Some("2025-10-01"), "2025-12-10"),
+        ("TR-OHNE", None, "2025-12-10"),
+        ("TR-BEIDE", Some("2025-10-01"), "2026-01-20"),
+    ] {
+        sqlx::query(
+            "INSERT INTO eeg_anlagen
+               (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+                erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+                ausschreibungs_zuschlag_id, gebotstermin, zuschlag_datum, foerderendedatum,
+                einspeiser_id, biomasse_hauptbrennstoff, biomasse_getreide_mais_anteil)
+             VALUES ($1, $2, '51238696781', 2023, '2026-03-01', 500, 'BIOGAS', 19.00,
+                     'AUSSCHREIBUNG', 19.00, 'B-1', $3::date, $4::date, '2046-12-31', 'EB-1',
+                     'PFLANZLICHE_BIOMASSE', 0.28)",
+        )
+        .bind(tr_id)
+        .bind(TENANT)
+        .bind(gebotstermin)
+        .bind(zuschlag)
+        .execute(&pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed {tr_id}: {e}"));
+    }
+    let settle = |tr_id: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
+                .await
+                .expect("fetch")
+                .expect("plant");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                4,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    jahresmarktwert_ct_kwh: Some(dec!(5)),
+                    ..Default::default()
+                },
+            )
+            .expect("input");
+            let mut tx = pool.begin().await.expect("begin");
+            einsd::pg::run_settlement(&mut tx, input).await
+        }
+    };
+    assert_eq!(settle("TR-NR3").await.expect("Nr. 3").status, "calculated");
+    for tr_id in ["TR-OHNE", "TR-BEIDE"] {
+        let err = settle(tr_id).await.expect_err(tr_id);
+        assert!(einsd::settle::is_refusal(&err), "{tr_id}: {err:#}");
+        assert!(format!("{err:#}").contains("§ 39i"), "{tr_id}: {err:#}");
+    }
+}
+
+/// A § 51b plant settled for September 2025 — the month the Commission's
+/// approval of 18.09.2025 falls in — is refused (`422`), as § 44b and § 50a
+/// are: § 51b reaches the days from the 18th and not those before, and one
+/// settlement of the month cannot state both. August and October settle.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_sect51b_plant_is_refused_for_the_month_of_the_approval() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("sect51b_month").await else {
+        return;
+    };
+    // 100 kW keeps the plant below the § 44b 45 %-Quote (Satz 1: „mehr als 100
+    // Kilowatt"), so September is refused by the engine's § 51b gate alone.
+    sqlx::query(
+        "INSERT INTO eeg_anlagen
+           (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+            erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+            ausschreibungs_zuschlag_id, is_biogas_sect51b, gebotstermin, zuschlag_datum,
+            foerderendedatum, einspeiser_id)
+         VALUES ('TR-51B-SEP', $1, '51238696781', 2023, '2025-06-01', 100, 'BIOGAS', 18.00,
+                 'AUSSCHREIBUNG', 18.00, 'B-1', true, '2025-04-01', '2025-06-10',
+                 '2045-12-31', 'EB-1')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("seed");
+    let settle = |monat: i16| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "TR-51B-SEP")
+                .await
+                .expect("fetch")
+                .expect("plant");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2025,
+                monat,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    jahresmarktwert_ct_kwh: Some(dec!(5)),
+                    ..Default::default()
+                },
+            )
+            .expect("input");
+            let mut tx = pool.begin().await.expect("begin");
+            einsd::pg::run_settlement(&mut tx, input).await
+        }
+    };
+    let err = settle(9)
+        .await
+        .expect_err("September 2025 holds the approval");
+    assert!(einsd::settle::is_refusal(&err), "{err:#}");
+    assert!(format!("{err:#}").contains("51b"), "{err:#}");
+    assert_eq!(settle(8).await.expect("August").status, "calculated");
+    assert_eq!(settle(10).await.expect("October").status, "calculated");
+
+    // A plant no § 101 Abs. 2 provision reaches settles September as usual: the
+    // approval splits only the periods whose rules it changes.
+    seed_plant(&pool, "P-SOLAR-SEP", TENANT, "", "").await;
+    let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "P-SOLAR-SEP")
+        .await
+        .expect("fetch")
+        .expect("plant");
+    let input = einsd::pg::build_settle_input(
+        TENANT,
+        &anlage,
+        &regelbesteuert(),
+        2025,
+        9,
+        einsd::pg::SettleOverrides {
+            einspeisemenge_kwh: Some(dec!(1000)),
+            ..Default::default()
+        },
+    )
+    .expect("input");
+    let mut tx = pool.begin().await.expect("begin");
+    let res = einsd::pg::run_settlement(&mut tx, input)
+        .await
+        .expect("a solar plant's September");
+    assert_eq!(res.status, "calculated");
+}
+
+/// § 51b needs the Gebotstermin: § 100 Abs. 37 Satz 2 excludes a plant awarded
+/// in a Gebotstermin after 31.12.2022 and before 24.02.2025, so a § 51b plant
+/// without one is refused for a period after the approval. § 50a Abs. 1 Satz 1
+/// sets 65 EUR/kW/Jahr before the approval of 18.09.2025 and 100 after it, so
+/// a stored 100 is refused for June 2025, paid for March 2026, and a month the
+/// approval falls inside is refused.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_fassung_inputs_are_refused_when_missing_or_overstated() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("sect101_inputs").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO eeg_anlagen
+           (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+            erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+            ausschreibungs_zuschlag_id, is_biogas_sect51b, foerderendedatum, einspeiser_id)
+         VALUES
+           ('TR-51B', $1, '51238696781', 2023, '2024-06-01', 500, 'BIOGAS', 18.00,
+            'AUSSCHREIBUNG', 18.00, 'B-1', true, '2044-12-31', 'EB-1'),
+           ('TR-FLEX', $1, '51238696781', 2023, '2024-06-01', 500, 'BIOGAS', 100,
+            'FLEXIBILITAET_ZUSCHLAG', NULL, NULL, false, '2044-12-31', 'EB-1')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("seed");
+    let settle = |tr_id: &'static str, jahr: i16, monat: i16| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
+                .await
+                .expect("fetch")
+                .expect("plant");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                jahr,
+                monat,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    jahresmarktwert_ct_kwh: Some(dec!(5)),
+                    ..Default::default()
+                },
+            )
+            .expect("input");
+            let mut tx = pool.begin().await.expect("begin");
+            einsd::pg::run_settlement(&mut tx, input).await
+        }
+    };
+    // § 51b without a Gebotstermin after the approval; 100 EUR/kW before it;
+    // September 2025, which the approval falls inside.
+    for (tr_id, jahr, monat) in [
+        ("TR-51B", 2026, 3),
+        ("TR-FLEX", 2025, 6),
+        ("TR-FLEX", 2025, 9),
+    ] {
+        let err = settle(tr_id, jahr, monat).await.expect_err(tr_id);
+        assert!(
+            einsd::settle::is_refusal(&err),
+            "{tr_id} {jahr}-{monat}: {err:#}"
+        );
+    }
+    // 500 kW × 100 EUR / 12 from the approval on.
+    let flex = settle("TR-FLEX", 2026, 3).await.expect("100 EUR/kW/Jahr");
+    assert_eq!(flex.settlement_eur, Some(dec!(4166.66667)));
+    sqlx::query("UPDATE eeg_anlagen SET verguetungssatz_ct = 65 WHERE tr_id = 'TR-FLEX'")
+        .execute(&pool)
+        .await
+        .expect("update");
+    let flex = settle("TR-FLEX", 2025, 6).await.expect("65 EUR/kW/Jahr");
+    // 500 kW × 65 EUR / 12.
+    assert_eq!(flex.settlement_eur, Some(dec!(2708.33333)));
 }
 
 /// The §52 Pflichtverstoß register supplies the three things a bare derivation
@@ -2856,6 +3436,128 @@ async fn the_sect52_claim_reaches_the_cloudevent_as_a_running_total() {
         Some(dec!(81.10)),
         "the Vergütung is untouched — §52 Abs. 6 Aufrechnung is the ledger's call"
     );
+}
+
+/// The receipt states the running § 52 claim, so a month owes only what it
+/// adds. A breach running April–June on 100 kW adds 1 000 EUR a month; with the
+/// § 52 Abs. 6 Satz 2 set-off elected each increment is netted once against the
+/// month's § 19 Abs. 1 claim, what the claim does not cover stays owed, and the
+/// sum set off and owed is the claim. Without the election the payout is whole
+/// and the increment is owed apart from it (Abs. 6 Satz 1).
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_running_sect52_claim_is_set_off_one_month_at_a_time() {
+    use rust_decimal::{Decimal, dec};
+    let Some((pool, _pg)) = test_pool("sect52_netting").await else {
+        return;
+    };
+    for tr_id in ["TR-AUF", "TR-GES"] {
+        sqlx::query(
+            "INSERT INTO eeg_anlagen
+               (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+                erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
+                sect9_fernsteuerbarkeit, mastr_registriert, einspeiser_id)
+             VALUES ($2, $1, '51238696781', 2023, '2024-06-01', 100,
+                     'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
+                     true, true, 'EB-1')",
+        )
+        .bind(TENANT)
+        .bind(tr_id)
+        .execute(&pool)
+        .await
+        .expect("seed");
+        let mut conn = pool.acquire().await.expect("conn");
+        einsd::pg::open_pflichtverstoss(
+            &mut conn,
+            TENANT,
+            tr_id,
+            eeg_billing::SanktionsTyp::IMssAnforderungNichtErfuellt,
+            time::macros::date!(2026 - 04 - 01),
+            false,
+            None,
+        )
+        .await
+        .expect("record");
+    }
+    let settle = |tr_id: &'static str, month: i16, kwh: Decimal, aufrechnen: bool| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
+                .await
+                .expect("fetch")
+                .expect("plant");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                month,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(kwh),
+                    sect52_aufrechnen: aufrechnen,
+                    ..Default::default()
+                },
+            )
+            .expect("input");
+            let mut tx = pool.begin().await.expect("begin");
+            let res = einsd::pg::run_settlement(&mut tx, input)
+                .await
+                .expect("settle");
+            tx.commit().await.expect("commit");
+            res
+        }
+    };
+
+    // 20 000 kWh × 8,11 ct = 1 622 EUR covers April's 1 000 EUR increment.
+    let april = settle("TR-AUF", 4, dec!(20000), true).await;
+    let s = april.sect52.expect("a claim runs");
+    assert_eq!(
+        (s.monat_eur, s.aufgerechnet_eur, s.rest_eur),
+        (dec!(1000), dec!(1000), dec!(0))
+    );
+    assert_eq!(
+        april.settlement_eur,
+        Some(dec!(1622.00)),
+        "the § 19 claim is stated whole"
+    );
+    // A re-settle of April reaches the same increment, not a second one.
+    let again = settle("TR-AUF", 4, dec!(20000), true)
+        .await
+        .sect52
+        .expect("claim");
+    assert_eq!(again.monat_eur, dec!(1000));
+    // May: 5 000 kWh = 405,50 EUR covers part of the increment.
+    let may = settle("TR-AUF", 5, dec!(5000), true)
+        .await
+        .sect52
+        .expect("claim");
+    assert_eq!(may.anspruch_kumuliert_eur, dec!(2000));
+    assert_eq!(
+        (may.monat_eur, may.aufgerechnet_eur, may.rest_eur),
+        (dec!(1000), dec!(405.50), dec!(594.50))
+    );
+    let june = settle("TR-AUF", 6, dec!(20000), true)
+        .await
+        .sect52
+        .expect("claim");
+    assert_eq!(june.monat_eur, dec!(1000));
+    let (netted, owed): (Decimal, Decimal) = sqlx::query_as(
+        "SELECT sum(aufgerechnet_eur), sum(rest_eur) FROM eeg_sect52_monate WHERE tr_id = 'TR-AUF'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("sum");
+    assert_eq!(
+        netted + owed,
+        dec!(3000),
+        "the months add up to the claim, once"
+    );
+
+    // Without the election nothing is set off.
+    let gesondert = settle("TR-GES", 4, dec!(20000), false).await;
+    let s = gesondert.sect52.expect("claim");
+    assert_eq!((s.aufgerechnet_eur, s.rest_eur), (dec!(0), dec!(1000)));
+    assert_eq!(gesondert.settlement_eur, Some(dec!(1622.00)));
 }
 
 /// §52 Abs. 3 Satz 1 Nr. 1 names **Nummern 1, 3, 4 and 11** and no others, so a

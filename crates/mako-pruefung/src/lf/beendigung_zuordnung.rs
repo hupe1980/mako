@@ -58,6 +58,10 @@ macro_rules! gas_code {
 ///
 /// If the tree names a code [`crate::codes::E_0624_CODES`] does not publish.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the published Prüfschritte in order; splitting them would scatter the tree"
+)]
 pub fn pruefe_beendigung_zuordnung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntscheidung {
     let ebd = EBD_BEENDIGUNG_ZUORDNUNG;
     let list = E_0624_CODES;
@@ -89,7 +93,11 @@ pub fn pruefe_beendigung_zuordnung(anfrage: &LfAnfrage, lage: &LfVertragslage) -
     };
 
     // Prüfschritt 20/200 — besteht zum Folgetag des genannten Termins noch eine
-    // Zuordnung? Ersatz-/Grundversorgung zählt laut EBD-Hinweis als ja.
+    // Zuordnung? Ersatz-/Grundversorgung zählt laut EBD-Hinweis als ja. 20, 200
+    // and 80/90 ask about the Anfrage's Termin (EBD 4.3 Kap. 6.6.3, S. 81–83).
+    if let Err(e) = anfrage.termin_oder_eskalation(ebd, if verbrauchend { 20 } else { 200 }) {
+        return *e;
+    }
     let zuordnung = match lage.zuordnung_am_folgetag {
         Bekannt::Unbekannt => {
             return LfEntscheidung::eskalation(
@@ -144,8 +152,10 @@ pub fn pruefe_beendigung_zuordnung(anfrage: &LfAnfrage, lage: &LfVertragslage) -
     }
 
     // Prüfschritt 40 — Transaktionsgrund Ein-/Auszug (Umzug)?
-    if anfrage.grund_ist(crate::EIN_AUSZUG) {
-        return umzug_zweig(anfrage, lage);
+    match anfrage.transaktionsgrund_oder_eskalation(ebd, 40) {
+        Err(e) => return *e,
+        Ok(grund) if grund == crate::EIN_AUSZUG => return umzug_zweig(anfrage, lage),
+        Ok(_) => {}
     }
 
     // Prüfschritt 70/80 — ist der LFA auch Grundversorger, und ist die MaLo zum
@@ -298,10 +308,13 @@ pub fn pruefe_abmeldungsanfrage_gas(anfrage: &LfAnfrage, lage: &LfVertragslage) 
     let ebd = EBD_ABMELDUNGSANFRAGE_GAS;
     let termin = anfrage.termin;
 
-    // `Z08` — bereits zum gleichen Zeitpunkt bestätigt.
-    if let (Some(bestaetigt), Some(t)) = (lage.bestaetigtes_zuordnungsende, termin)
-        && bestaetigt == t
-    {
+    // `Z08` — bereits zum gleichen Zeitpunkt bestätigt. Without the Termin the
+    // comparison has no side.
+    let t = match anfrage.termin_oder_eskalation(ebd, 0) {
+        Ok(t) => t,
+        Err(e) => return *e,
+    };
+    if lage.bestaetigtes_zuordnungsende == Some(t) {
         gas_code!(list, ebd, "Z08", 0, termin);
     }
 

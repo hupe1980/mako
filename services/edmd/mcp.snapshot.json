@@ -62,6 +62,14 @@
             "string",
             "null"
           ]
+        },
+        "sparte": {
+          "description": "`STROM` · `GAS` · `WAERME` · `WASSER` — decides whether the period runs\non calendar days or Gastage. Absent, the Sparte the MaLo's readings are\nstored under; with none stored, refused.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       }
     },
@@ -202,7 +210,7 @@
           "pattern": "^-?\\d+(\\.\\d+)?([eE]\\d+)?$"
         },
         "sparte": {
-          "description": "`STROM` (default) or `GAS` — Gas balances on the 06:00 Gastag.",
+          "description": "`STROM` or `GAS` — Gas balances on the 06:00 Gastag. Absent, the Sparte\nthe MaLo's readings are stored under; with none stored, refused.",
           "type": [
             "string",
             "null"
@@ -589,7 +597,6 @@
         "malo_id",
         "gap_from",
         "gap_to",
-        "bundesland",
         "reason"
       ],
       "properties": {
@@ -615,8 +622,12 @@
           "minimum": 0
         },
         "bundesland": {
-          "description": "**Required** — the Bundesland whose holidays decide the day class\n(`BE`, `NW`, `DE-BY`, …).",
-          "type": "string"
+          "description": "The Bundesland whose holidays decide the day class (`BE`, `NW`,\n`DE-BY`, …). Absent, the Land cached for the MaLo from `marktd`; with\nneither, refused.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "hold": {
           "description": "Fill gaps longer than 2 h with the last measured value (`Z93`). Gas only.",

@@ -73,7 +73,7 @@ pub const IDENTIFIKATION_WERKTAGE: u32 = 60;
 /// device data the Anmeldung carries, against its own NIS/GIS. That is not a
 /// market-communication lookup and not something this crate can do, so the
 /// caller supplies the outcome.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Identifikation {
     /// Exactly one Marktlokation matched.
     Eindeutig {
@@ -100,7 +100,7 @@ pub enum Identifikation {
 /// its own Antwortcode. Grouping them into a bitflag or a state enum would make
 /// the mapping from field to Prüfschritt — the thing an auditor checks — a
 /// lookup instead of a name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag is an independent switch, not a state machine"
@@ -123,7 +123,7 @@ pub struct NeuanlageBefund {
 }
 
 /// Parsed fields of an inbound 55600 / 55601.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NeuanlageAnfrage {
     /// `55600` verbrauchende, `55601` erzeugende Marktlokation.
     pub pid: u32,

@@ -6,18 +6,18 @@
 //! Lieferant has not been told the outcome — their `gpke-sperrung-lf` process
 //! cannot close, and GPKE gives them no way to find out but to ask.
 //!
-//! So it is a queue, not a one-shot: [`claim_iftsta_retry`] leases the worker one
-//! such order at a time with an `UPDATE … RETURNING` — a pooled `SELECT … FOR
-//! UPDATE SKIP LOCKED` holds no lock past the statement, and two replicas sent
-//! the same Sperrauftrag-Status to the Lieferant — a successful dispatch closes
-//! it, and orders past [`IFTSTA_MAX_ATTEMPTS`] are announced once as
-//! `de.sperr.iftsta.ausstehend` and left for a human.
+//! So the IFTSTA 21039 is owed, not attempted: [`report_outcome`] commits the
+//! terminal state together with a `mako_service::outbox` command to makod, keyed
+//! on the order ([`iftsta_key`]). The outbox worker delivers it under the shared
+//! retry and dead-letter policy and stamps `iftsta_dispatched_at` in the
+//! transaction that marks it delivered ([`record_iftsta_delivered`]). An order
+//! whose command was dead-lettered, or that is past its Frist, is announced once
+//! as `de.sperr.iftsta.ausstehend` and left for a human.
 
 use anyhow::Context as _;
-use mako_markt::makod_client::{ForwardCommand, MakodClient};
+use mako_markt::makod_client::ForwardCommand;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
-use std::sync::Arc;
 use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
@@ -203,33 +203,21 @@ pub fn iftsta_faellig_am(abschluss: Date) -> Date {
     )
 }
 
-/// How many times the worker re-tries an IFTSTA before escalating to a human.
-///
-/// Bounded because a dispatch that keeps failing is not a transport problem: the
-/// makod process is in the wrong state, or was never spawned. Retrying that
-/// forever hides it behind a growing attempt count.
-pub const IFTSTA_MAX_ATTEMPTS: i32 = 8;
+/// The upstream the IFTSTA 21039 commands are owed to — the name the outbox
+/// worker built by [`crate::sperr::iftsta_worker`] drains.
+pub const IFTSTA_UPSTREAM: &str = "makod";
 
-/// When an order may be dispatched again after the attempt being made now — the
-/// claim lease and the retry backoff in one expression, read against the row's
-/// **pre-update** `iftsta_attempts`.
-///
-/// `30 s → 2 min → 8 min → 32 min → 2 h` and then flat, so the eight attempts of
-/// [`IFTSTA_MAX_ATTEMPTS`] are spent over roughly nine hours. That is the point
-/// of it: the sweep re-claimed a failing order every 250 ms, so a `makod` that
-/// was down for three seconds burned the whole budget and escalated an order
-/// that a minute's patience would have delivered. Nine hours still leaves the
-/// escalation well inside the „1. WT nach dem Abschluss" the Lieferant is owed
-/// the Auftragsstatus by, and [`list_stuck_iftsta`] raises the alarm on that
-/// deadline regardless of the counter.
-///
-/// It is a SQL fragment rather than a Rust duration because it must be applied
-/// **in the claiming statement**: computing it in Rust would need the attempt
-/// count first, and reading it before the update is exactly the race the claim
-/// exists to close.
-const IFTSTA_BACKOFF: &str = "now() + LEAST(\
-     INTERVAL '30 seconds' * POWER(4, iftsta_attempts), \
-     INTERVAL '2 hours')";
+/// The outbox key, and the makod idempotency key, of an order's IFTSTA 21039.
+/// Keyed on the order, not the attempt: one order owes one Auftragsstatus.
+#[must_use]
+pub fn iftsta_key(order_id: Uuid) -> String {
+    format!("processd-sperr-iftsta-{order_id}")
+}
+
+/// The `event_outbox` join that reads an order's IFTSTA delivery track — the
+/// attempts made and the last error — off the command that carries it.
+const IFTSTA_OUTBOX_JOIN: &str =
+    "LEFT JOIN event_outbox o ON o.event_id = 'processd-sperr-iftsta-' || s.id::TEXT";
 
 // ── Requests ──────────────────────────────────────────────────────────────────
 
@@ -379,13 +367,17 @@ impl SperrOrderView {
     }
 }
 
-const ORDER_COLUMNS: &str = "id::TEXT, tenant, malo_id, lf_mp_id, order_type, \
-     pruefidentifikator, process_id, ausfuehrung_am, fruehestens_am, arbeitszeit, \
-     treffpunkt_hinweis, treffpunkt_strasse, treffpunkt_plz, treffpunkt_ort, \
-     treffpunkt_land, hinweis, ausfuehrung_faellig_am, status, sperrversuche, \
-     letzter_versuch_am, letzter_versuch_grund, executed_at, execution_note, \
-     fail_reason, pruefschritt_code, iftsta_faellig_am, iftsta_ref, \
-     iftsta_dispatched_at, iftsta_attempts, iftsta_last_error, created_at, updated_at";
+/// The columns of a [`SperrOrderRow`], read from `sperr_orders s` joined to its
+/// IFTSTA command ([`IFTSTA_OUTBOX_JOIN`]): the attempts and the last error of
+/// the delivery live on the command.
+const ORDER_COLUMNS: &str = "s.id::TEXT AS id, s.tenant, s.malo_id, s.lf_mp_id, s.order_type, \
+     s.pruefidentifikator, s.process_id, s.ausfuehrung_am, s.fruehestens_am, s.arbeitszeit, \
+     s.treffpunkt_hinweis, s.treffpunkt_strasse, s.treffpunkt_plz, s.treffpunkt_ort, \
+     s.treffpunkt_land, s.hinweis, s.ausfuehrung_faellig_am, s.status, s.sperrversuche, \
+     s.letzter_versuch_am, s.letzter_versuch_grund, s.executed_at, s.execution_note, \
+     s.fail_reason, s.pruefschritt_code, s.iftsta_faellig_am, s.iftsta_ref, \
+     s.iftsta_dispatched_at, COALESCE(o.attempts, 0)::INTEGER AS iftsta_attempts, \
+     o.last_error AS iftsta_last_error, s.created_at, s.updated_at";
 
 /// Aggregate counters for the compliance sweep.
 #[derive(Debug, Serialize)]
@@ -409,7 +401,7 @@ pub struct SperrStats {
     /// Terminal orders whose IFTSTA 21039 has not been dispatched. The LF has
     /// not learned the outcome and their process cannot close.
     pub iftsta_outstanding: i64,
-    /// …of which have exhausted the retry budget and need a human.
+    /// …of which have a dead-lettered IFTSTA command and need a human.
     pub iftsta_stuck: i64,
     /// Orders the **Lieferant** sent later than its own Vorlauffrist allowed —
     /// 6 Werktage before the frühestmöglicher Sperrtermin, or 12 before a
@@ -454,6 +446,7 @@ pub async fn create_order_pg(
              (GPKE Teil 2 § 3.5.1.2 Nr. 2 does not publish it as a ground)",
         );
     }
+    let mut tx = pool.begin().await?;
     let row = sqlx::query(
         r"INSERT INTO sperr_orders
               (tenant, malo_id, lf_mp_id, order_type, pruefidentifikator, process_id,
@@ -490,13 +483,23 @@ pub async fn create_order_pg(
     // does not invent one.
     .bind(befund.map(|b| b.eingehalten))
     .bind(befund.map(|b| b.spaetester_ut))
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .context("insert sperr_order")?;
 
     let Some(row) = row else { return Ok(None) };
     let id: String = row.try_get("id")?;
-    Ok(Some(id.parse::<Uuid>().context("parse UUID")?))
+    let id = id.parse::<Uuid>().context("parse UUID")?;
+    // The order and its arrival commit together; a failure rolls the insert
+    // back, and the ORDERS redelivery or the operator's retry inserts it again.
+    mako_service::outbox::enqueue(
+        &mut tx,
+        &crate::sperr::events::auftrag_eingegangen(tenant, id, req),
+    )
+    .await
+    .context("enqueue de.sperr.auftrag.eingegangen")?;
+    tx.commit().await.context("commit sperr_order")?;
+    Ok(Some(id))
 }
 
 // ── Read ──────────────────────────────────────────────────────────────────────
@@ -511,12 +514,13 @@ pub async fn list_orders_pg(
 ) -> anyhow::Result<Vec<SperrOrderRow>> {
     sqlx::query_as::<_, SperrOrderRow>(mako_service::sql::dynamic(format!(
         r"SELECT {ORDER_COLUMNS}
-          FROM sperr_orders
-          WHERE tenant = $1
-            AND ($2::TEXT IS NULL OR status = $2)
-            AND ($3::TEXT IS NULL OR malo_id = $3)
-            AND (NOT $4 OR COALESCE(ausfuehrung_am, fruehestens_am) <= heute())
-          ORDER BY COALESCE(ausfuehrung_am, fruehestens_am) NULLS LAST, created_at DESC
+          FROM sperr_orders s
+          {IFTSTA_OUTBOX_JOIN}
+          WHERE s.tenant = $1
+            AND ($2::TEXT IS NULL OR s.status = $2)
+            AND ($3::TEXT IS NULL OR s.malo_id = $3)
+            AND (NOT $4 OR COALESCE(s.ausfuehrung_am, s.fruehestens_am) <= heute())
+          ORDER BY COALESCE(s.ausfuehrung_am, s.fruehestens_am) NULLS LAST, s.created_at DESC
           LIMIT $5"
     )))
     .bind(tenant)
@@ -535,7 +539,8 @@ pub async fn fetch_order_pg(
     tenant: &str,
 ) -> anyhow::Result<Option<SperrOrderRow>> {
     sqlx::query_as::<_, SperrOrderRow>(mako_service::sql::dynamic(format!(
-        "SELECT {ORDER_COLUMNS} FROM sperr_orders WHERE id = $1 AND tenant = $2"
+        "SELECT {ORDER_COLUMNS} FROM sperr_orders s {IFTSTA_OUTBOX_JOIN} \
+         WHERE s.id = $1 AND s.tenant = $2"
     )))
     .bind(id)
     .bind(tenant)
@@ -586,16 +591,15 @@ impl Outcome<'_> {
 /// What [`report_outcome`] recorded.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Reported {
-    /// The order moved to its terminal state. The IFTSTA is either dispatched
-    /// (`iftsta_ref` set) or queued for the retry worker.
-    Recorded { iftsta_dispatched: bool },
+    /// The order moved to its terminal state. `iftsta_queued` says the IFTSTA
+    /// 21039 command committed with it; `false` is an operator-created order,
+    /// which has no Lieferant waiting and is closed locally.
+    Recorded { iftsta_queued: bool },
     /// A Sperrversuch was recorded and the order stays `pending` — the
     /// Festlegung allows a second visit, so no IFTSTA goes out yet.
     VersuchNotiert {
         /// How many of the two allowed attempts have been made.
         sperrversuche: i32,
-        /// The Marktlokation, for the announcement.
-        malo_id: String,
     },
     /// No pending order with that id in this tenant.
     NotFound,
@@ -603,23 +607,21 @@ pub enum Reported {
 
 /// Record a field outcome and report it to the Lieferant with IFTSTA 21039.
 ///
-/// The order is **claimed first** — a single guarded `UPDATE … WHERE status =
-/// 'pending'` — and only then is the IFTSTA dispatched. Reading, dispatching and
-/// guarding the write afterwards let a concurrent execute and fail both pass the
-/// read, so the LF received an Ausführungs- *and* a Fehlmeldung for one order.
+/// The order is **claimed** — a single guarded `UPDATE … WHERE status =
+/// 'pending'` — so a concurrent execute and fail cannot both pass, and the LF
+/// never receives an Ausführungs- *and* a Fehlmeldung for one order.
 ///
-/// If the dispatch then fails, the claim is **kept**, not rolled back: the field
-/// team's report is a fact about the physical world and must not be discarded
-/// because a downstream service was unreachable. The order lands in the retry
-/// queue instead, which is what [`claim_iftsta_retry`] drains.
+/// The claim, the IFTSTA 21039 command and the `ausgefuehrt`/`fehlgeschlagen`
+/// event commit in one transaction (a Sperrversuch commits with its
+/// `versuch.gescheitert`): the field
+/// team's report never waits on makod, and the Auftragsstatus it owes the
+/// Lieferant cannot be lost behind it. The outbox worker delivers the command.
 ///
 /// # Errors
 ///
-/// Propagates database errors. A failed dispatch is *not* an error — it is a
-/// queued retry.
+/// Propagates database errors; nothing is recorded then.
 pub async fn report_outcome(
     pool: &PgPool,
-    makod: &Arc<MakodClient>,
     id: Uuid,
     tenant: &str,
     outcome: &Outcome<'_>,
@@ -648,6 +650,7 @@ pub async fn report_outcome(
         ..
     } = outcome
     {
+        let mut tx = pool.begin().await?;
         let recorded = sqlx::query(
             r"UPDATE sperr_orders
               SET sperrversuche = sperrversuche + 1,
@@ -662,15 +665,28 @@ pub async fn report_outcome(
         .bind(tenant)
         .bind(*reason)
         .bind(MAX_SPERRVERSUCHE)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await
         .context("record Sperrversuch")?;
         if let Some(row) = recorded {
-            return Ok(Reported::VersuchNotiert {
-                sperrversuche: row.try_get("sperrversuche")?,
-                malo_id: row.try_get("malo_id")?,
-            });
+            let sperrversuche: i32 = row.try_get("sperrversuche")?;
+            let malo_id: String = row.try_get("malo_id")?;
+            mako_service::outbox::enqueue(
+                &mut tx,
+                &crate::sperr::events::versuch_gescheitert(
+                    tenant,
+                    id,
+                    &malo_id,
+                    reason,
+                    sperrversuche,
+                ),
+            )
+            .await
+            .context("enqueue de.sperr.versuch.gescheitert")?;
+            tx.commit().await.context("commit Sperrversuch")?;
+            return Ok(Reported::VersuchNotiert { sperrversuche });
         }
+        drop(tx);
         // The allowance is used up — fall through and close the order.
     }
 
@@ -681,6 +697,7 @@ pub async fn report_outcome(
         .to_offset(time::UtcOffset::UTC)
         .date();
 
+    let mut tx = pool.begin().await?;
     let claimed = sqlx::query(
         r"UPDATE sperr_orders
           SET status = $3, executed_at = $4, execution_note = $5, fail_reason = $6,
@@ -700,7 +717,7 @@ pub async fn report_outcome(
     .bind(iftsta_faellig_am(abschluss))
     .bind(i32::from(matches!(outcome, Outcome::Failed { .. })))
     .bind(MAX_SPERRVERSUCHE)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .context("claim order")?;
 
@@ -720,12 +737,40 @@ pub async fn report_outcome(
         reason: reason.map(str::to_owned),
         pruefschritt_code: code.map(str::to_owned),
     };
-    // Not claimed — this is the first attempt, made the moment the report
-    // lands — so the failure write is what counts it and backs it off.
-    let dispatched =
-        dispatch_iftsta(pool, makod, tenant, &order, AttemptAccounting::CountHere).await;
+    let queued = match iftsta_command(&order)? {
+        Some(command) => {
+            mako_service::outbox::enqueue_command(&mut tx, &command)
+                .await
+                .context("enqueue IFTSTA 21039")?;
+            true
+        }
+        // An operator-created order has no inbound ORDERS behind it, so there
+        // is no Lieferant waiting and no process to report into. Closing it
+        // here is honest: nothing is outstanding.
+        None => {
+            sqlx::query(
+                r"UPDATE sperr_orders
+                  SET iftsta_ref = 'local', iftsta_dispatched_at = now(), updated_at = now()
+                  WHERE id = $1 AND tenant = $2",
+            )
+            .bind(id)
+            .bind(tenant)
+            .execute(&mut *tx)
+            .await
+            .context("close local order")?;
+            false
+        }
+    };
+    // The outcome, its IFTSTA command and its announcement commit together.
+    mako_service::outbox::enqueue(
+        &mut tx,
+        &crate::sperr::events::outcome(tenant, id, outcome, queued),
+    )
+    .await
+    .context("enqueue the outcome's announcement")?;
+    tx.commit().await.context("commit outcome")?;
     Ok(Reported::Recorded {
-        iftsta_dispatched: dispatched,
+        iftsta_queued: queued,
     })
 }
 
@@ -744,66 +789,25 @@ pub struct DispatchTarget {
     pub pruefschritt_code: Option<String>,
 }
 
-/// Who spent the attempt this dispatch is making.
+/// The IFTSTA 21039 command an order owes makod, or `None` for an order with
+/// no market process to report into.
 ///
-/// The retry budget must be spent by the attempt being *made*, and there are two
-/// ways an order reaches [`dispatch_iftsta`]: the worker claims it — and
-/// [`claim_iftsta_retry`] counts the attempt in the claiming statement — or
-/// [`report_outcome`] dispatches inline the moment the field team reports, with
-/// nothing having claimed it. Passing this rather than letting the failure write
-/// always count is what keeps the two from counting the same attempt twice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttemptAccounting {
-    /// The claim already advanced `iftsta_attempts` and set the backoff.
-    CountedByClaim,
-    /// Nothing claimed this order: the failure write counts the attempt and sets
-    /// the backoff, so the worker does not pick it up 250 ms later.
-    CountHere,
-}
-
-/// Hand the IFTSTA 21039 to `makod`, recording success or the reason it failed.
+/// # Errors
 ///
-/// Returns whether the dispatch succeeded. Never returns an error: a failure is
-/// recorded on the row and retried by the worker, because the alternative is
-/// losing the field team's report.
-pub async fn dispatch_iftsta(
-    pool: &PgPool,
-    makod: &Arc<MakodClient>,
-    tenant: &str,
+/// A non-terminal order, or a body that cannot be encoded.
+pub fn iftsta_command(
     order: &DispatchTarget,
-    accounting: AttemptAccounting,
-) -> bool {
-    // An operator-created order has no inbound ORDERS behind it, so there is no
-    // Lieferant waiting and no process to report into. Marking it dispatched is
-    // honest: nothing is outstanding.
+) -> anyhow::Result<Option<mako_service::outbox::Command>> {
     let Some(process_id) = order.process_id.as_deref() else {
-        if let Err(e) = record_iftsta(pool, order.id, tenant, "local").await {
-            // Returning `true` here told `report_execution`'s caller — an
-            // operator watching an HTTP response about a *disconnection* — that
-            // the report was closed out, while the row still read
-            // `iftsta_dispatched_at IS NULL`. The retry worker then claimed that
-            // row on every sweep and took this same branch again, and because
-            // nothing on this path counts an attempt it never ran out of budget
-            // and never reached `list_stuck_iftsta`: a permanent 250 ms busy
-            // loop that no alarm could see. Reporting the failure is what makes
-            // the retry meaningful instead of endless.
-            tracing::error!(
-                order_id = %order.id, %tenant, error = %e,
-                "processd sperr: local IFTSTA closure not recorded — the order stays on the retry \
-                 queue and the operator is told the dispatch did not complete"
-            );
-            return false;
-        }
-        return true;
+        return Ok(None);
     };
-
     let command = match order.status {
         OrderStatus::Executed => mako_markt::commands::GPKE_SPERRUNG_BESTAETIGEN,
         OrderStatus::Failed => mako_markt::commands::GPKE_SPERRUNG_FEHLGESCHLAGEN,
-        // Unreachable: only terminal outcomes are dispatched.
-        OrderStatus::Pending | OrderStatus::Cancelled => return false,
+        OrderStatus::Pending | OrderStatus::Cancelled => {
+            anyhow::bail!("only a terminal order owes an IFTSTA 21039")
+        }
     };
-
     let cmd = ForwardCommand {
         command: command.to_owned(),
         marktrolle: Some("NB".to_owned()),
@@ -831,191 +835,55 @@ pub async fn dispatch_iftsta(
             "reason": order.reason,
         }),
     };
-
-    // Keyed on the order, not the attempt: makod deduplicates a retry into the
-    // same command rather than putting a second IFTSTA on the wire.
-    let key = format!("processd-sperr-iftsta-{}", order.id);
-    match makod.post_command(&key, &cmd).await {
-        Ok(accepted) => {
-            let reference = accepted.process_id.to_string();
-            if let Err(e) = record_iftsta(pool, order.id, tenant, &reference).await {
-                tracing::error!(
-                    order_id = %order.id, error = %e,
-                    "processd sperr: IFTSTA 21039 accepted by makod but not recorded — the retry \
-                     worker will re-send it under the same idempotency key"
-                );
-                return false;
-            }
-            true
-        }
-        Err(e) => {
-            if let Err(db) =
-                record_iftsta_failure(pool, order.id, tenant, &e.to_string(), accounting).await
-            {
-                // Two things are lost with this write, and neither is a log
-                // line. `iftsta_last_error` is what the operator runbook and the
-                // MCP guidance tell a human to read, and `iftsta_attempts` is
-                // the budget whose exhaustion emits `de.sperr.iftsta.ausstehend`
-                // — the event that says a Lieferant was never told a customer
-                // was disconnected. Uncounted, the order retries without ever
-                // raising that event. The Frist backstop in
-                // [`list_stuck_iftsta`] catches it at `iftsta_faellig_am`
-                // regardless, which is why this is an `error!` and not a stalled
-                // dispatch, but the row must still be findable now.
-                tracing::error!(
-                    order_id = %order.id, %tenant, error = %db, dispatch_error = %e,
-                    "processd sperr: IFTSTA 21039 dispatch failure was not recorded — the attempt is \
-                     uncounted and iftsta_last_error is stale; escalation now depends on the \
-                     iftsta_faellig_am deadline"
-                );
-            }
-            tracing::warn!(
-                order_id = %order.id, error = %e,
-                "processd sperr: IFTSTA 21039 dispatch failed — queued for retry"
-            );
-            false
-        }
-    }
+    Ok(Some(mako_service::outbox::Command {
+        upstream: IFTSTA_UPSTREAM.to_owned(),
+        label: command.to_owned(),
+        method: mako_service::outbox::CommandMethod::Post,
+        path: "/api/v1/commands".to_owned(),
+        body: serde_json::to_value(&cmd).context("encode the IFTSTA command")?,
+        key: iftsta_key(order.id),
+        settled_statuses: Vec::new(),
+    }))
 }
 
-/// Record a successful IFTSTA dispatch.
-async fn record_iftsta(
-    pool: &PgPool,
-    id: Uuid,
-    tenant: &str,
-    reference: &str,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        r"UPDATE sperr_orders
-          SET iftsta_ref = $3, iftsta_dispatched_at = now(),
-              iftsta_last_error = NULL, updated_at = now()
-          WHERE id = $1 AND tenant = $2 AND iftsta_dispatched_at IS NULL",
-    )
-    .bind(id)
-    .bind(tenant)
-    .bind(reference)
-    .execute(pool)
-    .await
-    .context("record IFTSTA dispatch")?;
-    Ok(())
-}
-
-/// Record a failed IFTSTA dispatch, counting the attempt only when nothing else
-/// did.
-///
-/// A claimed order was already counted and leased by [`claim_iftsta_retry`], so
-/// this write says *why* it failed and nothing more — losing it costs the
-/// operator the reason, not the budget. An unclaimed one (the inline first
-/// dispatch) is counted and backed off here, which is the only place that can.
-async fn record_iftsta_failure(
-    pool: &PgPool,
-    id: Uuid,
-    tenant: &str,
-    error: &str,
-    accounting: AttemptAccounting,
-) -> anyhow::Result<()> {
-    let sql = match accounting {
-        AttemptAccounting::CountedByClaim => r"UPDATE sperr_orders
-          SET iftsta_last_error = $3, updated_at = now()
-          WHERE id = $1 AND tenant = $2"
-            .to_owned(),
-        AttemptAccounting::CountHere => format!(
-            r"UPDATE sperr_orders
-          SET iftsta_attempts = iftsta_attempts + 1,
-              iftsta_next_attempt_at = {IFTSTA_BACKOFF},
-              iftsta_last_error = $3, updated_at = now()
-          WHERE id = $1 AND tenant = $2"
-        ),
-    };
-    sqlx::query(mako_service::sql::dynamic(sql))
-        .bind(id)
-        .bind(tenant)
-        // Bounded: a provider error can be arbitrarily long and this column is read
-        // in list responses.
-        .bind(error.chars().take(500).collect::<String>())
-        .execute(pool)
-        .await
-        .context("record IFTSTA failure")?;
-    Ok(())
-}
-
-/// Take one order off the IFTSTA retry queue, or `None` when nothing is due.
-///
-/// # Why this is an `UPDATE … RETURNING`
-///
-/// It was a pooled `SELECT … FOR UPDATE SKIP LOCKED`, which holds nothing:
-/// sqlx runs a pooled statement in its own implicit transaction, and that
-/// transaction commits as the query returns — so the row locks are gone before
-/// the caller has the row, let alone before it dispatches. Two replicas sweeping
-/// at the same moment both got the same order and both sent the Lieferant an
-/// IFTSTA 21039 for one Sperrauftrag. `makod` does not deduplicate on the
-/// idempotency key, so that is a second disconnection status on the wire, not a
-/// suppressed duplicate.
-///
-/// Pushing `iftsta_next_attempt_at` forward *as part of the claim* makes
-/// the claim atomic without holding a transaction across the makod call: a
-/// concurrent worker's `iftsta_next_attempt_at <= now()` no longer matches. The
-/// push doubles as the retry backoff (see `IFTSTA_BACKOFF`), so a worker that
-/// dies mid-dispatch releases the order when the backoff elapses rather than
-/// stranding it. `FOR UPDATE SKIP LOCKED` stays, inside the subquery, so two
-/// concurrent claims pick different rows instead of one waiting on the other.
-///
-/// # The claim is also what counts the attempt
-///
-/// `iftsta_attempts` is advanced here, not by the outcome write, because
-/// `iftsta_attempts >= IFTSTA_MAX_ATTEMPTS` *is* the give-up state. Counting it
-/// in `record_iftsta_failure` instead made the budget hostage to a write made
-/// on the failure path — the path most likely to be running while the database
-/// is unwell — so a dispatch that could never succeed was retried without limit
-/// and the „der Lieferant wurde nie informiert" alarm never fired. Spending the
-/// budget by the attempt being *made* means the order reaches the escalation
-/// state on its own even when every outcome write is lost. The inline first
-/// dispatch in [`report_outcome`] is not claimed, so it counts its own attempt.
+/// Stamp an order's IFTSTA 21039 as dispatched, on the transaction that marks
+/// its outbox command delivered. `delivered` is what the worker hands its
+/// follow-up: the command's key and makod's answer, whose `process_id` is
+/// recorded as `iftsta_ref`. A delivery of anything else is ignored.
 ///
 /// # Errors
 ///
-/// Propagates database errors.
-pub async fn claim_iftsta_retry(
-    pool: &PgPool,
-    tenant: &str,
-) -> anyhow::Result<Option<DispatchTarget>> {
-    let row = sqlx::query(mako_service::sql::dynamic(format!(
+/// Propagates database errors; the command then stays undelivered and is
+/// sent again.
+pub async fn record_iftsta_delivered(
+    conn: &mut sqlx::PgConnection,
+    delivered: &mako_service::outbox::Delivered,
+) -> Result<(), sqlx::Error> {
+    let Some(id) = delivered
+        .subject
+        .as_deref()
+        .and_then(|k| k.strip_prefix("processd-sperr-iftsta-"))
+        .and_then(|s| s.parse::<Uuid>().ok())
+    else {
+        return Ok(());
+    };
+    let reference = delivered
+        .reply
+        .as_ref()
+        .and_then(|r| r.get("process_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("makod")
+        .to_owned();
+    sqlx::query(
         r"UPDATE sperr_orders
-             SET iftsta_attempts        = iftsta_attempts + 1,
-                 iftsta_next_attempt_at = {IFTSTA_BACKOFF}
-           WHERE id = (
-               SELECT id FROM sperr_orders
-                WHERE tenant = $1
-                  AND status IN ('executed', 'failed')
-                  AND iftsta_dispatched_at IS NULL
-                  AND iftsta_attempts < $2
-                  AND iftsta_next_attempt_at <= now()
-                ORDER BY iftsta_next_attempt_at
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-           )
-           RETURNING id, malo_id, lf_mp_id, order_type, process_id, status,
-                     executed_at, execution_note, fail_reason, pruefschritt_code"
-    )))
-    .bind(tenant)
-    .bind(IFTSTA_MAX_ATTEMPTS)
-    .fetch_optional(pool)
-    .await
-    .context("claim_iftsta_retry")?;
-
-    let Some(r) = row else { return Ok(None) };
-    Ok(Some(DispatchTarget {
-        id: r.try_get("id")?,
-        malo_id: r.try_get("malo_id")?,
-        lf_mp_id: r.try_get("lf_mp_id")?,
-        order_type: r.try_get("order_type")?,
-        process_id: r.try_get("process_id")?,
-        status: r.try_get("status")?,
-        executed_at: r.try_get("executed_at")?,
-        note: r.try_get("execution_note")?,
-        reason: r.try_get("fail_reason")?,
-        pruefschritt_code: r.try_get("pruefschritt_code")?,
-    }))
+          SET iftsta_ref = $2, iftsta_dispatched_at = now(), updated_at = now()
+          WHERE id = $1 AND iftsta_dispatched_at IS NULL",
+    )
+    .bind(id)
+    .bind(reference)
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 /// Orders whose IFTSTA 21039 is not going to arrive by itself, and that have
@@ -1023,44 +891,34 @@ pub async fn claim_iftsta_retry(
 ///
 /// Two triggers, deliberately:
 ///
-/// * the retry budget is spent (`iftsta_attempts >= IFTSTA_MAX_ATTEMPTS`) **and
-///   the last attempt is no longer in flight**, and
+/// * the order's outbox command was dead-lettered — its retry budget is spent,
+///   or makod refused it outright, and
 /// * the order is past `iftsta_faellig_am` — the 1. Werktag nach Abschluss the
 ///   Lieferant is entitled to the Auftragsstatus by (GPKE Teil 2 § 3.5.1.2
 ///   Nr. 5).
 ///
-/// The lease is part of the counter arm because the claim spends the budget
-/// *before* the dispatch: without it, the last attempt would be announced as
-/// „never told the Lieferant" while its own IFTSTA was still on its way to
-/// makod. The deadline arm carries no such condition — the Frist is not a
-/// function of what this service is currently doing.
-///
-/// The deadline arm is not redundant. The counter is only as reliable as the
-/// write that advances it, and that write is made on the failure path — the
-/// path most likely to be running while the database is unwell. An order whose
-/// failures went unrecorded keeps its budget for ever and would never reach the
-/// counter arm, so the one alarm saying "a customer was disconnected and their
-/// Lieferant was never told" would never fire. The Frist is the thing the
-/// regulation actually cares about, and it is stamped once when the order goes
-/// terminal, so it holds whatever happens to the counter afterwards.
+/// The deadline arm is not redundant: a command still retrying is not
+/// dead-lettered, yet the Lieferant is owed the Auftragsstatus by a date, and
+/// the Frist is the thing the regulation cares about. It is stamped once when
+/// the order goes terminal, so it holds whatever the delivery does.
 ///
 /// # Errors
 ///
 /// Propagates database errors.
 pub async fn list_stuck_iftsta(pool: &PgPool, tenant: &str) -> anyhow::Result<Vec<StuckIftsta>> {
-    let rows = sqlx::query(
-        r"SELECT id, malo_id, lf_mp_id, COALESCE(iftsta_last_error, '') AS err,
-                 iftsta_attempts
-          FROM sperr_orders
-          WHERE tenant = $1
-            AND status IN ('executed', 'failed')
-            AND iftsta_dispatched_at IS NULL
-            AND ((iftsta_attempts >= $2 AND iftsta_next_attempt_at <= now())
-                 OR (iftsta_faellig_am IS NOT NULL AND iftsta_faellig_am < heute()))
-            AND iftsta_escalated_at IS NULL",
-    )
+    let rows = sqlx::query(mako_service::sql::dynamic(format!(
+        r"SELECT s.id, s.malo_id, s.lf_mp_id, COALESCE(o.last_error, '') AS err,
+                 COALESCE(o.attempts, 0)::INTEGER AS attempts
+          FROM sperr_orders s
+          {IFTSTA_OUTBOX_JOIN}
+          WHERE s.tenant = $1
+            AND s.status IN ('executed', 'failed')
+            AND s.iftsta_dispatched_at IS NULL
+            AND (o.dead_lettered_at IS NOT NULL
+                 OR (s.iftsta_faellig_am IS NOT NULL AND s.iftsta_faellig_am < heute()))
+            AND s.iftsta_escalated_at IS NULL"
+    )))
     .bind(tenant)
-    .bind(IFTSTA_MAX_ATTEMPTS)
     .fetch_all(pool)
     .await
     .context("list_stuck_iftsta")?;
@@ -1071,7 +929,7 @@ pub async fn list_stuck_iftsta(pool: &PgPool, tenant: &str) -> anyhow::Result<Ve
                 malo_id: r.try_get("malo_id")?,
                 lf_mp_id: r.try_get("lf_mp_id")?,
                 last_error: r.try_get("err")?,
-                attempts: r.try_get("iftsta_attempts")?,
+                attempts: r.try_get("attempts")?,
             })
         })
         .collect()
@@ -1181,21 +1039,20 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
                   WHERE status IN ('executed', 'failed')
                     AND iftsta_dispatched_at IS NULL
               )                                                AS iftsta_outstanding,
-              -- Same test as `list_stuck_iftsta`'s counter arm, lease and all:
-              -- the claim spends the attempt before the dispatch, so without it
-              -- the gauge counts an order whose last IFTSTA is still on its way
-              -- to makod as one nobody is trying any more.
+              -- Same test as `list_stuck_iftsta`'s dead-letter arm: nobody is
+              -- trying any more.
               COUNT(*) FILTER (
                   WHERE status IN ('executed', 'failed')
                     AND iftsta_dispatched_at IS NULL
-                    AND iftsta_attempts >= $2
-                    AND iftsta_next_attempt_at <= now()
+                    AND EXISTS (
+                        SELECT 1 FROM event_outbox o
+                         WHERE o.event_id = 'processd-sperr-iftsta-' || sperr_orders.id::TEXT
+                           AND o.dead_lettered_at IS NOT NULL)
               )                                                AS iftsta_stuck
           FROM sperr_orders
           WHERE tenant = $1",
     )
     .bind(tenant)
-    .bind(IFTSTA_MAX_ATTEMPTS)
     .fetch_one(pool)
     .await
     .context("stats_pg")?;
@@ -1340,10 +1197,16 @@ mod tests {
     }
 
     #[test]
-    fn the_retry_budget_is_bounded() {
-        // A dispatch that keeps failing is a wrong-state problem, not a
-        // transport one; retrying forever hides it behind an attempt counter.
-        const { assert!(IFTSTA_MAX_ATTEMPTS > 0 && IFTSTA_MAX_ATTEMPTS <= 32) }
+    fn the_iftsta_key_is_the_order_and_the_outbox_join_reads_it() {
+        // One order owes one Auftragsstatus, so the key — the outbox row's
+        // identity and makod's idempotency key — is the order, and the join
+        // that reads the delivery track back has to spell it the same way.
+        let id = Uuid::nil();
+        assert_eq!(
+            iftsta_key(id),
+            "processd-sperr-iftsta-00000000-0000-0000-0000-000000000000"
+        );
+        assert!(IFTSTA_OUTBOX_JOIN.contains("'processd-sperr-iftsta-' || s.id::TEXT"));
     }
 
     /// The execution window is 6 Werktage, counted with the BDEW-MaKo calendar
@@ -1392,7 +1255,13 @@ mod tests {
         // production, on a route nobody ran in CI.
         let selected: Vec<&str> = ORDER_COLUMNS
             .split(',')
-            .map(|c| c.trim().split("::").next().unwrap_or_default().trim())
+            .map(|c| {
+                let c = c.trim();
+                match c.rsplit_once(" AS ") {
+                    Some((_, alias)) => alias.trim(),
+                    None => c.trim_start_matches("s.").trim(),
+                }
+            })
             .collect();
         for field in [
             "id",

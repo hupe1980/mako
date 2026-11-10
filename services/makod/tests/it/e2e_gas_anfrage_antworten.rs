@@ -8,7 +8,7 @@
 //! | 44180 LF → NB | 44181 `G_0035` / 44182 `G_0036` | marktd's Messlokationen (Kap. 5.12.3, `[590]`) |
 //! | 44137 NB → LF | 44138 `G_0040` | the LF's own facts, stated by the command (Kap. 5.12.4) |
 //! | 44150 NB → LF | 44151 `G_0038` / 44152 `G_0039` | the LF's Bilanzkreis (Kap. 5.12.5) |
-//! | 44139 / 44140 → NB | 44142 | marktd's Turnusablesung and Netznutzungsvertrag (Kap. 5.12.1) |
+//! | 44139 / 44140 → NB | 44142 | marktd's Turnusablesung and Netznutzungsvertrag (Kap. 5.12.1); the 44140 names a Messlokation, answered from the Marktlokation marktd assigns it to |
 //!
 //! The NB's 44163/44164 as Verteiler of a 44162 (Kap. 5.12.7) are not
 //! assembled and answer `501`.
@@ -120,12 +120,11 @@ fn gated(
         .validate_on_date(mako_fristen::heute())
         .expect("the AHB validation runs");
     assert!(
-        report.is_valid(),
+        report.is_sendable(),
         "the rendered {} violates its AHB profile: {:#?}\n{}",
         om.message_type,
         report
-            .errors()
-            .iter()
+            .sending_refusals()
             .map(|e| &e.message)
             .collect::<Vec<_>>(),
         text.replace('\'', "'\n"),
@@ -138,6 +137,17 @@ fn seg(tag: &str, e: &[&[&str]]) -> serde_json::Value {
         "tag": tag,
         "elemente": e.iter().map(|c| c.to_vec()).collect::<Vec<_>>(),
     })
+}
+
+/// The Meldepunkt an Anfrage `pid` names: a Zählpunktbezeichnung where its
+/// column formats it so — the 44140 and the 44162 (`[951]`, UTILMD AHB Gas
+/// 1.2 Kap. 5.12.1, S. 149; Kap. 5.12.7) —, the Marktlokation otherwise.
+fn meldepunkt(pid: u32) -> &'static str {
+    if matches!(pid, 44140 | 44162) {
+        support::GAS_MELO
+    } else {
+        MALO
+    }
 }
 
 /// An inbound Anfrage `pid` from `sender` to `receiver`, Grund `grund`,
@@ -156,7 +166,7 @@ fn anfrage(
             "pid": pid,
             "sender": sender,
             "receiver": receiver,
-            "malo": MALO,
+            "malo": meldepunkt(pid),
             "process_date": "2026-12-01",
             "vertragsbeginn": "2026-12-01",
             "vorgangsnummer": "ANFRAGE-VG-1",
@@ -216,6 +226,11 @@ impl Deployment {
 
 fn body(code: &str) -> serde_json::Value {
     serde_json::json!({ "malo_id": MALO, "antwort_code": code })
+}
+
+/// The command answering an Anfrage keyed on the Messlokation.
+fn melo_body(code: &str) -> serde_json::Value {
+    serde_json::json!({ "melo_id": support::GAS_MELO, "antwort_code": code })
 }
 
 fn assert_contains(wire: &str, expected: &[&str]) {
@@ -532,7 +547,7 @@ async fn the_44142_states_turnusablesung_and_netznutzung() {
         44140,
     )
     .await;
-    nb.answer(body("ZG2"))
+    nb.answer(melo_body("ZG2"))
         .await
         .expect("the 44142 is dispatched");
     let (pid, wire) = nb.the_antwort().await;
@@ -540,6 +555,8 @@ async fn the_44142_states_turnusablesung_and_netznutzung() {
     assert_contains(
         &wire,
         &[
+            // The Meldepunkt the 44140 named — `[953]` admits it on the 44142.
+            &format!("LOC+172+{}", support::GAS_MELO),
             "STS+E01++ZG2:G_0069",
             &format!("RFF+Z19:{}", support::GAS_MELO),
             "DTM+752:05040504:104",
@@ -602,7 +619,7 @@ async fn a_turnusablesung_marktd_lacks_is_refused_by_name() {
         44140,
     )
     .await;
-    match nb.answer(body("ZG2")).await {
+    match nb.answer(melo_body("ZG2")).await {
         Err(DispatchError::StammdatenUnvollstaendig { fehlend, .. }) => {
             assert!(
                 fehlend.iter().any(|f| f.contains("turnusablesung")),
@@ -639,7 +656,10 @@ async fn the_verteiler_antwort_is_not_implemented() {
         44162,
     )
     .await;
-    let err = nb.answer(body("ZG2")).await.expect_err("not assembled");
+    let err = nb
+        .answer(melo_body("ZG2"))
+        .await
+        .expect_err("not assembled");
     assert!(
         matches!(&err, DispatchError::NotImplemented(m) if m.contains("44163")),
         "{err:?}"

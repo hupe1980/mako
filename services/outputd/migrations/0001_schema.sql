@@ -55,7 +55,8 @@ CREATE TABLE document_templates (
     kind            TEXT        NOT NULL CHECK (kind IN (
                         'INVOICE',          -- ZUGFeRD PDF/A-3 carrier
                         'MAHNUNG',          -- Textform (§ 126b BGB)
-                        'PREISANPASSUNG'    -- § 41 Abs. 5 EnWG notice, Textform
+                        'PREISANPASSUNG',   -- § 41 Abs. 5 EnWG notice, Textform
+                        'GEBUEHRENBESCHEID' -- public-law Gebühr, § 157 Abs. 1 AO content
                     )),
     -- The template source. Typst.
     source          TEXT        NOT NULL,
@@ -82,7 +83,8 @@ CREATE TABLE document_templates (
     -- renders a conformant PDF/A carrier, a Textform kind renders its specimen.
     CONSTRAINT dt_proof_matches_kind CHECK (
         (kind = 'INVOICE'        AND proof = 'RENDERED_PDFA' AND pdf_standard IS NOT NULL)
-     OR (kind IN ('MAHNUNG', 'PREISANPASSUNG') AND proof = 'RENDERED_TEXTFORM')
+     OR (kind IN ('MAHNUNG', 'PREISANPASSUNG', 'GEBUEHRENBESCHEID')
+         AND proof = 'RENDERED_TEXTFORM')
     ),
     PRIMARY KEY (tenant, hash)
 );
@@ -131,7 +133,7 @@ CREATE TABLE documents (
     document_id     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant          TEXT        NOT NULL,
     kind            TEXT        NOT NULL CHECK (kind IN (
-                        'INVOICE', 'MAHNUNG', 'PREISANPASSUNG'
+                        'INVOICE', 'MAHNUNG', 'PREISANPASSUNG', 'GEBUEHRENBESCHEID'
                     )),
     -- The template that rendered it. A plain value rather than a foreign key:
     -- it is the same pin issuing services keep, and `document_templates` is
@@ -214,10 +216,9 @@ CREATE TABLE document_deliveries (
     -- Where it went, in the channel's own terms: an e-mail address, a postal
     -- address. NULL for a SUPPRESSED row — its absence is usually the reason.
     target          TEXT,
-    attempts        INTEGER     NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-    -- When the worker may next try. Here rather than in worker memory, so a
-    -- restart does not retry everything at once.
-    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- A pushed delivery is owed as an `event_outbox` command keyed
+    -- `de.output.delivery/<delivery_id>`, committed with this row; its attempts
+    -- and backoff live on the command.
     first_sent_at   TIMESTAMPTZ,
     delivered_at    TIMESTAMPTZ,
     read_at         TIMESTAMPTZ,
@@ -228,8 +229,7 @@ CREATE TABLE document_deliveries (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    -- One attempt track per channel per document: a retry advances this row
-    -- rather than inserting a second, so `attempts` is the whole history.
+    -- One delivery per channel per document.
     UNIQUE (document_id, channel),
     -- A delivered row states when. A pending one cannot claim to have been.
     CHECK ((status = 'DELIVERED') = (delivered_at IS NOT NULL)),
@@ -241,9 +241,6 @@ COMMENT ON TABLE document_deliveries IS
     '"delivered" means differs by channel. Backs the § 126b BGB Textform and '
     '§ 41f EnWG notice evidence.';
 
--- The worker's claim scan.
-CREATE INDEX dd_due ON document_deliveries (tenant, next_attempt_at)
-    WHERE status = 'PENDING';
 -- The print service's spool pull.
 CREATE INDEX dd_spool ON document_deliveries (tenant, created_at)
     WHERE channel = 'POST' AND status = 'PENDING';

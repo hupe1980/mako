@@ -177,6 +177,32 @@ pub struct EinsdPolicy {
     /// What happens to a Teil-3 payment no recorded approval covers.
     #[serde(default)]
     pub beihilfe_politik: mako_service::policy::Policy<BeihilfePolitik>,
+    /// Whether a § 52 Pflichtzahlung is set off against the month's payout.
+    #[serde(default)]
+    pub sect52_aufrechnung: mako_service::policy::Policy<Sect52Aufrechnung>,
+}
+
+mako_service::policy_choice! {
+    /// Whether the Netzbetreiber sets a § 52 EEG 2023 Pflichtzahlung off
+    /// against the plant's § 19 Abs. 1 claim of the same month.
+    ///
+    /// § 52 Abs. 6 Satz 2 permits it („können … aufgerechnet werden"), § 27
+    /// Abs. 1 Satz 1 otherwise admits an Aufrechnung only „soweit die Forderung
+    /// unbestritten oder rechtskräftig festgestellt ist". The election is the
+    /// Netzbetreiber's.
+    pub enum Sect52Aufrechnung {
+        key: "sect52_aufrechnung",
+        doc: "@/docs/services/einsd.md#policy-sect52-aufrechnung",
+        default: tightening(Gesondert, "§ 27 Abs. 1 EEG 2023 bars the Aufrechnung unless the Netzbetreiber elects the § 52 Abs. 6 Satz 2 set-off; the payout stays whole"),
+        options: {
+            /// Pay the Vergütung in full; the month's Pflichtzahlung is a
+            /// separate claim, due on the 15th of the following month.
+            Gesondert = "gesondert" => "§ 52 Abs. 6 Satz 1 EEG 2023: Fälligkeit zum 15. Kalendertag des Folgemonats",
+            /// Set the month's Pflichtzahlung off against its § 19 Abs. 1
+            /// claim; what the claim does not cover stays owed.
+            Aufrechnen = "aufrechnen" => "§ 52 Abs. 6 Satz 2 EEG 2023: Aufrechnung mit Ansprüchen nach § 19 Abs. 1",
+        }
+    }
 }
 
 mako_service::policy_choice! {
@@ -265,6 +291,7 @@ impl EinsdConfig {
     pub fn policy_report(&self) -> mako_service::policy::PolicyReport {
         mako_service::policy::PolicyReport::new()
             .with(&self.policy.beihilfe_politik)
+            .with(&self.policy.sect52_aufrechnung)
             .posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
             .posture_presence("oidc", self.oidc.is_some(), true)
             .posture_presence(

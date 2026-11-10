@@ -69,52 +69,57 @@ pub async fn cloud_event(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
 
-    if !pg::idempotent_event(&ctx.pool, ce_id, ce_type, &ce)
+    // The marker commits with the work it marks: committed alone, a failure
+    // after it turns makod's redelivery into a deduplicated 200 and the
+    // Vertragskomponente never reaches `BESTAETIGT`.
+    let mut tx = ctx
+        .pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    if !pg::idempotent_event(&mut *tx, ce_id, ce_type, &ce)
         .await
         .map_err(ApiError::Internal)?
     {
         return Ok(StatusCode::OK);
     }
 
-    let Some(outcome) = parse_mako_outcome(&ce) else {
-        return Ok(StatusCode::OK);
-    };
-    let Some(process_id) = outcome.process_id.as_deref() else {
-        tracing::warn!(
-            ce_type,
-            "vertragd: MaKo outcome without process_id — ignored"
-        );
-        return Ok(StatusCode::OK);
-    };
-
-    let komponenten: Vec<pg::VertragskomponenteRow> = sqlx::query_as(
-        "SELECT k.* FROM vertragskomponenten k
-         JOIN versorgungsvertraege v ON v.id = k.vertrag_id
-         WHERE k.mako_process_id=$1 AND v.tenant=$2",
-    )
-    .bind(process_id)
-    .bind(ctx.tenant())
-    .fetch_all(&ctx.pool)
-    .await
-    .map_err(|e| ApiError::Internal(e.into()))?;
-
-    for k in &komponenten {
-        apply_outcome(&ctx, k, &outcome).await?;
+    if let Some(outcome) = parse_mako_outcome(&ce) {
+        if let Some(process_id) = outcome.process_id.as_deref() {
+            let komponenten: Vec<pg::VertragskomponenteRow> = sqlx::query_as(
+                "SELECT k.* FROM vertragskomponenten k
+                 JOIN versorgungsvertraege v ON v.id = k.vertrag_id
+                 WHERE k.mako_process_id=$1 AND v.tenant=$2",
+            )
+            .bind(process_id)
+            .bind(ctx.tenant())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| ApiError::Internal(e.into()))?;
+            for k in &komponenten {
+                apply_outcome(&ctx, &mut tx, k, &outcome).await?;
+            }
+        } else {
+            tracing::warn!(
+                ce_type,
+                "vertragd: MaKo outcome without process_id — ignored"
+            );
+        }
     }
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
     Ok(StatusCode::OK)
 }
 
-/// Apply one process outcome to one component and everything downstream of it.
+/// Apply one process outcome to one component and everything downstream of it,
+/// on the inbound event's transaction.
 async fn apply_outcome(
     ctx: &Ctx,
+    tx: &mut sqlx::PgConnection,
     k: &pg::VertragskomponenteRow,
     outcome: &crate::events::MakoOutcome,
 ) -> ApiResult<()> {
-    let mut tx = ctx
-        .pool
-        .begin()
-        .await
-        .map_err(|e| ApiError::Internal(e.into()))?;
     let new_status = if outcome.confirmed {
         "BESTAETIGT"
     } else {
@@ -142,9 +147,9 @@ async fn apply_outcome(
             // re-delivered against the same component) replaces the order it
             // already scheduled instead of being dropped as a duplicate.
             outbound::enqueue_superseding(
-                &mut tx,
+                &mut *tx,
                 ctx.tenant(),
-                &outbound::ablesung(k.id, malo_id, false, k.lieferbeginn),
+                &outbound::ablesung(k.id, malo_id, &k.sparte, false, k.lieferbeginn),
             )
             .await
             .map_err(ApiError::Internal)?;
@@ -157,20 +162,12 @@ async fn apply_outcome(
             .map_err(ApiError::Internal)?;
         }
     }
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::Internal(e.into()))?;
 
     // Recompute the contract status from the components as they now stand.
-    let alle = pg::list_komponenten(&ctx.pool, k.vertrag_id)
+    let alle = pg::list_komponenten(&mut *tx, k.vertrag_id)
         .await
         .map_err(ApiError::Internal)?;
     let status = pg::derive_vertrag_status(&alle);
-    let mut tx = ctx
-        .pool
-        .begin()
-        .await
-        .map_err(|e| ApiError::Internal(e.into()))?;
     pg::update_vertrag_status(&mut *tx, k.vertrag_id, ctx.tenant(), status)
         .await
         .map_err(ApiError::Internal)?;
@@ -181,13 +178,10 @@ async fn apply_outcome(
             ctx.tenant(),
             serde_json::json!({ "vertrag_id": k.vertrag_id }),
         );
-        mako_service::outbox::enqueue(&mut tx, &ce)
+        mako_service::outbox::enqueue(&mut *tx, &ce)
             .await
             .map_err(|e| ApiError::Internal(e.into()))?;
     }
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::Internal(e.into()))?;
     Ok(())
 }
 
@@ -202,8 +196,9 @@ async fn apply_outcome(
 /// fields on the event are the fallback for a quotation accepted before it was
 /// ever priced.
 ///
-/// Idempotent twice over — on the CloudEvent id, and on
-/// `erp_rahmenvertrag_id = angebot_id` — so a redelivery creates nothing.
+/// Idempotent twice over — on the CloudEvent id, recorded once the work is
+/// done, and on `erp_rahmenvertrag_id = angebot_id` — so a redelivery creates
+/// nothing, and a redelivery after a failure finishes the work.
 pub async fn angebot(
     Extension(ctx): Extension<Arc<Ctx>>,
     headers: HeaderMap,
@@ -238,15 +233,15 @@ pub async fn angebot(
         .ok_or_else(|| ApiError::bad_request("invalid or missing angebot_id"))?;
 
     // Deduplicate on the event as well as on the contract: the second delivery
-    // must not even attempt the work.
-    if !pg::idempotent_event(
-        &ctx.pool,
-        ce_id,
-        mako_events::tarif::ANGEBOT_ANGENOMMEN,
-        &ce,
-    )
-    .await
-    .map_err(ApiError::Internal)?
+    // must not even attempt the work. The marker itself is written only once
+    // the work is done (below) — the work spans several transactions, and a
+    // marker committed ahead of it would answer the redelivery after a failure
+    // with a replay and no contract. Every step is idempotent on the Angebot
+    // (`erp_rahmenvertrag_id`, the per-site `erp_contract_id`, the prospect's
+    // `erp_kunde_id`), so redoing the work after a failure creates nothing twice.
+    if pg::event_received(&ctx.pool, ce_id)
+        .await
+        .map_err(ApiError::Internal)?
     {
         return Ok((
             StatusCode::OK,
@@ -381,6 +376,15 @@ pub async fn angebot(
             }
         }
     }
+
+    pg::idempotent_event(
+        &ctx.pool,
+        ce_id,
+        mako_events::tarif::ANGEBOT_ANGENOMMEN,
+        &ce,
+    )
+    .await
+    .map_err(ApiError::Internal)?;
 
     tracing::info!(
         %angebot_id, %rahmenvertrag_id, sites = vertrag_ids.len(), fehler = fehler.len(),

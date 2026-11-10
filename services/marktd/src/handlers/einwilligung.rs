@@ -12,9 +12,10 @@
 //! the BDEW template): `evidence_uri`/`evidence_hash` are stored verbatim and
 //! never validated for form.
 //!
-//! Revocation emits `de.markt.einwilligung.widerrufen` and fires the **17008
-//! Abbestellung** at makod — GDPR Art. 7(3) obliges the ESA to stop, and the
-//! only way to stop is the Abbestellung.
+//! Revocation commits `de.markt.einwilligung.widerrufen` and one **17008
+//! Abbestellung** command per covered location for makod with the revocation —
+//! GDPR Art. 7(3) obliges the ESA to stop, and the only way to stop is the
+//! Abbestellung.
 
 use mako_service::ApiError;
 use std::sync::Arc;
@@ -25,13 +26,9 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use mako_markt::{
-    cloudevents::MarktEvent,
-    makod_client::MakodClient,
-    repository::{
-        ConsentPerspective, EinwilligungRecord, EsaFrameworkAgreement, EsaMessproduktAngebot,
-        EsaMessproduktPreis,
-    },
+use mako_markt::repository::{
+    ConsentPerspective, EinwilligungRecord, EsaFrameworkAgreement, EsaMessproduktAngebot,
+    EsaMessproduktPreis,
 };
 use mako_service::Json;
 use serde::Deserialize;
@@ -43,18 +40,6 @@ use super::{Claims, IntoMdmResponse as _, Tenant};
 
 /// Injected `Arc<PgEinwilligungRepository>`.
 pub type EinwilligungRepoExt = Arc<crate::pg::PgEinwilligungRepository>;
-async fn emit(
-    pool: &sqlx::PgPool,
-    tenant: &str,
-    ce_type: &str,
-    subject: String,
-    data: serde_json::Value,
-) -> Result<(), sqlx::Error> {
-    let evt = MarktEvent::new(tenant, ce_type, subject, data);
-    crate::outbox::enqueue(pool, &evt).await?;
-    Ok(())
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GrantBody {
@@ -80,7 +65,6 @@ pub async fn grant_einwilligung(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(pool): Extension<sqlx::PgPool>,
     Json(body): Json<GrantBody>,
 ) -> impl IntoResponse {
     if enforcer
@@ -106,29 +90,10 @@ pub async fn grant_einwilligung(
         evidence_uri: body.evidence_uri,
         evidence_hash: body.evidence_hash,
     };
+    // The grant, its `einwilligung.erteilt` event and the end of any consent
+    // it replaces commit together (`PgEinwilligungRepository::grant`).
     match repo.grant(rec).await {
-        Ok(id) => {
-            if let Err(e) = emit(
-                &pool,
-                &tenant,
-                mako_events::markt::EINWILLIGUNG_ERTEILT,
-                id.to_string(),
-                serde_json::json!({
-                    "einwilligung_id": id,
-                    "esa_mp_id": body.esa_mp_id,
-                    "anschlussnutzer_ref": body.anschlussnutzer_ref,
-                    "location_ids": body.location_ids,
-                }),
-            )
-            .await
-            {
-                return ApiError::internal(anyhow::Error::from(e).context(format!(
-                    "einwilligung: durable enqueue for Einwilligung {id}"
-                )))
-                .into_response();
-            }
-            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
-        }
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -186,17 +151,15 @@ pub async fn get_einwilligung(
 
 /// `DELETE /api/v1/esa/einwilligungen/:id` — revoke consent (Art. 7(3) GDPR).
 ///
-/// Emits `de.markt.einwilligung.widerrufen` and fires the **17008 Abbestellung**
-/// at makod for the covered locations. The Abbestellung dispatch is best-effort
-/// (logged on failure) — the revocation itself always succeeds and is the
-/// durable signal a consumer can act on.
+/// Commits the revocation with its `de.markt.einwilligung.widerrufen` event and
+/// one ORDERS 17008 Abbestellung command per covered location; the outbox
+/// worker delivers those to makod with retry, so a makod outage delays the stop
+/// and never loses it.
 pub async fn revoke_einwilligung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(pool): Extension<sqlx::PgPool>,
-    Extension(makod): Extension<Arc<MakodClient>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     if enforcer
@@ -205,44 +168,11 @@ pub async fn revoke_einwilligung(
     {
         return ApiError::forbidden("write-einwilligung denied").into_response();
     }
-    let revoked = match repo.revoke(&tenant, id).await {
-        Ok(Some(rec)) => rec,
-        Ok(None) => {
-            return ApiError::not_found(format!("Einwilligung {id} not found")).into_response();
-        }
-        Err(e) => return e.into_response(),
-    };
-
-    if let Err(e) = emit(
-        &pool,
-        &tenant,
-        mako_events::markt::EINWILLIGUNG_WIDERRUFEN,
-        id.to_string(),
-        serde_json::json!({
-            "einwilligung_id": id,
-            "esa_mp_id": revoked.esa_mp_id,
-            "anschlussnutzer_ref": revoked.anschlussnutzer_ref,
-            "location_ids": revoked.location_ids,
-            // Which of the two ways the basis ended. An audit that cannot tell
-            // a Widerruf from an Ablauf cannot answer „did anyone withdraw
-            // consent this quarter" — see `consent_lifecycle`.
-            "grund": "einwilligung_widerrufen",
-        }),
-    )
-    .await
-    {
-        return ApiError::internal(anyhow::Error::from(e).context(format!(
-            "einwilligung: widerrufen durable enqueue for Einwilligung {id}"
-        )))
-        .into_response();
+    match repo.revoke(&tenant, id).await {
+        Ok(Some(_)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(None) => ApiError::not_found(format!("Einwilligung {id} not found")).into_response(),
+        Err(e) => e.into_response(),
     }
-
-    // GDPR Art. 7(3): stopping value delivery requires an Abbestellung (17008)
-    // per covered location. The expiry sweep runs the same code — the two ways
-    // a consent stops being a lawful basis owe the market the same message.
-    crate::consent_lifecycle::stop_deliveries(&makod, "einwilligung_widerrufen", &revoked).await;
-
-    StatusCode::NO_CONTENT.into_response()
 }
 
 #[derive(Debug, Deserialize)]

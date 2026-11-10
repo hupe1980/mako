@@ -2,8 +2,11 @@
 //!
 //! Append-only for the content columns, like [`crate::template_store`] and for
 //! the same statute (§ 147 AO): a corrected document is a new row. The delivery
-//! rows beside it advance in place — an attempt track is mutable state, which
-//! is what `attempts` counts.
+//! rows beside it advance in place. A pushed delivery (`EMAIL`, `POST` to a
+//! relay, `ERP`) is owed as a `mako_service::outbox` command committed with the
+//! document; its attempts are read off that command
+//! (`DELIVERY_OUTBOX_JOIN`), and its evidence is written when the outbox
+//! marks it delivered ([`record_success`]).
 
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -12,6 +15,46 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::channel::Channel;
+use crate::config::DeliveryConfig;
+
+/// The outbox key of a delivery: the Standard Webhooks message id a relay
+/// deduplicates on. The delivery, not the attempt — a retry is the same
+/// message, and a relay that already accepted it must be able to say so rather
+/// than print the letter twice.
+#[must_use]
+pub fn delivery_key(delivery_id: Uuid) -> String {
+    format!("de.output.delivery/{delivery_id}")
+}
+
+/// The delivery behind an outbox key, when it is one.
+#[must_use]
+pub fn delivery_of_key(key: &str) -> Option<Uuid> {
+    key.strip_prefix("de.output.delivery/")?.parse().ok()
+}
+
+/// The outbox upstream a pushed channel's commands are owed to.
+#[must_use]
+pub const fn upstream(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Portal => "outputd-portal",
+        Channel::Email => "outputd-email",
+        Channel::Post => "outputd-post",
+        Channel::Erp => "outputd-erp",
+    }
+}
+
+/// The `event_outbox` join that reads a delivery's attempt track off the
+/// command that carries it.
+const DELIVERY_OUTBOX_JOIN: &str =
+    "LEFT JOIN event_outbox o ON o.event_id = 'de.output.delivery/' || dd.delivery_id::TEXT";
+
+/// The [`DeliveryRow`] columns, read through [`DELIVERY_OUTBOX_JOIN`].
+const DELIVERY_COLUMNS: &str = "dd.delivery_id, dd.document_id, dd.channel, dd.status, dd.target, \
+     COALESCE(o.attempts, 0)::INTEGER AS attempts, \
+     CASE WHEN o.delivered_at IS NULL AND o.dead_lettered_at IS NULL \
+          THEN o.next_attempt_at END AS next_attempt_at, \
+     dd.first_sent_at, dd.delivered_at, dd.read_at, dd.evidence, \
+     COALESCE(dd.last_error, o.last_error) AS last_error";
 
 /// A document to record, with the bytes that were produced for it.
 #[derive(Debug)]
@@ -120,9 +163,11 @@ pub struct DeliveryRow {
     pub channel: String,
     pub status: String,
     pub target: Option<String>,
+    /// Attempts made by the outbox command carrying this delivery.
     pub attempts: i32,
-    #[serde(with = "time::serde::rfc3339")]
-    pub next_attempt_at: OffsetDateTime,
+    /// When the outbox tries again; `None` when nothing is pending.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub next_attempt_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub first_sent_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -196,6 +241,12 @@ pub fn content_hash(bytes: &[u8]) -> String {
 /// stored `SUPPRESSED` with the reason, never omitted — "why did this never go
 /// out" has to be answerable from the row, not from its absence.
 ///
+/// In the same transaction each queued delivery is set going under `cfg`: the
+/// portal publication is recorded as delivered, and a pushed channel's relay
+/// POST is enqueued as a `mako_service::outbox` command — except a `POST` with
+/// no postal relay, which waits in the spool for a print service. With
+/// delivery disabled every row stays `PENDING`.
+///
 /// Returns the document, its queued deliveries, and whether it was new.
 ///
 /// # Errors
@@ -205,6 +256,7 @@ pub async fn issue(
     pool: &PgPool,
     doc: &NewDocument<'_>,
     channels: &[Channel],
+    cfg: &DeliveryConfig,
 ) -> Result<(IssuedDocument, bool)> {
     // The already-issued case first, and outside the write: the common retry
     // path then costs one indexed read.
@@ -282,24 +334,44 @@ pub async fn issue(
             ),
             (Channel::Erp, None) => ("PENDING", None),
         };
-        let r = sqlx::query(
+        let delivery_id: Uuid = sqlx::query_scalar(
             r"INSERT INTO document_deliveries
                 (document_id, tenant, channel, status, target, last_error)
               VALUES ($1,$2,$3,$4,$5,$6)
-              RETURNING delivery_id, document_id, channel, status, target, attempts,
-                        next_attempt_at, first_sent_at, delivered_at, read_at,
-                        evidence, last_error",
+              RETURNING delivery_id",
         )
         .bind(document.document_id)
         .bind(doc.tenant)
         .bind(channel.as_str())
         .bind(status)
-        .bind(target)
+        .bind(&target)
         .bind(last_error)
         .fetch_one(&mut *tx)
         .await
         .context("queue delivery")?;
-        deliveries.push(delivery_row(&r)?);
+        if status == "PENDING" && cfg.enabled {
+            set_going(
+                &mut tx,
+                cfg,
+                doc,
+                &document,
+                *channel,
+                delivery_id,
+                target.as_deref(),
+            )
+            .await?;
+        }
+    }
+    let rows = sqlx::query(mako_service::sql::dynamic(format!(
+        "SELECT {DELIVERY_COLUMNS} FROM document_deliveries dd {DELIVERY_OUTBOX_JOIN} \
+         WHERE dd.document_id = $1 ORDER BY dd.channel"
+    )))
+    .bind(document.document_id)
+    .fetch_all(&mut *tx)
+    .await
+    .context("read the queued deliveries")?;
+    for r in &rows {
+        deliveries.push(delivery_row(r)?);
     }
     tx.commit().await?;
 
@@ -310,6 +382,103 @@ pub async fn issue(
         },
         true,
     ))
+}
+
+/// Set one queued delivery going, on the issuing transaction.
+async fn set_going(
+    tx: &mut sqlx::PgConnection,
+    cfg: &DeliveryConfig,
+    doc: &NewDocument<'_>,
+    document: &DocumentRow,
+    channel: Channel,
+    delivery_id: Uuid,
+    target: Option<&str>,
+) -> Result<()> {
+    match channel {
+        // Publishing *is* the delivery: the document is in the store and
+        // `portald` serves it from there, which is why this channel can claim
+        // arrival by itself.
+        Channel::Portal => {
+            record_success(
+                &mut *tx,
+                doc.tenant,
+                delivery_id,
+                true,
+                Some(serde_json::json!({
+                    "published": "portal-inbox",
+                    "document_id": document.document_id,
+                })),
+            )
+            .await
+        }
+        // A print service *pulls* from `GET /api/v1/spool`; the push is for
+        // partners that offer an endpoint. With none configured the letter
+        // waits in the spool, which is a supported integration and not a
+        // failed push.
+        Channel::Post if !cfg.has_postal_relay() => Ok(()),
+        Channel::Email | Channel::Post | Channel::Erp => {
+            let to = matches!(channel, Channel::Email)
+                .then_some(target)
+                .flatten();
+            let body = relay_body(cfg, doc, document, channel, delivery_id, to);
+            mako_service::outbox::enqueue_command(
+                tx,
+                &mako_service::outbox::Command {
+                    upstream: upstream(channel).to_owned(),
+                    label: format!("output.delivery.{}", channel.as_str().to_ascii_lowercase()),
+                    method: mako_service::outbox::CommandMethod::Post,
+                    path: String::new(),
+                    body,
+                    key: delivery_key(delivery_id),
+                    settled_statuses: Vec::new(),
+                },
+            )
+            .await
+            .context("enqueue the relay delivery")
+        }
+    }
+}
+
+/// The JSON a relay receives.
+///
+/// Carries the delivery id, so a relay reporting asynchronously through
+/// `POST /api/v1/deliveries/{id}/status` has a key to report against, and the
+/// document base64-encoded, so an adapter needs nothing but a JSON parser.
+fn relay_body(
+    cfg: &DeliveryConfig,
+    doc: &NewDocument<'_>,
+    document: &DocumentRow,
+    channel: Channel,
+    delivery_id: Uuid,
+    to: Option<&str>,
+) -> serde_json::Value {
+    use base64::Engine as _;
+    let filename = format!(
+        "{}-{}.{}",
+        doc.kind.to_ascii_lowercase(),
+        doc.subject_ref.replace(['/', '\\', ' '], "-"),
+        if doc.media_type == "application/pdf" {
+            "pdf"
+        } else {
+            "bin"
+        }
+    );
+    serde_json::json!({
+        "delivery_id":    delivery_id,
+        "document_id":    document.document_id,
+        "channel":        channel.as_str(),
+        "kind":           doc.kind,
+        "subject_ref":    doc.subject_ref,
+        "malo_id":        doc.malo_id,
+        "kunden_nr":      doc.kunden_nr,
+        "from":           cfg.from_address,
+        "to":             to,
+        "recipient_name": doc.recipient.name,
+        "subject":        cfg.subject_for(doc.kind),
+        "filename":       filename,
+        "media_type":     doc.media_type,
+        "content_base64": base64::engine::general_purpose::STANDARD.encode(doc.content),
+    })
 }
 
 /// The document issued for `(tenant, kind, subject_ref)`, with its deliveries.
@@ -407,13 +576,10 @@ pub async fn deliveries_of(
     tenant: &str,
     document_id: Uuid,
 ) -> Result<Vec<DeliveryRow>> {
-    let rows = sqlx::query(
-        r"SELECT delivery_id, document_id, channel, status, target, attempts,
-                 next_attempt_at, first_sent_at, delivered_at, read_at, evidence, last_error
-          FROM document_deliveries
-          WHERE document_id = $1 AND tenant = $2
-          ORDER BY channel",
-    )
+    let rows = sqlx::query(mako_service::sql::dynamic(format!(
+        "SELECT {DELIVERY_COLUMNS} FROM document_deliveries dd {DELIVERY_OUTBOX_JOIN} \
+         WHERE dd.document_id = $1 AND dd.tenant = $2 ORDER BY dd.channel"
+    )))
     .bind(document_id)
     .bind(tenant)
     .fetch_all(pool)
@@ -471,95 +637,19 @@ pub async fn list(
     rows.iter().map(document_row).collect()
 }
 
-/// One pending delivery, claimed by the worker, with what it needs to send.
+/// One letter waiting in the postal spool.
 #[derive(Debug, Clone)]
 pub struct PendingDelivery {
     pub delivery_id: Uuid,
     pub document_id: Uuid,
     pub channel: Channel,
     pub target: Option<String>,
-    pub attempts: i32,
     pub kind: String,
     pub subject_ref: String,
     pub malo_id: Option<String>,
     pub kunden_nr: Option<String>,
     pub recipient_name: Option<String>,
     pub media_type: String,
-}
-
-/// Claim up to `limit` deliveries that are due, marking them in flight.
-///
-/// `FOR UPDATE SKIP LOCKED` plus an immediate `next_attempt_at` push: two
-/// replicas never send the same document at once, and a replica that dies
-/// mid-send releases its claim when the backoff elapses. At-least-once, which
-/// is tolerable only because the far end can deduplicate — the portal
-/// republishes the same row, and the relay body carries the delivery id.
-///
-/// `postal_push` says whether this deployment has a postal relay to push to.
-/// With `false`, `POST` rows are not claimed at all: they are letters a print
-/// service collects from [`postal_spool`], and a claim is the first step of a
-/// path that ends in `FAILED` — which would delete them from that spool, since
-/// it lists `PENDING` rows. The pull model is a supported integration, not a
-/// broken push, so it must not consume the retry budget.
-///
-/// # Errors
-///
-/// Propagates database errors.
-pub async fn claim_due(
-    pool: &PgPool,
-    tenant: &str,
-    limit: i64,
-    retry_after: time::Duration,
-    postal_push: bool,
-) -> Result<Vec<PendingDelivery>> {
-    let rows = sqlx::query(
-        r"WITH due AS (
-              SELECT dd.delivery_id
-              FROM document_deliveries dd
-              WHERE dd.tenant = $1 AND dd.status = 'PENDING' AND dd.next_attempt_at <= now()
-                AND ($4 OR dd.channel <> 'POST')
-              ORDER BY dd.next_attempt_at
-              LIMIT $2
-              FOR UPDATE SKIP LOCKED
-          )
-          UPDATE document_deliveries dd
-             SET attempts        = dd.attempts + 1,
-                 next_attempt_at = now() + $3::interval,
-                 updated_at      = now()
-            FROM due, documents d
-           WHERE dd.delivery_id = due.delivery_id AND d.document_id = dd.document_id
-          RETURNING dd.delivery_id, dd.document_id, dd.channel, dd.target, dd.attempts,
-                    d.kind, d.subject_ref, d.malo_id, d.kunden_nr,
-                    d.recipient_name, d.media_type",
-    )
-    .bind(tenant)
-    .bind(limit)
-    .bind(retry_after)
-    .bind(postal_push)
-    .fetch_all(pool)
-    .await
-    .context("claim due deliveries")?;
-
-    rows.iter()
-        .map(|r| {
-            let channel: String = r.try_get("channel")?;
-            Ok(PendingDelivery {
-                delivery_id: r.try_get("delivery_id")?,
-                document_id: r.try_get("document_id")?,
-                channel: Channel::parse(&channel).with_context(|| {
-                    format!("stored channel {channel} is not one this build knows")
-                })?,
-                target: r.try_get("target")?,
-                attempts: r.try_get("attempts")?,
-                kind: r.try_get("kind")?,
-                subject_ref: r.try_get("subject_ref")?,
-                malo_id: r.try_get("malo_id")?,
-                kunden_nr: r.try_get("kunden_nr")?,
-                recipient_name: r.try_get("recipient_name")?,
-                media_type: r.try_get("media_type")?,
-            })
-        })
-        .collect()
 }
 
 /// Record what a channel reported for one delivery.
@@ -574,7 +664,7 @@ pub async fn claim_due(
 ///
 /// Propagates database errors.
 pub async fn record_success(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     delivery_id: Uuid,
     delivered: bool,
@@ -594,48 +684,89 @@ pub async fn record_success(
     .bind(delivery_id)
     .bind(delivered)
     .bind(evidence)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("record delivery success")?;
     Ok(())
 }
 
-/// Record a failed attempt, scheduling a retry or giving up.
-///
-/// The row stays `PENDING` while retries remain and becomes `FAILED` at the
-/// ceiling — the state that says a customer never received something the
-/// platform believes it sent. `delivered_at` is cleared with it, so a bounce
-/// reported on a `DELIVERED` row turns it into the failure it was.
+/// Record that a delivery did not reach its recipient: `FAILED`, the state
+/// that says a customer never received something the platform believes it
+/// sent. `delivered_at` is cleared with it, so a bounce reported on a
+/// `DELIVERED` row turns it into the failure it was.
 ///
 /// # Errors
 ///
 /// Propagates database errors.
 pub async fn record_failure(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     delivery_id: Uuid,
     error: &str,
-    give_up: bool,
-    retry_after: time::Duration,
 ) -> Result<()> {
     sqlx::query(
         r"UPDATE document_deliveries
-             SET status          = CASE WHEN $4 THEN 'FAILED' ELSE 'PENDING' END,
-                 delivered_at    = NULL,
-                 next_attempt_at = now() + $5::interval,
-                 last_error      = $3,
-                 updated_at      = now()
+             SET status       = 'FAILED',
+                 delivered_at = NULL,
+                 last_error   = $3,
+                 updated_at   = now()
            WHERE tenant = $1 AND delivery_id = $2",
     )
     .bind(tenant)
     .bind(delivery_id)
     .bind(error)
-    .bind(give_up)
-    .bind(retry_after)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("record delivery failure")?;
     Ok(())
+}
+
+/// A delivery whose outbox command was dead-lettered, now `FAILED`.
+#[derive(Debug, Clone)]
+pub struct GaveUp {
+    pub delivery_id: Uuid,
+    pub channel: String,
+    pub attempts: i32,
+    pub error: String,
+}
+
+/// Turn every `PENDING` delivery whose outbox command was dead-lettered into
+/// `FAILED`, with the command's last error, and return them.
+///
+/// The outbox gave up — its budget is spent or the relay refused the push —
+/// so nothing will deliver the document any more, and the row has to say so.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn fail_dead_lettered(pool: &PgPool, tenant: &str) -> Result<Vec<GaveUp>> {
+    let rows = sqlx::query(
+        r"UPDATE document_deliveries dd
+             SET status       = 'FAILED',
+                 delivered_at = NULL,
+                 last_error   = COALESCE(o.last_error, 'the outbox gave up on the delivery'),
+                 updated_at   = now()
+            FROM event_outbox o
+           WHERE dd.tenant = $1 AND dd.status = 'PENDING'
+             AND o.event_id = 'de.output.delivery/' || dd.delivery_id::TEXT
+             AND o.dead_lettered_at IS NOT NULL
+          RETURNING dd.delivery_id, dd.channel, o.attempts::INTEGER AS attempts,
+                    dd.last_error",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("fail dead-lettered deliveries")?;
+    rows.iter()
+        .map(|r| {
+            Ok(GaveUp {
+                delivery_id: r.try_get("delivery_id")?,
+                channel: r.try_get("channel")?,
+                attempts: r.try_get("attempts")?,
+                error: r.try_get("last_error")?,
+            })
+        })
+        .collect()
 }
 
 /// Record that the recipient opened the document in the portal.
@@ -666,16 +797,16 @@ pub async fn record_read(pool: &PgPool, tenant: &str, delivery_id: Uuid) -> Resu
 /// What a print service pulls: the `POST` deliveries still waiting, with the
 /// document ids whose bytes it then fetches.
 ///
-/// `PENDING` is the whole spool, which is why [`claim_due`] must never let a
-/// `POST` row that has no relay to push to reach `FAILED`: a letter that left
-/// this list was never printed, and nobody is watching the status column.
+/// `PENDING` is the whole spool: with no postal relay configured a `POST` row
+/// is never enqueued, so nothing can turn it `FAILED` behind the print
+/// service's back.
 ///
 /// # Errors
 ///
 /// Propagates database errors.
 pub async fn postal_spool(pool: &PgPool, tenant: &str, limit: i64) -> Result<Vec<PendingDelivery>> {
     let rows = sqlx::query(
-        r"SELECT dd.delivery_id, dd.document_id, dd.channel, dd.target, dd.attempts,
+        r"SELECT dd.delivery_id, dd.document_id, dd.channel, dd.target,
                  d.kind, d.subject_ref, d.malo_id, d.kunden_nr, d.recipient_name, d.media_type
           FROM document_deliveries dd
           JOIN documents d ON d.document_id = dd.document_id
@@ -695,7 +826,6 @@ pub async fn postal_spool(pool: &PgPool, tenant: &str, limit: i64) -> Result<Vec
                 document_id: r.try_get("document_id")?,
                 channel: Channel::Post,
                 target: r.try_get("target")?,
-                attempts: r.try_get("attempts")?,
                 kind: r.try_get("kind")?,
                 subject_ref: r.try_get("subject_ref")?,
                 malo_id: r.try_get("malo_id")?,

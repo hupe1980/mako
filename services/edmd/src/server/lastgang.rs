@@ -993,16 +993,15 @@ pub(crate) async fn get_lastgang_resampled(
         }
     };
 
-    if reads.is_empty() {
+    let Some(sparte) = reads.first().map(|r| r.sparte) else {
         return ApiError::NotFound.into_response();
-    }
+    };
 
     // Project onto one canonical energy series before resampling. A resolved read
     // spans every register the measuring point reported, and a bucket total built
     // from all of them adds a prosumer's Einspeisung to its Bezug and counts a
     // dual-tariff meter's consumption twice (`domain::register`). Non-billable
     // qualities are dropped by the same projection (§ 40a Abs. 2 EnWG).
-    let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
     let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
     let response = match resampled_buckets(sparte, &intervals, target) {
         Ok(buckets) => buckets,
@@ -1118,8 +1117,11 @@ pub(crate) async fn get_summenzeitreihe(
     // the **Bezug**, projected onto one canonical register set: billable
     // qualities only (§ 40a Abs. 2 EnWG), no Einspeisung folded in, and no total
     // register added to its own HT/NT split (`domain::register`). A month
-    // missing any slot is absent rather than reported short.
-    let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
+    // missing any slot is absent rather than reported short. A window with no
+    // reading at all is no data, not a zero total.
+    let Some(sparte) = reads.first().map(|r| r.sparte) else {
+        return ApiError::NotFound.into_response();
+    };
     let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
     let months = match resampled_buckets(sparte, &intervals, metering::Resolution::Month) {
         Ok(buckets) => buckets,
@@ -1174,6 +1176,7 @@ mod arrow_transport_tests {
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: None,
             mscons_version: None,
+            ablesung_herkunft: None,
         }
     }
 

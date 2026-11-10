@@ -34,7 +34,7 @@ graph TB
     invoicd -->|"price sheets + MMM reference prices"| marktd
     invoicd -->|"persist receipt BEFORE dispatch<br/>(§ 147 AO / GoBD)"| pg
     invoicd -->|"accept / reject, per the answering PID"| makod
-    invoicd -->|"de.invoic.receipt.settled/disputed<br/>durable at-least-once<br/>(inline + outbox worker retry)"| erp["ERP webhook"]
+    invoicd -->|"de.invoic.receipt.settled/disputed<br/>durable at-least-once<br/>(event_outbox)"| erp["ERP webhook"]
 ```
 
 ---
@@ -157,9 +157,15 @@ The answer's shape picks the REMADV PID (REMADV AHB 1.0a): one code rides 33002
 `E_0264` has three levels with disjoint codes: Kopf 10–90 (`A01`–`A07`, `A90`),
 Position 300–430 (`A09`–`A15`, `A20`, `A99`), Summe 500–550 (`A21`–`A24`, `A96`).
 A Kopf refusal ends the walk; settlement is „ganz oder gar nicht" (WiM Teil 2 UC
-4.5.1). Five Prüfschritte need facts no INVOIC carries (50, 310, 370, 10, and
-`E_0266` 1); each is optional on `mako_pruefung::RechnungsFakten` and an unknown
-answer never refuses. A `marktd` outage passes Prüfschritt 40.
+4.5.1). Seven Prüfschritte need facts no INVOIC carries (10, 50, 310, 330, 370,
+`E_0266` 1, and on Preisblatt B 80). A step the walk reaches with no answer —
+those facts, or a missing Leistungszeitraum, Zahlungsziel or Angebot — is
+neither passed nor refused: the walk ends open, the receipt is recorded with
+outcome `Offen`, no REMADV is sent, no `de.invoic.receipt.*` event is
+enqueued, and `dispatch-answer` refuses it. No record answers Prüfschritte 10
+and 330, so every walked invoice is held for a person. A
+`marktd` outage on the order lookup (Prüfschritt 40) answers `503`, so the
+sender redelivers once marktd answers.
 
 **PID 31004** is the universal, Sparte-neutral Storno (INVOIC AHB §3.1.2): the
 Sparte comes from `Rechnung.sparte`, the check is arithmetic only, and the
@@ -277,22 +283,13 @@ never overdue.
 
 ### Delivery guarantee — durable at-least-once
 
-The first attempt runs inline after the market answer is dispatched and does
-not spend the budget. On failure the `erp_outbox` worker retries, leasing each
-batch with `UPDATE … RETURNING` (which also counts the attempt), so replicas do
-not double-deliver and a lost outcome write cannot retry forever:
-
-| Attempt | Delay before retry |
-|---------|--------------------|
-| 1       | 30 s               |
-| 2       | 5 min              |
-| 3       | 30 min             |
-| 4       | 2 h                |
-| 5       | dead-lettered      |
-
-2xx sets `erp_notified_at`; 4xx dead-letters immediately; 5xx and transport
-errors retry. `[erp] hmac_secret` signs each POST (Standard Webhooks). The
-market answer never waits on the ERP. Dead letters count in
+The `de.invoic.receipt.*` event is enqueued in `event_outbox` in the
+transaction that stamps the answer's `dispatched_at`, and the
+`mako_service::outbox` worker delivers it to `[erp] webhook_url` under the
+shared policy (8 attempts, 30 s × 4ⁿ capped at 2 h, then dead-lettered; a 4xx
+dead-letters at once). If that transaction fails, invoicd answers `500` and
+makod redelivers the invoice. `[erp] hmac_secret` signs each POST (Standard
+Webhooks). The market answer never waits on the ERP. Dead letters count in
 `invoicd_erp_dead_lettered_total`. Without `[erp] webhook_url` nothing delivers
 and the service warns at startup.
 
@@ -360,6 +357,7 @@ stateDiagram-v2
     [*] --> Received : invoicd persists receipt (atomic)
     Received --> Dispatched : REMADV 33001 Zahlungsavis sent
     Received --> Disputed : REMADV 33002 / 33003 / 33004 sent (Dispute outcome)
+    Received --> Held : a walked Prüfschritt unanswered (Offen outcome), nothing sent
     Dispatched --> Settled : POST /confirm-payment (ERP ack)
     Dispatched --> Overdue : pay_by passes without confirmation
     Overdue --> Settled : POST /confirm-payment (late ERP ack)

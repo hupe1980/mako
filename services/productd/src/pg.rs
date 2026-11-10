@@ -154,6 +154,24 @@ pub async fn upsert_product(
     product_code: &str,
     req: ProductUpsertRequest,
 ) -> anyhow::Result<Uuid> {
+    upsert_product_announced(pool, lf_mp_id, tenant, product_code, req, None).await
+}
+
+/// [`upsert_product`], enqueueing `announcement` in the same transaction, so
+/// the new version and its `de.tarif.product.updated` commit together.
+///
+/// # Errors
+///
+/// As [`upsert_product`], and when the enqueue fails — the version then does
+/// not commit either.
+pub async fn upsert_product_announced(
+    pool: &PgPool,
+    lf_mp_id: &str,
+    tenant: &str,
+    product_code: &str,
+    req: ProductUpsertRequest,
+    announcement: Option<&mako_service::CloudEvent>,
+) -> anyhow::Result<Uuid> {
     let valid_from = parse_date_opt(&req.valid_from).context("parse valid_from")?;
     let valid_to = parse_date_opt(&req.valid_to).context("parse valid_to")?;
 
@@ -262,6 +280,11 @@ pub async fn upsert_product(
     .context("upsert product")?;
 
     let id: Uuid = row.try_get("id")?;
+    if let Some(ce) = announcement {
+        mako_service::outbox::enqueue(&mut tx, ce)
+            .await
+            .context("enqueue de.tarif.product.updated")?;
+    }
     tx.commit().await.context("commit upsert_product")?;
     Ok(id)
 }
@@ -1187,11 +1210,19 @@ impl From<sqlx::Error> for AcceptError {
 /// # Errors
 ///
 /// [`AcceptError`] — one kind per reason, the storage failure among them.
+/// Accept an Angebot, enqueueing what `angenommen` builds from the accepted
+/// row in the transaction that accepts it.
+///
+/// The acceptance is binding the moment it commits, and the
+/// `de.tarif.angebot.angenommen` it owes `vertragd` is what becomes the
+/// contract: committed apart, an outage between the two leaves an accepted
+/// Angebot that nothing ever contracts, and the customer's retry is a 409.
 pub async fn accept_angebot(
     pool: &PgPool,
     id: Uuid,
     tenant: &str,
     gewaehlte_variante: Option<i16>,
+    angenommen: impl FnOnce(&AngebotRow) -> Option<mako_service::CloudEvent>,
 ) -> Result<AngebotRow, AcceptError> {
     let angebot = fetch_angebot(pool, id, tenant)
         .await?
@@ -1224,6 +1255,7 @@ pub async fn accept_angebot(
     // The status was read on a separate statement, so a decline or an expiry
     // landing in between was overwritten and a terminal ABGELEHNT/ABGELAUFEN
     // became ANGENOMMEN. The state the read established is re-asserted here.
+    let mut tx = pool.begin().await?;
     let row = sqlx::query_as::<_, AngebotRow>(
         r"UPDATE angebote
           SET status = 'ANGENOMMEN',
@@ -1237,10 +1269,14 @@ pub async fn accept_angebot(
     .bind(id)
     .bind(tenant)
     .bind(gewaehlte_variante)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
-
-    row.ok_or(AcceptError::Wettlauf)
+    let row = row.ok_or(AcceptError::Wettlauf)?;
+    if let Some(ce) = angenommen(&row) {
+        mako_service::outbox::enqueue(&mut tx, &ce).await?;
+    }
+    tx.commit().await?;
+    Ok(row)
 }
 
 /// Why an Angebot could not be moved to ABGELEHNT or VERSANDT.
@@ -1351,16 +1387,15 @@ pub async fn mark_angebot_versandt(
 
 /// Update rahmenvertrag_id after successful acceptance + contract creation.
 pub async fn link_angebot_rahmenvertrag(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     id: Uuid,
     rahmenvertrag_id: Uuid,
-) -> anyhow::Result<()> {
+) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE angebote SET rahmenvertrag_id=$2, updated_at=now() WHERE id=$1")
         .bind(id)
         .bind(rahmenvertrag_id)
-        .execute(pool)
-        .await
-        .context("link_angebot_rahmenvertrag")?;
+        .execute(conn)
+        .await?;
     Ok(())
 }
 

@@ -3,7 +3,6 @@
 //! Every channel is an adapter over something an operator already runs. What
 //! outputd owns is *when* to send, *what* counts as sent, and the evidence.
 
-use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
 use super::store::Recipient;
@@ -104,36 +103,6 @@ impl serde::Serialize for Channel {
     }
 }
 
-/// What one send attempt achieved.
-#[derive(Debug)]
-pub struct DeliveryOutcome {
-    /// `true` when the document is known to have arrived, not merely handed
-    /// off. See [`Channel::arrival_is_observable_at_send`].
-    pub delivered: bool,
-    /// The channel's own receipt — a relay message id, a webhook response.
-    pub evidence: Option<serde_json::Value>,
-}
-
-/// A relay this daemon POSTs documents to: a URL and the credential that
-/// authenticates the push.
-///
-/// The contract `accountingd` uses for its bank adapter. The body is JSON with
-/// the document base64-encoded — a relay is an endpoint an operator writes in
-/// whatever language they like, and multipart is more to ask of them.
-///
-/// The credential is both the bearer token and the [Standard Webhooks] signing
-/// key: the body carries a customer's invoice, their name, e-mail address, MaLo
-/// and Kundennummer, so the relay has to be able to tell a mako push from
-/// anything else that reached its URL. Startup refuses a relay URL configured
-/// without one.
-///
-/// [Standard Webhooks]: https://www.standardwebhooks.com/
-#[derive(Debug, Clone)]
-pub struct Relay {
-    pub url: String,
-    pub api_key: Option<secrecy::SecretString>,
-}
-
 /// What a relay answers. Every field optional: a `200` with an empty body has
 /// still accepted the document, and demanding a schema of an operator's own
 /// adapter would make the common case the failing one.
@@ -147,59 +116,4 @@ pub struct RelayReceipt {
     /// notifications). Absent → the send counts as handed off, not arrived.
     #[serde(default)]
     pub delivered: Option<bool>,
-}
-
-/// POST one document to a relay, signed.
-///
-/// `id` is the Standard Webhooks message id — the key the relay deduplicates
-/// on, so every retry of one delivery carries the same one.
-///
-/// The signature covers `{id}.{timestamp}.{body}` with the relay credential, so
-/// the receiver can tell a mako push from any other POST that reached its URL
-/// and a captured one cannot be replayed past the tolerance. This is the one
-/// signer the whole platform uses.
-///
-/// # Errors
-///
-/// Any transport failure or non-2xx status. Whether that is a retry or a
-/// give-up is the caller's decision.
-pub async fn send_to_relay(
-    http: &reqwest::Client,
-    relay: &Relay,
-    id: &str,
-    body: &serde_json::Value,
-) -> Result<DeliveryOutcome> {
-    use secrecy::ExposeSecret as _;
-    let payload = serde_json::to_vec(body).context("serialise the relay body")?;
-    let mut request = http
-        .post(&relay.url)
-        .header("Content-Type", "application/json")
-        .body(payload.clone());
-    if let Some(key) = relay.api_key.as_ref() {
-        request = request.bearer_auth(key.expose_secret());
-        for (name, value) in mako_service::webhook::headers(
-            key.expose_secret().as_bytes(),
-            id,
-            time::OffsetDateTime::now_utc().unix_timestamp(),
-            &payload,
-        ) {
-            request = request.header(name, value);
-        }
-    }
-    let response = request.send().await.context("relay request")?;
-    let status = response.status();
-    let text = response.text().await.unwrap_or_default();
-    anyhow::ensure!(
-        status.is_success(),
-        "relay answered {status}: {}",
-        text.chars().take(400).collect::<String>()
-    );
-    let receipt: RelayReceipt = serde_json::from_str(&text).unwrap_or_default();
-    Ok(DeliveryOutcome {
-        delivered: receipt.delivered.unwrap_or(false),
-        evidence: Some(serde_json::json!({
-            "relay_status":  status.as_u16(),
-            "message_id":    receipt.message_id,
-        })),
-    })
 }

@@ -27,10 +27,24 @@ impl PgPartnerRepository {
     ///
     /// Returns the new version number.
     pub async fn upsert(&self, partner: PartnerRecord) -> Result<i64, MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::upsert_tx(&mut conn, partner).await
+    }
+
+    /// [`Self::upsert`] on the caller's transaction, so the row and the
+    /// CloudEvent announcing it commit together.
+    pub async fn upsert_tx(
+        conn: &mut sqlx::PgConnection,
+        partner: PartnerRecord,
+    ) -> Result<i64, MdmError> {
         let current: Option<i64> =
             sqlx::query_scalar("SELECT version FROM partners WHERE mp_id = $1")
                 .bind(partner.mp_id.as_ref())
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -66,7 +80,7 @@ impl PgPartnerRepository {
         .bind(partner.edi_zustimmung)
         .bind(partner.edi_extrahierbar)
         .bind(new_version)
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 

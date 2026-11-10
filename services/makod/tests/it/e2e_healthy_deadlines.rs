@@ -301,6 +301,10 @@ async fn healthy_beginn_msb(pid: u32, strom: bool) {
                 pid: Pruefidentifikator::new(mako_wim::geraetewechsel::GESAMTVORGANG_ERFOLG_PID)
                     .expect("PID"),
                 zuordnungsbeginn: Some("20260316".to_owned()),
+                referenz: Some(mako_wim::geraetewechsel::IftstaReferenz {
+                    dokumentennummer: "IFT-1".to_owned(),
+                    vorgangsnummer: "1".to_owned(),
+                }),
                 message_ref: MessageRef::new("WIM-GV-0001"),
                 received_at: GESAMTVORGANG_AT,
             },

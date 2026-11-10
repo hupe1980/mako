@@ -16,11 +16,11 @@ just dev outputd       # dev/config/outputd.toml against the dev PostgreSQL
 
 | | |
 |---|---|
-| **Kinds** | `INVOICE` (the caller sends the EN 16931 model; outputd projects the view), `MAHNUNG` (§ 126b BGB) from `accountingd`, `PREISANPASSUNG` (§ 41 Abs. 5 EnWG) from `vertragd` |
+| **Kinds** | `INVOICE` (the caller sends the EN 16931 model; outputd projects the view), `MAHNUNG` (§ 126b BGB) from `accountingd`, `PREISANPASSUNG` (§ 41 Abs. 5 EnWG) from `vertragd`, `GEBUEHRENBESCHEID` (§ 157 Abs. 1 AO content) from `billingd` |
 | **Template store** | content-addressed per tenant, append-only; issuers pin the hash beside each document (`X-Mako-Template-Hash`). `document_template_current` is the one mutable pointer |
 | **Publish gate** | renders the candidate against a specimen, enforces PDF/A, reads the Factur-X payload back byte-identical and requires the § 14 Abs. 4 UStG terms on the page before a row is written |
 | **Typst sandbox** | no filesystem, network, packages or clock; renders capped at cores − 1, 20 s budget |
-| **Delivery** | one track per (document, channel): `PORTAL`, `EMAIL`, `POST`, `ERP`, with backoff and `max_attempts`. `SENT` ≠ `DELIVERED` — arrival is reported back |
+| **Delivery** | one track per (document, channel): `PORTAL`, `EMAIL`, `POST`, `ERP`; a pushed one is a signed `event_outbox` command under the shared retry policy. `SENT` ≠ `DELIVERED` — arrival is reported back |
 | **Auth** | OIDC + Cedar `policies/outputd.cedar`: reads and previews for the tenant; publish, rollout, render, issue and delivery reports for `LF`/`MSB`/`ESA` |
 | **Errors** | one envelope with a stable code; a template that does not compile returns its diagnostics as a list (`TEMPLATE_DID_NOT_COMPILE`) |
 
@@ -63,7 +63,6 @@ email_relay_api_key = "env:OUTPUTD_EMAIL_RELAY_KEY"
 # postal_relay_url = "http://print:8000/jobs"
 erp_webhook_url    = "http://erp:8000/documents"
 from_address       = "rechnung@example.de"
-max_attempts       = 8                       # ~half a day with the doubling backoff
 
 [delivery.subjects]
 MAHNUNG = "Zahlungserinnerung"

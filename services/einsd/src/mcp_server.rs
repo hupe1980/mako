@@ -997,7 +997,9 @@ impl EinsdMcpHandler {
         it is left. The quota is the share of the calendar year's generation whose \
         Bemessungsleistung equals 45 % of the installed capacity — 0,45 × kW × the §3 Nr. 6 \
         hours of that year, which is 8 784 in a leap year and is shortened for a plant that \
-        first generated during it. Applies to BIOGAS above 100 kW outside the §51b Ausschreibung.",
+        first generated during it. Applies to BIOGAS above 100 kW except a §44 plant; a plant with a \
+        Zuschlag nach §39 only until the Commission's approval of §44b Abs. 1 Satz 3 is recorded \
+        (§101 Abs. 2 EEG 2023: the Fassung of 24.02.2025 until then).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn check_sect44b_quota(
@@ -1016,41 +1018,32 @@ impl EinsdMcpHandler {
             ))]));
         };
 
-        // The same applicability test the settlement uses.
-        if anlage.erzeugungsart != "BIOGAS" {
-            return ContentBlock::json(serde_json::json!({
-                "tr_id": p.tr_id,
-                "applicable": false,
-                "reason": format!(
-                    "§44b Abs. 1 covers Strom aus Biogas; this plant is {}",
-                    anlage.erzeugungsart
-                ),
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None));
+        // The same predicate the settlement uses, for the current month.
+        let heute = mako_fristen::heute();
+        let periode = crate::pg::abrechnungsmonat(
+            i16::try_from(heute.year()).unwrap_or(i16::MAX),
+            i16::from(u8::from(heute.month())),
+        )
+        .map_err(|e| McpError::internal_error(format!("{e:#}"), None))?;
+        match crate::pg::sect44b_quote_gilt_fuer(&anlage, periode) {
+            Ok(true) => {}
+            Ok(false) => {
+                return ContentBlock::json(serde_json::json!({
+                    "tr_id": p.tr_id,
+                    "applicable": false,
+                    "reason": "§44b Abs. 1 Satz 1 reaches Strom aus Biogas above 100 kW, and \
+                               Satz 3 exempts a §44 plant — and, once the Commission's approval \
+                               is recorded, a plant with a Zuschlag nach §39 (§101 Abs. 2)",
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None));
+            }
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                    e.to_string(),
+                )]));
+            }
         }
-        if anlage.is_biogas_sect51b {
-            return ContentBlock::json(serde_json::json!({
-                "tr_id": p.tr_id,
-                "applicable": false,
-                "reason": "an Ausschreibungsanlage under §51b is outside the §44b cap",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None));
-        }
-        if anlage.leistung_kwp <= Decimal::from(100) {
-            return ContentBlock::json(serde_json::json!({
-                "tr_id": p.tr_id,
-                "applicable": false,
-                "reason": format!(
-                    "§44b Abs. 1 applies above 100 kW; this plant is {} kW",
-                    anlage.leistung_kwp
-                ),
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None));
-        }
-
         let jahr = mako_fristen::heute().year();
         // The quota comes from the engine, in Decimal, against the §3 Nr. 6 hours
         // of *this* year — not a flat 8 760, which would disagree with the
@@ -1107,8 +1100,9 @@ art='MONATSMARKTWERT' (Nr. 3) needs a billing_month and is final when published;
 art='JAHRESMARKTWERT' (Nr. 4) takes no month and may be vorlaeufig, because the binding figure \
 exists only once the year is over. Which series a plant settles on follows its Inbetriebnahme or \
 Zuschlag date (Nr. 2), never the operator: before 01.01.2023 the Monatsmarktwert, otherwise the \
-Jahresmarktwert. erzeugungsart must match plant erzeugungsart values (WIND_ONSHORE, SOLAR_AUFDACH, \
-SOLAR_FREIFLAECHE, BIOMASSE, BIOGAS, WASSERKRAFT, etc.) or 'DEFAULT' for the generic fallback."
+Jahresmarktwert. erzeugungsart is SOLAR, WIND_ONSHORE or WIND_OFFSHORE for the Nr. 3.3/4.3 values \
+(one SOLAR figure for every Bauform; SOLAR_* is refused), a Nr. 3.2 technology (BIOMASSE, BIOGAS, \
+WASSERKRAFT, etc.), or 'DEFAULT' for the spot mean, which Wind and Solar plants never read."
     )]
     async fn import_marktwert(
         &self,

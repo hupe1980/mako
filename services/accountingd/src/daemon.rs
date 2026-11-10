@@ -122,6 +122,26 @@ impl Daemon for Accountingd {
             )),
             None => {}
         }
+        if cfg.dunning_auto_enabled {
+            for (pfad, tage) in cfg.zahlungsfristen() {
+                if tage.is_none() {
+                    out.push(Befund::blockiert(
+                        pfad,
+                        "dunning_auto_enabled = true needs the Zahlungsfrist every automatic \
+                         Mahnung of this Stufe states, in days (at least 1)",
+                    ));
+                }
+            }
+            for (pfad, ct) in cfg.mahngebuehren() {
+                if ct.is_none() {
+                    out.push(Befund::blockiert(
+                        pfad,
+                        "dunning_auto_enabled = true needs the Mahngebühr every automatic \
+                         Mahnung of this Stufe charges, in ct (0 charges none)",
+                    ));
+                }
+            }
+        }
         out
     }
 
@@ -498,6 +518,11 @@ impl Daemon for Accountingd {
             .route(
                 "/api/v1/accounts/{malo_id}/interest-charges",
                 get(handlers::get_interest_charges).post(handlers::post_interest_charge),
+            )
+            // POST /api/v1/accounts/{malo_id}/locks — a lock with no case yet
+            .route(
+                "/api/v1/accounts/{malo_id}/locks",
+                post(handlers::place_account_lock),
             )
             // ── Payment plans (Zahlungsvereinbarung) ───────────────────────────
             // GET  /api/v1/accounts/{malo_id}/payment-plans
@@ -1020,21 +1045,30 @@ impl Daemon for Accountingd {
                         continue;
                     };
                     let grace_days = cfg_dun.dunning_grace_days.unwrap_or(30);
-                    let fee1 = cfg_dun.dunning_fee_stufe1_ct.unwrap_or(0);
-                    let fee2 = cfg_dun.dunning_fee_stufe2_ct.unwrap_or(500); // 5.00 EUR default
-                    let fee3 = cfg_dun.dunning_fee_stufe3_ct.unwrap_or(1000); // 10.00 EUR default
-
-                    match crate::pg::run_auto_dunning(
-                        &ledger_dun,
-                        &pool_dun,
-                        &cfg_dun.tenant,
-                        grace_days,
-                        fee1,
-                        fee2,
-                        fee3,
-                    )
-                    .await
-                    {
+                    // `validate` refused a start without all six; a run
+                    // without them is skipped rather than defaulted.
+                    let [(_, f1), (_, f2), (_, f3)] = cfg_dun.zahlungsfristen();
+                    let [(_, g1), (_, g2), (_, g3)] = cfg_dun.mahngebuehren();
+                    let run = match (f1, f2, f3, g1, g2, g3) {
+                        (Some(f1), Some(f2), Some(f3), Some(g1), Some(g2), Some(g3)) => {
+                            let stufen = crate::pg::Mahnstufen {
+                                gebuehr_ct: [g1, g2, g3],
+                                zahlungsfrist_tage: [f1, f2, f3],
+                            };
+                            crate::pg::run_auto_dunning(
+                                &ledger_dun,
+                                &pool_dun,
+                                &cfg_dun.tenant,
+                                grace_days,
+                                &stufen,
+                            )
+                            .await
+                        }
+                        _ => Err(anyhow::anyhow!(
+                            "dunning Zahlungsfristen and Mahngebühren are not all set"
+                        )),
+                    };
+                    match run {
                         Ok(result) => {
                             if result.mahnstufe1_created > 0 || result.escalated > 0 {
                                 tracing::info!(
@@ -1082,6 +1116,26 @@ impl Daemon for Accountingd {
                             Err(e) => {
                                 tracing::error!(error = %e, "accountingd: Mahnung document sweep failed");
                             }
+                        }
+                    }
+
+                    // Instalment plans: match the cash booked since each plan
+                    // began, then default a plan with an instalment past due —
+                    // before the sequence below, which an ACTIVE plan holds back
+                    // and a broken Abwendungsvereinbarung re-opens.
+                    match crate::pg::run_payment_plans(&pool_dun, &cfg_dun.tenant).await {
+                        Ok(s) if s.paid + s.completed + s.defaulted > 0 => {
+                            tracing::info!(
+                                paid = s.paid,
+                                completed = s.completed,
+                                defaulted = s.defaulted,
+                                vereinbarungen_gebrochen = s.vereinbarungen_gebrochen,
+                                "accountingd: payment plans matched"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::error!(error = %e, "accountingd: payment-plan run failed");
                         }
                     }
 

@@ -321,6 +321,23 @@ impl Element {
     }
 }
 
+impl Element {
+    /// The MIG's note on a DE 9013 whose code comes from the Codeliste or EBD
+    /// that DE 1131 names.
+    const CODE_DES_PRUEFSCHRITTS: &'static str = "Code des Prüfschritts";
+
+    /// Whether a value outside [`Self::codes`] breaks the MIG.
+    ///
+    /// Not for a „Code des Prüfschritts": its code is one of the Codeliste
+    /// DE 1131 names, and where the MIG prints codes beside it they are the
+    /// ones a column fixes — IFTSTA MIG 2.1 lists `E17` for the 21013 while
+    /// the 21011 carries `S_0057`'s `Z66` (EBD 4.3 Kap. 8.2.2.1).
+    #[must_use]
+    pub fn is_closed_code_list(&self) -> bool {
+        self.is_code_list() && self.note != Self::CODE_DES_PRUEFSCHRITTS
+    }
+}
+
 impl Anwendungsfall {
     /// The statuses the column states for segment `nr`, if it lists it.
     #[must_use]

@@ -370,8 +370,10 @@ pub struct Uci {
     /// DE 0010 — recipient identification (S003).
     #[edifact(element = "0010")]
     pub recipient: Option<String>,
-    /// DE 0083 — action, coded: `"4"` = acknowledged, `"7"` = rejected (group),
-    /// `"8"` = rejected (interchange).
+    /// DE 0083 — action, coded: `"7"` = „Übertragung bestätigt (keine
+    /// Syntaxfehler)", `"4"` = „Diese Ebene und alle tieferen Ebenen
+    /// zurückgewiesen" (CONTRL MIG 2.0b, UCI, S. 5; CONTRL AHB 1.0 Kap. 3.1,
+    /// S. 24).
     #[edifact(element = "0083")]
     pub action_code: Option<String>,
 }
@@ -546,7 +548,7 @@ pub(crate) fn collect_com(segments: &[edifact_rs::Segment<'_>]) -> Vec<Com> {
 /// | 0       | 0         | 0062 | Message reference number             |
 /// | 1       | 0         | 0065 | Message type identifier              |
 /// | 1       | 4         | 0057 | Association assigned code            |
-/// | 2       | 0         | 0083 | Action, coded (`"4"` = acknowledged, `"7"` = rejected) |
+/// | 2       | 0         | 0083 | Action, coded (`"4"` = rejected — the only value the CONTRL MIG 2.0b admits here, S. 8) |
 /// | 3       | 0         | 0085 | Syntax error code (if rejected)      |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
 #[edifact(segment = "UCM", layout = edifact_rs::service::UCM)]
@@ -560,7 +562,9 @@ pub struct Ucm {
     /// DE 0057 — association assigned code (S009).
     #[edifact(element = "0057")]
     pub assoc_code: Option<String>,
-    /// DE 0083 — action, coded: `"4"` = acknowledged, `"7"` = rejected.
+    /// DE 0083 — action, coded: `"4"` = „Diese Ebene und alle tieferen Ebenen
+    /// zurückgewiesen", the only value the CONTRL MIG 2.0b admits on `UCM`
+    /// (S. 8); `"7"` is the UN/EDIFACT acknowledgement.
     #[edifact(element = "0083")]
     pub action_code: String,
     /// DE 0085 — syntax error, coded; present when rejected.

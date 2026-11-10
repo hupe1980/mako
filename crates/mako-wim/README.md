@@ -50,7 +50,7 @@ clock. All of them come from `mako_fristen`.
 | `geraetewechsel`   | MSB-Wechsel: UTILMD 55039/55042/55051/55168, the Gas twins 44039/44042/44051/44168 and 44183, IFTSTA 21007/21009–21013/21015/21018/21036. Inbound and ERP-initiated directions; `antwort_frist_werktage()` per PID |
 | `geraeteubernahme` | ORDERS 17001 → ORDRSP 19001/19002 and 17009 → 19015/19016 (Kap. 3.1/3.2); a 17009 date inside the `mako_fristen::vorlauf` Mindestvorlaufzeit is refused with `E17` |
 | `weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 — the NB keeping the abgebender MSB on the Messlokation while the gMSB prepares to take over (Kap. 2.4.2 Nr. 5/6, `E_0203`) |
-| `technik_aenderung` | REQOTE 35005 → QUOTES 15005, ORDERS 17011/17118 → ORDRSP 19005/19006, IFTSTA 21025/21027 — Messlokationsänderung, 10 WT Antwort; the MSB receives a 17011 (`ReceiveAuftrag`, own 10-WT window) |
+| `technik_aenderung` | REQOTE 35005 → QUOTES 15005, ORDERS 17011 → ORDRSP 19005/19006, IFTSTA 21025/21027 — Messlokationsänderung, 10 WT Antwort; the MSB receives a 17011 (`ReceiveAuftrag`, own 10-WT window) and answers it (`SendAntwort`, out of `E_0249`/`E_0250`/`E_0279`/`E_0283`) |
 | `ersteinbau` | IFTSTA 21029 → 21030/21031 — Ersteinbau eines iMS in eine bestehende Messlokation, **3 WT** Antwort aus `E_0233` (Kap. 3.5, Strom only) |
 | `wertebestellung`  | MSB side of the ESA Wertebestellung (WiM Teil 2 Kap. 4): REQOTE 35003 → QUOTES 15003, ORDERS 17007/17008, ORDCHG 39002, ORDRSP 19011–19014, IFTSTA 21042; answers carry an `E_0254`/`E_0256`/`E_0257` code |
 | `invoic`           | INVOIC 31009 (MSB-Rechnung, Strom), 31003 (Dienstleistungen, beide Sparten), 31004 (Stornorechnung); inbound REMADV 33001–33004 and COMDIS 29001. The state machine is `mako-invoic`'s |

@@ -10,6 +10,7 @@ mod demo_payloads;
 mod dev_config;
 mod dispatch_integration;
 mod identitaet_body;
+mod inbound_marker;
 mod mcp_round_trips;
 mod processd_supply_contract;
 mod router_builds;

@@ -49,13 +49,6 @@ pub struct CalculateRequest {
     pub emobility_meter: Option<EmobilityMeterInput>,
     /// Service usage input (ENERGIEDIENSTLEISTUNG category).
     pub service_meter: Option<ServiceMeterInput>,
-    /// §42c EnWG allocated community share (SHARING category).
-    ///
-    /// The residual supply comes from `edmd` like any other electricity bill;
-    /// the allocation is the community's, computed by the sharing settlement
-    /// and handed in here, so `EnergyShareProvider` can credit it.
-    #[serde(default)]
-    pub energy_share: Option<energy_billing::EnergyShareMeterInput>,
     /// Issue a Schlussrechnung (§40c EnWG: end of supply — move-out or
     /// supplier switch). Sets `rechnungsart = SCHLUSSRECHNUNG` and settles
     /// the paid `abschlaege` against the consumption bill.
@@ -165,6 +158,59 @@ pub async fn post_calculate(
     )
     .await?;
 
+    // A public-law Gebühr is issued as a Bescheid beside the supply invoice,
+    // under one `billingRunId` — BR-O-11 ff. forbid the two on one e-invoice.
+    let mut belege = crate::gebuehrenbescheid::trennen(result);
+    crate::gebuehrenbescheid::eine_lauf_id(&mut belege);
+    let bescheid = match belege.gebuehr.take() {
+        Some(mut g) => {
+            g.context.rechnungsnummer =
+                next_rechnungsnummer(&pool, &cfg.tenant, series::BESCHEID, None, period_from)
+                    .await?;
+            let view = crate::gebuehrenbescheid::view(&g, &cfg)?;
+            Some((g, view))
+        }
+        None => None,
+    };
+    let Some(result) = belege.lieferung else {
+        // The period carries nothing but Gebühren: the Bescheid is its only
+        // document.
+        let (g, view) = bescheid.ok_or_else(|| {
+            BillingError::Internal(anyhow::anyhow!("a billed period yielded no document"))
+        })?;
+        let mut tx = pool.begin().await?;
+        let id = match crate::gebuehrenbescheid::speichern(
+            &mut tx,
+            &cfg,
+            &g,
+            &view,
+            &summary.product_code,
+            &summary.category,
+            false,
+        )
+        .await
+        {
+            Ok(id) => id,
+            Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+        };
+        tx.commit().await?;
+        return Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": id,
+                "dokumentart": crate::gebuehrenbescheid::GEBUEHRENBESCHEID,
+                "malo_id": malo_id,
+                "rechnungsnummer": g.context.rechnungsnummer,
+                "period_from": period_from.to_string(),
+                "period_to": period_to.to_string(),
+                "netto_eur": g.netto_eur,
+                "brutto_eur": g.brutto_eur,
+                "billing_run_id": g.billing_run_id,
+                "bescheid": view,
+            })),
+        ));
+    };
+
     // The rates the risk gate scores the document against. Each leg was billed
     // under its own; a split period is scored against its **last** leg's, which
     // are the ones in force when the document is issued and the ones an anomaly
@@ -221,6 +267,7 @@ pub async fn post_calculate(
             rechnung_json: &rechnung_json,
             total_netto_eur: result.netto_eur,
             total_brutto_eur: result.brutto_eur,
+            steuerzeilen: &crate::steuerzeilen::aus_rechnung(&result),
         },
     )
     .await;
@@ -242,6 +289,28 @@ pub async fn post_calculate(
     // Attach the EN 16931 semantic model (the XRechnung/CII/UBL render source),
     // mapped from the invoice with full per-line VAT — not from BO4E.
     crate::einvoice::store(&mut tx, record_id, &result, &cfg, &malo_id).await?;
+    let bescheid_record = match &bescheid {
+        Some((g, view)) => match crate::gebuehrenbescheid::speichern(
+            &mut tx,
+            &cfg,
+            g,
+            view,
+            &summary.product_code,
+            &summary.category,
+            held,
+        )
+        .await
+        {
+            Ok(id) => Some(serde_json::json!({
+                "id": id,
+                "rechnungsnummer": g.context.rechnungsnummer,
+                "netto_eur": g.netto_eur,
+                "brutto_eur": g.brutto_eur,
+            })),
+            Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+        },
+        None => None,
+    };
     tx.commit().await?;
 
     Ok((
@@ -257,6 +326,8 @@ pub async fn post_calculate(
             "positions_count": result.positions.len(),
             "risk": assessment,
             "held": held,
+            "billing_run_id": result.billing_run_id,
+            "gebuehrenbescheid": bescheid_record,
             "rechnung": rechnung_json,
         })),
     ))

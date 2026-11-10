@@ -170,6 +170,7 @@ fn read(malo: &str, from: OffsetDateTime, value: &str, sparte: Sparte, obis: &st
         allocation_version: "INITIAL".to_owned(),
         valid_from_tx: None,
         mscons_version: None,
+        ablesung_herkunft: None,
     }
 }
 
@@ -237,8 +238,8 @@ async fn schema_check_constraints_reject_bad_data() {
     // A well-formed row of each still inserts.
     sqlx::query(
         "INSERT INTO meter_billing_periods
-           (malo_id, period_from, period_to, arbeitsmenge_kwh, quality, tenant)
-         VALUES ('51238696012','2026-01-01','2026-01-31', 1, 'SUBSTITUTED', 't')",
+           (malo_id, period_from, period_to, sparte, arbeitsmenge_kwh, quality, tenant)
+         VALUES ('51238696012','2026-01-01','2026-01-31', 'STROM', 1, 'SUBSTITUTED', 't')",
     )
     .execute(&pool)
     .await
@@ -943,7 +944,7 @@ async fn a_long_gap_takes_the_vergleichswert_of_comparable_days() {
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
         prior_days: Some(7),
-        bundesland: "BE".to_owned(),
+        bundesland: Some("BE".to_owned()),
         hold: false,
         confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
@@ -1089,7 +1090,7 @@ async fn a_short_gap_interpolates_between_its_real_brackets() {
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
         prior_days: Some(7),
-        bundesland: "BE".to_owned(),
+        bundesland: Some("BE".to_owned()),
         hold: false,
         confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
@@ -1344,7 +1345,7 @@ async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
         prior_days: Some(7),
-        bundesland: "BE".to_owned(),
+        bundesland: Some("BE".to_owned()),
         hold: false,
         confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
@@ -1783,7 +1784,9 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
         .expect("store fresh reads");
 
     // ── First sweep: the stale point is opened ────────────────────────────────
-    let first = run_surveillance_sweep(&repo, &cfg, "9910000000010").await;
+    let first = run_surveillance_sweep(&repo, &cfg, "9910000000010")
+        .await
+        .expect("the sweep runs");
     let silent: Vec<_> = first
         .findings
         .iter()
@@ -1803,7 +1806,9 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
     );
 
     // ── Second sweep, nothing changed: silent, not re-announced ───────────────
-    let second = run_surveillance_sweep(&repo, &cfg, "9910000000010").await;
+    let second = run_surveillance_sweep(&repo, &cfg, "9910000000010")
+        .await
+        .expect("the sweep runs");
     assert_eq!(
         second.findings.len(),
         1,
@@ -1836,7 +1841,9 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
         .await
         .expect("store the backfill");
 
-    let third = run_surveillance_sweep(&repo, &cfg, "9910000000010").await;
+    let third = run_surveillance_sweep(&repo, &cfg, "9910000000010")
+        .await
+        .expect("the sweep runs");
     assert_eq!(third.resumed, 1, "the recovered point is closed");
     let resolved: Option<OffsetDateTime> = sqlx::query_scalar(
         "SELECT resolved_at FROM delivery_surveillance WHERE tenant = $1 AND malo_id = $2",
@@ -1872,13 +1879,214 @@ async fn surveillance_does_not_cross_tenants() {
         .await
         .expect("store other tenant's stale read");
 
-    let report = run_surveillance_sweep(&repo, &cfg, "9910000000010").await;
+    let report = run_surveillance_sweep(&repo, &cfg, "9910000000010")
+        .await
+        .expect("the sweep runs");
     assert!(
         report.findings.is_empty(),
         "another tenant's silent point is not this tenant's finding: {:?}",
         report.findings
     );
     assert_eq!(report.points_scanned, 0);
+}
+
+/// A silent point is resolved only when it is seen delivering again.
+///
+/// The scan is bounded to the coverage window, so a point that stopped
+/// delivering drops out of it once its last interval is older than the window.
+/// „Not returned by the scan" therefore says nothing about resumption: read as
+/// resumption it gives a dead meter a false all-clear exactly when its outage
+/// has lasted longest. Narrowing the window between two sweeps is the same
+/// event as the clock moving past the last interval.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_silent_point_that_leaves_the_window_stays_open() {
+    use edmd::config::SurveillanceConfig;
+    use edmd::surveillance::run_surveillance_sweep;
+
+    let (repo, pool, _pg, _wh) = setup().await;
+    let now = OffsetDateTime::now_utc();
+    let cfg = SurveillanceConfig {
+        silent_after_hours: 36,
+        coverage_window_days: 7,
+        ..SurveillanceConfig::default()
+    };
+
+    // Delivered hourly from six and a half to six days ago, then nothing.
+    let reads: Vec<MeterRead> = (6 * 24..6 * 24 + 12)
+        .map(|h| {
+            let mut r = read(
+                "51238696012",
+                now - Duration::hours(h),
+                "1.0",
+                Sparte::Strom,
+                "1-0:1.8.0",
+            );
+            r.dtm_to = r.dtm_from + Duration::hours(1);
+            r
+        })
+        .collect();
+    repo.store_reads(validated(reads)).await.expect("store");
+
+    let first = run_surveillance_sweep(&repo, &cfg, "9910000000010")
+        .await
+        .expect("the sweep runs");
+    assert_eq!(
+        first.newly_overdue, 1,
+        "opened SILENT: {:?}",
+        first.findings
+    );
+
+    // The point's data is now older than the window.
+    let later = SurveillanceConfig {
+        coverage_window_days: 5,
+        ..cfg.clone()
+    };
+    let second = run_surveillance_sweep(&repo, &later, "9910000000010")
+        .await
+        .expect("the sweep runs");
+    assert_eq!(
+        second.resumed, 0,
+        "a point that left the window is not a point that resumed"
+    );
+    let resolved: Option<OffsetDateTime> = sqlx::query_scalar(
+        "SELECT resolved_at FROM delivery_surveillance WHERE tenant = $1 AND malo_id = $2",
+    )
+    .bind("9910000000010")
+    .bind("51238696012")
+    .fetch_one(&pool)
+    .await
+    .expect("the incident row");
+    assert!(resolved.is_none(), "the incident stays open");
+}
+
+/// An empty scan resolves nothing: no point was seen, so none was seen
+/// delivering.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn an_empty_surveillance_scan_resolves_nothing() {
+    use edmd::config::SurveillanceConfig;
+    use edmd::surveillance::{run_surveillance_sweep, run_typ2_surveillance_sweep};
+
+    let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
+    let (reads_store, typ2_store, zsg_store, _cold) = build_stores(
+        &url,
+        &warehouse_uri,
+        TieringConfig::default(),
+        &WarehouseAuth::default(),
+        &test_erasure_keys(),
+    )
+    .await
+    .expect("build meterstore tiers");
+    let repo = MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone())
+        .with_own_operator(Some(OWN_MSB))
+        .expect("own MSB");
+    let typ2 = MeterStoreTyp2Repository::new(typ2_store)
+        .with_own_operator(Some(OWN_MSB))
+        .expect("own MSB");
+
+    for (stream, obis, subscription) in [("TYP1", "", ""), ("TYP2", "1-0:1.8.0", "ESABE0000000001")]
+    {
+        sqlx::query(
+            "INSERT INTO delivery_surveillance
+                 (tenant, malo_id, stream, obis_code, subscription_ref, state,
+                  last_interval_end, hours_silent, coverage_pct, interval_count)
+             VALUES ('9910000000010', '51238696012', $1, $2, $3, 'SILENT',
+                     now() - interval '3 days', 72, 0, 1)",
+        )
+        .bind(stream)
+        .bind(obis)
+        .bind(subscription)
+        .execute(&pool)
+        .await
+        .expect("an open incident");
+    }
+
+    let cfg = SurveillanceConfig {
+        typ2_enabled: true,
+        ..SurveillanceConfig::default()
+    };
+    let esa = run_typ2_surveillance_sweep(&typ2, &pool, &cfg, "9910000000010", None)
+        .await
+        .expect("the Typ-2 sweep runs");
+    assert_eq!(esa.resumed, 0, "the Typ-2 sweep saw nothing delivering");
+    let typ1 = run_surveillance_sweep(&repo, &cfg, "9910000000010")
+        .await
+        .expect("the Typ-1 sweep runs");
+    assert_eq!(typ1.resumed, 0, "the Typ-1 sweep saw nothing delivering");
+
+    let open: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM delivery_surveillance WHERE resolved_at IS NULL")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(open, 2, "both incidents stay open");
+}
+
+/// An ESA Typ-2 subscription that went silent is opened, stays open while it
+/// stays silent, and is resolved once a later interval arrives.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_silent_typ2_subscription_is_resolved_only_on_a_later_interval() {
+    use edmd::config::SurveillanceConfig;
+    use edmd::surveillance::run_typ2_surveillance_sweep;
+
+    let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
+    let (_reads_store, typ2_store, _zsg_store, _cold) = build_stores(
+        &url,
+        &warehouse_uri,
+        TieringConfig::default(),
+        &WarehouseAuth::default(),
+        &test_erasure_keys(),
+    )
+    .await
+    .expect("build meterstore tiers");
+    let typ2 = MeterStoreTyp2Repository::new(typ2_store)
+        .with_own_operator(Some(OWN_MSB))
+        .expect("own MSB");
+    let now = OffsetDateTime::now_utc();
+    let value = |at: OffsetDateTime| Typ2Read {
+        malo_id: "51238696012".to_owned(),
+        melo_id: None,
+        dtm_from: at,
+        dtm_to: at + Duration::minutes(15),
+        quantity_kwh: kwh("1.0"),
+        quality: QualityFlag::Measured,
+        pid: 13027,
+        sparte: Sparte::Strom,
+        obis_code: Some("1-0:1.8.0".to_owned()),
+        tenant: "9910000000010".to_owned(),
+        delivery_path: Typ2DeliveryPath::default(),
+        sender_mp_id: None,
+        bestellung_ref: Some("ESABE0000000001".to_owned()),
+        received_at: None,
+    };
+    let cfg = SurveillanceConfig {
+        typ2_enabled: true,
+        typ2_silent_after_hours: 36,
+        ..SurveillanceConfig::default()
+    };
+
+    typ2.store_typ2_reads(&[value(now - Duration::days(3))])
+        .await
+        .expect("an old value");
+    let first = run_typ2_surveillance_sweep(&typ2, &pool, &cfg, "9910000000010", None)
+        .await
+        .expect("the sweep runs");
+    assert_eq!(first.newly_overdue, 1, "opened: {:?}", first.findings);
+
+    let still = run_typ2_surveillance_sweep(&typ2, &pool, &cfg, "9910000000010", None)
+        .await
+        .expect("the sweep runs");
+    assert_eq!(still.resumed, 0, "nothing new arrived");
+
+    typ2.store_typ2_reads(&[value(now - Duration::hours(1))])
+        .await
+        .expect("a fresh value");
+    let back = run_typ2_surveillance_sweep(&typ2, &pool, &cfg, "9910000000010", None)
+        .await
+        .expect("the sweep runs");
+    assert_eq!(back.resumed, 1, "a later interval resolves it");
 }
 
 // ── §14a compliance register ──────────────────────────────────────────────────
@@ -2255,7 +2463,7 @@ async fn a_feed_in_reading_does_not_block_substituting_the_consumption_register(
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
         prior_days: Some(7),
-        bundesland: "BE".to_owned(),
+        bundesland: Some("BE".to_owned()),
         hold: false,
         confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
@@ -2464,7 +2672,7 @@ async fn a_substitute_is_filed_under_the_register_it_fills() {
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
         prior_days: Some(7),
-        bundesland: "BE".to_owned(),
+        bundesland: Some("BE".to_owned()),
         hold: false,
         confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
@@ -2635,6 +2843,7 @@ async fn a_zaehlerstandsgang_differences_into_a_lastgang() {
         source: IngestionSource::DirectPush,
         sender_mp_id: Some("9900000000003".to_owned()),
         push_session: Some("ZSG-TEST-1".to_owned()),
+        ablesung_herkunft: None,
     })
     .collect();
 
@@ -2692,6 +2901,7 @@ async fn a_billing_period_reports_its_opening_and_closing_zaehlerstand() {
         source: IngestionSource::DirectPush,
         sender_mp_id: None,
         push_session: None,
+        ablesung_herkunft: None,
     };
     repo.store_readings(&[
         // Before the day: the opening reading.
@@ -2773,6 +2983,7 @@ async fn erasure_unlinks_the_zaehlerstandsgang() {
         source: IngestionSource::DirectPush,
         sender_mp_id: None,
         push_session: None,
+        ablesung_herkunft: None,
     }])
     .await
     .expect("store a Zählerstand");
@@ -2875,6 +3086,7 @@ async fn a_completed_ablesung_reaches_the_reading_store() {
             source: IngestionSource::Manual,
             sender_mp_id: None,
             push_session: None,
+            ablesung_herkunft: None,
         }])
         .await
         .expect("file the Zählerstand");
@@ -3112,6 +3324,7 @@ async fn a_gas_zaehlerstand_round_trips_unconverted() {
         source: IngestionSource::DirectPush,
         sender_mp_id: None,
         push_session: None,
+        ablesung_herkunft: None,
     }])
     .await
     .expect("store a gas Zählerstand");
@@ -3376,4 +3589,67 @@ async fn a_queued_cloud_event_survives_without_a_configured_webhook() {
         .await
         .expect("count");
     assert_eq!(queued, 1, "the same event is queued once, not twice");
+}
+
+/// An Ersatzwert without a requested Bundesland runs on the Land cached for
+/// the MaLo from `marktd`, and its audit row names it; with neither, it is
+/// refused — the substitution never calls `marktd` and never guesses a Land.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_substitution_runs_on_the_cached_bundesland() {
+    use edmd::server::{SubstituteRequest, run_substitute_values};
+    use time::format_description::well_known::Rfc3339;
+
+    let (repo, pool, _pg, _wh) = setup().await;
+    let malo = "51238696129";
+    let obis = "1-0:1.8.0";
+    let gap_from = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
+    let gap_to = gap_from + Duration::minutes(150);
+    let prior: Vec<MeterRead> = (0..672)
+        .map(|i| {
+            let start = gap_from - Duration::days(7) + Duration::minutes(15 * i);
+            read(malo, start, "1.0", Sparte::Strom, obis)
+        })
+        .collect();
+    repo.store_reads(validated(prior))
+        .await
+        .expect("store prior week");
+
+    let req = SubstituteRequest {
+        gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
+        gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
+        prior_days: Some(7),
+        bundesland: None,
+        hold: false,
+        confirmed_outage: false,
+        operator_id: Some("TEST-OPERATOR".to_owned()),
+        sparte: None,
+        reason: "METERING_EQUIPMENT_FAULT".to_owned(),
+        obis_code: Some(obis.to_owned()),
+    };
+    let refused = run_substitute_values(&repo, "9910000000010", malo, &req)
+        .await
+        .status();
+    assert_eq!(refused.as_u16(), 422, "no Land requested and none cached");
+
+    sqlx::query(
+        "INSERT INTO malo_bundesland (tenant, malo_id, bundesland, postleitzahl, quelle)
+         VALUES ('9910000000010', $1, 'NW', '50667', 'test')",
+    )
+    .bind(malo)
+    .execute(&pool)
+    .await
+    .expect("cache the Land");
+    let status = run_substitute_values(&repo, "9910000000010", malo, &req)
+        .await
+        .status();
+    assert_eq!(status.as_u16(), 201);
+    let lands: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT bundesland FROM substitute_value_log WHERE malo_id = $1",
+    )
+    .bind(malo)
+    .fetch_all(&pool)
+    .await
+    .expect("the audit rows");
+    assert_eq!(lands, ["NW"]);
 }

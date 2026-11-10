@@ -195,12 +195,11 @@ fn gated(
         .validate_on_date(mako_fristen::heute())
         .expect("the AHB validation runs");
     assert!(
-        report.is_valid(),
+        report.is_sendable(),
         "the rendered {} violates its AHB profile: {:#?}\n{}",
         om.message_type,
         report
-            .errors()
-            .iter()
+            .sending_refusals()
             .map(|e| &e.message)
             .collect::<Vec<_>>(),
         String::from_utf8_lossy(&wire.bytes).replace('\'', "'\n"),

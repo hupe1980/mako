@@ -148,6 +148,15 @@ pub(super) fn cmd_gpke_neuanlage_bestaetigen<'a>(
     Box::pin(dispatch_neuanlage_antwort(s, p, true))
 }
 
+pub(super) fn cmd_gpke_neuanlage_anmelden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_lf_neuanlage(s, p))
+}
+
 pub(super) fn cmd_gpke_neuanlage_ablehnen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
@@ -458,7 +467,11 @@ pub(super) async fn dispatch_lf_anmeldung(
             domain_cmd.clone(),
         )
         .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-        super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(
+            state,
+            &latest_format_version(),
+            &out.outbox,
+        )?;
     }
 
     // ── Duplicate guard ───────────────────────────────────────────────────────
@@ -1044,21 +1057,35 @@ pub(super) async fn dispatch_supplier_change_antwort(
 
 /// Dispatch the NB's Neuanlage decision (`E_0608`) to `GpkeNeuanlageWorkflow`.
 ///
-/// Called for `gpke.neuanlage.bestaetigen` and `gpke.neuanlage.ablehnen`.
-/// Business key = `malo_id` once the Marktlokation is identified; a case the NB
-/// could not identify is refused `A07` / `A16` and carries the `process_id`
-/// instead, which is what `processd` sends.
+/// Called for `gpke.neuanlage.bestaetigen` and `gpke.neuanlage.ablehnen`, whose
+/// body is [`mako_markt::commands::GpkeNeuanlageBeantworten`] — a key it does
+/// not declare is refused. Business key = `malo_id` once the Marktlokation is
+/// identified; a case the NB could not identify is refused `A07` / `A16` and
+/// carries the `process_id` instead, which is what `processd` sends.
 ///
 /// The Antwortcode is resolved inside `E_0608` and its published **Cluster**
 /// selects the response PID — `A09` / `A18` ride 55602 / 55603, everything else
 /// 55604 / 55605 — so a `bestaetigen` command carrying a refusal is rejected
-/// rather than sent.
+/// rather than sent. A Bestätigung carries what the NB knows of the new
+/// Marktlokation — its classification, the Produktpaket, the Messlokationen
+/// and their Messstellenbetreiber (UTILMD AHB Strom 2.2 Kap. 8.4, 8.5) — and
+/// one that leaves a Muss place of its column empty is refused naming it.
 pub(super) async fn dispatch_neuanlage_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
     accepted: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let antwort = extract_lf_antwort(payload, Some(mako_pruefung::codes::EBD_NEUANLAGE))?;
+    let mut body: mako_markt::commands::GpkeNeuanlageBeantworten =
+        mako_service::json_from_value(payload.clone()).map_err(|e| {
+            DispatchError::InvalidPayload(format!(
+                "gpke.neuanlage.{} payload: {e}",
+                if accepted { "bestaetigen" } else { "ablehnen" }
+            ))
+        })?;
+    if accepted && states_no_lokationsdaten(&body) {
+        lokationsdaten_aus_marktd(state, &mut body).await?;
+    }
+    let antwort = neuanlage_antwort(&body)?;
     if antwort.zustimmung != accepted {
         return Err(DispatchError::InvalidPayload(format!(
             "Antwortcode {:?} is a{} in {}, but the command asks for a{}.",
@@ -1077,39 +1104,382 @@ pub(super) async fn dispatch_neuanlage_antwort(
         )));
     }
 
-    // A Neuanlage that could not be identified has no MaLo-ID at all — the
-    // refusal is keyed on the process the inbound 55600/55601 spawned.
-    let key = payload
-        .get("malo_id")
-        .or_else(|| payload.get("process_id"))
-        .and_then(|v| v.as_str())
+    // An Anmeldung neue Marktlokation names its MaLo-ID only „Wenn bekannt"
+    // (Bedingung `[165]`), so the process the inbound 55600/55601 spawned is
+    // found by its `process_id` where one is given; the `malo_id` is then the
+    // Marktlokation the NB identified, which the Bestätigung names in its Muss
+    // `SG5 LOC+Z16`.
+    let marktlokation = body
+        .malo_id
+        .as_deref()
+        .map(|m| extract_malo_id(&serde_json::json!({ "malo_id": m })))
+        .transpose()?;
+    // `SG5 LOC+Z21` DE 3225 has the format of a Marktlokations-ID (`[950]`).
+    let tranche = match body.tranche.as_ref() {
+        None => None,
+        Some(t) => Some(Box::new(mako_gpke::NeuanlageTranche {
+            tranche_id: extract_malo_id(&serde_json::json!({ "malo_id": t.tranche_id.trim() }))
+                .map_err(|_| {
+                    DispatchError::InvalidPayload(format!(
+                        "tranche.tranche_id {:?} (SG5 LOC+Z21) is not a Marktlokations-ID",
+                        t.tranche_id
+                    ))
+                })?,
+            basis: t.basis.trim().to_owned(),
+            prozent: t.prozent.clone(),
+        })),
+    };
+    let key = body
+        .process_id
+        .clone()
+        .or_else(|| body.malo_id.clone())
         .ok_or_else(|| {
             DispatchError::InvalidPayload(
                 "payload must contain \"malo_id\" or, for a Marktlokation the NB could \
                  not identify, \"process_id\""
                     .into(),
             )
-        })?
-        .to_owned();
+        })?;
 
     // The answer is checked against its profile before anything is written —
     // the check the pre-send gate runs — so an answer whose Muss data the
     // process does not hold is refused here, naming it, rather than written as
     // a message the gate dead-letters.
-    dispatch_to_process_with_state::<mako_gpke::GpkeNeuanlageWorkflow, _>(
+    dispatch_to_process_in_version::<mako_gpke::GpkeNeuanlageWorkflow, _>(
         state,
         &key,
         mako_gpke::neuanlage::WORKFLOW_NAME,
-        move |current| {
+        move |current, fv| {
             use mako_engine::workflow::Workflow as _;
-            let cmd = mako_gpke::NeuanlageCommand::SendAntwort { antwort };
+            let cmd = mako_gpke::NeuanlageCommand::SendAntwort {
+                antwort,
+                marktlokation: marktlokation.clone(),
+                tranche: tranche.clone(),
+            };
             let out = mako_gpke::GpkeNeuanlageWorkflow::handle(current, cmd.clone())
                 .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, fv, &out.outbox)?;
             Ok(cmd)
         },
     )
     .await
+}
+
+/// Dispatch the Lieferant's Anmeldung neue Marktlokation — `gpke.neuanlage.anmelden`,
+/// UTILMD 55600 / 55601 to the Netzbetreiber the body names.
+///
+/// The body is [`mako_markt::commands::GpkeNeuanlageAnmelden`]; a key it does
+/// not declare is refused. The new Marktlokation has no MaLo-cache or marktd
+/// record to resolve the NB from, which is why the body names him, and its
+/// MaLo-ID is carried only „Wenn bekannt" (UTILMD AHB Strom 2.2 Bedingung
+/// `[165]`, S. 97, 112). The NB's answer — 55602 / 55604 to a 55600, 55603 /
+/// 55605 to a 55601 — restates the Anmeldung's `SG4 IDE+24` in `SG6 RFF+TN`,
+/// so the process is indexed under that Vorgangsnummer
+/// ([`mako_gpke::neuanlage_vorgang_key`]) and, where it is known, under the
+/// Marktlokation. The Anmeldung is rendered and held against its profile
+/// before anything is written; its answer window is the one
+/// `mako_fristen::antwort` publishes for the PID — 00:00 Uhr des 61. WT nach
+/// dem ÜT (GPKE Teil 2 Kap. 2.2.2).
+pub(super) async fn dispatch_lf_neuanlage(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_gpke::lf_anmeldung::{NEUANLAGE_PIDS_LF, NEUANLAGE_VERBRAUCHEND_PID};
+    let body: mako_markt::commands::GpkeNeuanlageAnmelden =
+        mako_service::json_from_value(payload.clone()).map_err(|e| {
+            DispatchError::InvalidPayload(format!("gpke.neuanlage.anmelden payload: {e}"))
+        })?;
+    if !NEUANLAGE_PIDS_LF.contains(&body.pid) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "gpke.neuanlage.anmelden: pid {} is not an Anmeldung neue Marktlokation \
+             (55600 verbrauchend, 55601 erzeugend)",
+            body.pid
+        )));
+    }
+    let pid = Pruefidentifikator::new(body.pid).map_err(DispatchError::InvalidPayload)?;
+    let nb = rubo4e::identifiers::MarktpartnerId::new(body.nb_mp_id.trim()).map_err(|e| {
+        DispatchError::InvalidPayload(format!(
+            "gpke.neuanlage.anmelden: nb_mp_id {:?} is not an MP-ID: {e}",
+            body.nb_mp_id
+        ))
+    })?;
+    let marktlokation = body
+        .malo_id
+        .as_deref()
+        .filter(|m| !m.trim().is_empty())
+        .map(|m| extract_malo_id(&serde_json::json!({ "malo_id": m.trim() })))
+        .transpose()?;
+    let verbrauchend = body.pid == NEUANLAGE_VERBRAUCHEND_PID;
+    // The 55600 admits `ZW4` alone; the 55601's Geschäftsvorfall is a fact
+    // only the Lieferant can state.
+    let transaktionsgrund_ergaenzung = match body.transaktionsgrund_ergaenzung.clone() {
+        Some(e) if !e.trim().is_empty() => e.trim().to_owned(),
+        _ if verbrauchend => mako_gpke::lf_anmeldung::ANMELDUNG_ERGAENZUNG.to_owned(),
+        _ => {
+            return Err(DispatchError::InvalidPayload(
+                "gpke.neuanlage.anmelden: transaktionsgrund_ergaenzung (SG4 STS+7) is Muss on \
+                 the 55601 — ZW0 or ZW2 (UTILMD AHB Strom 2.2 Kap. 8.5, S. 110)"
+                    .to_owned(),
+            ));
+        }
+    };
+    let kundendaten = neuanlage_kundendaten(&body).map_err(|fehlend| {
+        DispatchError::InvalidPayload(format!(
+            "gpke.neuanlage.anmelden: the Anmeldung {} cannot carry: {}",
+            body.pid,
+            fehlend.join("; ")
+        ))
+    })?;
+    let vorgangsnummer = super::vorgangsnummer::neu("");
+    let vorgang_key = mako_gpke::neuanlage_vorgang_key(&vorgangsnummer);
+    let domain_cmd =
+        LfAnmeldungCommand::InitiateNeuanlage(Box::new(mako_gpke::NeuanlageAnmeldung {
+            pid,
+            sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+            receiver: MarktpartnerCode::new(nb.to_string()),
+            marktlokation: marktlokation.clone(),
+            process_date: body.vertragsbeginn.clone(),
+            vorgangsnummer,
+            bilanzkreis: body.bilanzkreis.trim().to_owned(),
+            transaktionsgrund_ergaenzung,
+            tranchengroesse: body.tranchengroesse.as_ref().map(|t| {
+                mako_engine::payload::Tranchengroesse::Eigenschaft {
+                    art: Some(t.art.clone()),
+                    wert: t.wert.clone(),
+                }
+            }),
+            kundendaten,
+        }));
+    let format_version = latest_format_version();
+    {
+        use mako_engine::workflow::Workflow as _;
+        let out = GpkeLfAnmeldungWorkflow::handle(
+            &mako_gpke::lf_anmeldung::LfAnmeldungState::New,
+            domain_cmd.clone(),
+        )
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(state, &format_version, &out.outbox)?;
+    }
+
+    let window = mako_fristen::antwort::operator_window(body.pid, time::OffsetDateTime::now_utc());
+    let mut keys = vec![vorgang_key];
+    keys.extend(marktlokation.map(|m| m.as_str().to_owned()));
+    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let process_id = spawn_process::<GpkeLfAnmeldungWorkflow>(
+        &state.store,
+        state.tenant_id,
+        WorkflowId::new(mako_gpke::lf_anmeldung::WORKFLOW_NAME, format_version),
+        domain_cmd,
+        &[(
+            mako_gpke::lf_anmeldung::NB_RESPONSE_WINDOW_LABEL,
+            window.deadline,
+        )],
+        &keys,
+    )
+    .await?;
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// The Kunde's facts an Anmeldung neue Marktlokation carries: on the 55600 the
+/// Gruppenzuordnung `SG8 SEQ+Z01` (S. 104) and the Kunde des Lieferanten
+/// `SG12 NAD+Z09` with his Korrespondenzanschrift `NAD+Z04` (S. 106–107), all
+/// Muss; on the 55601 the Kunde alone, Kann (S. 122), and no Gruppenzuordnung.
+///
+/// # Errors
+///
+/// Every defect, named with its segment.
+fn neuanlage_kundendaten(
+    a: &mako_markt::commands::GpkeNeuanlageAnmelden,
+) -> Result<Option<mako_gpke::lf_anmeldung::Kundendaten>, Vec<String>> {
+    use super::eog_stammdaten::{anschrift_elemente, c080, nad, name_of};
+    use edi_energy::utilmd_codes::nad as q;
+    let verbrauchend = a.pid == mako_gpke::lf_anmeldung::NEUANLAGE_VERBRAUCHEND_PID;
+    let mut fehlend = Vec::new();
+    if verbrauchend && a.haushaltskunde.is_none() {
+        fehlend.push("haushaltskunde (SG8 SEQ+Z01 CCI+++Z15/Z18)".to_owned());
+    }
+    if !verbrauchend && a.haushaltskunde.is_some() {
+        fehlend.push("haushaltskunde (SG8 SEQ+Z01) is listed on the 55600 only".to_owned());
+    }
+    let Some(kunde) = a.kunde.as_ref() else {
+        if verbrauchend {
+            fehlend.push("kunde (SG12 NAD+Z09/Z04)".to_owned());
+            return Err(fehlend);
+        }
+        return if fehlend.is_empty() {
+            Ok(None)
+        } else {
+            Err(fehlend)
+        };
+    };
+    fehlend.extend(
+        kunde
+            .anmeldung_maengel()
+            .into_iter()
+            .map(|f| format!("kunde (SG12 NAD+Z09/Z04): {f}")),
+    );
+    if !fehlend.is_empty() {
+        return Err(fehlend);
+    }
+    let (Some((parts, format)), Some(adresse)) = (
+        name_of(kunde),
+        kunde.anschrift.as_ref().and_then(anschrift_elemente),
+    ) else {
+        return Err(vec![
+            "kunde (SG12 NAD+Z09/Z04): name and anschrift do not fill the NAD".to_owned(),
+        ]);
+    };
+    let name = c080(&parts, format);
+    let mut stammdaten = mako_engine::payload::Stammdaten::default();
+    stammdaten
+        .sg12
+        .push(nad(q::KUNDE_DES_LF, vec![], name.clone(), None));
+    stammdaten.sg12.push(nad(
+        q::KORRESPONDENZANSCHRIFT_KUNDE,
+        vec![],
+        name,
+        Some(&adresse),
+    ));
+    Ok(Some(mako_gpke::lf_anmeldung::Kundendaten {
+        haushaltskunde: a.haushaltskunde.unwrap_or(false),
+        enfg_grundlage: String::new(),
+        enfg_grund: None,
+        stammdaten,
+    }))
+}
+
+/// Whether a Bestätigung body names the identified Marktlokation and states
+/// none of what the NB knows of it — the body `processd`'s automatic
+/// Bestätigung posts.
+fn states_no_lokationsdaten(body: &mako_markt::commands::GpkeNeuanlageBeantworten) -> bool {
+    body.malo_id
+        .as_deref()
+        .is_some_and(|m| !m.trim().is_empty())
+        && body.transaktionsgrund_ergaenzung.is_none()
+        && body.malo_msb.is_none()
+        && body.messlokationen.is_empty()
+}
+
+/// Fill a Bestätigung's Lokationsdaten from the NB's record of the identified
+/// Marktlokation in marktd, on the Anmeldung's Vertragsbeginn: its
+/// Messlokationen with their Messstellenbetreiber (`SG5 LOC+Z17`, `SG8
+/// SEQ+ZF3`), the Marktlokation's MSB (`SG8 SEQ+Z98`) and, on a 55602, the
+/// classification that follows from them — `ZW7` „Gemessene Marktlokation"
+/// where marktd assigns a Messlokation, `ZW6` „Pauschale Marktlokation" where
+/// it assigns none (UTILMD AHB Strom 2.2 Kap. 8.4, S. 97, 100, 105; Kap. 8.5,
+/// S. 113, 119). A 55603 restates the Anmeldung's Geschäftsvorfall instead.
+///
+/// # Errors
+///
+/// [`DispatchError::MarktdUnavailable`] without a marktd that answers,
+/// [`DispatchError::StammdatenUnvollstaendig`] naming every fact marktd does
+/// not hold, and the lookup's errors when no Neuanlage process is found.
+async fn lokationsdaten_aus_marktd(
+    state: &CommandsApiState,
+    body: &mut mako_markt::commands::GpkeNeuanlageBeantworten,
+) -> Result<(), DispatchError> {
+    let malo_id = body.malo_id.clone().unwrap_or_default();
+    let key = body.process_id.clone().unwrap_or_else(|| malo_id.clone());
+    let current = super::current_state::<mako_gpke::GpkeNeuanlageWorkflow>(
+        state,
+        &key,
+        mako_gpke::neuanlage::WORKFLOW_NAME,
+    )
+    .await?;
+    // A process with no Anmeldung behind it is the workflow's refusal to give.
+    let Some(data) = current.data() else {
+        return Ok(());
+    };
+    let stichtag = super::eog_stammdaten::stichtag(&data.process_date)?;
+    let sd = super::eog_stammdaten::lesen(state, &malo_id, stichtag).await?;
+    let mut f = super::eog_stammdaten::Fehlend::default();
+    let msb = |(mp_id, rolle, grundlage, gmsb_mp_id): (String, &str, &str, String)| {
+        mako_markt::commands::AntwortMsb {
+            mp_id,
+            rolle: rolle.to_owned(),
+            grundlage: grundlage.to_owned(),
+            gmsb_mp_id,
+        }
+    };
+    body.messlokationen = sd
+        .messlokationen
+        .iter()
+        .filter_map(|melo| {
+            super::eog_stammdaten::msb_codes(melo, &mut f, true).map(|m| {
+                mako_markt::commands::AntwortMesslokation {
+                    melo_id: melo.melo_id.clone(),
+                    msb: msb(m),
+                }
+            })
+        })
+        .collect();
+    if !sd.messlokationen.is_empty() {
+        body.malo_msb = super::eog_stammdaten::gemeinsamer_msb(&sd.messlokationen, &mut f).map(msb);
+    }
+    if data.pruefidentifikator.as_u32() == mako_gpke::lf_anmeldung::NEUANLAGE_VERBRAUCHEND_PID {
+        body.transaktionsgrund_ergaenzung = Some(
+            if sd.messlokationen.is_empty() {
+                edi_energy::utilmd_codes::ergaenzung::PAUSCHALE_MALO
+            } else {
+                edi_energy::utilmd_codes::ergaenzung::GEMESSENE_MALO
+            }
+            .to_owned(),
+        );
+    }
+    f.refuse(&malo_id)
+}
+
+/// The [`mako_gpke::LfAntwort`] a Neuanlage answer body states: its code
+/// resolved in `E_0608` (or the Codeliste it names), the Bestätigung's facts
+/// carried as stated.
+fn neuanlage_antwort(
+    body: &mako_markt::commands::GpkeNeuanlageBeantworten,
+) -> Result<mako_gpke::LfAntwort, DispatchError> {
+    let ebd = body
+        .antwort_codeliste
+        .clone()
+        .unwrap_or_else(|| mako_pruefung::codes::EBD_NEUANLAGE.to_owned());
+    let entry = mako_pruefung::codes::lookup(&ebd, &body.antwort_code).ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "Antwortcode {:?} is not published by {ebd}. Only codes from that \
+             Entscheidungsbaum's Codeliste are admissible.",
+            body.antwort_code
+        ))
+    })?;
+    let zustimmung = entry.ist_zustimmung().ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "Antwortcode {:?} belongs to {ebd}, whose Cluster is \"{}\" — not the \
+             Zustimmung/Ablehnung pair this answer's PID is derived from.",
+            body.antwort_code,
+            entry.cluster.label(),
+        ))
+    })?;
+    let msb = |m: &mako_markt::commands::AntwortMsb| mako_gpke::ZugeordneterMsb {
+        mp_id: m.mp_id.clone(),
+        rolle: m.rolle.clone(),
+        grundlage: m.grundlage.clone(),
+        gmsb_mp_id: m.gmsb_mp_id.clone(),
+    };
+    let nonempty = |v: &Option<String>| v.clone().filter(|s| !s.trim().is_empty());
+    Ok(mako_gpke::LfAntwort {
+        antwort_code: body.antwort_code.clone(),
+        ebd: Some(ebd),
+        zustimmung,
+        bemerkung: nonempty(&body.bemerkung),
+        bilanzkreis: None,
+        termin: None,
+        malo_art: nonempty(&body.transaktionsgrund_ergaenzung),
+        geplantes_produktpaket: nonempty(&body.geplantes_produktpaket),
+        malo_msb: body.malo_msb.as_ref().map(msb),
+        messlokationen: body
+            .messlokationen
+            .iter()
+            .map(|m| mako_gpke::AntwortMesslokation {
+                melo_id: m.melo_id.clone(),
+                msb: msb(&m.msb),
+            })
+            .collect(),
+    })
 }
 
 /// Dispatch the NB's Bearbeitungsstand on Abrechnungsdaten (`E_0595`).
@@ -1476,7 +1846,11 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
         use mako_engine::workflow::Workflow as _;
         let out = GpkeEogWorkflow::handle(&mako_gpke::EogState::New, domain_cmd.clone())
             .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-        super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(
+            state,
+            &latest_format_version(),
+            &out.outbox,
+        )?;
     }
 
     // ── Duplicate guard (workflow-scoped) ─────────────────────────────────────
@@ -1679,11 +2053,11 @@ pub(super) async fn dispatch_gpke_eog_antwort(
     let record = super::eog_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
     let marktlokation = super::eog_stammdaten::strom_55014(&record, &data.transaktionsgrund)?;
 
-    dispatch_to_process_with_state::<mako_gpke::GpkeEogWorkflow, _>(
+    dispatch_to_process_in_version::<mako_gpke::GpkeEogWorkflow, _>(
         state,
         malo_id.as_str(),
         mako_gpke::EOG_WORKFLOW_NAME,
-        move |current| {
+        move |current, fv| {
             use mako_engine::workflow::Workflow as _;
             let cmd = mako_gpke::EogCommand::SendAntwort {
                 accepted,
@@ -1697,7 +2071,7 @@ pub(super) async fn dispatch_gpke_eog_antwort(
             };
             let out = mako_gpke::GpkeEogWorkflow::handle(current, cmd.clone())
                 .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, fv, &out.outbox)?;
             Ok(cmd)
         },
     )

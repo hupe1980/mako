@@ -91,7 +91,7 @@ pub mod rate_limit;
 
 pub use befund::{Befund, Schwere};
 pub use builder::ServiceBuilder;
-pub use cloudevent::{CloudEvent, PublishError, post_ce_with_retry, source};
+pub use cloudevent::{CloudEvent, PublishError, post_ce_for_reply, post_ce_with_retry, source};
 pub use config::{
     ConfigError, ConfigFile, ConfigProblem, DatabaseConfig, HttpConfig, load_config,
     load_config_file,

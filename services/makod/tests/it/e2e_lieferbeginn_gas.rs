@@ -268,9 +268,12 @@ async fn e2e_lieferbeginn_gas_positive_aperak() {
     let aperak_outbox = gnb.dispatch_aperak(true, None).await;
     // ── Assert Antwort outbox entry ───────────────────────────────────────────
     assert_eq!(
-        aperak_outbox.len(),
-        1,
-        "positive SendAntwort must enqueue exactly one UTILMD answer outbox entry"
+        aperak_outbox
+            .iter()
+            .map(|o| o.message_type.as_ref())
+            .collect::<Vec<_>>(),
+        ["UTILMD", "ProcessCompleted"],
+        "the answer enqueues its UTILMD and the completion the GNB's marktd moves the supplier on"
     );
     let aperak = &aperak_outbox[0];
     assert_eq!(aperak.message_type.as_ref(), "UTILMD");
@@ -345,9 +348,12 @@ async fn e2e_lieferbeginn_gas_negative_aperak() {
         )
         .await;
     assert_eq!(
-        aperak_outbox.len(),
-        1,
-        "negative SendAntwort must also enqueue one UTILMD answer outbox entry"
+        aperak_outbox
+            .iter()
+            .map(|o| o.message_type.as_ref())
+            .collect::<Vec<_>>(),
+        ["UTILMD", "ProcessCompleted"],
+        "the answer enqueues its UTILMD and the completion the GNB's marktd moves the supplier on"
     );
     let aperak = &aperak_outbox[0];
     assert_eq!(aperak.message_type.as_ref(), "UTILMD");

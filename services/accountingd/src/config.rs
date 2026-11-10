@@ -147,11 +147,22 @@ pub struct AccountingdConfig {
     /// disconnection order. Default: 8.
     pub sperrankuendigung_frist_werktage: Option<i64>,
 
-    /// Dunning fee in ct (× 10⁻² EUR) per Mahnstufe level.
-    /// Default: Stufe 1 = 0, Stufe 2 = 500 (= 5.00 EUR), Stufe 3 = 1000 (= 10.00 EUR)
+    /// The Mahngebühr each automatic Mahnung charges, in ct, one per Mahnstufe.
+    /// The operator's decision: with `dunning_auto_enabled = true` each is
+    /// **required** and at least 0 (`0` charges none), and the daemon refuses
+    /// to start without them.
     pub dunning_fee_stufe1_ct: Option<i64>,
     pub dunning_fee_stufe2_ct: Option<i64>,
     pub dunning_fee_stufe3_ct: Option<i64>,
+
+    /// The Zahlungsfrist each automatic Mahnung states, in calendar days from
+    /// the day it is issued — one per Mahnstufe. The operator's decision, as
+    /// `due_days` is on a manual escalation: with `dunning_auto_enabled = true`
+    /// each is **required** and at least 1, and the daemon refuses to start
+    /// without them.
+    pub dunning_zahlungsfrist_stufe1_tage: Option<u16>,
+    pub dunning_zahlungsfrist_stufe2_tage: Option<u16>,
+    pub dunning_zahlungsfrist_stufe3_tage: Option<u16>,
 
     /// Days between issuing a Rechnung and sending Mahnstufe 1 (default: 30).
     pub dunning_grace_days: Option<i64>,
@@ -324,6 +335,39 @@ pub struct AccountingdConfig {
 }
 
 impl AccountingdConfig {
+    /// The three `dunning_fee_stufe{1,2,3}_ct`, each with its setting's name;
+    /// a missing or negative one is `None`.
+    #[must_use]
+    pub fn mahngebuehren(&self) -> [(&'static str, Option<i64>); 3] {
+        let gesetzt = |v: Option<i64>| v.filter(|&ct| ct >= 0);
+        [
+            ("dunning_fee_stufe1_ct", gesetzt(self.dunning_fee_stufe1_ct)),
+            ("dunning_fee_stufe2_ct", gesetzt(self.dunning_fee_stufe2_ct)),
+            ("dunning_fee_stufe3_ct", gesetzt(self.dunning_fee_stufe3_ct)),
+        ]
+    }
+
+    /// The three `dunning_zahlungsfrist_stufe{1,2,3}_tage`, each with its
+    /// setting's name; a missing or zero one is `None`.
+    #[must_use]
+    pub fn zahlungsfristen(&self) -> [(&'static str, Option<u16>); 3] {
+        let gesetzt = |v: Option<u16>| v.filter(|&d| d > 0);
+        [
+            (
+                "dunning_zahlungsfrist_stufe1_tage",
+                gesetzt(self.dunning_zahlungsfrist_stufe1_tage),
+            ),
+            (
+                "dunning_zahlungsfrist_stufe2_tage",
+                gesetzt(self.dunning_zahlungsfrist_stufe2_tage),
+            ),
+            (
+                "dunning_zahlungsfrist_stufe3_tage",
+                gesetzt(self.dunning_zahlungsfrist_stufe3_tage),
+            ),
+        ]
+    }
+
     /// Refuse to start in a posture that leaves the book and its personal data
     /// open.
     ///

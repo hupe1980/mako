@@ -28,6 +28,12 @@
 //! at-least-once duplicates on the `CloudEvent` `id`. Dead-lettering is a status
 //! column on the same row (it already holds the whole event) — inspect and
 //! requeue via [`list_dead_letters`] / [`requeue`].
+//!
+//! The same table carries a second kind of obligation: a [`Command`], an HTTP
+//! call one upstream service is owed (an ORDERS 17008 Abbestellung to `makod`,
+//! say). [`enqueue_command`] writes it in the business transaction exactly like
+//! an event, and a worker built with [`OutboxWorker::commands`] drains the rows
+//! of one upstream under the same attempts, backoff and dead-letter policy.
 
 use std::time::Duration;
 
@@ -47,6 +53,9 @@ pub const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS event_outbox (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     event_id         TEXT        NOT NULL UNIQUE,
+    kind             TEXT        NOT NULL DEFAULT 'cloudevent'
+                                 CHECK (kind IN ('cloudevent', 'command')),
+    upstream         TEXT,
     ce_type          TEXT        NOT NULL,
     envelope         JSONB       NOT NULL,
     attempts         SMALLINT    NOT NULL DEFAULT 0,
@@ -54,7 +63,11 @@ CREATE TABLE IF NOT EXISTS event_outbox (
     delivered_at     TIMESTAMPTZ,
     dead_lettered_at TIMESTAMPTZ,
     last_error       TEXT,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- A command names the upstream it is owed to. An event names one only
+    -- when it goes to a receiver other than the service's default webhook.
+    CONSTRAINT event_outbox_upstream_per_kind
+        CHECK (kind = 'cloudevent' OR upstream IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (next_attempt_at)
     WHERE delivered_at IS NULL AND dead_lettered_at IS NULL;
@@ -134,9 +147,103 @@ pub async fn enqueue(conn: &mut sqlx::PgConnection, event: &CloudEvent) -> Resul
     Ok(())
 }
 
-/// Tuning for the [`OutboxWorker`]. [`Default`] mirrors the proven invoicd
-/// schedule: poll every 30 s, batches of 50, 5 attempts, backoff 30 s → 5 m →
-/// 30 m → 2 h then dead-letter.
+/// [`enqueue`], for a receiver other than the service's default webhook.
+///
+/// `target` names the receiver; the worker built with
+/// [`OutboxWorker::for_target`] under the same name drains it, and the default
+/// worker never claims it.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` if the envelope cannot be encoded or the insert fails.
+pub async fn enqueue_to(
+    conn: &mut sqlx::PgConnection,
+    target: &str,
+    event: &CloudEvent,
+) -> Result<(), sqlx::Error> {
+    let envelope = serde_json::to_value(event).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    sqlx::query(
+        "INSERT INTO event_outbox (event_id, upstream, ce_type, envelope) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (event_id) DO NOTHING",
+    )
+    .bind(&event.id)
+    .bind(target)
+    .bind(&event.ce_type)
+    .bind(envelope)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// An HTTP call owed to one upstream service, persisted like an event.
+///
+/// `key` is the obligation's identity: it is the row's unique `event_id`, so a
+/// retried business command enqueues it once, and it travels as the
+/// `Idempotency-Key` header on every delivery attempt.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Command {
+    /// The upstream this call is owed to — the name a worker built with
+    /// [`OutboxWorker::commands`] drains.
+    pub upstream: String,
+    /// A short label for the obligation, listed beside a dead letter.
+    pub label: String,
+    /// `POST` or `PUT`.
+    pub method: CommandMethod,
+    /// Path below the upstream's base URL, starting with `/`.
+    pub path: String,
+    /// The JSON body.
+    pub body: serde_json::Value,
+    /// The obligation's identity and idempotency key.
+    pub key: String,
+    /// Statuses the upstream answers when the call already took effect, which
+    /// therefore discharge the obligation rather than fail it.
+    #[serde(default)]
+    pub settled_statuses: Vec<u16>,
+}
+
+/// The HTTP method of a [`Command`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum CommandMethod {
+    /// `POST`.
+    Post,
+    /// `PUT`.
+    Put,
+}
+
+/// Persist a [`Command`] to the outbox **within the caller's transaction**.
+///
+/// The counterpart of [`enqueue`] for a call owed to an upstream service:
+/// idempotent on [`Command::key`], and woken by the same trigger, so there is
+/// nothing to call after the commit either.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` if the command cannot be encoded or the insert fails.
+pub async fn enqueue_command(
+    conn: &mut sqlx::PgConnection,
+    command: &Command,
+) -> Result<(), sqlx::Error> {
+    let envelope = serde_json::to_value(command).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    sqlx::query(
+        "INSERT INTO event_outbox (event_id, kind, upstream, ce_type, envelope)
+         VALUES ($1, 'command', $2, $3, $4)
+         ON CONFLICT (event_id) DO NOTHING",
+    )
+    .bind(&command.key)
+    .bind(&command.upstream)
+    .bind(&command.label)
+    .bind(envelope)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Tuning for the [`OutboxWorker`]. [`Default`] is the one policy every kind of
+/// row is delivered under: poll every 30 s, batches of 50, 8 attempts, backoff
+/// 30 s × 4ⁿ capped at 2 h (30 s → 2 min → 8 min → 32 min → 2 h …), so the
+/// budget runs out about nine hours after the first attempt — inside the day an
+/// IFTSTA or a Mahnung delivery is owed by — and then dead-letters.
 #[derive(Debug, Clone)]
 pub struct OutboxConfig {
     /// How often the worker polls for due events.
@@ -163,11 +270,12 @@ impl Default for OutboxConfig {
         Self {
             poll_interval: Duration::from_secs(30),
             batch_size: 50,
-            max_attempts: 5,
+            max_attempts: 8,
             backoff: vec![
                 Duration::from_secs(30),
-                Duration::from_mins(5),
-                Duration::from_mins(30),
+                Duration::from_mins(2),
+                Duration::from_mins(8),
+                Duration::from_mins(32),
                 Duration::from_hours(2),
             ],
             lease: Duration::from_mins(2),
@@ -216,22 +324,159 @@ struct Claimed {
 pub struct OutboxWorker {
     pool: PgPool,
     client: reqwest::Client,
-    url: String,
-    secret: Option<SecretString>,
+    target: Target,
     cfg: OutboxConfig,
+    on_delivered: Option<OnDelivered>,
+}
+
+/// What a receiver answered to a delivered row, handed to the worker's
+/// [`OutboxWorker::on_delivered`] handler.
+#[derive(Debug)]
+pub struct Delivered {
+    /// The CloudEvent `type`, or a command's label.
+    pub ce_type: String,
+    /// The CloudEvent `subject`, or a command's key; `None` for an event
+    /// without a subject.
+    pub subject: Option<String>,
+    /// The receiver's JSON answer, when it sent one.
+    pub reply: Option<serde_json::Value>,
+}
+
+/// The handler type behind [`OutboxWorker::on_delivered`].
+pub type OnDelivered = std::sync::Arc<
+    dyn for<'c> Fn(
+            &'c mut sqlx::PgConnection,
+            &'c Delivered,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'c>,
+        > + Send
+        + Sync,
+>;
+
+/// What one worker drains: the events, or the commands of one upstream.
+enum Target {
+    CloudEvents {
+        name: Option<String>,
+        url: String,
+        secret: Option<SecretString>,
+    },
+    Commands {
+        upstream: String,
+        base_url: String,
+        bearer: Option<SecretString>,
+        /// Sign each command with Standard Webhooks, keyed with `bearer`.
+        signed: bool,
+    },
+}
+
+impl Target {
+    const fn kind(&self) -> &'static str {
+        match self {
+            Self::CloudEvents { .. } => "cloudevent",
+            Self::Commands { .. } => "command",
+        }
+    }
+
+    fn upstream(&self) -> Option<&str> {
+        match self {
+            Self::CloudEvents { name, .. } => name.as_deref(),
+            Self::Commands { upstream, .. } => Some(upstream),
+        }
+    }
+
+    fn describe(&self) -> &str {
+        match self {
+            Self::CloudEvents { url, .. } => url,
+            Self::Commands { base_url, .. } => base_url,
+        }
+    }
 }
 
 impl OutboxWorker {
-    /// Build a worker delivering to `url`, signing with `secret` when present.
+    /// Build a worker delivering the events to `url`, signing with `secret`
+    /// when present.
     #[must_use]
     pub fn new(pool: PgPool, url: impl Into<String>, secret: Option<SecretString>) -> Self {
         Self {
             pool,
             client: crate::http::default_client(),
-            url: url.into(),
-            secret,
+            target: Target::CloudEvents {
+                name: None,
+                url: url.into(),
+                secret,
+            },
             cfg: OutboxConfig::default(),
+            on_delivered: None,
         }
+    }
+
+    /// Build a worker delivering the events enqueued with [`enqueue_to`] under
+    /// `target` to `url`, signing with `secret` when present.
+    #[must_use]
+    pub fn for_target(
+        pool: PgPool,
+        target: impl Into<String>,
+        url: impl Into<String>,
+        secret: Option<SecretString>,
+    ) -> Self {
+        let mut worker = Self::new(pool, url, secret);
+        if let Target::CloudEvents { name, .. } = &mut worker.target {
+            *name = Some(target.into());
+        }
+        worker
+    }
+
+    /// Build a worker delivering the [`Command`]s owed to `upstream`, each to
+    /// `base_url` + its path, with `bearer` as the `Authorization` token when
+    /// present.
+    #[must_use]
+    pub fn commands(
+        pool: PgPool,
+        upstream: impl Into<String>,
+        base_url: impl Into<String>,
+        bearer: Option<SecretString>,
+    ) -> Self {
+        Self {
+            pool,
+            client: crate::http::default_client(),
+            target: Target::Commands {
+                upstream: upstream.into(),
+                base_url: base_url.into(),
+                bearer,
+                signed: false,
+            },
+            cfg: OutboxConfig::default(),
+            on_delivered: None,
+        }
+    }
+
+    /// Sign every command this worker sends with [Standard Webhooks]
+    /// (`webhook-id` the command's key, keyed with the bearer token), for a
+    /// receiver that must tell this service's push from anything else that
+    /// reached its URL. No effect on an event worker, which signs with its own
+    /// secret, or on a command worker without a bearer.
+    ///
+    /// [Standard Webhooks]: https://www.standardwebhooks.com/
+    #[must_use]
+    pub fn signed(mut self) -> Self {
+        if let Target::Commands { signed, .. } = &mut self.target {
+            *signed = true;
+        }
+        self
+    }
+
+    /// Run `handler` for every delivered row, in the transaction that marks it
+    /// delivered.
+    ///
+    /// The business follow-up of a delivery — a reference the receiver
+    /// assigned, written back onto the row that owed the delivery — then lands
+    /// with the delivery or not at all: a handler that fails rolls the mark
+    /// back, and the row is delivered again, so the receiver must answer a
+    /// redelivery idempotently.
+    #[must_use]
+    pub fn on_delivered(mut self, handler: OnDelivered) -> Self {
+        self.on_delivered = Some(handler);
+        self
     }
 
     /// Override the default schedule.
@@ -275,7 +520,8 @@ impl OutboxWorker {
             }
         };
         tracing::info!(
-            url = %self.url,
+            target = %self.target.describe(),
+            kind = self.target.kind(),
             listening = listener.is_some(),
             "outbox worker started"
         );
@@ -319,22 +565,35 @@ impl OutboxWorker {
     ///
     /// # Errors
     ///
-    /// Returns `sqlx::Error` if the claim query fails. A per-row delivery
+    /// Returns `sqlx::Error` if the sweep or the claim query fails. A per-row delivery
     /// failure is recorded on the row rather than returned — the batch carries
     /// on. A failure to *record* it cannot be recorded anywhere, so it is
     /// logged: it leaves the row claimed and the event is posted again after the
     /// lease expires, which is the one outcome nothing downstream can see.
     pub async fn flush_once(&self) -> Result<usize, sqlx::Error> {
         let lease_secs = i64::try_from(self.cfg.lease.as_secs()).unwrap_or(i64::MAX);
-        // Atomically claim + lease a batch (push next_attempt_at forward) so no
-        // long-held row locks and no double-claim across replicas.
+        sweep(
+            &self.pool,
+            self.cfg.max_attempts,
+            Some((self.target.kind(), self.target.upstream())),
+        )
+        .await?;
+        // Atomically claim, lease and count a batch: `attempts` is advanced here
+        // and nowhere else, so the budget survives a worker killed between the
+        // POST and the outcome write. RETURNING yields the post-increment value,
+        // the number of this attempt. A spent budget is never claimed again —
+        // only the sweep above takes it.
         let rows: Vec<Claimed> = sqlx::query_as(
             "UPDATE event_outbox
-                SET next_attempt_at = now() + ($1 * INTERVAL '1 second')
+                SET next_attempt_at = now() + ($1 * INTERVAL '1 second'),
+                    attempts = attempts + 1
               WHERE id IN (
                   SELECT id FROM event_outbox
                    WHERE delivered_at IS NULL AND dead_lettered_at IS NULL
                      AND next_attempt_at <= now()
+                     AND attempts < $3
+                     AND kind = $4
+                     AND upstream IS NOT DISTINCT FROM $5
                    ORDER BY next_attempt_at
                    LIMIT $2
                    FOR UPDATE SKIP LOCKED
@@ -343,49 +602,38 @@ impl OutboxWorker {
         )
         .bind(lease_secs)
         .bind(self.cfg.batch_size)
+        .bind(self.cfg.max_attempts)
+        .bind(self.target.kind())
+        .bind(self.target.upstream())
         .fetch_all(&self.pool)
         .await?;
 
         let n = rows.len();
         // Expose the secret once per batch (not per row).
-        let secret = self
-            .secret
-            .as_ref()
-            .map(|s| s.expose_secret().as_bytes().to_vec());
+        let secret = match &self.target {
+            Target::CloudEvents { secret, .. } => secret
+                .as_ref()
+                .map(|s| s.expose_secret().as_bytes().to_vec()),
+            Target::Commands { .. } => None,
+        };
         for row in rows {
-            let ce: CloudEvent = match serde_json::from_value(row.envelope) {
-                Ok(ce) => ce,
-                Err(e) => {
-                    // A stored envelope that no longer decodes can never succeed.
-                    if let Err(db) = self
-                        .dead_letter(row.id, &format!("undecodable envelope: {e}"))
-                        .await
-                    {
-                        tracing::error!(
-                            outbox_id = %row.id, error = %db,
-                            "outbox: undecodable envelope could not be dead-lettered; \
-                             it stays in the queue"
-                        );
-                    }
-                    continue;
-                }
-            };
-            match crate::post_ce_with_retry(&self.client, &self.url, &ce, secret.as_deref()).await {
-                Ok(()) => {
-                    if let Err(db) = self.mark_delivered(row.id).await {
-                        // The consumer accepted the event and the row still says
-                        // it did not, so the next flush posts it again — and
-                        // keeps posting it. Nothing downstream can tell the
+            let outcome = self.deliver(row.envelope, secret.as_deref()).await;
+            match outcome {
+                Ok(delivered) => {
+                    if let Err(db) = self.mark_delivered(row.id, &delivered).await {
+                        // The receiver accepted the delivery and the row still
+                        // says it did not, so the next flush sends it again — and
+                        // keeps sending it. Nothing downstream can tell the
                         // difference; only this line can.
                         tracing::error!(
                             outbox_id = %row.id, error = %db,
-                            "outbox: delivered event could not be marked delivered; \
+                            "outbox: delivered row could not be marked delivered; \
                              it will be redelivered"
                         );
                     }
                 }
-                Err(e) if e.is_permanent() => {
-                    if let Err(db) = self.dead_letter(row.id, &e.to_string()).await {
+                Err((true, e)) => {
+                    if let Err(db) = self.dead_letter(row.id, &e).await {
                         tracing::error!(
                             outbox_id = %row.id, error = %db,
                             "outbox: permanent delivery failure could not be \
@@ -393,15 +641,12 @@ impl OutboxWorker {
                         );
                     }
                 }
-                Err(e) => {
-                    if let Err(db) = self
-                        .record_failure(row.id, row.attempts, &e.to_string())
-                        .await
-                    {
+                Err((false, e)) => {
+                    if let Err(db) = self.record_failure(row.id, row.attempts, &e).await {
                         tracing::warn!(
                             outbox_id = %row.id, error = %db,
                             "outbox: retry bookkeeping failed; the lease still \
-                             expires and the event retries"
+                             expires and the row retries"
                         );
                     }
                 }
@@ -410,14 +655,117 @@ impl OutboxWorker {
         Ok(n)
     }
 
-    async fn mark_delivered(&self, id: uuid::Uuid) -> Result<(), sqlx::Error> {
+    /// Deliver one claimed row's envelope to this worker's target.
+    /// `Err((permanent, reason))` on failure.
+    async fn deliver(
+        &self,
+        envelope: serde_json::Value,
+        secret: Option<&[u8]>,
+    ) -> Result<Delivered, (bool, String)> {
+        match &self.target {
+            Target::CloudEvents { url, .. } => {
+                match serde_json::from_value::<CloudEvent>(envelope) {
+                    Ok(ce) => crate::post_ce_for_reply(&self.client, url, &ce, secret)
+                        .await
+                        .map(|reply| Delivered {
+                            ce_type: ce.ce_type.clone(),
+                            subject: ce.subject.clone(),
+                            reply,
+                        })
+                        .map_err(|e| (e.is_permanent(), e.to_string())),
+                    Err(e) => Err((true, format!("undecodable envelope: {e}"))),
+                }
+            }
+            Target::Commands {
+                base_url,
+                bearer,
+                signed,
+                ..
+            } => match serde_json::from_value::<Command>(envelope) {
+                Ok(cmd) => self
+                    .send_command(base_url, bearer.as_ref(), *signed, &cmd)
+                    .await
+                    .map(|reply| Delivered {
+                        ce_type: cmd.label.clone(),
+                        subject: Some(cmd.key.clone()),
+                        reply,
+                    }),
+                Err(e) => Err((true, format!("undecodable command: {e}"))),
+            },
+        }
+    }
+
+    /// Send one [`Command`]. `Err((permanent, reason))` on failure: a 408, a
+    /// 429, a 5xx or a transport error is transient, any other non-2xx status that is
+    /// not one of the command's settled statuses is permanent.
+    async fn send_command(
+        &self,
+        base_url: &str,
+        bearer: Option<&SecretString>,
+        signed: bool,
+        cmd: &Command,
+    ) -> Result<Option<serde_json::Value>, (bool, String)> {
+        let url = if cmd.path.is_empty() {
+            base_url.to_owned()
+        } else {
+            format!("{}{}", base_url.trim_end_matches('/'), cmd.path)
+        };
+        let payload =
+            serde_json::to_vec(&cmd.body).map_err(|e| (true, format!("unencodable body: {e}")))?;
+        let mut req = match cmd.method {
+            CommandMethod::Post => self.client.post(&url),
+            CommandMethod::Put => self.client.put(&url),
+        }
+        .header("Idempotency-Key", &cmd.key)
+        .header("Content-Type", "application/json");
+        if let Some(b) = bearer {
+            req = req.bearer_auth(b.expose_secret());
+            if signed {
+                for (name, value) in crate::webhook::headers(
+                    b.expose_secret().as_bytes(),
+                    &cmd.key,
+                    time::OffsetDateTime::now_utc().unix_timestamp(),
+                    &payload,
+                ) {
+                    req = req.header(name, value);
+                }
+            }
+        }
+        match req.body(payload).send().await {
+            Ok(r) if r.status().is_success() => Ok(r.json().await.ok()),
+            Ok(r) if cmd.settled_statuses.contains(&r.status().as_u16()) => {
+                tracing::debug!(
+                    key = %cmd.key, status = r.status().as_u16(),
+                    "outbox: command answered with a settled status — discharged"
+                );
+                Ok(None)
+            }
+            Ok(r) => {
+                let status = r.status();
+                let transient = crate::cloudevent::is_transient_status(status);
+                let body = r.text().await.unwrap_or_default();
+                Err((!transient, format!("HTTP {status}: {body}")))
+            }
+            Err(e) => Err((false, e.to_string())),
+        }
+    }
+
+    async fn mark_delivered(
+        &self,
+        id: uuid::Uuid,
+        delivered: &Delivered,
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "UPDATE event_outbox SET delivered_at = now(), last_error = NULL WHERE id = $1",
         )
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        Ok(())
+        if let Some(handler) = &self.on_delivered {
+            handler(&mut tx, delivered).await?;
+        }
+        tx.commit().await
     }
 
     async fn dead_letter(&self, id: uuid::Uuid, err: &str) -> Result<(), sqlx::Error> {
@@ -437,23 +785,21 @@ impl OutboxWorker {
         attempts: i16,
         err: &str,
     ) -> Result<(), sqlx::Error> {
-        let new_attempts = attempts + 1;
-        if new_attempts >= self.cfg.max_attempts {
+        // `attempts` was counted at the claim: it is the number of this attempt.
+        if attempts >= self.cfg.max_attempts {
             return self.dead_letter(id, err).await;
         }
-        let idx = usize::try_from(attempts)
+        let idx = usize::try_from(attempts - 1)
             .unwrap_or(0)
             .min(self.cfg.backoff.len() - 1);
         let delay = i64::try_from(self.cfg.backoff[idx].as_secs()).unwrap_or(i64::MAX);
         sqlx::query(
             "UPDATE event_outbox
-                SET attempts = $2,
-                    next_attempt_at = now() + ($3 * INTERVAL '1 second'),
-                    last_error = $4
+                SET next_attempt_at = now() + ($2 * INTERVAL '1 second'),
+                    last_error = $3
               WHERE id = $1",
         )
         .bind(id)
-        .bind(new_attempts)
         .bind(delay)
         .bind(err)
         .execute(&self.pool)
@@ -462,14 +808,70 @@ impl OutboxWorker {
     }
 }
 
+/// Dead-letter every row whose attempt budget is spent but which is still in
+/// the queue. Returns the number of rows swept.
+///
+/// On the healthy path the worker dead-letters a row itself when its last
+/// attempt fails, so this sweeps nothing. It is the backstop for the path where
+/// that outcome write never landed — the worker was killed between the POST
+/// and the write, or the write hit a database error. Because the attempt is
+/// counted at the claim, such a row still spends its budget; without the sweep
+/// it would sit due and never reach [`list_dead_letters`].
+///
+/// `next_attempt_at <= now()` excludes rows whose lease is still running, so a
+/// delivery in flight is never dead-lettered. `last_error` keeps the diagnostic
+/// of the last attempt that recorded one.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` on database failure.
+pub async fn sweep_exhausted(pool: &PgPool, max_attempts: i16) -> Result<u64, sqlx::Error> {
+    sweep(pool, max_attempts, None).await
+}
+
+/// [`sweep_exhausted`], narrowed to one worker's rows when `scope` names its
+/// kind and upstream — a worker sweeps only what its own budget governs.
+async fn sweep(
+    pool: &PgPool,
+    max_attempts: i16,
+    scope: Option<(&str, Option<&str>)>,
+) -> Result<u64, sqlx::Error> {
+    let (kind, upstream) = scope.unwrap_or(("", None));
+    let swept: Vec<(uuid::Uuid, String, i16)> = sqlx::query_as(
+        "UPDATE event_outbox
+            SET dead_lettered_at = now()
+          WHERE delivered_at IS NULL AND dead_lettered_at IS NULL
+            AND attempts >= $1
+            AND next_attempt_at <= now()
+            AND ($2 = '' OR (kind = $2 AND upstream IS NOT DISTINCT FROM $3))
+          RETURNING id, event_id, attempts",
+    )
+    .bind(max_attempts)
+    .bind(kind)
+    .bind(upstream)
+    .fetch_all(pool)
+    .await?;
+    for (id, event_id, attempts) in &swept {
+        tracing::error!(
+            outbox_id = %id, %event_id, attempts,
+            "outbox: attempt budget spent with no recorded outcome — dead-lettering"
+        );
+    }
+    Ok(swept.len() as u64)
+}
+
 /// A dead-lettered outbox row, for admin inspection.
 #[derive(Debug, sqlx::FromRow, serde::Serialize)]
 pub struct DeadLetter {
     /// The outbox row's id.
     pub id: uuid::Uuid,
-    /// The CloudEvent `id`.
+    /// The CloudEvent `id`, or a command's key.
     pub event_id: String,
-    /// The CloudEvent `type`.
+    /// `cloudevent` or `command`.
+    pub kind: String,
+    /// The upstream a command is owed to; `None` for an event.
+    pub upstream: Option<String>,
+    /// The CloudEvent `type`, or a command's label.
     pub ce_type: String,
     /// Delivery attempts made before the row was dead-lettered.
     pub attempts: i16,
@@ -487,7 +889,7 @@ pub struct DeadLetter {
 /// Returns `sqlx::Error` on database failure.
 pub async fn list_dead_letters(pool: &PgPool, limit: i64) -> Result<Vec<DeadLetter>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, event_id, ce_type, attempts, last_error, dead_lettered_at
+        "SELECT id, event_id, kind, upstream, ce_type, attempts, last_error, dead_lettered_at
            FROM event_outbox
           WHERE dead_lettered_at IS NOT NULL
           ORDER BY dead_lettered_at DESC
@@ -543,15 +945,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_config_matches_the_proven_schedule() {
+    fn the_default_policy_is_30s_times_four_capped_at_two_hours() {
         let c = OutboxConfig::default();
-        assert_eq!(c.max_attempts, 5);
+        assert_eq!(c.max_attempts, 8);
         assert_eq!(
             c.backoff,
             vec![
                 Duration::from_secs(30),
-                Duration::from_mins(5),
-                Duration::from_mins(30),
+                Duration::from_mins(2),
+                Duration::from_mins(8),
+                Duration::from_mins(32),
                 Duration::from_hours(2),
             ]
         );

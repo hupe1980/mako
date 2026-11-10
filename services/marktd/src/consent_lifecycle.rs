@@ -19,29 +19,25 @@
 //!
 //! Nothing else closes the gap: `gate_outbound` refuses *new* orders, the
 //! registry's list endpoint stops showing the row, and the MSB has no reason to
-//! act. Hence [`spawn_expiry_sweep`], and hence one [`stop_deliveries`] both
-//! paths call — two copies of „emit the event, then fire an Abbestellung per
-//! covered location" is how the two would drift.
+//! act. Hence [`spawn_expiry_sweep`], and hence one [`end_consent`] every
+//! ending calls — Widerruf, Ablauf, and a new grant that replaces the consent.
 //!
-//! # The sweep's revocation and its event are one transaction
+//! # The end, its event and its Abbestellungen are one transaction
 //!
-//! `revoked_at` is also the sweep's own filter: a consent that carries it can
+//! `revoked_at` is also every path's own filter: a consent that carries it can
 //! never be selected again. Closing the row on its own therefore spends the
-//! only retry that exists — if the `einwilligung.widerrufen` event is then lost,
-//! no later sweep sees the consent, no Abbestellung is ever sent, and the ESA
-//! goes on receiving Typ-2 Messwerte with no lawful basis (Art. 6 Abs. 1 lit. a
-//! DSGVO). So `close_expired` claims one lapsed consent, revokes it and
-//! enqueues its event in a single transaction; anything that fails leaves the
-//! consent open for the next sweep. Only [`stop_deliveries`], the call out to
-//! makod, runs after the commit.
+//! only retry that exists — if the `einwilligung.widerrufen` event or the
+//! Abbestellung is then lost, nothing sees the consent again, no 17008 is ever
+//! sent, and the ESA goes on receiving Typ-2 Messwerte with no lawful basis
+//! (Art. 6 Abs. 1 lit. a DSGVO). So the row, its event and one
+//! `mako_service::outbox` command per covered location commit together, and
+//! the command worker delivers the 17008 to makod with retry and a
+//! dead-letter budget. A makod outage delays the stop; it never loses it.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use mako_markt::{
-    makod_client::{ForwardCommand, MakodClient},
-    repository::EinwilligungRecord,
-};
+use mako_markt::{makod_client::ForwardCommand, repository::EinwilligungRecord};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
@@ -54,10 +50,20 @@ use tokio_util::sync::CancellationToken;
 /// Uhr"), so an hourly sweep cannot let a whole delivery through.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(3_600);
 
-/// Stop every ESA delivery a consent authorised, and announce that it ended.
+/// The upstream name the Abbestellung commands are owed to; the worker that
+/// drains them is built with the same name.
+pub const MAKOD_UPSTREAM: &str = "makod";
+
+/// Record the end of a consent **on the caller's transaction**: its
+/// `einwilligung.widerrufen` event, and one ORDERS 17008 Abbestellung command
+/// per location in `abbestellen`.
 ///
-/// Called from the Widerruf handler and from [`spawn_expiry_sweep`], so the two
-/// paths cannot diverge on what „the consent ended" means.
+/// Every ending calls this — the Widerruf, the expiry sweep, and a grant that
+/// replaces the consent — so the paths cannot diverge on what „the consent
+/// ended" owes the market. `abbestellen` is every covered location for a
+/// Widerruf or an Ablauf, and only the ones the replacing consent no longer
+/// covers for a supersession: abbestellen a location still covered would stop
+/// a lawful flow.
 ///
 /// **No `messprodukt`, deliberately.** An ESA subscription is the
 /// (Meldepunkt, Messprodukt) pair and one location may carry several — the
@@ -68,20 +74,40 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(3_600);
 /// the shape its own Abo mode admits. Naming one here would stop one and leave
 /// the rest delivering.
 ///
-/// Best-effort by design, and called only **after** the transaction that
-/// revoked the consent and wrote its CloudEvent has committed: an external call
-/// must not hold a row lock open, and a makod outage must delay the stop rather
-/// than block the customer's Art.-7(3) right. The event is the durable signal a
-/// consumer retries from.
+/// A redelivered Abbestellung sends no second 17008: makod resolves the command
+/// against the ESA subscriptions still running at the location, so once the
+/// first one went out either none is left to address (`404`) or the process
+/// has moved past `Beliefert` and `EsaWertebestellungWorkflow` refuses
+/// `SendAbbestellung` (`409`). Both are the command's settled statuses.
 ///
-/// A repeated Abbestellung for the same (consent, location) is harmless. makod
-/// resolves the command against the ESA subscriptions still running at the
-/// location: once the first one went out, either none is left to address
-/// (`ProcessNotFound`, logged here) or the process has moved past `Beliefert`
-/// and `EsaWertebestellungWorkflow` refuses `SendAbbestellung` from any other
-/// state — so no second ORDERS 17008 reaches the wire either way.
-pub async fn stop_deliveries(makod: &MakodClient, grund: &str, rec: &EinwilligungRecord) {
-    for location_id in &rec.location_ids {
+/// # Errors
+///
+/// Returns `sqlx::Error` when an INSERT fails; the caller rolls back and the
+/// consent stays open.
+pub async fn end_consent(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    rec: &EinwilligungRecord,
+    grund: &str,
+    abbestellen: &[String],
+) -> Result<(), sqlx::Error> {
+    // One CloudEvent for every way the basis ends: a consumer's obligation does
+    // not change with *why*, and the `grund` is what tells them apart.
+    let evt = mako_markt::cloudevents::MarktEvent::new(
+        tenant,
+        mako_events::markt::EINWILLIGUNG_WIDERRUFEN,
+        rec.id.to_string(),
+        serde_json::json!({
+            "einwilligung_id": rec.id,
+            "esa_mp_id": rec.esa_mp_id,
+            "anschlussnutzer_ref": rec.anschlussnutzer_ref,
+            "location_ids": rec.location_ids,
+            "grund": grund,
+            "valid_to": rec.valid_to.map(|d| d.to_string()),
+        }),
+    );
+    crate::outbox::enqueue(&mut *conn, &evt).await?;
+    for location_id in abbestellen {
         let cmd = ForwardCommand {
             command: mako_markt::commands::ESA_ABBESTELLUNG_BEAUFTRAGEN.to_owned(),
             marktrolle: Some("ESA".to_owned()),
@@ -94,21 +120,28 @@ pub async fn stop_deliveries(makod: &MakodClient, grund: &str, rec: &Einwilligun
                 "einwilligung_id": rec.id,
             }),
         };
-        // Keyed on (consent, location) so makod can correlate the dispatch —
-        // makod requires the header but never compares it, so what keeps a
-        // redelivery of the same expiry, or a Widerruf racing the sweep, from
-        // sending a second 17008 is the workflow state, not this key.
-        let idem = format!("esa-abbestellung:{}:{location_id}", rec.id);
-        if let Err(e) = makod.post_command(&idem, &cmd).await {
-            tracing::warn!(
-                error = %e, location_id, grund,
-                einwilligung_id = %rec.id,
-                "marktd: Abbestellung dispatch to makod failed — the consent is closed \
-                 and the CloudEvent emitted; retry via that event"
-            );
-        }
+        let body = serde_json::to_value(&cmd).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+        mako_service::outbox::enqueue_command(
+            &mut *conn,
+            &mako_service::outbox::Command {
+                upstream: MAKOD_UPSTREAM.to_owned(),
+                label: mako_markt::commands::ESA_ABBESTELLUNG_BEAUFTRAGEN.to_owned(),
+                method: mako_service::outbox::CommandMethod::Post,
+                path: "/api/v1/commands".to_owned(),
+                body,
+                // One obligation per (consent, location): a Widerruf racing the
+                // sweep enqueues it once.
+                key: format!("esa-abbestellung:{}:{location_id}", rec.id),
+                settled_statuses: vec![404, 409],
+            },
+        )
+        .await?;
     }
+    Ok(())
 }
+
+/// The `grund` of a Widerruf (GDPR Art. 7(3)).
+pub const GRUND_WIDERRUFEN: &str = "einwilligung_widerrufen";
 
 /// The `grund` an expiry-driven Abbestellung states.
 ///
@@ -117,10 +150,13 @@ pub async fn stop_deliveries(makod: &MakodClient, grund: &str, rec: &Einwilligun
 /// cannot answer „did anyone withdraw consent this quarter".
 pub const GRUND_ABGELAUFEN: &str = "einwilligung_abgelaufen";
 
-/// Close expired consents hourly and stop the deliveries they authorised.
+/// The `grund` of a consent ended because a new grant for the same ESA and
+/// Anschlussnutzer replaced it.
+pub const GRUND_ERSETZT: &str = "einwilligung_ersetzt";
+
+/// Close expired consents hourly and owe makod the Abbestellungen.
 pub fn spawn_expiry_sweep(
     repo: Arc<crate::pg::PgEinwilligungRepository>,
-    makod: Arc<MakodClient>,
     pool: PgPool,
     tenant: String,
     shutdown: CancellationToken,
@@ -132,19 +168,14 @@ pub fn spawn_expiry_sweep(
             tokio::select! {
                 () = shutdown.cancelled() => break,
                 _ = interval.tick() => {
-                    sweep(repo.as_ref(), &makod, &pool, &tenant).await;
+                    sweep(repo.as_ref(), &pool, &tenant).await;
                 }
             }
         }
     });
 }
 
-async fn sweep(
-    repo: &crate::pg::PgEinwilligungRepository,
-    makod: &MakodClient,
-    pool: &PgPool,
-    tenant: &str,
-) {
+async fn sweep(repo: &crate::pg::PgEinwilligungRepository, pool: &PgPool, tenant: &str) {
     let today = mako_fristen::heute();
     let candidates = match repo.expired_candidates(today, tenant).await {
         Ok(ids) => ids,
@@ -163,8 +194,8 @@ async fn sweep(
 
     for id in candidates {
         match close_expired(pool, tenant, today, id).await {
-            // Closed here, and the event is durable — now stop the deliveries.
-            Ok(Some(rec)) => stop_deliveries(makod, GRUND_ABGELAUFEN, &rec).await,
+            // Closed here, with its event and its Abbestellungen.
+            Ok(Some(_)) => {}
             // Already closed, or held by another transaction — a customer's
             // Widerruf, a second replica's sweep. That transaction owes the
             // event, and a row it only holds is expired again next hour.
@@ -181,7 +212,13 @@ async fn sweep(
 }
 
 /// Revoke one expired consent and persist its `einwilligung.widerrufen` event
-/// in a **single transaction**, returning the record when this call closed it.
+/// and Abbestellungen in a **single transaction**, returning the record when
+/// this call closed it.
+///
+/// # Errors
+///
+/// Returns an error when the claim, an INSERT or the commit fails; the consent
+/// then stays open for the next sweep.
 ///
 /// # One transaction per consent, not per sweep
 ///
@@ -197,7 +234,7 @@ async fn sweep(
 /// them retried, and none of their Abbestellungen sent this hour. Per-row also
 /// keeps the transaction short, which matters because a claimed row is locked
 /// against the Widerruf handler for its duration.
-async fn close_expired(
+pub async fn close_expired(
     pool: &PgPool,
     tenant: &str,
     today: time::Date,
@@ -210,23 +247,7 @@ async fn close_expired(
         return Ok(None);
     };
 
-    // The same CloudEvent the Widerruf emits: a consumer's obligation does not
-    // change with *why* the basis ended, and the `grund` in the payload is what
-    // tells the two apart.
-    let evt = mako_markt::cloudevents::MarktEvent::new(
-        tenant,
-        mako_events::markt::EINWILLIGUNG_WIDERRUFEN,
-        rec.id.to_string(),
-        serde_json::json!({
-            "einwilligung_id": rec.id,
-            "esa_mp_id": rec.esa_mp_id,
-            "anschlussnutzer_ref": rec.anschlussnutzer_ref,
-            "location_ids": rec.location_ids,
-            "grund": GRUND_ABGELAUFEN,
-            "valid_to": rec.valid_to.map(|d| d.to_string()),
-        }),
-    );
-    crate::outbox::enqueue(&mut *tx, &evt).await?;
+    end_consent(&mut tx, tenant, &rec, GRUND_ABGELAUFEN, &rec.location_ids).await?;
     tx.commit().await?;
     Ok(Some(rec))
 }

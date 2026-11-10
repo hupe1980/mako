@@ -10,7 +10,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use mako_markt::makod_client::MakodClient;
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
@@ -67,7 +66,6 @@ pub async fn create_order(
             "an order for this process already exists",
         ));
     };
-    events::auftrag_eingegangen(&pool, &tenant, id, &req).await;
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response())
 }
 
@@ -147,7 +145,6 @@ pub async fn execute_order(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(makod): Extension<Arc<MakodClient>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Path(id): Path<Uuid>,
     Json(req): Json<ExecuteRequest>,
@@ -176,7 +173,7 @@ pub async fn execute_order(
         note: req.note.as_deref(),
         pruefschritt_code: req.pruefschritt_code.as_deref(),
     };
-    finish(&pool, &makod, id, &tenant, &outcome).await
+    finish(&pool, id, &tenant, &outcome).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -213,7 +210,6 @@ pub async fn fail_order(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(makod): Extension<Arc<MakodClient>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Path(id): Path<Uuid>,
     Json(req): Json<FailRequest>,
@@ -232,65 +228,54 @@ pub async fn fail_order(
         pruefschritt_code: req.pruefschritt_code.as_deref(),
         endgueltig: req.endgueltig,
     };
-    finish(&pool, &makod, id, &tenant, &outcome).await
+    finish(&pool, id, &tenant, &outcome).await
 }
 
-/// Record a terminal outcome and report what happened to the IFTSTA.
+/// Record a terminal outcome with the IFTSTA 21039 it owes.
 ///
-/// `202 Accepted` rather than `204` when the dispatch did not go through: the
-/// order **is** recorded — the field team's report is not thrown away because a
-/// downstream service was unreachable — but the Lieferant has not been told yet.
-/// The response says which of the two it was, so the caller does not read a
-/// queued IFTSTA as a delivered one.
+/// `202 Accepted` when the IFTSTA is queued: the order **is** recorded and the
+/// Auftragsstatus committed with it, but the outbox worker has yet to hand it
+/// to makod, so the Lieferant has not been told yet. `204` for an
+/// operator-created order, which owes no IFTSTA.
 async fn finish(
     pool: &PgPool,
-    makod: &Arc<MakodClient>,
     id: Uuid,
     tenant: &str,
     outcome: &Outcome<'_>,
 ) -> ApiResult<Response> {
-    match report_outcome(pool, makod, id, tenant, outcome).await? {
+    match report_outcome(pool, id, tenant, outcome).await? {
         Reported::NotFound => Err(ApiError::NotFound),
         // A Sperrversuch, not an outcome: the order is still owed a second
         // visit, so no IFTSTA goes out and the LF's process stays open.
-        Reported::VersuchNotiert {
-            sperrversuche,
-            malo_id,
-        } => {
-            if let Outcome::Failed { reason, .. } = outcome {
-                events::versuch_gescheitert(pool, tenant, id, &malo_id, reason, sperrversuche)
-                    .await;
-            }
-            Ok((
-                StatusCode::ACCEPTED,
-                Json(serde_json::json!({
-                    "recorded": true,
-                    "status": "pending",
-                    "sperrversuche": sperrversuche,
-                    "iftsta_dispatched": false,
-                    "note": "Sperrversuch recorded. GPKE Teil 2 § 3.5.1.2 Nr. 5 allows two \
-                             attempts within one Sperrauftrag, so the order stays in the \
-                             queue and no IFTSTA 21039 is sent yet. Use endgueltig=true to \
-                             close it on a legal or factual impossibility.",
-                })),
-            )
-                .into_response())
-        }
-        Reported::Recorded { iftsta_dispatched } => {
-            events::outcome(pool, tenant, id, outcome, iftsta_dispatched).await;
-            if iftsta_dispatched {
-                Ok(StatusCode::NO_CONTENT.into_response())
-            } else {
+        Reported::VersuchNotiert { sperrversuche } => Ok((
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "recorded": true,
+                "status": "pending",
+                "sperrversuche": sperrversuche,
+                "iftsta_queued": false,
+                "note": "Sperrversuch recorded. GPKE Teil 2 § 3.5.1.2 Nr. 5 allows two \
+                         attempts within one Sperrauftrag, so the order stays in the \
+                         queue and no IFTSTA 21039 is sent yet. Use endgueltig=true to \
+                         close it on a legal or factual impossibility.",
+            })),
+        )
+            .into_response()),
+        Reported::Recorded { iftsta_queued } => {
+            if iftsta_queued {
                 Ok((
                     StatusCode::ACCEPTED,
                     Json(serde_json::json!({
                         "recorded": true,
-                        "iftsta_dispatched": false,
-                        "note": "outcome recorded; IFTSTA 21039 dispatch failed and is \
-                                 queued for retry. The Lieferant has not been told yet.",
+                        "iftsta_queued": true,
+                        "note": "outcome recorded with its IFTSTA 21039, which the outbox \
+                                 delivers to makod; `iftsta_dispatched_at` on the order says \
+                                 when it went.",
                     })),
                 )
                     .into_response())
+            } else {
+                Ok(StatusCode::NO_CONTENT.into_response())
             }
         }
     }
@@ -380,7 +365,6 @@ pub async fn ingest(
 
     match create_order_pg(pool, tenant, &req).await? {
         Some(id) => {
-            events::auftrag_eingegangen(pool, tenant, id, &req).await;
             tracing::info!(
                 order_id = %id, malo_id = %req.malo_id, pid = req.order_type.pid(),
                 "processd sperr: ORDERS queued for field execution"

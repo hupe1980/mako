@@ -43,6 +43,7 @@
 
 pub mod facturx;
 pub mod gate;
+pub mod gebuehrenbescheid;
 pub mod mahnung;
 pub mod preisanpassung;
 pub mod render;
@@ -71,3 +72,7 @@ pub const REFERENCE_MAHNUNG_TEMPLATE: &str = include_str!("templates/mahnung.typ
 /// Sonderkündigungsrecht, which Satz 1 obliges the supplier to state in the
 /// same notice and without which the Anzeige is invalid.
 pub const REFERENCE_PREISANPASSUNG: &str = include_str!("templates/preisanpassung.typ");
+
+/// The reference Gebührenbescheid layout — same rationale, same gate: the page
+/// must print what § 157 Abs. 1 AO attaches to a Bescheid.
+pub const REFERENCE_GEBUEHRENBESCHEID: &str = include_str!("templates/gebuehrenbescheid.typ");

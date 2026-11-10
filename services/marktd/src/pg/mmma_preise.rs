@@ -40,6 +40,37 @@ impl PgMmmaPreisGasRepository {
         minder_ct_kwh: Decimal,
         source: &str,
     ) -> Result<(), MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::upsert_gas_on(
+            &mut conn,
+            price_month,
+            marktgebiet,
+            mehr_ct_kwh,
+            minder_ct_kwh,
+            source,
+        )
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))
+    }
+
+    /// [`Self::upsert_gas`] on the caller's connection, so an import and its
+    /// event commit together.
+    ///
+    /// # Errors
+    ///
+    /// Returns `sqlx::Error` when the upsert fails.
+    pub async fn upsert_gas_on(
+        conn: &mut sqlx::PgConnection,
+        price_month: Date,
+        marktgebiet: &str,
+        mehr_ct_kwh: Decimal,
+        minder_ct_kwh: Decimal,
+        source: &str,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"INSERT INTO mmma_preise_gas (price_month, marktgebiet, mehr_ct_kwh, minder_ct_kwh, source, updated_at)
                VALUES ($1, $2, $3, $4, $5, now())
@@ -54,9 +85,8 @@ impl PgMmmaPreisGasRepository {
         .bind(mehr_ct_kwh)
         .bind(minder_ct_kwh)
         .bind(source)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        .execute(conn)
+        .await?;
         Ok(())
     }
 
@@ -137,6 +167,29 @@ impl PgMmmPreisStromRepository {
         minder_ct_kwh: Decimal,
         source: &str,
     ) -> Result<(), MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::upsert_strom_on(&mut conn, price_month, mehr_ct_kwh, minder_ct_kwh, source)
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))
+    }
+
+    /// [`Self::upsert_strom`] on the caller's connection, so an import and its
+    /// event commit together.
+    ///
+    /// # Errors
+    ///
+    /// Returns `sqlx::Error` when the upsert fails.
+    pub async fn upsert_strom_on(
+        conn: &mut sqlx::PgConnection,
+        price_month: Date,
+        mehr_ct_kwh: Decimal,
+        minder_ct_kwh: Decimal,
+        source: &str,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"INSERT INTO mmm_preise_strom (price_month, mehr_ct_kwh, minder_ct_kwh, source, updated_at)
                VALUES ($1, $2, $3, $4, now())
@@ -150,9 +203,8 @@ impl PgMmmPreisStromRepository {
         .bind(mehr_ct_kwh)
         .bind(minder_ct_kwh)
         .bind(source)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        .execute(conn)
+        .await?;
         Ok(())
     }
 

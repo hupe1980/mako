@@ -27,9 +27,29 @@ use super::structure::{InstanceId, Kind, NodeId, Resolution, Structure};
 
 /// Rule id prefix of a Formatbedingung finding (`FMT-<pid>-<nr>-<tag>-<de>-<n>`).
 ///
-/// A Formatbedingung finding is a `Warning`, never an `Error`: it is advisory
-/// and does not refuse the message. See [`super::formatbedingung`].
+/// A Formatbedingung finding is a `Warning`, never an `Error`: a receiver
+/// decides whether it refuses the message. A sender does not send one — see
+/// [`bars_sending`]. See [`super::formatbedingung`].
 pub const FMT_PREFIX: &str = "FMT-";
+
+/// Whether `issue` keeps a message from being sent: every error, and every
+/// Formatbedingung finding.
+///
+/// The Prüfschablone fixes „welche Formatdefinitionen für die Inhalte einzelner
+/// Datenelemente gelten" (APERAK AHB 1.1 Kap. 2.1.2, S. 10), and a receiver
+/// answers a violation with „Z35 Format nicht eingehalten" (Kap. 2.1.2.1,
+/// S. 12). A validator that only warns leaves the receiver to decide; a sender
+/// has no such choice to leave.
+#[must_use]
+pub fn bars_sending(issue: &ValidationIssue) -> bool {
+    matches!(
+        issue.severity,
+        ValidationSeverity::Error | ValidationSeverity::Critical
+    ) || issue
+        .rule_id
+        .as_deref()
+        .is_some_and(|r| r.starts_with(FMT_PREFIX))
+}
 
 /// Rule id of the advisory raised when no Anwendungsfall can be selected.
 pub const AHB_SKIP_NO_PID: &str = "AHB-SKIP-NO-PID";
@@ -553,7 +573,7 @@ fn check_leaf(
         )
         .with_rule_id(format!("MIG-{nr}-{tag}-{}-FORMAT", el.id))));
     }
-    if el.is_code_list() && !el.codes.iter().any(|c| c.code == value) {
+    if el.is_closed_code_list() && !el.codes.iter().any(|c| c.code == value) {
         let admitted: Vec<&str> = el.codes.iter().map(|c| c.code.as_str()).collect();
         issues.push(at(ValidationIssue::new(
             ValidationSeverity::Error,
@@ -1230,7 +1250,7 @@ fn element_rules(
         let (required, mut admitted, mut coded) = operands(ctx, rule, instance);
         // An operand on the element rather than on its codes (`X` beside
         // `UNH` DE 0065) admits what the MIG's code list admits.
-        if !coded && el.is_code_list() {
+        if !coded && el.is_closed_code_list() {
             coded = true;
             admitted = el.codes.iter().map(|c| c.code.clone()).collect();
         }

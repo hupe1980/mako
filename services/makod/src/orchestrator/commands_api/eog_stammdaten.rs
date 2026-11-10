@@ -60,7 +60,7 @@ use rubo4e::current::{
 use super::{CommandsApiState, DispatchError};
 
 /// The Transaktionsgründe Bedingung `[203]` names — on these the
-/// „Kunde des Lieferanten" is Muss, on the others Soll „wenn bekannt"
+/// „Kunde des Lieferanten" is Muss, on the others Soll „Wenn bekannt"
 /// (`[165]`). UTILMD AHB Strom 2.2 / Gas 1.2, Anwendungsfall 55013 / 44013.
 const GRUENDE_MIT_KUNDE: &[&str] = &["E06", "Z39", "ZC6", "ZC7", "ZT6", "ZT7", "Z02", "ZZD"];
 
@@ -131,46 +131,119 @@ pub(super) fn stichtag(process_date: &str) -> Result<time::Date, DispatchError> 
     })
 }
 
-/// Refuse a command whose UTILMD the pre-send AHB gate would dead-letter.
+/// Refuse a command whose outbound message the pre-send AHB gate would
+/// dead-letter.
 ///
 /// The workflow is pure, so its `handle` on a fresh process yields the exact
-/// outbox entries the spawn writes; each UTILMD among them is rendered and
-/// checked against its profile as `transport::as4_sender` checks it before
-/// delivery. A refusal names every finding.
+/// outbox entries the spawn writes; each EDIFACT message among them — every
+/// type the outbox worker renders against a BDEW profile, not only UTILMD — is
+/// rendered in the release of `format_version` (the process's own, or for a
+/// spawn the one it is stamped with), parsed back and checked with
+/// `is_sendable()` as `transport::as4_sender` checks it before delivery. A
+/// refusal names every finding.
 ///
 /// It is also where a rehearsal stops: inside [`super::probe::rehearse`] the
 /// door's outbox is handed to the probe and the door ends here with
 /// [`DispatchError::Geprobt`], before its duplicate guard and its spawn.
 pub(super) fn refuse_what_the_gate_refuses(
     state: &CommandsApiState,
+    format_version: &mako_engine::version::FormatVersion,
     outbox: &[PendingOutbox],
 ) -> Result<(), DispatchError> {
-    if super::probe::halt(outbox) {
+    if super::probe::halt(format_version, outbox) {
         return Err(DispatchError::Geprobt);
     }
-    gate_verdict(state, outbox)
+    gate_verdict(state, format_version, outbox)
 }
 
 /// The gate's own answer on `outbox` — the refusal a door returns, word for
 /// word, and the verdict a rehearsal reports.
 pub(super) fn gate_verdict(
     state: &CommandsApiState,
+    format_version: &mako_engine::version::FormatVersion,
     outbox: &[PendingOutbox],
 ) -> Result<(), DispatchError> {
-    for pending in outbox.iter().filter(|p| &*p.message_type == "UTILMD") {
-        let findings =
-            crate::orchestrator::edifact_renderer::utilmd_ahb_findings(pending, state.tenant_id)
-                .map_err(|e| {
-                    DispatchError::InvalidPayload(format!("the UTILMD does not render: {e}"))
-                })?;
+    for pending in outbox {
+        let message_type = &*pending.message_type;
+        let findings = if message_type == "UTILMD" {
+            crate::orchestrator::edifact_renderer::utilmd_ahb_findings(
+                pending,
+                state.tenant_id,
+                format_version,
+            )
+        } else if GATED_MESSAGE_TYPES.contains(&message_type) {
+            edifact_findings(state, pending, format_version)
+        } else {
+            continue;
+        }
+        .map_err(|e| {
+            DispatchError::InvalidPayload(format!("the {message_type} does not render: {e}"))
+        })?;
         if !findings.is_empty() {
             return Err(DispatchError::InvalidPayload(format!(
-                "the UTILMD violates its AHB profile: {}",
+                "the {message_type} violates its AHB profile: {}",
                 findings.join("; ")
             )));
         }
     }
     Ok(())
+}
+
+/// The message types the outbox worker renders against a BDEW profile beside
+/// UTILMD. The DVGW documents (ALOCAT, NOMINT, NOMRES, SSQNOT) have no BDEW
+/// AHB to hold them to, and a type with no renderer leaves the outbox as JSON.
+const GATED_MESSAGE_TYPES: &[&str] = &[
+    "APERAK", "CONTRL", "REQOTE", "QUOTES", "ORDERS", "ORDCHG", "ORDRSP", "INVOIC", "REMADV",
+    "MSCONS", "IFTSTA", "INSRPT",
+];
+
+/// Render `pending` as the outbox worker will — its own `sender`, else this
+/// deployment's, as the party; the release of `format_version` — parse it back
+/// and return what keeps it from being sent.
+fn edifact_findings(
+    state: &CommandsApiState,
+    pending: &PendingOutbox,
+    format_version: &mako_engine::version::FormatVersion,
+) -> Result<Vec<String>, String> {
+    use edi_energy::EdiEnergyMessage as _;
+    use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
+    let sender = pending
+        .payload
+        .get("sender")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&state.sender_party_id);
+    let registry =
+        crate::party_registry::MpIdRegistry::from_config(&[crate::config::PartyConfig {
+            mp_id: sender.to_owned(),
+            roles: Vec::new(),
+            primary: true,
+            agency: None,
+            as4: None,
+        }])
+        .map_err(|e| e.to_string())?;
+    let process_id = ProcessId::new();
+    let mut msg = mako_engine::outbox::OutboxMessage::new(
+        StreamId::for_process(state.tenant_id, &process_id),
+        process_id,
+        state.tenant_id,
+        CorrelationId::new(),
+        ConversationId::new(),
+        EventId::new(),
+        pending.message_type.clone(),
+        pending.recipient.clone(),
+        pending.payload.clone(),
+    );
+    msg.format_version = Some(format_version.clone());
+    let rendered = crate::orchestrator::edifact_renderer::render_to_wire_bytes(&msg, &registry)
+        .map_err(|e| e.to_string())?;
+    let parsed = edi_energy::parse(&rendered.bytes).map_err(|e| e.to_string())?;
+    let report = parsed
+        .validate_on_date(mako_fristen::heute())
+        .map_err(|e| e.to_string())?;
+    Ok(report
+        .sending_refusals()
+        .map(|e| e.message.to_string())
+        .collect())
 }
 
 /// What a 55013 carries beside its Grund.

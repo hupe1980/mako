@@ -152,6 +152,8 @@ pub async fn post_correction(
             rechnung_json: &corrected_json,
             total_netto_eur: netto,
             total_brutto_eur: brutto,
+            // The Storno's lines are the original's, negated in the insert.
+            steuerzeilen: &[],
         },
         original.id,
         Some(&req.reason),

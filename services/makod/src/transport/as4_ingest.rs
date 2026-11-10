@@ -35,7 +35,7 @@ use std::time::Duration;
 use asx::as4::UserMessage;
 use asx::{BoxFuture, Claim, ClaimToken, DedupStore, Reject, Verified};
 use axum::Router;
-use edi_energy::{AnyMessage, EdiEnergyMessage};
+use edi_energy::AnyMessage;
 use mako_engine::ids::InboxClaimId;
 use mako_engine::inbox::{InboxClaim, InboxStore};
 use mako_engine::metrics::EngineMetrics;
@@ -1031,10 +1031,7 @@ impl BdewAs4IngestHandler {
                 }
                 Ok(msg) => {
                     let message_type = msg.try_message_type().map(|t| t.to_string());
-                    let pid = msg
-                        .detect_pruefidentifikator()
-                        .ok()
-                        .and_then(|p| mako_engine::ids::Pid::from_u32(p.as_u32()));
+                    let pid = crate::edifact_api::routing_pid(&msg);
                     let workflow = pid
                         .and_then(|p| self.ingest.resolve_workflow(p.as_u32(), &recipient_mp_id))
                         .map(str::to_owned);

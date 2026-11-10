@@ -22,7 +22,6 @@ use std::path::PathBuf;
 use mako_markt::utilmd_stammdaten::{NetznutzungZahler, Netznutzungsvertrag};
 use mako_service::schema_check::check_values;
 use vertragd::domain::{Kuendigungsgrund, Lieferbeginnanlass, Vertragsart};
-use vertragd::outbound::TaskKind;
 
 fn migration_sql() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/0001_schema.sql");
@@ -103,15 +102,6 @@ fn kuendigungsgrund_matches_its_check_list() {
     );
 }
 
-/// `kind` drives the outbound task dispatcher; an unlisted variant cannot be
-/// enqueued at all.
-#[test]
-fn task_kind_matches_its_check_list() {
-    assert_pinned("kind", TaskKind::ALL, TaskKind::as_db, |s| {
-        TaskKind::ALL.iter().copied().find(|k| k.as_db() == s)
-    });
-}
-
 /// The Anlass is the GeLi Gas Anmeldung's Transaktionsgrund; an unlisted one
 /// cannot be stored, an unknown stored one would be no Anmeldung at all.
 #[test]
@@ -156,7 +146,6 @@ fn netznutzung_matches_its_check_lists() {
 #[test]
 fn the_guard_reads_the_lists_it_names() {
     let sql = migration_sql();
-    assert_eq!(check_values(&sql, "kind").len(), 5);
     assert_eq!(check_values(&sql, "kuendigung_grund").len(), 4);
     assert_eq!(check_values(&sql, "vertragsart").len(), 3);
 }

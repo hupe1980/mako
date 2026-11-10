@@ -6,6 +6,7 @@
     reason = "publish = false: a daemon's library exists for its binary and its tests, not as an API"
 )]
 
+pub mod bundesland;
 pub mod config;
 pub mod consent_lifecycle;
 pub mod daemon;

@@ -31,6 +31,11 @@ on the `mako-service` SDK.
 one SlateDB `WriteBatch`; the PostgreSQL services share `mako_service::outbox`
 (`enqueue(&mut tx, &ce)` plus `OutboxWorker`). Delivery is at-least-once,
 retried and dead-lettered; the receiver deduplicates on the CloudEvent `id`.
+A marker that says „done" — a status, a timestamp, an idempotency key — commits
+in the transaction that does the work and enqueues its event, or not at all;
+`cargo xtask check-event-durability` refuses one written on a pool beside an
+enqueue, a CloudEvent publish with nothing durable behind it, and a hand-built
+envelope.
 
 **One deployment, one operator.** A `tenant` column or `TenantId` carries the
 operator's data-isolation key. It scopes data to the configured party — several
@@ -265,7 +270,7 @@ All **14** daemons share one operational model:
 
 Ports, market roles and per-daemon design live in the
 [Services section](@/docs/services/_index.md). `makod` is the protocol gateway
-the rest sits behind: EDIFACT ↔ BO4E, 73 workflows over 473 Prüfidentifikatoren,
+the rest sits behind: EDIFACT ↔ BO4E, 76 workflows over 494 Prüfidentifikatoren,
 AS4 ingest and the deadline scheduler.
 
 | Daemon | Port | Role in the mesh |
@@ -361,8 +366,8 @@ graph TD
 | `http` | `default_client()` — `reqwest::Client` with a 5 s connect timeout |
 | `webhook` | `sign`, `verify_request` — Standard Webhooks; `verify_request` also refuses a stale timestamp and returns the id to deduplicate on |
 | `builder` | `ServiceBuilder` — Axum router with health, metrics, trace layer |
-| `outbox` | Transactional outbox — `enqueue` in the business transaction, drain worker with retry and dead-lettering |
-| `cloudevent` | `CloudEvent`, `post_ce_with_retry`, `source`; type names come from `mako-events` |
+| `outbox` | Transactional outbox: `enqueue` (event), `enqueue_to` (event for a named receiver) or `enqueue_command` (idempotent HTTP call) inside the business transaction; `OutboxWorker` drains them with retry and dead-lettering, counting an attempt at the claim. `on_delivered` writes the receiver's answer in the delivering transaction |
+| `cloudevent` | `CloudEvent`, `post_ce_with_retry`, `post_ce_for_reply`, `source`; type names come from `mako-events` |
 | `metrics` | `init_metrics` — Prometheus registry and `/metrics` |
 | `rate_limit` | `RateLimitConfig` — the per-peer GCRA every port applies |
 | `worker_lock` | PostgreSQL session-level advisory lock, so a periodic worker runs on one replica; a dead replica's connection releases it |

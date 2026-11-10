@@ -459,6 +459,7 @@ pub async fn put_abschlag(
             abschlag_ct: Some(body.abschlag_ct),
             billing_day: None,
             address: Default::default(),
+            verbraucher: None,
         },
     )
     .await
@@ -898,7 +899,26 @@ fn eeg_beleg_aus(
         ketten_folge,
         bank_iban: text("bank_iban"),
         zahlungsempfaenger: text("zahlungsempfaenger"),
+        sect52_aufgerechnet_ct: sect52_aufgerechnet_ct(data)?,
     })
+}
+
+/// `data.sect52.aufgerechnet_eur` in ct — the § 52 Abs. 6 Satz 2 EEG 2023
+/// set-off einsd states beside the receipt's claim; 0 where it states none.
+fn sect52_aufgerechnet_ct(data: &serde_json::Value) -> Result<i64, String> {
+    use rust_decimal::prelude::ToPrimitive as _;
+    let wert = match data.get("sect52").and_then(|s| s.get("aufgerechnet_eur")) {
+        None | Some(serde_json::Value::Null) => return Ok(0),
+        Some(serde_json::Value::String(s)) => s.parse::<rust_decimal::Decimal>().ok(),
+        Some(serde_json::Value::Number(n)) => n.to_string().parse().ok(),
+        Some(_) => None,
+    }
+    .filter(|d| !d.is_sign_negative())
+    .ok_or("data.sect52.aufgerechnet_eur is not a non-negative decimal amount")?;
+    (wert * rust_decimal::Decimal::ONE_HUNDRED)
+        .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        .to_i64()
+        .ok_or_else(|| "data.sect52.aufgerechnet_eur is out of range".to_owned())
 }
 
 /// `de.eeg.verguetung.berechnet` / `de.eeg.marktpraemie.berechnet`: record the
@@ -1695,6 +1715,9 @@ async fn import_cash_entries(
                         {
                             Ok(Some(collected)) => {
                                 let status = if is_return { "RETURNED" } else { "SETTLED" };
+                                // committed apart: the booking committed with its
+                                // own event in `stage_bank_row`; this follows the
+                                // collection it settles and announces nothing.
                                 match crate::pg::set_collection_entry_status(
                                     pool,
                                     collected.entry_id,
@@ -2579,6 +2602,65 @@ pub async fn place_lock(
     }
 }
 
+/// `POST /api/v1/accounts/{malo_id}/locks` — the same lock, placed on the
+/// account rather than through one of its dunning cases.
+///
+/// For a ground known before any Mahnung: an Insolvenz (§ 87 InsO) has to stop
+/// Mahnstufe 1 from being opened at all, and an account without a case has no
+/// case to name.
+pub async fn place_account_lock(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<AccountQuery>,
+    Json(req): Json<PlaceLockRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    if matches!(req.grund, crate::pg::LockGrund::Operator) && req.note.is_none() {
+        return ApiError::unprocessable(
+            "grund = \"operator\" requires a note — a halt with no \
+             statutory ground and no reason is not auditable",
+        )
+        .into_response();
+    }
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return account_not_found(&malo_id),
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    let placed = crate::pg::place_account_lock(
+        &pool,
+        account.account_id,
+        &cfg.tenant,
+        req.grund,
+        req.rechtsgrundlage.as_deref(),
+        req.note.as_deref(),
+        req.valid_from,
+        req.valid_to,
+        Some(claims.sub()),
+    )
+    .await;
+    match placed {
+        Ok(Some(lock_id)) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "lock_id": lock_id })),
+        )
+            .into_response(),
+        Ok(None) => account_not_found(&malo_id),
+        Err(e) if is_exclusion_violation(&e) => ApiError::conflict(
+            "the account already carries a live lock on this ground \
+             for part of that term — lift it or change the dates",
+        )
+        .into_response(),
+        Err(e) => internal(e),
+    }
+}
+
 /// `true` when the error is a Postgres exclusion-constraint violation (`23P01`).
 fn is_exclusion_violation(e: &anyhow::Error) -> bool {
     e.downcast_ref::<sqlx::Error>()
@@ -2667,39 +2749,18 @@ pub async fn lift_lock(
     let broken = req.grund.trim() == "vereinbarung_gebrochen";
     let done = async {
         let mut tx = pool.begin().await?;
-        let Some(account_id) =
+        // A broken agreement re-opens the path to a disconnection and § 41f
+        // Abs. 5 needs a fresh letter, so the lift, the cleared Ankündigung and
+        // the announcement commit together — the payment-plan default worker
+        // applies the same act.
+        let lifted = if broken {
+            crate::pg::vereinbarung_gebrochen(&mut tx, lock_id, &cfg.tenant).await?
+        } else {
             crate::pg::lift_dunning_lock(&mut *tx, lock_id, &cfg.tenant, req.grund.trim()).await?
-        else {
+        };
+        let Some(account_id) = lifted else {
             return anyhow::Ok(None);
         };
-        if broken {
-            crate::pg::clear_ankuendigung(&mut *tx, account_id, &cfg.tenant).await?;
-            // In the same transaction as the lift: a broken agreement re-opens
-            // the path to a disconnection and § 41f Abs. 5 needs a fresh letter,
-            // so resuming without telling the ERP is the failure mode.
-            let ids: Option<(String, String)> = sqlx::query_as(
-                "SELECT malo_id, lf_mp_id FROM accounts WHERE account_id = $1 AND tenant = $2",
-            )
-            .bind(account_id)
-            .bind(&cfg.tenant)
-            .fetch_optional(&mut *tx)
-            .await?;
-            if let Some((malo_id, lf_mp_id)) = ids {
-                let ce = mako_service::CloudEvent::new(
-                    mako_service::source("accountingd", &cfg.tenant),
-                    mako_events::accounting::ABWENDUNG_GEBROCHEN,
-                    &malo_id,
-                    serde_json::json!({
-                        "malo_id":         malo_id,
-                        "lf_mp_id":        lf_mp_id,
-                        "lock_id":         lock_id.to_string(),
-                        "rechtsgrundlage": "\u{a7}41g Abs. 1 S. 11 EnWG",
-                        "folge": "Unterbrechung wieder zul\u{e4}ssig; \u{a7}41f Abs. 1 S. 2 und                                   Abs. 5 sind erneut zu beachten (neue Ank\u{fc}ndigung, 8 Werktage)",
-                    }),
-                );
-                mako_service::outbox::enqueue(&mut tx, &ce).await?;
-            }
-        }
         tx.commit().await?;
         anyhow::Ok(Some(account_id))
     }
@@ -3864,6 +3925,7 @@ pub async fn settle_jahresabschluss(
                 abschlag_ct: Some(new_abschlag_ct),
                 billing_day: None,
                 address: Default::default(),
+                verbraucher: None,
             },
         )
         .await
@@ -4745,6 +4807,34 @@ pub struct EegPayoutQuery {
     pub payment_type: Option<String>,
 }
 
+/// One `eeg_payout_orders` row as `GET /api/v1/eeg/payouts` and the MCP
+/// `list_eeg_payouts` serve it.
+#[must_use]
+pub fn eeg_payout_json(r: &sqlx::postgres::PgRow) -> serde_json::Value {
+    use sqlx::Row;
+    let submitted_at: Option<time::OffsetDateTime> = r.try_get("submitted_at").unwrap_or(None);
+    let settled_at: Option<time::OffsetDateTime> = r.try_get("settled_at").unwrap_or(None);
+    let created_at: Option<time::OffsetDateTime> = r.try_get("created_at").ok();
+    serde_json::json!({
+        "payout_id":      r.try_get::<uuid::Uuid, _>("payout_id").ok().map(|u| u.to_string()),
+        "malo_id":        r.try_get::<String, _>("malo_id").ok(),
+        "tr_id":          r.try_get::<String, _>("tr_id").ok(),
+        "billing_year":   r.try_get::<i16, _>("billing_year").ok(),
+        "billing_month":  r.try_get::<i16, _>("billing_month").ok(),
+        "amount_ct":      r.try_get::<i64, _>("amount_ct").ok(),
+        "creditor_iban":  r.try_get::<String, _>("creditor_iban").ok(),
+        "creditor_name":  r.try_get::<String, _>("creditor_name").ok(),
+        "payment_type":   r.try_get::<String, _>("payment_type").ok(),
+        "end_to_end_ref": r.try_get::<String, _>("end_to_end_ref").ok(),
+        "pain002_status": r.try_get::<String, _>("pain002_status").ok(),
+        "pain002_reason": r.try_get::<String, _>("pain002_reason").ok(),
+        "submitted_at":   submitted_at.map(|t| t.to_string()),
+        "settled_at":     settled_at.map(|t| t.to_string()),
+        "source_ce_id":   r.try_get::<String, _>("source_ce_id").ok(),
+        "created_at":     created_at.map(|t| t.to_string()),
+    })
+}
+
 /// `GET /api/v1/eeg/payouts` — list EEG payout orders with optional filters.
 ///
 /// Returns all `eeg_payout_orders` rows for the tenant, newest first.
@@ -4757,7 +4847,7 @@ pub async fn get_eeg_payouts(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Query(q): Query<EegPayoutQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
+    if let Err(e) = cedar.check(&claims.principal(), "read-eeg-payouts", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
     let filter = crate::pg::EegPayoutFilter {
@@ -4775,35 +4865,7 @@ pub async fn get_eeg_payouts(
     };
     match crate::pg::list_eeg_payouts(&pool, &cfg.tenant, &filter, 200).await {
         Ok(rows) => {
-            let result: Vec<serde_json::Value> = rows
-                .into_iter()
-                .map(|r| {
-                    use sqlx::Row;
-                    let submitted_at: Option<time::OffsetDateTime> =
-                        r.try_get("submitted_at").unwrap_or(None);
-                    let settled_at: Option<time::OffsetDateTime> =
-                        r.try_get("settled_at").unwrap_or(None);
-                    let created_at: time::OffsetDateTime = r.get("created_at");
-                    serde_json::json!({
-                        "payout_id":     r.get::<uuid::Uuid, _>("payout_id").to_string(),
-                        "malo_id":       r.get::<String, _>("malo_id"),
-                        "tr_id":         r.try_get::<String, _>("tr_id").ok(),
-                        "billing_year":  r.get::<i16, _>("billing_year"),
-                        "billing_month": r.get::<i16, _>("billing_month"),
-                        "amount_ct":     r.get::<i64, _>("amount_ct"),
-                        "creditor_iban": r.get::<String, _>("creditor_iban"),
-                        "creditor_name": r.get::<String, _>("creditor_name"),
-                        "payment_type":  r.get::<String, _>("payment_type"),
-                        "end_to_end_ref": r.get::<String, _>("end_to_end_ref"),
-                        "pain002_status": r.try_get::<String, _>("pain002_status").ok(),
-                        "pain002_reason": r.try_get::<String, _>("pain002_reason").ok(),
-                        "submitted_at":  submitted_at.map(|t| t.to_string()),
-                        "settled_at":    settled_at.map(|t| t.to_string()),
-                        "source_ce_id":  r.try_get::<String, _>("source_ce_id").ok(),
-                        "created_at":    created_at.to_string(),
-                    })
-                })
-                .collect();
+            let result: Vec<serde_json::Value> = rows.iter().map(eeg_payout_json).collect();
             Json(serde_json::json!({ "payouts": result, "count": result.len() })).into_response()
         }
         Err(e) => ApiError::internal(e).into_response(),
@@ -4818,7 +4880,7 @@ pub async fn get_eeg_payout(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(payout_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
-    if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
+    if let Err(e) = cedar.check(&claims.principal(), "read-eeg-payouts", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
     use sqlx::Row;

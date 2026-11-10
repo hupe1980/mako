@@ -47,10 +47,10 @@ pub struct EogModuleConfig {
     /// Days before the §38 3-month maximum at which the warning fires.
     pub warn_days_before_expiry: u32,
     /// Optional webhook for `de.markt.versorgung.ersatz-auslaufend`
-    /// CloudEvents (ERP / operator alerting).
+    /// CloudEvents (ERP / operator alerting). When set, the sweep enqueues the
+    /// notices for [`EOG_NOTIFY_TARGET`]; the worker draining that target
+    /// signs with `eog.notify_webhook_secret`.
     pub notify_webhook_url: Option<String>,
-    /// HMAC-SHA256 secret for signing the `notify_webhook_url` CloudEvents.
-    pub notify_webhook_secret: Option<String>,
 }
 
 impl Default for EogModuleConfig {
@@ -60,7 +60,6 @@ impl Default for EogModuleConfig {
             default_transaktionsgrund: "ZT6".to_owned(),
             warn_days_before_expiry: 14,
             notify_webhook_url: None,
-            notify_webhook_secret: None,
         }
     }
 }
@@ -447,12 +446,16 @@ pub struct EogTimerHit {
 ///
 /// `INTERVAL '3 months'` is calendar-month arithmetic — exactly the statute's
 /// "drei Monate nach Beginn der Ersatzenergieversorgung".
+///
+/// The status flips and their `de.markt.versorgung.ersatz-auslaufend` notices
+/// commit in one transaction: a flipped row is never selected again, so a
+/// notice lost after the flip would never be sent.
 pub async fn sweep_ersatzversorgung_timer(
     pool: &PgPool,
     cfg: &EogModuleConfig,
     tenant: &str,
-    client: &reqwest::Client,
 ) -> anyhow::Result<(u64, u64)> {
+    let mut tx = pool.begin().await?;
     // Phase 1 — warning window.
     let warned: Vec<EogTimerHit> = sqlx::query_as(
         r"UPDATE eog_activations
@@ -465,7 +468,7 @@ pub async fn sweep_ersatzversorgung_timer(
     )
     .bind(tenant)
     .bind(i32::try_from(cfg.warn_days_before_expiry).unwrap_or(14))
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     // Phase 2 — expiry.
@@ -479,7 +482,7 @@ pub async fn sweep_ersatzversorgung_timer(
           RETURNING malo_id, gv_mp_id, eog_seit, haushaltskunde",
     )
     .bind(tenant)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     for (phase, hits) in [("warning", &warned), ("expired", &expired)] {
@@ -498,25 +501,28 @@ pub async fn sweep_ersatzversorgung_timer(
                     "approaching"
                 }
             );
-            notify_ersatz_auslaufend(cfg, client, tenant, hit, phase).await;
+            if cfg.notify_webhook_url.is_some() {
+                notify_ersatz_auslaufend(&mut tx, tenant, hit, phase).await?;
+            }
         }
     }
+    tx.commit().await?;
 
     Ok((warned.len() as u64, expired.len() as u64))
 }
 
-/// POST a `de.markt.versorgung.ersatz-auslaufend` CloudEvent to the
-/// configured webhook (fire-and-forget; failures are logged only).
+/// The outbox target the `de.markt.versorgung.ersatz-auslaufend` notices are
+/// enqueued for; the worker delivering to `notify_webhook_url` drains it.
+pub const EOG_NOTIFY_TARGET: &str = "eog-notify";
+
+/// Enqueue a `de.markt.versorgung.ersatz-auslaufend` CloudEvent for the
+/// configured notify webhook, on the sweep's transaction.
 async fn notify_ersatz_auslaufend(
-    cfg: &EogModuleConfig,
-    client: &reqwest::Client,
+    conn: &mut sqlx::PgConnection,
     tenant: &str,
     hit: &EogTimerHit,
     phase: &str,
-) {
-    let Some(url) = cfg.notify_webhook_url.as_deref() else {
-        return;
-    };
+) -> Result<(), sqlx::Error> {
     let ce = mako_service::CloudEvent::new(
         mako_service::source("processd", tenant),
         mako_events::markt::VERSORGUNG_ERSATZ_AUSLAUFEND,
@@ -531,16 +537,7 @@ async fn notify_ersatz_auslaufend(
             "legal_basis":    "§38 Abs. 4 S. 1 EnWG",
         }),
     );
-    if let Err(e) = mako_service::post_ce_with_retry(
-        client,
-        url,
-        &ce,
-        cfg.notify_webhook_secret.as_deref().map(str::as_bytes),
-    )
-    .await
-    {
-        warn!(error = %e, malo_id = %hit.malo_id, "processd EoG: ersatz-auslaufend webhook failed");
-    }
+    mako_service::outbox::enqueue_to(conn, EOG_NOTIFY_TARGET, &ce).await
 }
 
 // ── REST ──────────────────────────────────────────────────────────────────────

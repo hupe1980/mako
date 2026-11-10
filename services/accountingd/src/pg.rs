@@ -116,6 +116,9 @@ pub struct AccountRow {
     pub abschlag_ust_satz: rust_decimal::Decimal,
     pub billing_day: i16,
     pub balance_ct: i64,
+    /// § 13 BGB — `Some(false)` arms the § 288 Abs. 5 BGB Pauschale; `None`
+    /// is not recorded.
+    pub verbraucher: Option<bool>,
     /// `PstlAdr` parts — see [`AccountRow::postal_address`].
     pub addr_town: Option<String>,
     pub addr_country: Option<String>,
@@ -304,6 +307,10 @@ pub struct UpdateAccountRequest {
     /// leaves the stored value alone — the same shape as every other field here.
     #[serde(default)]
     pub address: crate::sepa::AddressParts,
+    /// § 13 BGB — whether the customer is a Verbraucher. `false` arms the
+    /// § 288 Abs. 5 BGB Pauschale; omitted leaves the stored value alone.
+    #[serde(default)]
+    pub verbraucher: Option<bool>,
 }
 
 /// The lookup hash written alongside a new `accounts.iban`. `None` when the
@@ -352,6 +359,7 @@ pub async fn update_account_tenanted(
               addr_building_number = COALESCE($12, addr_building_number),
               addr_post_code       = COALESCE($13, addr_post_code),
               addr_country_subdivision = COALESCE($14, addr_country_subdivision),
+              verbraucher = COALESCE($15, verbraucher),
               updated_at  = now()
           WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
     )
@@ -369,6 +377,7 @@ pub async fn update_account_tenanted(
     .bind(req.address.building_number)
     .bind(req.address.post_code)
     .bind(req.address.country_subdivision)
+    .bind(req.verbraucher)
     .execute(executor)
     .await
     .context("update_account_tenanted")?
@@ -1999,14 +2008,18 @@ pub async fn create_dunning_case(
     Ok(row.try_get("id")?)
 }
 
-pub async fn resolve_dunning_case(pool: &PgPool, id: Uuid, tenant: &str) -> anyhow::Result<u64> {
+pub async fn resolve_dunning_case(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<u64> {
     let r = sqlx::query(
         "UPDATE dunning_cases SET resolved_at = now() \
          WHERE id = $1 AND tenant = $2 AND resolved_at IS NULL",
     )
     .bind(id)
     .bind(tenant)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("resolve_dunning_case")?;
     Ok(r.rows_affected())
@@ -2057,7 +2070,7 @@ pub async fn list_accounts_with_mandates(
                  a.abschlag_ct, a.abschlag_ust_satz, a.billing_day, a.balance_ct,
                  a.addr_town, a.addr_country, a.addr_street,
                  a.addr_building_number, a.addr_post_code,
-                 a.addr_country_subdivision,
+                 a.addr_country_subdivision, a.verbraucher,
                  a.updated_at
           FROM sepa_mandates sm
           JOIN accounts a ON a.account_id = sm.account_id
@@ -2107,6 +2120,7 @@ pub async fn list_accounts_with_mandates(
             abschlag_ust_satz: r.try_get("abschlag_ust_satz")?,
             billing_day: r.try_get("billing_day")?,
             balance_ct: r.try_get("balance_ct")?,
+            verbraucher: r.try_get("verbraucher")?,
             addr_town: r.try_get("addr_town")?,
             addr_country: r.try_get("addr_country")?,
             addr_street: r.try_get("addr_street")?,
@@ -2174,7 +2188,7 @@ pub async fn find_accounts_due_for_sepa(
                  a.abschlag_ct, a.abschlag_ust_satz, a.billing_day, a.balance_ct,
                  a.addr_town, a.addr_country, a.addr_street,
                  a.addr_building_number, a.addr_post_code,
-                 a.addr_country_subdivision,
+                 a.addr_country_subdivision, a.verbraucher,
                  a.updated_at
           FROM sepa_mandates sm
           JOIN accounts a ON a.account_id = sm.account_id
@@ -2226,6 +2240,7 @@ pub async fn find_accounts_due_for_sepa(
             abschlag_ust_satz: r.try_get("abschlag_ust_satz")?,
             billing_day: r.try_get("billing_day")?,
             balance_ct: r.try_get("balance_ct")?,
+            verbraucher: r.try_get("verbraucher")?,
             addr_town: r.try_get("addr_town")?,
             addr_country: r.try_get("addr_country")?,
             addr_street: r.try_get("addr_street")?,
@@ -2779,6 +2794,9 @@ pub async fn list_androhung_candidates(
 ///   precondition, not a default.
 /// * `NOT EXISTS (an active dunning lock)` — **§ 41g Abs. 1 S. 10**,
 ///   **§ 41f Abs. 1 S. 2** and **Abs. 2**, whichever applies.
+/// * `NOT EXISTS (an ACTIVE payment plan)` — a customer paying under an
+///   instalment agreement is not escalated toward disconnection. A plan stops
+///   shielding the account when it is `DEFAULTED`, `CANCELLED` or `COMPLETED`.
 ///
 /// `verzug_ct` is the ledger-derived cache: open debit residuals, less
 /// Verzugsschaden, less the Abs. 3 S. 3–5 objections. See [`refresh_verzug`].
@@ -2798,7 +2816,12 @@ const ABS3_GATES: &str = r"
                   WHERE dl.account_id = a.account_id
                     AND dl.aufgehoben_at IS NULL
                     AND dl.valid_from <= heute()
-                    AND (dl.valid_to IS NULL OR dl.valid_to >= heute()))";
+                    AND (dl.valid_to IS NULL OR dl.valid_to >= heute()))
+            AND NOT EXISTS (
+                  SELECT 1 FROM payment_plans pp
+                  WHERE pp.account_id = a.account_id
+                    AND pp.tenant = a.tenant
+                    AND pp.status = 'ACTIVE')";
 
 /// Phase 1 — no Androhung has gone out yet.
 const PHASE_1_ANDROHUNG: &str = "AND dc.sperrandrohung_at IS NULL";
@@ -3057,6 +3080,10 @@ pub enum LockGrund {
     Schutzbeduerftigkeit,
     /// § 41f Abs. 1 S. 2 — the customer showed *hinreichende Aussicht* to pay.
     Zahlungsaussicht,
+    /// § 87 InsO — the debtor is in Insolvenz; the claim is pursued in the
+    /// Insolvenzverfahren, so automatic dunning opens and escalates no
+    /// Mahnstufe on the account.
+    Insolvenz,
     /// An operator decision. Requires a note.
     Operator,
 }
@@ -3068,6 +3095,7 @@ impl LockGrund {
             Self::Abwendungsvereinbarung => "abwendungsvereinbarung",
             Self::Schutzbeduerftigkeit => "schutzbeduerftigkeit",
             Self::Zahlungsaussicht => "zahlungsaussicht",
+            Self::Insolvenz => "insolvenz",
             Self::Operator => "operator",
         }
     }
@@ -3079,6 +3107,7 @@ impl LockGrund {
             Self::Abwendungsvereinbarung => "\u{a7}41g Abs. 1 S. 10 EnWG",
             Self::Schutzbeduerftigkeit => "\u{a7}41f Abs. 2 EnWG",
             Self::Zahlungsaussicht => "\u{a7}41f Abs. 1 S. 2 EnWG",
+            Self::Insolvenz => "\u{a7}87 InsO",
             Self::Operator => "Ermessensentscheidung des Betreibers",
         }
     }
@@ -3222,6 +3251,52 @@ pub async fn place_dunning_lock(
         Some(r) => Ok(Some(r.try_get("lock_id")?)),
         None => Ok(None),
     }
+}
+
+/// Place a dunning lock on an account directly, for a ground that does not
+/// wait for a dunning case — an Insolvenz is known before any Mahnung.
+///
+/// Returns the new lock id, or `None` when the account does not exist.
+///
+/// # Errors
+///
+/// Propagates database errors, among them `dl_no_overlap` when the account
+/// already carries a live lock on this ground for part of the term.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
+pub async fn place_account_lock(
+    exec: impl sqlx::PgExecutor<'_>,
+    account_id: Uuid,
+    tenant: &str,
+    grund: LockGrund,
+    rechtsgrundlage: Option<&str>,
+    note: Option<&str>,
+    valid_from: Option<Date>,
+    valid_to: Option<Date>,
+    created_by: Option<&str>,
+) -> anyhow::Result<Option<Uuid>> {
+    sqlx::query_scalar(
+        r"INSERT INTO dunning_locks
+              (tenant, account_id, grund, rechtsgrundlage, note,
+               valid_from, valid_to, created_by)
+          SELECT $1, a.account_id, $3, $4, $5, COALESCE($6, heute()), $7, $8
+          FROM accounts a
+          WHERE a.account_id = $2 AND a.tenant = $1
+          RETURNING lock_id",
+    )
+    .bind(tenant)
+    .bind(account_id)
+    .bind(grund.as_str())
+    .bind(rechtsgrundlage.unwrap_or_else(|| grund.default_rechtsgrundlage()))
+    .bind(note)
+    .bind(valid_from)
+    .bind(valid_to)
+    .bind(created_by)
+    .fetch_optional(exec)
+    .await
+    .context("place_account_lock")
 }
 
 /// Lift a lock, recording why.
@@ -3542,6 +3617,42 @@ pub async fn mark_sperrauftrag_dispatched(
     Ok(())
 }
 
+/// Escalate: resolve the open case `resolves` and open the next Mahnstufe, in
+/// one transaction.
+///
+/// The dunning run selects open cases only, so an old case resolved on its own
+/// while the next one fails to open is never escalated again.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
+pub async fn escalate_dunning_case_announced(
+    pool: &PgPool,
+    resolves: Uuid,
+    tenant: &str,
+    account_id: Uuid,
+    malo_id: &str,
+    lf_mp_id: &str,
+    stufe: i16,
+    amount_due_ct: i64,
+    due_date: Date,
+    fee: Option<MahnFee<'_>>,
+) -> anyhow::Result<Uuid> {
+    open_dunning_case_announced(
+        pool,
+        Some(resolves),
+        tenant,
+        account_id,
+        malo_id,
+        lf_mp_id,
+        stufe,
+        amount_due_ct,
+        due_date,
+        fee,
+    )
+    .await
+}
+
 /// Open a Mahnstufe case and announce it as `de.accounting.mahnung.issued`.
 ///
 /// The event was declared in the catalog and documented as emitted, and
@@ -3569,7 +3680,43 @@ pub async fn create_dunning_case_announced(
     due_date: Date,
     fee: Option<MahnFee<'_>>,
 ) -> anyhow::Result<Uuid> {
+    open_dunning_case_announced(
+        pool,
+        None,
+        tenant,
+        account_id,
+        malo_id,
+        lf_mp_id,
+        stufe,
+        amount_due_ct,
+        due_date,
+        fee,
+    )
+    .await
+}
+
+/// [`create_dunning_case_announced`], resolving `resolves` in the same
+/// transaction when it names the case this one escalates.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
+async fn open_dunning_case_announced(
+    pool: &PgPool,
+    resolves: Option<Uuid>,
+    tenant: &str,
+    account_id: Uuid,
+    malo_id: &str,
+    lf_mp_id: &str,
+    stufe: i16,
+    amount_due_ct: i64,
+    due_date: Date,
+    fee: Option<MahnFee<'_>>,
+) -> anyhow::Result<Uuid> {
     let mut tx = pool.begin().await?;
+    if let Some(old) = resolves {
+        resolve_dunning_case(&mut *tx, old, tenant).await?;
+    }
     let case_id =
         create_dunning_case(&mut *tx, account_id, tenant, stufe, amount_due_ct, due_date).await?;
     let fee_draft = match &fee {
@@ -3592,6 +3739,16 @@ pub async fn create_dunning_case_announced(
         }
         _ => None,
     };
+    // § 288 Abs. 5 BGB — after the fee, so its Satz-3 Anrechnung counts it.
+    let pauschalen = match &fee {
+        Some(f) => {
+            stage_verzugspauschale(
+                &mut tx, f.ledger, tenant, account_id, malo_id, lf_mp_id, case_id, f.on,
+            )
+            .await?
+        }
+        None => Vec::new(),
+    };
 
     let ce = mako_service::CloudEvent::new(
         mako_service::source("accountingd", tenant),
@@ -3609,10 +3766,17 @@ pub async fn create_dunning_case_announced(
     );
     mako_service::outbox::enqueue(&mut tx, &ce).await?;
     tx.commit().await?;
-    if let (Some(f), Some(d)) = (fee, fee_draft)
+    if let (Some(f), Some(d)) = (&fee, fee_draft)
         && let Err(e) = crate::booking::book(f.ledger, pool, tenant, &d.idempotency).await
     {
         tracing::warn!(case_id = %case_id, error = %e, "accountingd: Mahngebühr booking deferred to recovery");
+    }
+    if let Some(f) = &fee {
+        for key in &pauschalen {
+            if let Err(e) = crate::booking::book(f.ledger, pool, tenant, key).await {
+                tracing::warn!(case_id = %case_id, %key, error = %e, "accountingd: Pauschale booking deferred to recovery");
+            }
+        }
     }
     Ok(case_id)
 }
@@ -3636,7 +3800,169 @@ pub struct MahnFee<'a> {
 /// customer 8 EUR short of the 100 EUR floor crosses it on the third Mahngebühr.
 /// Both are listed. They book to different GL accounts (§ 275 HGB separates
 /// Zinserträge from sonstige betriebliche Erträge) but share this character.
-pub const VERZUGSSCHADEN_KINDS: &[&str] = &["MAHNGEBUEHR", "VERZUGSZINSEN"];
+///
+/// The § 288 Abs. 5 BGB Pauschale is Verzugsschaden too: it is owed „bei
+/// Verzug des Schuldners", so it stays out of the § 41f Abs. 3 arrears and out
+/// of the consumption figure an Abschlag is reset from.
+pub const VERZUGSSCHADEN_KINDS: &[&str] = &["MAHNGEBUEHR", "VERZUGSZINSEN", "VERZUGSPAUSCHALE"];
+
+/// § 288 Abs. 5 S. 1 BGB — „eine Pauschale in Höhe von 40 Euro".
+pub const VERZUGSPAUSCHALE_CT: i64 = 4_000;
+
+/// The Entgeltforderungen § 288 Abs. 5 BGB attaches the Pauschale to: an
+/// invoice, and — by Satz 2 — „eine Abschlagszahlung oder sonstige
+/// Ratenzahlung".
+const ENTGELTFORDERUNGEN: &[&str] = &["RECHNUNG", "ABSCHLAG"];
+
+/// Stage the § 288 Abs. 5 BGB Pauschale for a non-Verbraucher account, in the
+/// dunning step's transaction; returns the drafts to book after the commit.
+///
+/// * **Satz 1** — one Pauschale of [`VERZUGSPAUSCHALE_CT`] per open
+///   Entgeltforderung, keyed on the receivable's entry, so a second Mahnung
+///   for the same claim books none. Only when `accounts.verbraucher` is
+///   `false`: a Verbraucher owes none, and an unrecorded status claims none.
+/// * **Satz 3** — „Die Pauschale nach Satz 1 ist auf einen geschuldeten
+///   Schadensersatz anzurechnen, soweit der Schaden in Kosten der
+///   Rechtsverfolgung begründet ist." The Mahngebühren are that Schaden. Over
+///   the current Verzug — everything booked since the oldest open
+///   Entgeltforderung — the Anrechnung is `min(Pauschalen, Mahngebühren)`,
+///   booked as a negative `VERZUGSPAUSCHALE` for whatever earlier steps have
+///   not yet credited. The customer is charged `max(Pauschalen,
+///   Mahngebühren)`, never both in full, and the Pauschale never goes negative.
+///
+/// Reads the staged and booked drafts of this transaction, so the Mahngebühr
+/// the step itself just staged is counted.
+///
+/// # Errors
+///
+/// Propagates database, ledger and staging errors; the caller's transaction
+/// rolls back whole.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
+pub async fn stage_verzugspauschale(
+    conn: &mut sqlx::PgConnection,
+    ledger: &PgLedger,
+    tenant: &str,
+    account_id: Uuid,
+    malo_id: &str,
+    lf_mp_id: &str,
+    case_id: Uuid,
+    on: Date,
+) -> anyhow::Result<Vec<String>> {
+    let verbraucher: Option<bool> = sqlx::query_scalar(
+        "SELECT verbraucher FROM accounts WHERE account_id = $1 AND tenant = $2",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("stage_verzugspauschale: account")?
+    .flatten();
+    if verbraucher != Some(false) {
+        return Ok(Vec::new());
+    }
+    let claims: Vec<_> = ledger
+        .open_receivables(lf_mp_id, malo_id)
+        .await?
+        .into_iter()
+        .filter(|r| {
+            r.outstanding_ct > 0
+                && r.entry_type
+                    .as_deref()
+                    .is_some_and(|k| ENTGELTFORDERUNGEN.contains(&k))
+        })
+        .collect();
+    let Some(seit) = claims.iter().map(|r| r.booking_date).min() else {
+        return Ok(Vec::new());
+    };
+
+    let mut keys = Vec::new();
+    for claim in &claims {
+        let key = format!("verzugspauschale:{}", claim.entry_id);
+        let staged: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM booking_drafts WHERE tenant = $1 AND key = $2)",
+        )
+        .bind(tenant)
+        .bind(&key)
+        .fetch_one(&mut *conn)
+        .await
+        .context("stage_verzugspauschale: claimed")?;
+        if staged {
+            continue;
+        }
+        let beleg = claim
+            .document
+            .clone()
+            .unwrap_or_else(|| claim.entry_id.to_string());
+        let d = draft(
+            malo_id,
+            lf_mp_id,
+            "VERZUGSPAUSCHALE",
+            VERZUGSPAUSCHALE_CT,
+            &key,
+            None,
+            Some(&beleg),
+            on,
+            on,
+            Some(&format!("Pauschale § 288 Abs. 5 BGB zu {beleg}")),
+            None,
+        );
+        crate::booking::stage(conn, ledger, tenant, &d).await?;
+        keys.push(key);
+    }
+
+    // Satz 3 over the current Verzug: what this account has been charged as
+    // Pauschale and as Mahngebühr since the oldest open claim, and what has
+    // already been credited.
+    let rows = sqlx::query(
+        r"SELECT key, entwurf FROM booking_drafts
+          WHERE tenant = $1 AND status IN ('offen', 'gebucht')
+            AND entwurf->>'malo_id' = $2 AND entwurf->>'lf_mp_id' = $3
+            AND entwurf->>'entry_type' IN ('VERZUGSPAUSCHALE', 'MAHNGEBUEHR')",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .fetch_all(&mut *conn)
+    .await
+    .context("stage_verzugspauschale: Verzugsschaden")?;
+    let (mut pauschalen, mut gebuehren, mut angerechnet) = (0i64, 0i64, 0i64);
+    for r in rows {
+        let d: PostEntry = serde_json::from_value(r.try_get("entwurf")?)
+            .context("stage_verzugspauschale: decode draft")?;
+        if d.booking_date < seit {
+            continue;
+        }
+        match (d.entry_type.as_str(), d.amount_ct > 0) {
+            ("MAHNGEBUEHR", _) => gebuehren += d.amount_ct,
+            ("VERZUGSPAUSCHALE", true) => pauschalen += d.amount_ct,
+            ("VERZUGSPAUSCHALE", false) => angerechnet -= d.amount_ct,
+            _ => {}
+        }
+    }
+    let anrechnung = pauschalen.min(gebuehren) - angerechnet;
+    if anrechnung > 0 {
+        let key = format!("verzugspauschale-anrechnung:{case_id}");
+        let d = draft(
+            malo_id,
+            lf_mp_id,
+            "VERZUGSPAUSCHALE",
+            -anrechnung,
+            &key,
+            None,
+            Some(&case_id.to_string()),
+            on,
+            on,
+            Some("Anrechnung der Mahngebühren auf die Pauschale (§ 288 Abs. 5 S. 3 BGB)"),
+            None,
+        );
+        crate::booking::stage(conn, ledger, tenant, &d).await?;
+        keys.push(key);
+    }
+    Ok(keys)
+}
 
 /// The **§ 41f Abs. 3 Zahlungsverzug** for one account, read from the ledger.
 ///
@@ -3826,15 +4152,64 @@ pub async fn settle_paid_dunning_cases(pool: &PgPool, tenant: &str) -> anyhow::R
     Ok(n)
 }
 
+/// What holds automatic dunning back: no Mahnstufe is opened or escalated, and
+/// no Mahngebühr charged, on an account with
+///
+/// * a live `dunning_locks` row of any ground — the table's own definition is a
+///   reason to stop dunning the account; for `insolvenz` § 87 InsO leaves the
+///   claim to the Insolvenzverfahren;
+/// * an `ACTIVE` payment plan — a Ratenzahlungsvereinbarung defers the claims
+///   it covers.
+///
+/// A lifted or lapsed lock and a plan that is no longer `ACTIVE` re-open
+/// dunning on the next run.
+const MAHNSPERRE: &str = r"AND NOT EXISTS (
+                SELECT 1 FROM dunning_locks il
+                WHERE il.account_id = a.account_id
+                  AND il.tenant = a.tenant
+                  AND il.aufgehoben_at IS NULL
+                  AND il.valid_from <= heute()
+                  AND (il.valid_to IS NULL OR il.valid_to >= heute()))
+            AND NOT EXISTS (
+                SELECT 1 FROM payment_plans ip
+                WHERE ip.account_id = a.account_id
+                  AND ip.tenant = a.tenant
+                  AND ip.status = 'ACTIVE')";
+
+/// What each Mahnstufe charges and how long it gives the customer to pay,
+/// index 0 = Mahnstufe 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mahnstufen {
+    /// The Mahngebühr in ct; zero books nothing.
+    pub gebuehr_ct: [i64; 3],
+    /// The Zahlungsfrist the Mahnung states, in calendar days from its issue.
+    /// The operator's decision — read from configuration, never defaulted.
+    pub zahlungsfrist_tage: [u16; 3],
+}
+
+impl Mahnstufen {
+    /// The due date a Mahnung of `stufe` (1–3) issued on `today` states.
+    #[must_use]
+    pub fn faellig(&self, stufe: usize, today: Date) -> Date {
+        today + time::Duration::days(i64::from(self.zahlungsfrist_tage[stufe - 1]))
+    }
+}
+
+/// The daily dunning run: re-derive the Verzug, close what is paid, open
+/// Mahnstufe 1 for newly overdue accounts and escalate 1 → 2 → 3, each Mahnung
+/// carrying the Gebühr and Zahlungsfrist `stufen` configures for its Stufe.
+///
+/// # Errors
+///
+/// Propagates database and ledger errors.
 pub async fn run_auto_dunning(
     ledger: &PgLedger,
     pool: &PgPool,
     tenant: &str,
     grace_days: i64,
-    fee_stufe1_ct: i64,
-    fee_stufe2_ct: i64,
-    fee_stufe3_ct: i64,
+    stufen: &Mahnstufen,
 ) -> anyhow::Result<AutoDunningResult> {
+    let [fee_stufe1_ct, fee_stufe2_ct, fee_stufe3_ct] = stufen.gebuehr_ct;
     let today = mako_fristen::heute();
 
     // Idempotency check — skip if already ran today.
@@ -3894,34 +4269,36 @@ pub async fn run_auto_dunning(
     // cutoff), checked per candidate below. `post_entry` refreshes `verzug_ct`
     // after every posting, so the cache is current for any account a payment
     // has touched.
-    let prefiltered: Vec<(Uuid, String, String, i64)> = sqlx::query(
-        r"SELECT a.account_id, a.malo_id, a.lf_mp_id, a.balance_ct
+    let prefiltered: Vec<(Uuid, String, String, i64)> =
+        sqlx::query(mako_service::sql::dynamic(format!(
+            r"SELECT a.account_id, a.malo_id, a.lf_mp_id, a.balance_ct
           FROM accounts a
           WHERE a.tenant = $1
             AND a.verzug_ct > 0
             AND a.anonymized_at IS NULL
             AND NOT EXISTS (SELECT 1 FROM eeg_belege b
                             WHERE b.tenant = a.tenant AND b.account_id = a.account_id)
+            {MAHNSPERRE}
             AND NOT EXISTS (
                 SELECT 1 FROM dunning_cases dc
                 WHERE dc.account_id = a.account_id
                   AND dc.resolved_at IS NULL
             )",
-    )
-    .bind(tenant)
-    .fetch_all(pool)
-    .await
-    .context("auto_dunning: find Mahnstufe1 candidates")?
-    .into_iter()
-    .map(|r| {
-        (
-            r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
-            r.try_get::<String, _>("malo_id").unwrap_or_default(),
-            r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
-            r.try_get::<i64, _>("balance_ct").unwrap_or(0),
-        )
-    })
-    .collect();
+        )))
+        .bind(tenant)
+        .fetch_all(pool)
+        .await
+        .context("auto_dunning: find Mahnstufe1 candidates")?
+        .into_iter()
+        .map(|r| {
+            (
+                r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
+                r.try_get::<String, _>("malo_id").unwrap_or_default(),
+                r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
+                r.try_get::<i64, _>("balance_ct").unwrap_or(0),
+            )
+        })
+        .collect();
 
     let mut candidates: Vec<(Uuid, String, String, i64)> = Vec::new();
     for cand in prefiltered {
@@ -3934,7 +4311,7 @@ pub async fn run_auto_dunning(
         }
     }
 
-    let stufe1_due_date = today + time::Duration::days(14); // 14-day payment deadline
+    let stufe1_due_date = stufen.faellig(1, today);
 
     for (account_id, malo_id, lf_mp_id, balance_ct) in &candidates {
         create_dunning_case_announced(
@@ -3964,10 +4341,11 @@ pub async fn run_auto_dunning(
     }
 
     // ── Step 2: Escalate Mahnstufe 1 → 2 ─────────────────────────────────────
-    let overdue_stufe1: Vec<(Uuid, Uuid, String, String, i64)> = sqlx::query(
-        // `a.balance_ct`, not `dc.amount_due_ct`: a Mahnung demands what is open
-        // **now**, so a partial payment between two Stufen has to reduce it.
-        r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
+    // `a.balance_ct`, not `dc.amount_due_ct`: a Mahnung demands what is open
+    // **now**, so a partial payment between two Stufen has to reduce it.
+    let overdue_stufe1: Vec<(Uuid, Uuid, String, String, i64)> =
+        sqlx::query(mako_service::sql::dynamic(format!(
+            r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
@@ -3980,35 +4358,34 @@ pub async fn run_auto_dunning(
             -- chain alive on the Mahngebühr the previous Stufe just charged.
             AND a.verzug_ct > 0
             AND NOT EXISTS (SELECT 1 FROM eeg_belege b
-                            WHERE b.tenant = a.tenant AND b.account_id = a.account_id)",
-    )
-    .bind(tenant)
-    .bind(today)
-    .fetch_all(pool)
-    .await
-    .context("auto_dunning: find overdue Mahnstufe1")?
-    .into_iter()
-    .map(|r| {
-        (
-            r.try_get::<Uuid, _>("id").unwrap_or(Uuid::nil()),
-            r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
-            r.try_get::<String, _>("malo_id").unwrap_or_default(),
-            r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
-            r.try_get::<i64, _>("amount_due_ct").unwrap_or(0),
-        )
-    })
-    .collect();
+                            WHERE b.tenant = a.tenant AND b.account_id = a.account_id)
+            {MAHNSPERRE}",
+        )))
+        .bind(tenant)
+        .bind(today)
+        .fetch_all(pool)
+        .await
+        .context("auto_dunning: find overdue Mahnstufe1")?
+        .into_iter()
+        .map(|r| {
+            (
+                r.try_get::<Uuid, _>("id").unwrap_or(Uuid::nil()),
+                r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
+                r.try_get::<String, _>("malo_id").unwrap_or_default(),
+                r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
+                r.try_get::<i64, _>("amount_due_ct").unwrap_or(0),
+            )
+        })
+        .collect();
 
-    let stufe2_due_date = today + time::Duration::days(14);
+    let stufe2_due_date = stufen.faellig(2, today);
 
     for (old_case_id, account_id, malo_id, lf_mp_id, amount_due_ct) in &overdue_stufe1 {
-        // Resolve the old Mahnstufe 1 case.
-        resolve_dunning_case(pool, *old_case_id, tenant)
-            .await
-            .context("auto_dunning: resolve Mahnstufe1")?;
-
-        create_dunning_case_announced(
+        // The old Mahnstufe is resolved in the transaction that opens the
+        // next one.
+        escalate_dunning_case_announced(
             pool,
+            *old_case_id,
             tenant,
             *account_id,
             malo_id,
@@ -4030,10 +4407,11 @@ pub async fn run_auto_dunning(
     }
 
     // ── Step 3: Escalate Mahnstufe 2 → 3 + Sperrauftrag ─────────────────────
-    let overdue_stufe2: Vec<(Uuid, Uuid, String, String, i64)> = sqlx::query(
-        // `a.balance_ct`, not `dc.amount_due_ct`: a Mahnung demands what is open
-        // **now**, so a partial payment between two Stufen has to reduce it.
-        r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
+    // `a.balance_ct`, not `dc.amount_due_ct`: a Mahnung demands what is open
+    // **now**, so a partial payment between two Stufen has to reduce it.
+    let overdue_stufe2: Vec<(Uuid, Uuid, String, String, i64)> =
+        sqlx::query(mako_service::sql::dynamic(format!(
+            r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
@@ -4046,34 +4424,34 @@ pub async fn run_auto_dunning(
             -- chain alive on the Mahngebühr the previous Stufe just charged.
             AND a.verzug_ct > 0
             AND NOT EXISTS (SELECT 1 FROM eeg_belege b
-                            WHERE b.tenant = a.tenant AND b.account_id = a.account_id)",
-    )
-    .bind(tenant)
-    .bind(today)
-    .fetch_all(pool)
-    .await
-    .context("auto_dunning: find overdue Mahnstufe2")?
-    .into_iter()
-    .map(|r| {
-        (
-            r.try_get::<Uuid, _>("id").unwrap_or(Uuid::nil()),
-            r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
-            r.try_get::<String, _>("malo_id").unwrap_or_default(),
-            r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
-            r.try_get::<i64, _>("amount_due_ct").unwrap_or(0),
-        )
-    })
-    .collect();
+                            WHERE b.tenant = a.tenant AND b.account_id = a.account_id)
+            {MAHNSPERRE}",
+        )))
+        .bind(tenant)
+        .bind(today)
+        .fetch_all(pool)
+        .await
+        .context("auto_dunning: find overdue Mahnstufe2")?
+        .into_iter()
+        .map(|r| {
+            (
+                r.try_get::<Uuid, _>("id").unwrap_or(Uuid::nil()),
+                r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
+                r.try_get::<String, _>("malo_id").unwrap_or_default(),
+                r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
+                r.try_get::<i64, _>("amount_due_ct").unwrap_or(0),
+            )
+        })
+        .collect();
 
-    let stufe3_due_date = today + time::Duration::days(7); // shorter final deadline
+    let stufe3_due_date = stufen.faellig(3, today);
 
     for (old_case_id, account_id, malo_id, lf_mp_id, amount_due_ct) in &overdue_stufe2 {
-        resolve_dunning_case(pool, *old_case_id, tenant)
-            .await
-            .context("auto_dunning: resolve Mahnstufe2")?;
-
-        create_dunning_case_announced(
+        // The old Mahnstufe is resolved in the transaction that opens the
+        // next one.
+        escalate_dunning_case_announced(
             pool,
+            *old_case_id,
             tenant,
             *account_id,
             malo_id,
@@ -4525,6 +4903,10 @@ pub struct PaymentPlanRow {
     pub billing_day: i16,
     pub status: String,
     pub dunning_case_id: Option<Uuid>,
+    /// The Abwendungsvereinbarung lock this plan is the Ratenzahlung of.
+    pub abwendung_lock_id: Option<Uuid>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub defaulted_at: Option<OffsetDateTime>,
     pub operator_sub: Option<String>,
     pub note: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -4559,6 +4941,11 @@ pub struct CreatePaymentPlanRequest {
     pub billing_day: i16,
     pub first_due_date: String, // ISO 8601 date
     pub dunning_case_id: Option<Uuid>,
+    /// The live `abwendungsvereinbarung` lock on the same account this plan is
+    /// the Ratenzahlung of (§ 41g Abs. 1 S. 3 Nr. 1 EnWG). When the plan goes
+    /// `DEFAULTED`, the lock is lifted with `vereinbarung_gebrochen`.
+    #[serde(default)]
+    pub abwendung_lock_id: Option<Uuid>,
     pub note: Option<String>,
     pub operator_sub: Option<String>,
 }
@@ -4609,11 +4996,31 @@ pub async fn create_payment_plan(
 
     let mut tx = pool.begin().await.context("create_payment_plan: begin")?;
 
+    // The link is what lets a missed instalment break the agreement by itself,
+    // so it must name the agreement this account actually holds.
+    if let Some(lock_id) = req.abwendung_lock_id {
+        let live: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM dunning_locks WHERE lock_id = $1 AND tenant = $2 \
+             AND account_id = $3 AND grund = 'abwendungsvereinbarung' AND aufgehoben_at IS NULL)",
+        )
+        .bind(lock_id)
+        .bind(tenant)
+        .bind(account_id)
+        .fetch_one(&mut *tx)
+        .await
+        .context("create_payment_plan: abwendung lock")?;
+        if !live {
+            anyhow::bail!(
+                "abwendung_lock_id {lock_id} is not a live Abwendungsvereinbarung lock on this account"
+            );
+        }
+    }
+
     let plan_id: Uuid = sqlx::query_scalar(
         r"INSERT INTO payment_plans
               (account_id, tenant, total_ct, installment_ct, installment_count,
-               billing_day, dunning_case_id, operator_sub, note)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+               billing_day, dunning_case_id, operator_sub, note, abwendung_lock_id)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
           RETURNING plan_id",
     )
     .bind(account_id)
@@ -4625,6 +5032,7 @@ pub async fn create_payment_plan(
     .bind(req.dunning_case_id)
     .bind(req.operator_sub.as_deref())
     .bind(req.note.as_deref())
+    .bind(req.abwendung_lock_id)
     .fetch_one(&mut *tx)
     .await
     .context("create_payment_plan")?;
@@ -4735,6 +5143,280 @@ pub async fn cancel_payment_plan(
         anyhow::bail!("payment plan not found or not ACTIVE: {plan_id}");
     }
     Ok(())
+}
+
+/// Buchungsarten that move cash on the Kontokorrent: a `ZAHLUNG` (negative)
+/// pays, a `BANKRUECKLAST` or `SEPA_STORNO` (positive) takes a payment back.
+pub const PLAN_CASH_KINDS: &[&str] = &["ZAHLUNG", "BANKRUECKLAST", "SEPA_STORNO"];
+
+/// What one [`run_payment_plans`] pass changed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PlanRunSummary {
+    /// Instalments newly marked `PAID`.
+    pub paid: u64,
+    /// Plans with every instalment `PAID` or `WAIVED`, now `COMPLETED`.
+    pub completed: u64,
+    /// Plans with an instalment past due and unpaid, now `DEFAULTED`.
+    pub defaulted: u64,
+    /// Of those, plans whose Abwendungsvereinbarung lock was lifted with
+    /// `vereinbarung_gebrochen` (§ 41g Abs. 1 S. 11 EnWG).
+    pub vereinbarungen_gebrochen: u64,
+}
+
+/// Match payments to instalments and default the plans that missed one, for
+/// every `ACTIVE` plan of `tenant` — one transaction per plan.
+///
+/// **Matching.** The cash booked on the plan's account since the day the plan
+/// was made ([`PLAN_CASH_KINDS`], read from `booking_drafts`) pays the
+/// instalments in schedule order, `WAIVED` ones skipped. It is recomputed
+/// absolutely each pass, like every other cache here: an instalment the cash
+/// covers is `PAID`, naming the payment that completed it and that payment's
+/// booking date; one a Rücklast has uncovered again returns to `PENDING`. The
+/// order is the ledger's own: the FIFO Zahlungszuordnung settles the oldest
+/// debt — which a plan's arrears are — first.
+///
+/// **Default.** An instalment still `PENDING` after its due date (against
+/// `heute()`) turns `OVERDUE` and the plan `DEFAULTED`, together. When the plan
+/// is the Ratenzahlung of an Abwendungsvereinbarung, the same transaction
+/// applies § 41g Abs. 1 S. 11 EnWG through [`vereinbarung_gebrochen`]: the lock
+/// is lifted and the Ankündigung cleared, so the case returns to a fresh
+/// § 41f Abs. 5 Ankündigung with no operator call.
+///
+/// `COMPLETED`, `CANCELLED` and `DEFAULTED` plans are never touched.
+///
+/// # Errors
+///
+/// Propagates database errors; a pass stops at the first failing plan, whose
+/// transaction rolls back whole.
+pub async fn run_payment_plans(pool: &PgPool, tenant: &str) -> anyhow::Result<PlanRunSummary> {
+    let plans: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT plan_id FROM payment_plans WHERE tenant = $1 AND status = 'ACTIVE' \
+         ORDER BY created_at",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("run_payment_plans: list")?;
+    let mut summary = PlanRunSummary::default();
+    for plan_id in plans {
+        let mut tx = pool.begin().await.context("run_payment_plans: begin")?;
+        settle_plan(&mut tx, tenant, plan_id, &mut summary).await?;
+        tx.commit().await.context("run_payment_plans: commit")?;
+    }
+    Ok(summary)
+}
+
+/// One plan's pass of [`run_payment_plans`], inside the caller's transaction.
+async fn settle_plan(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    plan_id: Uuid,
+    summary: &mut PlanRunSummary,
+) -> anyhow::Result<()> {
+    // Locked, and re-checked ACTIVE: a concurrent cancel wins or waits.
+    let Some(plan) = sqlx::query(
+        r"SELECT p.account_id, p.abwendung_lock_id, a.malo_id, a.lf_mp_id,
+                 (p.created_at AT TIME ZONE 'Europe/Berlin')::date AS beginn
+          FROM payment_plans p
+          JOIN accounts a ON a.account_id = p.account_id
+          WHERE p.plan_id = $1 AND p.tenant = $2 AND p.status = 'ACTIVE'
+          FOR UPDATE OF p",
+    )
+    .bind(plan_id)
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("settle_plan: plan")?
+    else {
+        return Ok(());
+    };
+    let account_id: Uuid = plan.try_get("account_id")?;
+    let lock_id: Option<Uuid> = plan.try_get("abwendung_lock_id")?;
+    let malo_id: String = plan.try_get("malo_id")?;
+    let lf_mp_id: String = plan.try_get("lf_mp_id")?;
+    let beginn: Date = plan.try_get("beginn")?;
+
+    // The cash, oldest first: (entry, booking date, money in).
+    let rows = sqlx::query(
+        r"SELECT entry_id, entwurf FROM booking_drafts
+          WHERE tenant = $1 AND status = 'gebucht'
+            AND entwurf->>'malo_id' = $2 AND entwurf->>'lf_mp_id' = $3
+            AND entwurf->>'entry_type' = ANY($4)
+          ORDER BY created_at",
+    )
+    .bind(tenant)
+    .bind(&malo_id)
+    .bind(&lf_mp_id)
+    .bind(PLAN_CASH_KINDS)
+    .fetch_all(&mut *conn)
+    .await
+    .context("settle_plan: cash")?;
+    let mut cash: Vec<(Uuid, Date, i64)> = Vec::with_capacity(rows.len());
+    for r in rows {
+        let draft: PostEntry = serde_json::from_value(r.try_get("entwurf")?)
+            .context("settle_plan: decode booking draft")?;
+        if draft.booking_date >= beginn {
+            cash.push((r.try_get("entry_id")?, draft.booking_date, -draft.amount_ct));
+        }
+    }
+    cash.sort_by_key(|&(_, on, _)| on);
+
+    let instalments = sqlx::query(
+        "SELECT id, amount_ct, status, due_date FROM payment_plan_installments \
+         WHERE plan_id = $1 AND tenant = $2 AND status <> 'WAIVED' ORDER BY installment_no",
+    )
+    .bind(plan_id)
+    .bind(tenant)
+    .fetch_all(&mut *conn)
+    .await
+    .context("settle_plan: instalments")?;
+
+    let today = mako_fristen::heute();
+    let mut owed = 0i64;
+    let mut open = 0usize;
+    let mut overdue: Vec<Uuid> = Vec::new();
+    for i in &instalments {
+        let id: Uuid = i.try_get("id")?;
+        let status: String = i.try_get("status")?;
+        let due: Date = i.try_get("due_date")?;
+        owed += i.try_get::<i64, _>("amount_ct")?;
+        // The payment whose running total first reaches what is owed through
+        // this instalment completed it.
+        let mut running = 0i64;
+        let completed_by = cash.iter().find(|&&(_, _, amount)| {
+            running += amount;
+            running >= owed
+        });
+        // A covering payment that a later Rücklast took back does not count:
+        // the instalment is paid only while the net cash covers it.
+        let net: i64 = cash.iter().map(|&(_, _, a)| a).sum();
+        match completed_by {
+            Some(&(entry, on, _)) if net >= owed => {
+                if status != "PAID" {
+                    sqlx::query(
+                        "UPDATE payment_plan_installments SET status = 'PAID', \
+                         ledger_entry_id = $2, \
+                         paid_at = ($3::date)::timestamp AT TIME ZONE 'Europe/Berlin' \
+                         WHERE id = $1",
+                    )
+                    .bind(id)
+                    .bind(entry)
+                    .bind(on)
+                    .execute(&mut *conn)
+                    .await
+                    .context("settle_plan: mark paid")?;
+                    summary.paid += 1;
+                }
+            }
+            _ => {
+                if status == "PAID" {
+                    sqlx::query(
+                        "UPDATE payment_plan_installments SET status = 'PENDING', \
+                         ledger_entry_id = NULL, paid_at = NULL WHERE id = $1",
+                    )
+                    .bind(id)
+                    .execute(&mut *conn)
+                    .await
+                    .context("settle_plan: uncover")?;
+                }
+                open += 1;
+                if due < today {
+                    overdue.push(id);
+                }
+            }
+        }
+    }
+
+    if open == 0 {
+        sqlx::query(
+            "UPDATE payment_plans SET status = 'COMPLETED', updated_at = now() WHERE plan_id = $1",
+        )
+        .bind(plan_id)
+        .execute(&mut *conn)
+        .await
+        .context("settle_plan: complete")?;
+        summary.completed += 1;
+        return Ok(());
+    }
+    if overdue.is_empty() {
+        return Ok(());
+    }
+    sqlx::query("UPDATE payment_plan_installments SET status = 'OVERDUE' WHERE id = ANY($1)")
+        .bind(&overdue)
+        .execute(&mut *conn)
+        .await
+        .context("settle_plan: overdue")?;
+    sqlx::query(
+        "UPDATE payment_plans SET status = 'DEFAULTED', defaulted_at = now(), \
+         updated_at = now() WHERE plan_id = $1",
+    )
+    .bind(plan_id)
+    .execute(&mut *conn)
+    .await
+    .context("settle_plan: default")?;
+    summary.defaulted += 1;
+    tracing::warn!(%plan_id, %account_id, overdue = overdue.len(), "accountingd: payment plan DEFAULTED");
+    if let Some(lock_id) = lock_id
+        && vereinbarung_gebrochen(&mut *conn, lock_id, tenant)
+            .await?
+            .is_some()
+    {
+        summary.vereinbarungen_gebrochen += 1;
+    }
+    Ok(())
+}
+
+/// § 41g Abs. 1 S. 11 EnWG — the customer did not keep the
+/// Abwendungsvereinbarung: lift its lock with `vereinbarung_gebrochen`, clear
+/// the Ankündigung on the account's open cases and announce
+/// `de.accounting.abwendung.gebrochen`, all in the caller's transaction.
+///
+/// The supplier may interrupt again, „unter Beachtung des § 41f Absatz 1 Satz 2
+/// und Absatz 5" — so the earlier Ankündigung does not carry over and the case
+/// returns to a fresh 8-Werktage announcement.
+///
+/// Returns the account the lock sat on, or `None` when it was already lifted
+/// or does not exist.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn vereinbarung_gebrochen(
+    conn: &mut sqlx::PgConnection,
+    lock_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<Uuid>> {
+    let Some(account_id) =
+        lift_dunning_lock(&mut *conn, lock_id, tenant, "vereinbarung_gebrochen").await?
+    else {
+        return Ok(None);
+    };
+    clear_ankuendigung(&mut *conn, account_id, tenant).await?;
+    let ids: Option<(String, String)> = sqlx::query_as(
+        "SELECT malo_id, lf_mp_id FROM accounts WHERE account_id = $1 AND tenant = $2",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("vereinbarung_gebrochen: account")?;
+    if let Some((malo_id, lf_mp_id)) = ids {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("accountingd", tenant),
+            mako_events::accounting::ABWENDUNG_GEBROCHEN,
+            &malo_id,
+            serde_json::json!({
+                "malo_id":         malo_id,
+                "lf_mp_id":        lf_mp_id,
+                "lock_id":         lock_id.to_string(),
+                "rechtsgrundlage": "\u{a7}41g Abs. 1 S. 11 EnWG",
+                "folge": "Unterbrechung wieder zul\u{e4}ssig; \u{a7}41f Abs. 1 S. 2 und \
+                          Abs. 5 sind erneut zu beachten (neue Ank\u{fc}ndigung, 8 Werktage)",
+            }),
+        );
+        mako_service::outbox::enqueue(&mut *conn, &ce).await?;
+    }
+    Ok(Some(account_id))
 }
 
 // ── Bank import deduplication (CAMT.054) ──────────────────────────────────────

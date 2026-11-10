@@ -79,7 +79,7 @@ async fn post_unrouted(edifact: String) -> (SlateDbStore, serde_json::Value) {
         max_body_bytes: 1024 * 1024,
         partner_store: None,
         tenant_id: tenant,
-        dl_sink: Arc::new(store.as_dead_letter_sink()),
+        dl_sink: Arc::new(store.as_dead_letter_sink(tenant)),
         dispatcher: None,
         contrl_ack: None,
     });
@@ -124,6 +124,38 @@ async fn an_unprocessed_pid_is_answered_z31() {
         1,
         "the refusal is recorded"
     );
+}
+
+/// A dead letter is a record someone sees: the refused 55001 yields one
+/// `DeadLetterRecorded` notice beside its record, in the outbox the ERP
+/// worker drains, mapped to `de.mako.dead-letter.recorded` and naming the PID
+/// and the message.
+#[tokio::test]
+async fn a_dead_lettered_message_yields_one_event() {
+    let (store, body) = post_unrouted(skeleton(edi_energy::MessageType::Utilmd, 55001)).await;
+    let notices: Vec<_> = store
+        .pending_now(50)
+        .await
+        .expect("outbox")
+        .into_iter()
+        .filter(|m| &*m.message_type == mako_engine::dead_letter::DEAD_LETTER_RECORDED)
+        .collect();
+    let [notice] = notices.as_slice() else {
+        panic!("one notice per dead letter, got {} — {body}", notices.len());
+    };
+    assert!(makod::erp_adapter::is_erp_notification(
+        &notice.message_type
+    ));
+    assert_eq!(notice.payload["pid"], 55001);
+    assert_eq!(notice.payload["sender"], SENDER);
+    assert!(
+        notice.payload["message_ref"]
+            .as_str()
+            .is_some_and(|r| !r.is_empty())
+    );
+    let records = store.list_dead_letters(10).await.expect("dead letters");
+    assert_eq!(records.len(), 1);
+    assert_eq!(notice.payload["reason"], records[0].reason_label);
 }
 
 /// An APERAK is never answered with an APERAK (§ 2, S. 9), routed or not.

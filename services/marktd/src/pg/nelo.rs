@@ -170,6 +170,21 @@ impl PgNeLoRepository {
         tenant: &str,
         patch: &mako_markt::repository::NeloStammdatenPatch,
     ) -> Result<bool, MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::patch_stammdaten_tx(&mut conn, nelo_id, tenant, patch).await
+    }
+
+    /// [`Self::patch_stammdaten`] on the caller's transaction.
+    pub async fn patch_stammdaten_tx(
+        conn: &mut sqlx::PgConnection,
+        nelo_id: &str,
+        tenant: &str,
+        patch: &mako_markt::repository::NeloStammdatenPatch,
+    ) -> Result<bool, MdmError> {
         if patch.is_empty() {
             return Ok(false);
         }
@@ -185,7 +200,7 @@ impl PgNeLoRepository {
         .bind(tenant)
         .bind(&patch.netzebene)
         .bind(patch.steuerkanal)
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?
         .rows_affected();

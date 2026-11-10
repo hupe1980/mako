@@ -82,16 +82,17 @@ pub enum ReleaseKind {
         /// Trailing letter qualifier (`a`, `b`, …).
         letter: char,
     },
-    /// Short two-component form: `<major>.<minor><letter>`.
+    /// Short two-component form: `<major>.<minor>[letter]`.
     ///
-    /// Examples: `2.5a`, `2.4c`, `1.0a`.
+    /// Examples: `2.5a`, `2.4c`, `2.1` — BDEW publishes a new release without
+    /// a letter and its corrigenda with one.
     Short {
         /// Major version component.
         major: u32,
         /// Minor version component.
         minor: u32,
-        /// Trailing letter qualifier (`a`, `b`, …).
-        letter: char,
+        /// Trailing corrigendum letter, `None` when the code carries none.
+        letter: Option<char>,
     },
     /// Strom track: `S<major>.<minor>[letter]`.
     ///
@@ -236,18 +237,23 @@ fn parse_dotted(s: &str) -> Option<ReleaseKind> {
 }
 
 fn parse_short(s: &str) -> Option<ReleaseKind> {
-    // Expect exactly one '.' and a trailing letter: "2.5a"
+    // Exactly one '.' and an optional trailing letter: "2.5a", "2.1".
     let dot = s.find('.')?;
     if s.rfind('.') != Some(dot) {
         return None; // two or more dots → not short form
     }
     let major: u32 = s[..dot].parse().ok()?;
-    let tail = &s[dot + 1..]; // "5a"
-    let letter = tail.chars().last()?;
-    if !letter.is_ascii_lowercase() {
+    let tail = &s[dot + 1..]; // "5a" or "1"
+    let last = tail.chars().last()?;
+    let (digits, letter) = if last.is_ascii_lowercase() {
+        (&tail[..tail.len() - 1], Some(last))
+    } else {
+        (tail, None)
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let minor: u32 = tail[..tail.len() - 1].parse().ok()?;
+    let minor: u32 = digits.parse().ok()?;
     Some(ReleaseKind::Short {
         major,
         minor,
@@ -497,8 +503,8 @@ fn compare_kinds(a: &ReleaseKind, b: &ReleaseKind) -> Ordering {
                 minor: mib,
                 letter: lb,
             },
-        ) => ma.cmp(mb).then(mi.cmp(mib)).then(la.cmp(lb)),
-        (
+        )
+        | (
             ReleaseKind::Strom {
                 major: ma,
                 minor: mi,
@@ -588,9 +594,48 @@ mod release_kind_tests {
             ReleaseKind::Short {
                 major: 2,
                 minor: 5,
-                letter: 'a'
+                letter: Some('a')
             }
         );
+    }
+
+    /// A release BDEW publishes without a corrigendum letter (IFTSTA 2.1,
+    /// APERAK 2.2, MSCONS 2.5) is the same track as its lettered
+    /// predecessors: read as `Opaque`, a track-filtered lookup skips it and
+    /// renders the previous release.
+    #[test]
+    fn a_short_release_without_a_letter_stays_on_its_track() {
+        let k = ReleaseKind::parse("2.1");
+        assert_eq!(
+            k,
+            ReleaseKind::Short {
+                major: 2,
+                minor: 1,
+                letter: None
+            }
+        );
+        assert_eq!(k.track(), ReleaseTrack::Short);
+        assert_eq!(
+            Release::new("2.0g").same_track_cmp(&Release::new("2.1")),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            Release::new("2.1").same_track_cmp(&Release::new("2.1a")),
+            Some(Ordering::Less)
+        );
+    }
+
+    /// Every bundled profile's release parses into a known track, so no
+    /// profile drops out of a track-filtered lookup.
+    #[test]
+    fn no_bundled_profile_has_an_opaque_release() {
+        let opaque: Vec<String> = crate::registry::ReleaseRegistry::global()
+            .all_profiles()
+            .iter()
+            .filter(|p| p.release().track() == ReleaseTrack::Other)
+            .map(|p| format!("{:?} {}", p.message_type(), p.release().as_str()))
+            .collect();
+        assert!(opaque.is_empty(), "opaque releases: {opaque:?}");
     }
 
     #[test]

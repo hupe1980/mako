@@ -38,11 +38,13 @@ pub struct OutputdConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeliveryConfig {
-    /// Run the delivery worker. Default **true**.
+    /// Set deliveries going and run the relay workers. Default **true**.
     ///
     /// Off means documents are still stored and served — a portal customer can
     /// still fetch an invoice — but nothing is pushed anywhere and queued
     /// deliveries stay `PENDING`, visibly, rather than silently succeeding.
+    /// A pushed delivery retries with backoff and is `FAILED` once the shared
+    /// outbox policy gives up on it.
     #[serde(default = "default_true")]
     pub enabled: bool,
 
@@ -74,13 +76,6 @@ pub struct DeliveryConfig {
     /// [`DeliveryConfig::default_subject`].
     #[serde(default)]
     pub subjects: std::collections::HashMap<String, String>,
-
-    /// How many attempts before a delivery is `FAILED`. Default **8**, which
-    /// with the doubling backoff spans about half a day — long enough that a
-    /// relay outage does not permanently fail a Mahnung, short enough that a
-    /// misconfigured URL surfaces the same day.
-    #[serde(default = "default_max_attempts")]
-    pub max_attempts: i32,
 }
 
 impl DeliveryConfig {
@@ -119,9 +114,6 @@ impl DeliveryConfig {
 const fn default_true() -> bool {
     true
 }
-const fn default_max_attempts() -> i32 {
-    8
-}
 
 impl Default for DeliveryConfig {
     fn default() -> Self {
@@ -135,12 +127,20 @@ impl Default for DeliveryConfig {
             erp_api_key: None,
             from_address: None,
             subjects: std::collections::HashMap::new(),
-            max_attempts: default_max_attempts(),
         }
     }
 }
 
 impl DeliveryConfig {
+    /// Whether `POST` deliveries are pushed to a print service rather than
+    /// left in the spool for one to pull.
+    #[must_use]
+    pub fn has_postal_relay(&self) -> bool {
+        self.postal_relay_url
+            .as_deref()
+            .is_some_and(|u| !u.is_empty())
+    }
+
     /// The subject line for a document kind.
     #[must_use]
     pub fn subject_for(&self, kind: &str) -> String {
@@ -158,6 +158,7 @@ impl DeliveryConfig {
             b"INVOICE" => "Ihre Rechnung",
             b"MAHNUNG" => "Zahlungserinnerung",
             b"PREISANPASSUNG" => "Änderung Ihrer Preise",
+            b"GEBUEHRENBESCHEID" => "Gebührenbescheid",
             _ => "Ihr Dokument",
         }
     }

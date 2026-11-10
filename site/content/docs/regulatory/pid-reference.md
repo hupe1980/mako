@@ -25,8 +25,7 @@ a workflow by PID.
 | **Crate / Workflow** | The `mako-*` crate and `workflow-name` that registers this PID in `PidRouter` — see below |
 
 Reading the **Crate / Workflow** column: `—` means no workflow registers the PID,
-and the cell says why. `⁽ᴺᴮ⁾` marks a registration that only happens in an
-NB-role deployment. Several entries separated by ` · ` mean more than one crate
+and the cell says why. Several entries separated by ` · ` mean more than one crate
 registers the PID; makod loads the crates its `[deployment] rollen` name, and
 when two loaded crates claim one PID, one module owns it and the engine
 build logs a warning — unless the PID is registered per Sparte, in which case
@@ -136,19 +135,18 @@ NOMRES 4.7 §4. See [DVGW EDI](@/docs/reference/dvgw.md) for the parsing archite
 
 ## Reading the “Crate / Workflow” column
 
-A named crate and workflow owns the PID; two groups of credited PIDs are not
-routed inbound:
+A named crate and workflow owns the PID; some credited PIDs are not routed
+inbound, or not on every deployment:
 
 | Situation | PIDs |
 |---|---|
-| **Outbound-only** — generated or dispatched by mako, never received | 17134, 17135 (ORDERS sent by `GpkeKonfigurationWorkflow`); 19003, 19004 (the MSBA's answer to ORDERS 17002) |
-| **Role-conditional** — registered only when the deployment roles name `NMSB` | 19001, 19002 (ORDRSP Bestellbestätigung/Ablehnung, answering ORDERS 17001) — GPKE Konfiguration claims the same two on an NB instance |
+| **Outbound-only** — generated or dispatched by mako, never received | 19003, 19004 (the MSBA's answer to ORDERS 17002) |
+| **Role-conditional** — registered only for a MSB role | 19001, 19002 (ORDRSP Bestellbestätigung/Ablehnung, answering ORDERS 17001) |
+| **Role-conditional** — an `lf-strom` / `lf-gas` deployment registers only the MaBiS and GaBi Gas PIDs a Lieferant is party to | MaBiS 13003, 13010–13012, 13023, 17201, 17202, 17210, 17211, 21000, 55062, 55063, 55065, 55066, 55073, 55199–55202 (`mako_mabis::LF_PIDS`); GaBi Gas 13013 |
 | **Role-conditional** — registered only when the deployment roles name a MSB (`MSB`, `NMSB`, `AMSB`) | 17004, 17102, 17113 (`gpke-datenabruf-msb`) and 17116 Strom (`gpke-sperrung-msb`) — the ORDERS a MSB Strom receives; a NB or LF deployment sends them and registers only their ORDRSP answers |
-| **Named but not routed** — outside the band the named workflow registers | 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55553 |
 
-An inbound message carrying one of the last group is dead-lettered as
-`UnknownPid` and counted by
-`makod_dead_letter_recorded_total{reason="unknown_pid:N"}`.
+A PID the router does not register is dead-lettered as `UnknownPid` and
+counted by `makod_dead_letter_recorded_total{reason="unknown_pid:N"}`.
 
 ### Meldepflichten — obligations nothing waits for
 
@@ -217,7 +215,7 @@ opened the process.
 | 55063 | Deaktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55064 | Antwort | MaBiS | NB → NB · BIKO → NB · BIKO → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55065 | Lieferantenclearingliste | MaBiS | NB → LF · ÜNB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
-| 55066 | Korrekturliste zu Lieferantenclearingliste | MaBiS | LF → NB · LF → ÜNB | `E_0047` (NB) · `E_0004` (ÜNB) | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
+| 55066 | Korrekturliste zu Lieferantenclearingliste | MaBiS | LF → NB · LF → ÜNB | `E_0047` / `E_0049` (NB) · `E_0014` / `E_0004` (ÜNB) | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
 | 55067 | Bilanzkreiszuordnungsliste | MaBiS | NB → BKV · ÜNB → BKV | `E_0068` (NB) · `E_0039` (ÜNB) | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
 | 55069 | Clearingliste DZR | MaBiS | BIKO → NB · BIKO → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
 | 55070 | Clearingliste BAS | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
@@ -233,18 +231,18 @@ opened the process.
 | 55095 | Antwort auf GDA erz. MaLo | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-geschaeftsdatenanfrage` |
 | 55109 | Änderung Daten der MaLo | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55110 | Änderung Daten der MaLo | GPKE Teil 4 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55126 | Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
+| 55126 | Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
 | 55136 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55137 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | NB → LF | 55109 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55156 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | LF → NB | 55126 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnungsdaten` |
 | 55168 | Verpflichtungsanfrage / Aufforderung | WiM Strom Teil 1 | NB → gMSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55169 | Bestätigung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55170 | Ablehnung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 55173 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55175 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55177 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | MSB → NB | 55173 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55180 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | LF → NB | 55175 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55194 | Antowrt auf GDA (Strom an Gas) | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55173 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
+| 55175 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
+| 55177 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | MSB → NB | 55173 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
+| 55180 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | LF → NB | 55175 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
+| 55194 | Antowrt auf GDA (Strom an Gas) | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
 | 55195 | Bilanzierungsgebietsclearingliste | MaBiS | ÜNB → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
 | 55196 | Antwort auf Bilanzierungsgebietsclearingliste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
 | 55197 | Aktivierung ZP tägliche AAÜZ | MaBiS | ANB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
@@ -252,7 +250,7 @@ opened the process.
 | 55199 | Aktivierung ZP LF-AASZR | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55200 | Deaktivierung ZP LF-AASZR | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55201 | LF-AACL | MaBiS | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
-| 55202 | Korrekturliste LF-AACL | MaBiS | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
+| 55202 | Korrekturliste LF-AACL | MaBiS | LF → NB | `E_0097` / `E_0096` | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
 | 55203 | Aktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55204 | Antwort auf Aktivierung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55205 | Weiterleitung Aktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
@@ -265,12 +263,12 @@ opened the process.
 | 55212 | Deaktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55213 | Antwort auf Deaktivierung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55214 | Weiterleitung Deaktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
-| 55218 | Abr.-Daten NNA | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
+| 55218 | Abr.-Daten NNA | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
 | 55220 | Rückmeldung/Anfrage Abr.-Daten NNA | GPKE Teil 2 | LF → NB | 55218 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnungsdaten` |
 | 55223 | DZÜ-Liste | MaBiS | ÜNB → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
 | 55224 | Antwort auf DZÜ-Liste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
-| 55225 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55227 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | 55225 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55225 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
+| 55227 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | 55225 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
 | 55230 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55232 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | NB → LF | 55230 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55235 | Zuordnung ZP der NGZ zur NZR | AWH MaBiS-Ergänzung | NB → NB · NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
@@ -282,22 +280,22 @@ opened the process.
 | 55241 | Antwort auf Beendigung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | LF → VNB | 55240 | ✅ | — | ✅ | ✅ | `mako-emob` `emob-zuordnungsende` |
 | 55242 | Abmeldung aus dem Modell 2 | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → VNB | — | ✅ | — | ✅ | ✅ | `mako-emob` `emob-abmeldung` |
 | 55243 | Antwort auf Abmeldung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | VNB → NB | 55242 | ✅ | — | ✅ | ✅ | `mako-emob` `emob-abmeldung` |
-| 55553 | Daten auf individuelle Bestellung | GPKE Teil 4 | MSB → NB · MSB → LF · MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55553 | Daten auf individuelle Bestellung | GPKE Teil 4 | MSB → NB · MSB → LF · MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
 | 55555 | Anfrage Daten der individuellen Bestellung | GPKE Teil 4 | NB → MSB · LF → MSB · MSB → MSB | 55553 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-anfrage-bestellung` |
 | 55557 | Änderung MSB-Abr.-Daten der MaLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
 | 55559 | Rückmeldung/Anfrage MSB-Abr.-Daten der MaLo | GPKE Teil 4 | NB → MSB | 55557 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55600 | Anmeldung neuer verb. MaLo | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-neuanlage` |
 | 55601 | Anmeldung neuer erz. MaLo | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-neuanlage` |
-| 55602 | Bestätigung Anmeldung neuer verb. MaLo | GPKE Teil 2 | NB → LF | 55600 | ✅ | — | ✅ | ✅ | — |
-| 55603 | Bestätigung Anmeldung neuer erz. MaLo | GPKE Teil 2 | NB → LF | 55601 | ✅ | — | ✅ | ✅ | — |
-| 55604 | Ablehnung Anmeldung neuer verb. MaLo | GPKE Teil 2 | NB → LF | 55600 | ✅ | — | ✅ | ✅ | — |
-| 55605 | Ablehnung Anmeldung neuer erz. MaLo | GPKE Teil 2 | NB → LF | 55601 | ✅ | — | ✅ | ✅ | — |
+| 55602 | Bestätigung Anmeldung neuer verb. MaLo | GPKE Teil 2 | NB → LF | 55600 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
+| 55603 | Bestätigung Anmeldung neuer erz. MaLo | GPKE Teil 2 | NB → LF | 55601 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
+| 55604 | Ablehnung Anmeldung neuer verb. MaLo | GPKE Teil 2 | NB → LF | 55600 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
+| 55605 | Ablehnung Anmeldung neuer erz. MaLo | GPKE Teil 2 | NB → LF | 55601 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55607 | Ankündigung Zuordnung / Zuordnung des LF zur MaLo/ Tranche | GPKE Teil 2 | NB → LFN (Notiz "LF des Unternehmens Netzbetreiber") · NB → LFN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` |
 | 55608 | Bestätigung Zuordnung des LF zur MaLo/ Tranche | GPKE Teil 2 | LFN (Notiz "LF des Unternehmens Netzbetreiber") → NB · LFN → NB | — | ✅ | — | ✅ | ✅ | — |
 | 55609 | Ablehnung Zuordnung des LF zur MaLo/ Tranche | GPKE Teil 2 | LFN (Notiz "LF des Unternehmens Netzbetreiber") → NB · LFN → NB | — | ✅ | — | ✅ | ✅ | — |
 | 55611 | Beendigung der Zuordnung des MSB zur MaLo / MeLo | GPKE Teil 2 | NB → MSB · NB → MSBZ | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-zuordnungsmeldung` |
-| 55613 | Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55614 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | ÜNB → NB | 55613 | ✅ | — | ✅ | ✅ | — |
+| 55613 | Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — (NB → ÜNB; the receiver is a ÜNB, which mako does not deploy) |
+| 55614 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | ÜNB → NB | 55613 | ✅ | — | ✅ | ✅ | — (ÜNB → NB; the NB's Bearbeitungsstand draws on E_0618 / E_0613, not catalogued) |
 | 55615 | Änderung Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55616 | Änderung Daten der MaLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55617 | Änderung Daten der TR | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
@@ -352,10 +350,10 @@ opened the process.
 | 55669 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | MSB → MSB | 55663 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55670 | Stammdaten BK-Treue | GPKE Teil 4 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55671 | Rückmeldung auf Stammdaten BK-Treue | GPKE Teil 4 | ÜNB → NB | 55670 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55672 | Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
+| 55672 | Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
 | 55673 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | LF → NB | 55672 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnungsdaten` |
-| 55674 | Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55675 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | ÜNB → NB | 55674 | ✅ | — | ✅ | ✅ | — |
+| 55674 | Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — (NB → ÜNB; the receiver is a ÜNB, which mako does not deploy) |
+| 55675 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | ÜNB → NB | 55674 | ✅ | — | ✅ | ✅ | — (ÜNB → NB; the NB's Bearbeitungsstand draws on E_0618 / E_0613, not catalogued) |
 | 55684 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55685 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | ÜNB → MSB | 55684 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55686 | Änderung Daten der Tranche | GPKE Teil 4 | MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
@@ -406,7 +404,7 @@ opened the process.
 | 44022 | Anfrage nach Stornierung | WiM Gas / GeLi Gas 2.0 | Sender → Empf. · orig. → orig. | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung` |
 | 44023 | Bestätigung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung-lf` |
 | 44024 | Ablehnung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung-lf` |
-| 44035 | Antwort auf die Geschäftsdatenanfrage | GeLi Gas 2.0 | NB → LF | 17101 | — | ✅ | ✅ | ✅ | — |
+| 44035 | Antwort auf die Geschäftsdatenanfrage | GeLi Gas 2.0 | NB → LF | 17101 | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-geschaeftsdatenanfrage` |
 | 44036 | Informationsmeldung über existierende Zuordnung | GeLi Gas 2.0 | NB → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-zuordnungsmeldung` |
 | 44037 | Informationsmeldung zur Beendigung der Zuordnung | GeLi Gas 2.0 | NB → LFA | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-zuordnungsmeldung` |
 | 44038 | Informationsmeldung zur Aufhebung einer zuk. Zuordnung | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-zuordnungsmeldung` |
@@ -419,7 +417,7 @@ opened the process.
 | 44051 | Ende MSB | WiM Gas | MSBA → NB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 44052 | Bestätigung Ende MSB | WiM Gas | NB → MSBA | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 44053 | Ablehnung Ende MSB | WiM Gas | NB → MSBA | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 44060 | Antwort auf die Geschäftsdatenanfrage | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | — |
+| 44060 | Antwort auf die Geschäftsdatenanfrage | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-geschaeftsdatenanfrage` |
 | 44101 | Stammdaten zur Messlokation | NBW Leitfaden | NBN → MSB | — | — | ✅ | ✅ | ✅ | — |
 | 44102 | Aktualisierte Stammdaten zur Messlokation | NBW Leitfaden | NBN → MSB | — | — | ✅ | ✅ | ✅ | — |
 | 44103 | Stammdaten zur verbrauchenden Marktlokation | NBW Leitfaden | NBN → LF | — | — | ✅ | ✅ | ✅ | — |
@@ -486,7 +484,7 @@ opened the process.
 | 17008 | Abbestellung von Werten ESA | WiM Strom Teil 2 Kap. 4 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` (MSB inbound) / `esa-wertebestellung` (ESA outbound) |
 | 17009 | Ankündigung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
 | 17011 | Beauftragung zur Änderung der Technik (Messlokationsänderung Strom) | WiM Strom Teil 1 | NB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
-| 17101 | Anfrage Stammdaten Marktlokation (Gas) | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
+| 17101 | Anfrage Stammdaten Marktlokation (Gas) | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-geschaeftsdatenanfrage` |
 | 17102 | Anfrage von Werten | GPKE Teil 4 / GeLi Gas 2.0 | LF → MSB · LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf-msb` (MSB Strom receives, 1 WT; `gpke-datenabruf` sends) |
 | 17103 | Anfrage Brennwert / Zustandszahl | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
 | 17104 | Anfrage vom MSB Gas | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
@@ -494,22 +492,22 @@ opened the process.
 | 17113 | Reklamation von Werten | WiM Gas / WiM Strom Teil 2 | LF → NB · NB → MSB · MSB → MSB · LF → MSB · ÜNB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf-msb` (MSB Strom receives, Ablehnung 3 WT; `gpke-datenabruf` sends) |
 | 17114 | Anforderung bilanzierte Menge | MMM Strom/Gas | NB → ÜNB | — | ✅ | — | ✅ | ⚠️ | `mako-gpke` `gpke-allokationsliste` (ORDERS fv20260401 only — AHB 1.1a Kap. 4.2.2; fv20261001 drops it) |
 | 17115 | Sperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` · `mako-geli-gas` `geli-gas-sperrung-nb` |
-| 17116 | Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-msb` (MSB Strom receives, 3 WT, lapse = Zustimmung) · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas GNB→gMSB role) |
+| 17116 | Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-msb` (MSB Strom receives, 3 WT, lapse = Zustimmung) · `mako-geli-gas` `geli-gas-sperrung-msb` (gMSB receives, Gas) |
 | 17117 | Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` · `mako-geli-gas` `geli-gas-sperrung-nb` |
-| 17118 | Bestellung einer Konfigurationsänderung | GPKE Teil 3 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
+| 17118 | Bestellung einer Konfigurationsänderung | GPKE Teil 3 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 17120 | Bestellung Änderung Prognosegrundlage | GPKE Teil 3 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 17121 | Bestellung Änderung | GPKE Teil 3 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 17122 | Reklamation einer Definition | GPKE Teil 3 | LF → NB · MSB → NB · NB → LF · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 17123 | Bestellung Änderung Zählzeitdefinition | GPKE Teil 3 | LF → NB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
-| 17126 | Anfrage Stammdaten Messlokation (Gas) | GeLi Gas 2.0 | MSB → NB | — | — | ✅ | ✅ | ✅ | — |
+| 17126 | Anfrage Stammdaten Messlokation (Gas) | GeLi Gas 2.0 | MSB → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-geschaeftsdatenanfrage` |
 | 17128 | Reklamation einer Konfiguration | GPKE Teil 3 | NB → MSB · LF → MSB · MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 17129 | Bestellung Beendigung einer Konfiguration | GPKE Teil 3 | NB → MSB · MSB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 17130 | Bestellung einer Konfiguration | GPKE Teil 3 | NB → MSB · MSB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 17131 | Bestellung Angebot einer Konfiguration | GPKE Teil 3 | NB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 17132 | Anfrage Stammdaten (Strom) | GPKE Teil 4 | LF → NB · MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-geschaeftsdatenanfrage` |
 | 17133 | Bestellung Änderung Abrechnungsdaten | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
-| 17134 | Einrichtung Konfiguration Zuordnung LF von NB | GPKE Teil 3 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration` (outbound-only via outbox; not in `PidRouter`) |
-| 17135 | Einrichtung Konfiguration Zuordnung LF von MSB | GPKE Teil 3 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration` (outbound-only via outbox; not in `PidRouter`) |
+| 17134 | Einrichtung Konfiguration Zuordnung LF von NB | GPKE Teil 3 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` (MSB receives; the NB sends from `gpke-konfiguration`) |
+| 17135 | Einrichtung Konfiguration Zuordnung LF von MSB | GPKE Teil 3 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` (the weiterer MSB receives) |
 | 17201 | Anforder. normierter Profile und Profilscharen | MaBiS | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
 | 17202 | Anforder. Lieferantenclearingliste | MaBiS | LF → NB · LF → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
 | 17203 | Anforder. Bilanzkreiszuordnungsliste | MaBiS | BKV → NB · BKV → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
@@ -527,8 +525,8 @@ opened the process.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 19001 | Bestellbestätigung | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-konfiguration` ⁽ᴺᴮ⁾ · `mako-wim` `wim-geraeteubernahme` (nMSB-role conditional) |
-| 19002 | Ablehnung der Bestellung | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-konfiguration` ⁽ᴺᴮ⁾ · `mako-wim` `wim-geraeteubernahme` (nMSB-role conditional) |
+| 19001 | Bestellbestätigung | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme-msbn` (MSB roles) |
+| 19002 | Ablehnung der Bestellung | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme-msbn` (MSB roles) |
 | 19003 | Fortführungsbestätigung | WiM Gas / WiM Strom Teil 1 | MSB → NB · MSBA → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-weiterverpflichtung` |
 | 19004 | Ablehnung Fortführung | WiM Gas / WiM Strom Teil 1 | MSB → NB · MSBA → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-weiterverpflichtung` |
 | 19005 | Bestätigung Auftrag Änderung Technik | WiM Gas / WiM Strom Teil 1 / AWH Änd. Technik | MSB → LF · MSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
@@ -540,9 +538,9 @@ opened the process.
 | 19012 | Ablehnung der Ab-/Bestellung von Werten für ESA | WiM Strom Teil 2 Kap. 4 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
 | 19013 | Bestätigung der Stornierung einer Bestellung | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
 | 19014 | Ablehnung der Stornierung einer Bestellung | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
-| 19015 | Bestätigung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
-| 19016 | Ablehnung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
-| 19101 | Ablehnung der Anfrage  Stammdaten | GPKE Teil 4 / GeLi Gas 2.0 | NB → MSB · NB → LF | 17101 | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-geschaeftsdatenanfrage` (answers 17132; a Gas 19101 finds no process) |
+| 19015 | Bestätigung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme-msbn` (MSB roles) |
+| 19016 | Ablehnung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme-msbn` (MSB roles) |
+| 19101 | Ablehnung der Anfrage  Stammdaten | GPKE Teil 4 / GeLi Gas 2.0 | NB → MSB · NB → LF | 17101 | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-geschaeftsdatenanfrage` (Strom, answers 17132) · `mako-geli-gas` `geli-gas-geschaeftsdatenanfrage` (Gas, answers 17101 / 17126; routed by the recipient's Sparte) |
 | 19102 | Ablehnung der Anfrage Werte | GPKE Teil 4 / GeLi Gas 2.0 | MSB → LF · NB → LF | 17102 | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf` |
 | 19103 | Ablehnung der Anfrage Brennwert / Zustandszahl | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
 | 19104 | Ablehnung der Anfrage vom MSB Gas | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
@@ -557,7 +555,7 @@ opened the process.
 | 19121 | Mitteilung zur Änderung Prognosegrundlage | GPKE Teil 3 | NB → LF | 17120 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 19123 | Ablehnung Reklamation einer Definition | GPKE Teil 3 | NB → LF · NB → MSB · LF → NB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 19124 | Mitteilung zur Änderung Zählzeitdefinition | GPKE Teil 3 | NB → LF · MSB → LF | 17123 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
-| 19127 | Mitteilung zur Konfigurationsänderung | GPKE Teil 3 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
+| 19127 | Mitteilung zur Konfigurationsänderung | GPKE Teil 3 | MSB → MSB | 17118 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 19128 | Bestätigung Stornierung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-lf` · `mako-geli-gas` `geli-gas-sperrung-lf` |
 | 19129 | Ablehnung Stornierung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-lf` · `mako-geli-gas` `geli-gas-sperrung-lf` |
 | 19130 | Bearbeitungsstand Reklamation Konfiguration | GPKE Teil 3 | MSB → NB · MSB → LF · MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |

@@ -296,6 +296,7 @@ pub async fn post_vpp_billing(
             rechnung_json: &rechnung_json,
             total_netto_eur: total_netto,
             total_brutto_eur: total_brutto,
+            steuerzeilen: &crate::steuerzeilen::aus_rechnung(&invoice),
         },
     )
     .await
@@ -771,6 +772,7 @@ pub async fn post_vpp_webhook(
             rechnung_json: &rechnung_json,
             total_netto_eur: position_netto,
             total_brutto_eur: total_brutto,
+            steuerzeilen: &crate::steuerzeilen::aus_rechnung(&invoice),
         },
     )
     .await

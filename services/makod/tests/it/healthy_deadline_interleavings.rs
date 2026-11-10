@@ -303,6 +303,10 @@ fn wim_rest_of_beginn() -> Vec<mako_wim::DeviceChangeCommand> {
         C::ReceiveGesamtvorgang {
             pid: pid(mako_wim::geraetewechsel::GESAMTVORGANG_ERFOLG_PID),
             zuordnungsbeginn: Some("20260316".to_owned()),
+            referenz: Some(mako_wim::geraetewechsel::IftstaReferenz {
+                dokumentennummer: "IFT-1".to_owned(),
+                vorgangsnummer: "1".to_owned(),
+            }),
             message_ref: MessageRef::new("GV-1"),
             received_at: datetime!(2026-03-17 08:00 UTC),
         },
@@ -369,6 +373,7 @@ fn wim_beginn_msb_survives_every_interleaving() {
             C::ReceiveZuordnungsantwort {
                 pid: pid(mako_wim::geraetewechsel::ZUORDNUNG_ERFOLG_PID),
                 zuordnungsbeginn: Some("20260316".to_owned()),
+                received_at: time::macros::datetime!(2026-03-17 09:00 UTC),
             },
         ],
         external: &[(AUFTRAG, 0)],

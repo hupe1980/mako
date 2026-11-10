@@ -1235,29 +1235,31 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
 
         // § 2 Abs. 4 (Strom) / Abs. 5 Nr. 2 (Gas) KAV — below the Grenzpreis no
         // Konzessionsabgabe may be agreed or paid at all. Both Absätze speak of
-        // Sondervertragskunden only.
-        if gruppe == KaKundengruppe::Sondervertragskunde
-            && ka_ct > Decimal::ZERO
-            && ka
-                .grenzpreis
-                .is_some_and(|g| g.verbietet_konzessionsabgabe())
+        // Sondervertragskunden only. A Sondervertragskunde charged an Abgabe
+        // without the comparison is refused: skipping it bills one the
+        // Verordnung may forbid.
+        let norm = match input.sparte {
+            Sparte::Strom => "KAV § 2 Abs. 4",
+            Sparte::Gas => "KAV § 2 Abs. 5 Nr. 2",
+        };
+        let vergleich = if gruppe == KaKundengruppe::Sondervertragskunde && ka_ct > Decimal::ZERO {
+            Some(
+                ka.grenzpreis
+                    .ok_or(BillingError::GrenzpreisvergleichFehlt { norm })?,
+            )
+        } else {
+            None
+        };
+        if let Some(g) =
+            vergleich.filter(crate::types::Grenzpreisvergleich::verbietet_konzessionsabgabe)
         {
-            let g = ka.grenzpreis.unwrap_or(crate::types::Grenzpreisvergleich {
-                durchschnittspreis_ct_per_kwh: Decimal::ZERO,
-                grenzpreis_ct_per_kwh: Decimal::ZERO,
-            });
             warnings.push(SettlementWarning {
-                severity: WarningSeverity::Warning,
+                severity: WarningSeverity::Error,
                 code: "KA_UNTER_GRENZPREIS",
                 message: format!(
                     "KA rate {ka_ct} ct/kWh charged although the Durchschnittspreis \
                      {} ct/kWh lies below the Grenzpreis {} ct/kWh — {} forbids one",
-                    g.durchschnittspreis_ct_per_kwh,
-                    g.grenzpreis_ct_per_kwh,
-                    match input.sparte {
-                        Sparte::Strom => "KAV § 2 Abs. 4",
-                        Sparte::Gas => "KAV § 2 Abs. 5 Nr. 2",
-                    },
+                    g.durchschnittspreis_ct_per_kwh, g.grenzpreis_ct_per_kwh, norm,
                 ),
             });
         }
@@ -2846,7 +2848,7 @@ mod tests {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
             niederspannung: None,
-            grenzpreis: None,
+            grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
         });
         out.push((
             "NNE + Konzessionsabgabe".to_owned(),
@@ -3154,7 +3156,7 @@ mod tests {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
             niederspannung: None,
-            grenzpreis: None,
+            grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
         });
         let r = settle_nne(&i).unwrap();
         assert_eq!(r.total_eur, d("54.15"));
@@ -3181,7 +3183,7 @@ mod tests {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
             niederspannung: None,
-            grenzpreis: None,
+            grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
         });
         let r = settle_nne(&i).unwrap();
         // 12.5 kW × 4.20 EUR/kW·Monat = 52.50 EUR for the month, beside 52.50
@@ -3312,7 +3314,7 @@ mod tests {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
             niederspannung: None,
-            grenzpreis: None,
+            grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
         });
         i.sect19 = Some(Sect19Vereinbarung {
             art: Sect19Art::IntensiveNetznutzung,
@@ -3696,7 +3698,7 @@ mod tests {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
             niederspannung: None,
-            grenzpreis: None,
+            grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
         });
         let r = settle_nne(&i).unwrap();
         let refs = r.all_legal_refs();
@@ -4034,7 +4036,7 @@ mod tests {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
             niederspannung: None,
-            grenzpreis: None,
+            grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
         });
         let r = settle_nne(&i).unwrap();
         assert_eq!(
@@ -4587,10 +4589,11 @@ mod tests {
             satz_ct_per_kwh: d("0.09"),
             klasse: KaKundengruppe::Sondervertragskunde,
             niederspannung: None,
-            grenzpreis: None,
+            grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
         });
         if let Some(ka) = i.konzessionsabgabe.as_mut() {
             ka.klasse = KaKundengruppe::Sondervertragskunde;
+            ka.grenzpreis = Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST);
         }
         let r = settle_nne(&i).unwrap();
         let ka_pos = r
@@ -4671,6 +4674,7 @@ mod tests {
         // Stated correctly, nothing is reported.
         if let Some(ka) = i.konzessionsabgabe.as_mut() {
             ka.klasse = KaKundengruppe::Sondervertragskunde;
+            ka.grenzpreis = Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST);
         }
         let ok = settle_nne(&i).expect("settles");
         assert!(
@@ -4704,8 +4708,10 @@ mod tests {
         });
         let r = settle_nne(&i).expect("settles");
         assert!(
-            r.warnings.iter().any(|w| w.code == "KA_UNTER_GRENZPREIS"),
-            "17,50 < 18,20 forbids the Konzessionsabgabe: {:?}",
+            r.warnings
+                .iter()
+                .any(|w| w.code == "KA_UNTER_GRENZPREIS" && w.severity == WarningSeverity::Error),
+            "17,50 < 18,20 forbids the Konzessionsabgabe — an Error, not a hint: {:?}",
             r.warnings
         );
         assert!(
@@ -4729,6 +4735,52 @@ mod tests {
         );
     }
 
+    /// **Invariant: a Sondervertragskunde's Konzessionsabgabe is never billed
+    /// without the Grenzpreisvergleich.**
+    ///
+    /// § 2 Abs. 4 KAV (Strom) and Abs. 5 Nr. 2 (Gas) forbid one below the
+    /// Grenzpreis; without the comparison the prohibition cannot be ruled out,
+    /// so the settlement is refused rather than charged. A Tarifkunde, which
+    /// neither Absatz covers, and a Sondervertragskunde charged nothing need
+    /// none.
+    #[test]
+    fn a_sondervertragskunde_without_the_grenzpreisvergleich_is_refused() {
+        for (sparte, satz, norm) in [
+            (Sparte::Strom, "0.11", "KAV § 2 Abs. 4"),
+            (Sparte::Gas, "0.03", "KAV § 2 Abs. 5 Nr. 2"),
+        ] {
+            let mut i = base_nne();
+            i.sparte = sparte;
+            i.konzessionsabgabe = Some(Konzessionsabgabe {
+                satz_ct_per_kwh: d(satz),
+                klasse: KaKundengruppe::Sondervertragskunde,
+                niederspannung: None,
+                grenzpreis: None,
+            });
+            match settle_nne(&i) {
+                Err(BillingError::GrenzpreisvergleichFehlt { norm: n }) => assert_eq!(n, norm),
+                other => panic!("{sparte:?}: must refuse naming {norm}, got {other:?}"),
+            }
+
+            if let Some(ka) = i.konzessionsabgabe.as_mut() {
+                ka.satz_ct_per_kwh = Decimal::ZERO;
+            }
+            settle_nne(&i).expect("no Abgabe charged, nothing to compare");
+        }
+
+        let mut i = base_nne();
+        i.konzessionsabgabe = Some(Konzessionsabgabe {
+            satz_ct_per_kwh: d("1.32"),
+            klasse: KaKundengruppe::Tarifkunde {
+                gemeinde: crate::types::GemeindeGroesse::Bis25k,
+                nur_kochen_warmwasser: false,
+            },
+            niederspannung: None,
+            grenzpreis: None,
+        });
+        settle_nne(&i).expect("a Tarifkunde needs no Grenzpreisvergleich");
+    }
+
     /// **Invariant: KAV § 2 Abs. 5 Nr. 1 — no Gas Konzessionsabgabe above
     /// 5 Millionen kWh je Jahr und Abnahmefall.**
     ///
@@ -4742,7 +4794,7 @@ mod tests {
             satz_ct_per_kwh: d("0.03"), // the Abs. 3 Nr. 2 Höchstbetrag
             klasse: KaKundengruppe::Sondervertragskunde,
             niederspannung: None,
-            grenzpreis: None,
+            grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
         });
 
         i.jahresarbeit_kwh = Some(d("5000001"));
@@ -4796,6 +4848,7 @@ mod tests {
         });
         if let Some(ka) = i.konzessionsabgabe.as_mut() {
             ka.klasse = KaKundengruppe::Sondervertragskunde;
+            ka.grenzpreis = Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST);
         }
         let r = settle_nne(&i).unwrap();
         assert!(
@@ -4954,7 +5007,7 @@ mod tests {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
             niederspannung: None,
-            grenzpreis: None,
+            grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
         });
         let original = settle_nne(&i).unwrap();
         let storno = reverse(&original, KorrekturGrund::Messwertkorrektur);
@@ -5757,7 +5810,7 @@ mod proptests {
                     satz_ct_per_kwh: Decimal::new(11, 2),
                     klasse: crate::types::KaKundengruppe::Sondervertragskunde,
                     niederspannung: None,
-                    grenzpreis: None,
+                    grenzpreis: Some(crate::types::Grenzpreisvergleich::ZULAESSIG_IM_TEST),
                 }),
                 grundpreis: None,
                 tariff_sheet_id: None,

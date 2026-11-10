@@ -37,6 +37,25 @@ pub enum BillingError {
         missing: Vec<String>,
     },
 
+    /// A Konzessionsabgabe on a Sondervertragskunde without the
+    /// Grenzpreisvergleich that decides whether one may be charged at all.
+    ///
+    /// § 2 Abs. 4 KAV (Strom) and Abs. 5 Nr. 2 (Gas): Konzessionsabgaben
+    /// „dürfen … für Lieferungen an Sondervertragskunden nicht vereinbart oder
+    /// gezahlt werden", whose Durchschnittspreis im Kalenderjahr lies below the
+    /// Grenzpreis. Without the customer's Durchschnittspreis and the Grenzpreis
+    /// the prohibition cannot be ruled out, and charging the Abgabe regardless
+    /// may bill one the Verordnung forbids.
+    #[error(
+        "cannot bill the Konzessionsabgabe on a Sondervertragskunde: {norm} forbids one below \
+         the Grenzpreis, and the settlement carries no Grenzpreisvergleich (the customer's \
+         Durchschnittspreis im Kalenderjahr and the Grenzpreis, both ohne Umsatzsteuer)"
+    )]
+    GrenzpreisvergleichFehlt {
+        /// The Absatz that forbids it — `KAV § 2 Abs. 4` or `KAV § 2 Abs. 5 Nr. 2`.
+        norm: &'static str,
+    },
+
     /// A Gas period ends after the GasNEV lapsed, so no Verordnung forms its
     /// Netzentgelte.
     ///

@@ -26,7 +26,24 @@ async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
         .execute(&pool)
         .await
         .expect("apply schema");
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
     Some((pool, container))
+}
+
+/// The commands of `kind` this tenant owes, not yet delivered or dead-lettered.
+pub(crate) async fn owed(pool: &PgPool, tenant: &str, kind: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM event_outbox
+          WHERE kind = 'command' AND ce_type = $2 AND starts_with(event_id, $1 || '/')
+            AND delivered_at IS NULL AND dead_lettered_at IS NULL",
+    )
+    .bind(tenant)
+    .bind(kind)
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 /// A Kunde with the name and address an Anmeldung's `SG12 NAD+Z09`/`Z04`
@@ -831,12 +848,14 @@ async fn a_kuendigung_ends_the_term_and_enqueues_both_obligations() {
         "§ 41 Abs. 8 Nr. 2 EnWG: the Textform confirmation is recorded as owed"
     );
 
-    let kinds: Vec<String> =
-        sqlx::query_scalar("SELECT kind FROM outbound_tasks WHERE tenant=$1 ORDER BY kind")
-            .bind(tenant)
-            .fetch_all(&pool)
-            .await
-            .expect("tasks");
+    let kinds: Vec<String> = sqlx::query_scalar(
+        "SELECT ce_type FROM event_outbox
+              WHERE kind = 'command' AND starts_with(event_id, $1 || '/') ORDER BY ce_type",
+    )
+    .bind(tenant)
+    .fetch_all(&pool)
+    .await
+    .expect("tasks");
     assert!(
         kinds.contains(&"LIEFERENDE".to_owned()),
         "the NB is told supply ends: {kinds:?}"
@@ -876,10 +895,10 @@ async fn kuendige(pool: &PgPool, vertrag_id: Uuid, tenant: &str, lieferende: tim
 /// each carries.
 async fn armed(pool: &PgPool, tenant: &str, kind: &str) -> Vec<String> {
     sqlx::query_scalar(
-        "SELECT COALESCE(payload->'body'->>'lieferende_datum', payload->>'geplant_am')
-           FROM outbound_tasks
-          WHERE tenant = $1 AND kind = $2
-            AND completed_at IS NULL AND dead_lettered_at IS NULL
+        "SELECT COALESCE(envelope->'body'->>'lieferende_datum', envelope->'body'->>'geplant_am')
+           FROM event_outbox
+          WHERE kind = 'command' AND starts_with(event_id, $1 || '/') AND ce_type = $2
+            AND delivered_at IS NULL AND dead_lettered_at IS NULL
           ORDER BY created_at",
     )
     .bind(tenant)
@@ -1028,14 +1047,11 @@ async fn the_registration_is_enqueued_once_however_often_the_contract_is_posted(
         .expect("replay");
     assert_eq!(second.dispatched, 0, "a replay registers nothing again");
 
-    let n: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM outbound_tasks WHERE kind='LIEFERBEGINN' AND tenant=$1",
-    )
-    .bind(tenant)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(n, 1, "one queued UTILMD, not two");
+    assert_eq!(
+        owed(&pool, tenant, "LIEFERBEGINN").await,
+        1,
+        "one queued UTILMD, not two"
+    );
 
     // The contract is now waiting on the NB, which is what the API reports.
     let v = pg::fetch_vertrag(&pool, first.id, tenant)
@@ -1043,6 +1059,30 @@ async fn the_registration_is_enqueued_once_however_often_the_contract_is_posted(
         .unwrap()
         .unwrap();
     assert_eq!(v.status, "IN_BEARBEITUNG");
+
+    // Delivered once, and the follow-up lands with the delivery: the
+    // component is ANGEMELDET under the process processd answered with.
+    let (peer, calls) = peers().await;
+    drain(&pool, &worker_against(tenant, &peer)).await;
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| *c == "start-supply")
+            .count(),
+        1
+    );
+    let (status, process): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, mako_process_id FROM vertragskomponenten WHERE vertrag_id = $1",
+    )
+    .bind(first.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "ANGEMELDET");
+    assert_eq!(process.as_deref(), Some("P-1"));
+    assert_eq!(owed(&pool, tenant, "LIEFERBEGINN").await, 0);
 }
 
 /// A Stornierung before supply began must also withdraw the registration still
@@ -1065,16 +1105,11 @@ async fn stornierung_withdraws_a_registration_that_has_not_left_the_queue() {
         .await
         .expect("storniere");
 
-    let offen: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM outbound_tasks
-          WHERE tenant=$1 AND kind='LIEFERBEGINN'
-            AND completed_at IS NULL AND dead_lettered_at IS NULL",
-    )
-    .bind(tenant)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(offen, 0, "nothing is left to register");
+    assert_eq!(
+        owed(&pool, tenant, "LIEFERBEGINN").await,
+        0,
+        "nothing is left to register"
+    );
 }
 
 /// Once the Lieferende has passed, supply ends and the contract closes.
@@ -1105,7 +1140,7 @@ async fn supply_that_has_run_out_closes_its_contract() {
         .await
         .unwrap();
     assert!(
-        pg::close_due_supply(&pool, tenant)
+        pg::close_due_supply(&mut pool.acquire().await.unwrap(), tenant)
             .await
             .unwrap()
             .is_empty(),
@@ -1118,7 +1153,9 @@ async fn supply_that_has_run_out_closes_its_contract() {
         .execute(&pool)
         .await
         .unwrap();
-    let closed = pg::close_due_supply(&pool, tenant).await.unwrap();
+    let closed = pg::close_due_supply(&mut pool.acquire().await.unwrap(), tenant)
+        .await
+        .unwrap();
     assert_eq!(closed, vec![created.id]);
 
     let after = pg::fetch_vertrag(&pool, created.id, tenant)
@@ -1139,81 +1176,122 @@ async fn supply_that_has_run_out_closes_its_contract() {
     );
 }
 
-// ── Outbound queue bookkeeping ───────────────────────────────────────────────
-
-/// A failing task is retried on a growing delay and then given up on, and an
-/// operator can put it back. All of it is SQL — an interval computed from a
-/// bind parameter and a boundary at which retrying stops — so only a real
-/// database proves the obligation neither spins for ever nor vanishes.
+/// A contract closes together with its `de.vertrag.abgeschlossen` row, or not
+/// at all: closed alone, it is no longer due on the next run, so nothing would
+/// ever announce it.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_failing_task_backs_off_then_dead_letters_then_can_be_requeued() {
+async fn a_contract_closes_only_with_its_event() {
+    let Some((pool, _pg)) = test_pool("close_with_event").await else {
+        return;
+    };
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
+    let tenant = "9800000000016";
+    let kunde = make_kunde(&pool, tenant).await;
+    let mut input = vertrag_input("C-EVT");
+    input.vertragsbeginn = time::macros::date!(2020 - 01 - 01);
+    input.komponenten[0].lieferbeginn = time::macros::date!(2020 - 01 - 01);
+    let created = pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &input)
+        .await
+        .expect("create");
+    activate(&pool, created.id).await;
+    sqlx::query("UPDATE vertragskomponenten SET lieferende = heute() - 1 WHERE vertrag_id=$1")
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // The enqueue fails.
+    sqlx::query("ALTER TABLE event_outbox RENAME TO event_outbox_away")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        vertragd::workers::ablauf(&pool, &worker_config(tenant))
+            .await
+            .is_err()
+    );
+    sqlx::query("ALTER TABLE event_outbox_away RENAME TO event_outbox")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let status = pg::fetch_vertrag(&pool, created.id, tenant)
+        .await
+        .unwrap()
+        .unwrap()
+        .status;
+    assert_ne!(
+        status, "ABGELAUFEN",
+        "a contract closed without its event is never announced"
+    );
+
+    // The next run closes it and announces it once.
+    vertragd::workers::ablauf(&pool, &worker_config(tenant))
+        .await
+        .expect("ablauf");
+    let status = pg::fetch_vertrag(&pool, created.id, tenant)
+        .await
+        .unwrap()
+        .unwrap()
+        .status;
+    assert_eq!(status, "ABGELAUFEN");
+    let events: i64 = sqlx::query_scalar("SELECT count(*) FROM event_outbox WHERE ce_type = $1")
+        .bind(mako_events::vertrag::ABGESCHLOSSEN)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(events, 1);
+}
+
+// ── Outbound queue bookkeeping ───────────────────────────────────────────────
+
+/// A failing command is given up on after the shared budget, is listed for the
+/// operator, and can be put back — by this tenant only.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_failing_task_dead_letters_then_can_be_requeued() {
     let Some((pool, _pg)) = test_pool("outbound_backoff").await else {
         return;
     };
     let tenant = "9800000000017";
     let kunde = make_kunde(&pool, tenant).await;
-    let created =
-        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("O-1"))
-            .await
-            .expect("create");
-    let komp = created.komponenten[0].id;
-
-    let (id, attempts): (uuid::Uuid, i32) = sqlx::query_as(
-        "SELECT id, attempts FROM outbound_tasks WHERE komp_id=$1 AND kind='LIEFERBEGINN'",
-    )
-    .bind(komp)
-    .fetch_one(&pool)
-    .await
-    .expect("the registration was enqueued");
-    assert_eq!(attempts, 0);
-
-    // Two failures: still queued, and not before the backoff has elapsed.
-    let mut conn = pool.acquire().await.unwrap();
-    vertragd::outbound::record_failure(&mut conn, id, 1, "processd unreachable")
+    pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("O-1"))
         .await
-        .unwrap();
-    let due_now: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM outbound_tasks
-          WHERE id=$1 AND next_attempt_at <= now() AND dead_lettered_at IS NULL",
-    )
-    .bind(id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(due_now, 0, "the retry waits");
+        .expect("create");
+    assert_eq!(owed(&pool, tenant, "LIEFERBEGINN").await, 1);
 
-    let (first, second): (time::OffsetDateTime, time::OffsetDateTime) = {
-        let a: time::OffsetDateTime =
-            sqlx::query_scalar("SELECT next_attempt_at FROM outbound_tasks WHERE id=$1")
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        vertragd::outbound::record_failure(&mut conn, id, 4, "processd unreachable")
-            .await
-            .unwrap();
-        let b: time::OffsetDateTime =
-            sqlx::query_scalar("SELECT next_attempt_at FROM outbound_tasks WHERE id=$1")
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        (a, b)
-    };
-    assert!(second > first, "the delay grows with the attempt count");
+    // processd answers 503 every time.
+    let app = axum::Router::new().route(
+        "/api/v1/start-supply",
+        axum::routing::post(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let peer = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    drain(&pool, &worker_against(tenant, &peer)).await;
 
-    // Enough failures and it stops being retried and becomes visible instead.
-    vertragd::outbound::record_failure(&mut conn, id, 8, "processd unreachable")
-        .await
-        .unwrap();
     let dead = vertragd::outbound::list_dead_lettered(&pool, tenant, 10)
         .await
         .unwrap();
-    assert_eq!(dead.len(), 1);
-    assert_eq!(dead[0].kind, "LIEFERBEGINN");
-    assert_eq!(dead[0].attempts, 8);
+    assert_eq!(
+        dead.len(),
+        1,
+        "the budget is spent and the operator sees it"
+    );
+    assert_eq!(dead[0].ce_type, "LIEFERBEGINN");
+    assert_eq!(dead[0].attempts, FAST_ATTEMPTS);
+    let id = dead[0].id;
 
+    // Another tenant cannot requeue it.
+    assert!(
+        !vertragd::outbound::retry_dead_lettered(&pool, "9800000000099", id)
+            .await
+            .unwrap()
+    );
     assert!(
         vertragd::outbound::retry_dead_lettered(&pool, tenant, id)
             .await
@@ -1226,12 +1304,7 @@ async fn a_failing_task_backs_off_then_dead_letters_then_can_be_requeued() {
             .is_empty(),
         "the requeued task is no longer the operator's problem"
     );
-    // Another tenant cannot requeue it.
-    assert!(
-        !vertragd::outbound::retry_dead_lettered(&pool, "9800000000099", id)
-            .await
-            .unwrap()
-    );
+    assert_eq!(owed(&pool, tenant, "LIEFERBEGINN").await, 1);
 }
 
 // ── The valid-time product assignment ────────────────────────────────────────
@@ -2804,14 +2877,11 @@ async fn a_locked_out_worker_reports_the_skip() {
 /// A Kündigung withdrawn and re-issued to a different Lieferende must move the
 /// Schlussablesung with it.
 ///
-/// The key was `ABLESUNG_ENDE:{komp}` with no date, so the second enqueue hit
-/// `ON CONFLICT (tenant, dedupe_key) DO NOTHING` and vanished: `edmd` kept the
-/// order for the *withdrawn* date, the reading happened on the wrong day, and
-/// the Schlussrechnung was built from it. Nothing logged a failure — the
-/// enqueue returned "already queued", which is indistinguishable from success.
-///
-/// The schema comment on `outbound_tasks.dedupe_key` documented the intended
-/// shape (`'ABLESUNG_BEGINN:{komp}:{datum}'`) all along; only the code drifted.
+/// The reading order's key carries its date (`ABLESUNG_ENDE:{komp}:{datum}`):
+/// keyed on the component alone, the second enqueue would collide with the
+/// first and vanish, `edmd` would keep the order for the *withdrawn* date, and
+/// the Schlussrechnung would be built from a reading on the wrong day — with
+/// nothing logged, because "already queued" is indistinguishable from success.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_reading_order_is_keyed_by_its_date() {
@@ -2836,7 +2906,7 @@ async fn a_reading_order_is_keyed_by_its_date() {
         outbound::enqueue_superseding(
             &mut conn,
             tenant,
-            &outbound::ablesung(komp, "51238696781", true, first),
+            &outbound::ablesung(komp, "51238696781", "STROM", true, first),
         )
         .await
         .expect("first order"),
@@ -2847,7 +2917,7 @@ async fn a_reading_order_is_keyed_by_its_date() {
         !outbound::enqueue_superseding(
             &mut conn,
             tenant,
-            &outbound::ablesung(komp, "51238696781", true, first),
+            &outbound::ablesung(komp, "51238696781", "STROM", true, first),
         )
         .await
         .expect("replay"),
@@ -2859,7 +2929,7 @@ async fn a_reading_order_is_keyed_by_its_date() {
         outbound::enqueue_superseding(
             &mut conn,
             tenant,
-            &outbound::ablesung(komp, "51238696781", true, second),
+            &outbound::ablesung(komp, "51238696781", "STROM", true, second),
         )
         .await
         .expect("re-issued order"),
@@ -2869,9 +2939,10 @@ async fn a_reading_order_is_keyed_by_its_date() {
     // …and exactly one order is pending: the superseded one is gone rather than
     // dispatched alongside it.
     let pending: Vec<(String, serde_json::Value)> = sqlx::query_as(
-        "SELECT dedupe_key, payload FROM outbound_tasks
-          WHERE tenant = $1 AND kind = 'ABLESUNG_ENDE' AND komp_id = $2
-            AND completed_at IS NULL AND dead_lettered_at IS NULL",
+        "SELECT event_id, envelope->'body' FROM event_outbox
+          WHERE kind = 'command' AND ce_type = 'ABLESUNG_ENDE'
+            AND starts_with(event_id, $1 || '/ABLESUNG_ENDE:' || $2::text)
+            AND delivered_at IS NULL AND dead_lettered_at IS NULL",
     )
     .bind(tenant)
     .bind(komp)
@@ -2954,18 +3025,28 @@ fn worker_against(tenant: &str, peer: &str) -> vertragd::config::VertragdConfig 
     cfg
 }
 
-/// Run the worker until the queue holds nothing due, making every retry due
-/// at once so the backoff cannot hide a repeat.
-async fn drain(pool: &PgPool, worker: &vertragd::outbound::OutboundWorker) {
+/// The attempt budget the tests drain under.
+const FAST_ATTEMPTS: i16 = 3;
+
+/// Run every outbound worker until nothing is due, making every retry due at
+/// once so the backoff cannot hide a repeat.
+async fn drain(pool: &PgPool, cfg: &vertragd::config::VertragdConfig) {
+    let fast = mako_service::outbox::OutboxConfig {
+        max_attempts: FAST_ATTEMPTS,
+        backoff: vec![std::time::Duration::ZERO],
+        lease: std::time::Duration::ZERO,
+        ..Default::default()
+    };
+    let workers: Vec<_> = vertragd::outbound::workers(pool, cfg)
+        .into_iter()
+        .map(|w| w.with_config(fast.clone()))
+        .collect();
     for _ in 0..20 {
-        sqlx::query(
-            "UPDATE outbound_tasks SET next_attempt_at = now()
-              WHERE completed_at IS NULL AND dead_lettered_at IS NULL",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-        if !worker.step().await.expect("step") {
+        let mut handled = 0;
+        for w in &workers {
+            handled += w.flush_once().await.expect("flush");
+        }
+        if handled == 0 {
             return;
         }
     }
@@ -2992,9 +3073,15 @@ async fn a_failed_follow_up_does_not_repeat_a_delivered_call() {
             .expect("create");
     let komp = created.komponenten[0].id;
     vertragd::outbound::enqueue(
-        &pool,
+        &mut pool.acquire().await.unwrap(),
         tenant,
-        &vertragd::outbound::ablesung(komp, MALO, false, time::macros::date!(2026 - 10 - 01)),
+        &vertragd::outbound::ablesung(
+            komp,
+            MALO,
+            "STROM",
+            false,
+            time::macros::date!(2026 - 10 - 01),
+        ),
     )
     .await
     .expect("enqueue the Beginnablesung");
@@ -3011,12 +3098,7 @@ async fn a_failed_follow_up_does_not_repeat_a_delivered_call() {
     .expect("install the refusing trigger");
 
     let (peer, calls) = peers().await;
-    let worker = vertragd::outbound::OutboundWorker::new(
-        pool.clone(),
-        std::sync::Arc::new(worker_against(tenant, &peer)),
-        reqwest::Client::new(),
-    );
-    drain(&pool, &worker).await;
+    drain(&pool, &worker_against(tenant, &peer)).await;
 
     let calls = calls.lock().unwrap().clone();
     assert_eq!(
@@ -3030,8 +3112,9 @@ async fn a_failed_follow_up_does_not_repeat_a_delivered_call() {
         "one reading order: {calls:?}"
     );
     let open: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM outbound_tasks
-          WHERE tenant = $1 AND completed_at IS NULL",
+        "SELECT count(*) FROM event_outbox
+          WHERE kind = 'command' AND starts_with(event_id, $1 || '/')
+            AND delivered_at IS NULL",
     )
     .bind(tenant)
     .fetch_one(&pool)
@@ -3039,8 +3122,8 @@ async fn a_failed_follow_up_does_not_repeat_a_delivered_call() {
     .unwrap();
     assert_eq!(open, 0, "a delivered task is complete");
     let noted: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM outbound_tasks
-          WHERE tenant = $1 AND last_error LIKE '%follow-up%'",
+        "SELECT count(*) FROM event_outbox
+          WHERE starts_with(event_id, $1 || '/') AND last_error LIKE '%follow-up%'",
     )
     .bind(tenant)
     .fetch_one(&pool)
@@ -3066,13 +3149,13 @@ async fn a_204_completes_the_abrechnungskonto_task() {
         pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("A-1"))
             .await
             .expect("create");
-    sqlx::query("DELETE FROM outbound_tasks WHERE tenant = $1")
+    sqlx::query("DELETE FROM event_outbox WHERE starts_with(event_id, $1 || '/')")
         .bind(tenant)
         .execute(&pool)
         .await
         .unwrap();
     vertragd::outbound::enqueue(
-        &pool,
+        &mut pool.acquire().await.unwrap(),
         tenant,
         &vertragd::outbound::abrechnungskonto(created.komponenten[0].id, MALO, tenant),
     )
@@ -3080,16 +3163,11 @@ async fn a_204_completes_the_abrechnungskonto_task() {
     .expect("enqueue");
 
     let (peer, calls) = peers().await;
-    let worker = vertragd::outbound::OutboundWorker::new(
-        pool.clone(),
-        std::sync::Arc::new(worker_against(tenant, &peer)),
-        reqwest::Client::new(),
-    );
-    assert!(worker.step().await.expect("step"));
+    drain(&pool, &worker_against(tenant, &peer)).await;
 
-    let (completed, attempts, dead): (bool, i32, bool) = sqlx::query_as(
-        "SELECT completed_at IS NOT NULL, attempts, dead_lettered_at IS NOT NULL
-           FROM outbound_tasks WHERE tenant = $1",
+    let (completed, attempts, dead): (bool, i16, bool) = sqlx::query_as(
+        "SELECT delivered_at IS NOT NULL, attempts, dead_lettered_at IS NOT NULL
+           FROM event_outbox WHERE starts_with(event_id, $1 || '/')",
     )
     .bind(tenant)
     .fetch_one(&pool)
@@ -3160,13 +3238,14 @@ async fn a_gas_contract_enqueues_the_full_anmeldung() {
     assert_eq!(created.dispatched, 1);
 
     let payload: serde_json::Value = sqlx::query_scalar(
-        "SELECT payload FROM outbound_tasks WHERE tenant=$1 AND kind='LIEFERBEGINN'",
+        "SELECT envelope FROM event_outbox
+          WHERE starts_with(event_id, $1 || '/') AND ce_type = 'LIEFERBEGINN'",
     )
     .bind(tenant)
     .fetch_one(&pool)
     .await
     .expect("the task");
-    assert_eq!(payload["endpoint"], "start-supply-gas");
+    assert_eq!(payload["path"], "/api/v1/start-supply-gas");
     let req: processd::server::StartSupplyGasRequest =
         mako_service::json_from_value(payload["body"].clone()).expect("processd's request");
     assert_eq!(req.transaktionsgrund.as_deref(), Some("E03"));
@@ -3197,13 +3276,14 @@ async fn a_strom_contract_enqueues_the_full_anmeldung() {
         .expect("a full Strom contract is created");
     assert_eq!(created.dispatched, 1);
     let payload: serde_json::Value = sqlx::query_scalar(
-        "SELECT payload FROM outbound_tasks WHERE tenant=$1 AND kind='LIEFERBEGINN'",
+        "SELECT envelope FROM event_outbox
+          WHERE starts_with(event_id, $1 || '/') AND ce_type = 'LIEFERBEGINN'",
     )
     .bind(tenant)
     .fetch_one(&pool)
     .await
     .expect("the task");
-    assert_eq!(payload["endpoint"], "start-supply");
+    assert_eq!(payload["path"], "/api/v1/start-supply");
     let req: processd::server::StartSupplyRequest =
         mako_service::json_from_value(payload["body"].clone()).expect("processd's request");
     assert_eq!(req.transaktionsgrund, "E01");
@@ -3266,4 +3346,116 @@ async fn a_gas_contract_without_the_anmeldung_facts_is_refused() {
         .await
         .unwrap();
     assert_eq!(n, 0, "the transaction rolled back");
+}
+
+// ── The § 14a EnWG module state ──────────────────────────────────────────────
+
+/// **Invariant: a MaLo's § 14a module state is stored and served per period.**
+///
+/// `billingd` selects the Modul 1/2/3 reductions from this answer, so a
+/// change of module inside a billing period must come back as two slices that
+/// tile it, and a combination BK8-22/010-A does not offer must come back as
+/// recorded — the billing engine refuses it, the store does not drop a module.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_sect14a_module_state_is_stored_and_served_per_period() {
+    use pg::Sect14aModul::{Modul1, Modul2, Modul3};
+    let Some((pool, _pg)) = test_pool("sect14a").await else {
+        return;
+    };
+    let tenant = "9800000000021";
+    let kunde = make_kunde(&pool, tenant).await;
+    pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("S-1"))
+        .await
+        .expect("create");
+    let record = |module: Vec<pg::Sect14aModul>, ab| {
+        let pool = pool.clone();
+        async move {
+            pg::record_sect14a(
+                &pool,
+                tenant,
+                MALO,
+                &pg::Sect14aInput {
+                    module,
+                    gueltig_ab: ab,
+                },
+            )
+            .await
+        }
+    };
+
+    record(vec![Modul1], time::macros::date!(2026 - 10 - 01))
+        .await
+        .expect("Modul 1");
+    // Modul 3 beside Modul 1 from mid-November, stated in any order.
+    let stored = record(
+        vec![Modul3, Modul1, Modul3],
+        time::macros::date!(2026 - 11 - 15),
+    )
+    .await
+    .expect("Modul 1 + 3");
+    assert_eq!(stored, vec!["MODUL_1", "MODUL_3"], "sorted, each once");
+
+    let slices = pg::malo_sect14a(
+        &pool,
+        tenant,
+        MALO,
+        time::macros::date!(2026 - 11 - 01),
+        time::macros::date!(2026 - 11 - 30),
+    )
+    .await
+    .expect("slices");
+    assert_eq!(slices.len(), 2, "the change splits the period: {slices:?}");
+    assert_eq!(slices[0].module, vec!["MODUL_1"]);
+    assert_eq!(
+        slices[0].gueltig_bis,
+        Some(time::macros::date!(2026 - 11 - 15))
+    );
+    assert_eq!(slices[1].module, vec!["MODUL_1", "MODUL_3"]);
+    assert_eq!(
+        slices[1].gueltig_bis,
+        Some(time::macros::date!(2026 - 12 - 01)),
+        "clipped to the asked period, exclusive"
+    );
+
+    // A history is not rewritten from before a later state.
+    let refused = record(vec![Modul2], time::macros::date!(2026 - 11 - 01)).await;
+    assert!(
+        matches!(refused, Err(pg::Sect14aError::SpaetererStand(_))),
+        "{refused:?}"
+    );
+
+    // An unoffered combination is recorded as stated.
+    record(vec![Modul2, Modul3], time::macros::date!(2026 - 12 - 01))
+        .await
+        .expect("recorded as stated");
+    let december = pg::malo_sect14a(
+        &pool,
+        tenant,
+        MALO,
+        time::macros::date!(2026 - 12 - 01),
+        time::macros::date!(2026 - 12 - 31),
+    )
+    .await
+    .expect("slices");
+    assert_eq!(december.len(), 1);
+    assert_eq!(december[0].module, vec!["MODUL_2", "MODUL_3"]);
+
+    assert!(matches!(
+        record(Vec::new(), time::macros::date!(2027 - 01 - 01)).await,
+        Err(pg::Sect14aError::KeinModul)
+    ));
+    assert!(matches!(
+        pg::record_sect14a(
+            &pool,
+            tenant,
+            "51238696020",
+            &pg::Sect14aInput {
+                module: vec![Modul1],
+                gueltig_ab: time::macros::date!(2026 - 10 - 01),
+            },
+        )
+        .await,
+        Err(pg::Sect14aError::KeineKomponente(_))
+    ));
 }

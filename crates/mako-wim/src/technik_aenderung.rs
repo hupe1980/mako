@@ -6,7 +6,6 @@
 //! | PID   | Direction  | Description |
 //! |-------|------------|-------------|
 //! | 17011 | NB / LF → MSB | Beauftragung resp. Bestellung zur Änderung der Technik |
-//! | 17118 | MSB → MSB  | Bestellung einer Konfigurationsänderung (see below) |
 //! | 19005 | MSB → NB/LF | Bestätigung Auftrag Änderung Technik |
 //! | 19006 | MSB → NB/LF | Ablehnung Auftrag Änderung Technik |
 //!
@@ -16,11 +15,11 @@
 //! and receives it as the MSB ([`TechnikAenderungCommand::ReceiveAuftrag`]).
 //! The received Auftrag runs under [`auftrag_key`] — the sender and the
 //! ORDERS' Dokumentennummer — so a deployment that is NB and MSB at once holds
-//! its own sent Auftrag and the received copy as two processes. Only 17011 is
-//! received here: the Anwendungsübersicht 4.0 (lfd. Nr. 22600–23180) files
-//! 17118 under GPKE Teil 3 „Bestellung einer Konfiguration" / „Bestellung
-//! Beendigung einer Konfiguration", answered by ORDRSP 19127 out of
-//! `E_0527` / `E_0539`, not by 19005/19006.
+//! its own sent Auftrag and the received copy as two processes. The MSB
+//! answers with [`TechnikAenderungCommand::SendAntwort`]. 17118 is not part of
+//! this workflow: the Anwendungsübersicht 4.0 (lfd. Nr. 22600–23180) files it
+//! under GPKE Teil 3 „Bestellung einer Konfiguration" / „Bestellung Beendigung
+//! einer Konfiguration", answered by ORDRSP 19127, and `mako-gpke` owns it.
 //!
 //! **17121 is not here.** „Bestellung Änderung (NB an MSB)" belongs to GPKE
 //! Teil 3 and is answered with ORDRSP 19120 out of `E_0526`; `mako-gpke` owns
@@ -55,7 +54,7 @@
 //!   Vorlauffrist Prüfschritt at all; its Umsetzungszeitraum was agreed in the
 //!   Angebot.
 
-use mako_engine::envelope::{Richtung, Verlauf};
+use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -69,13 +68,12 @@ use mako_engine::{
 /// Workflow name for the WiM Technikänderung process.
 pub const WORKFLOW_NAME: &str = "wim-technik-aenderung";
 
-/// ORDERS PIDs for technical change requests (all directions).
+/// ORDERS PIDs for technical change requests.
 ///
 /// | PID   | Description |
 /// |-------|-------------|
 /// | 17011 | Beauftragung zur Änderung der Technik (Messlokationsänderung Strom) |
-/// | 17118 | Bestellung Konfigurationsänderung (MSB → MSB) |
-pub const ORDERS_PIDS: &[u32] = &[17011, 17118];
+pub const ORDERS_PIDS: &[u32] = &[17011];
 
 /// ORDRSP PIDs received in response to technical change requests.
 ///
@@ -118,6 +116,32 @@ pub const ANTWORT_WINDOW_LABEL: &str = "wim-technik-aenderung-antwort";
 /// (BK6-24-174 WiM Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2, S. 53), the 17011 row
 /// of [`mako_fristen::antwort`].
 pub const EINGANG_WINDOW_LABEL: &str = "wim-technik-aenderung-eingang";
+
+/// ORDRSP 19005 „Bestätigung Auftrag Änderung Technik", MSB → NB, LF.
+pub const BESTAETIGUNG_PID: u32 = 19_005;
+
+/// ORDRSP 19006 „Ablehnung Auftrag Änderung Technik", MSB → NB, LF.
+pub const ABLEHNUNG_PID: u32 = 19_006;
+
+/// `BGM` DE 1001 `Z12` „Änderung der Technik der Lokation" — the direct
+/// Beauftragung of WiM Teil 1 (ORDERS AHB 1.1b Kap. 4.12, Hinweis `[592]`).
+pub const BGM_DIREKTE_BEAUFTRAGUNG: &str = "Z12";
+
+/// `BGM` DE 1001 `Z93` „Bestellung eines Angebots Änderung der Technik der
+/// Lokation" — the AWH Bestellung after a QUOTES (Hinweis `[591]`).
+pub const BGM_BESTELLUNG_NACH_ANGEBOT: &str = "Z93";
+
+/// The Beauftragungsart the received ORDERS' `BGM` DE 1001 states, which with
+/// the Besteller's Marktrolle selects the answer's tree.
+#[must_use]
+pub fn beauftragungsart(bgm_1001: &str) -> Option<mako_pruefung::codes::TechnikBeauftragung> {
+    use mako_pruefung::codes::TechnikBeauftragung;
+    match bgm_1001 {
+        BGM_DIREKTE_BEAUFTRAGUNG => Some(TechnikBeauftragung::DirekteBeauftragung),
+        BGM_BESTELLUNG_NACH_ANGEBOT => Some(TechnikBeauftragung::BestellungNachAngebot),
+        _ => None,
+    }
+}
 
 /// The key a received Auftrag runs under: the sender's MP-ID and the ORDERS'
 /// Dokumentennummer (`BGM` DE 1004).
@@ -170,6 +194,19 @@ pub enum TechnikAenderungEvent {
         location_id: Option<String>,
         /// Interchange reference of the inbound ORDERS.
         message_ref: MessageRef,
+        /// What the MSB's answer echoes from the ORDERS.
+        kopf: AuftragKopf,
+    },
+    /// MSB side: the MSB answered with ORDRSP 19005 / 19006.
+    AntwortGesendet {
+        /// 19005 or 19006 — picked by the code's Cluster.
+        ordrsp_pid: Pruefidentifikator,
+        /// The code.
+        antwortcode: String,
+        /// The tree it was read from (`E_0249`, `E_0250`, `E_0279`, `E_0283`).
+        codeliste: String,
+        /// Reference of the outbound ORDRSP.
+        message_ref: MessageRef,
     },
     /// MSB side: the received ORDERS failed its AHB check.
     AuftragUngueltig {
@@ -182,6 +219,9 @@ pub enum TechnikAenderungEvent {
         ordrsp_pid: Pruefidentifikator,
         /// Message reference.
         message_ref: MessageRef,
+        /// `SG2 AJT` — the MSB's code and the tree it names.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// ORDRSP received — rejection.
     AuftragAbgelehnt {
@@ -191,6 +231,9 @@ pub enum TechnikAenderungEvent {
         reason: Option<String>,
         /// Message reference.
         message_ref: MessageRef,
+        /// `SG2 AJT` — the MSB's code and the tree it names.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// Deadline expired before ORDRSP arrived.
     DeadlineExpired {
@@ -206,6 +249,7 @@ impl EventPayload for TechnikAenderungEvent {
         match self {
             Self::AuftragGesendet { .. } => "TechnikAenderungAuftragGesendet",
             Self::AuftragEingegangen { .. } => "TechnikAenderungAuftragEingegangen",
+            Self::AntwortGesendet { .. } => "TechnikAenderungAntwortGesendet",
             Self::AuftragUngueltig { .. } => "TechnikAenderungAuftragUngueltig",
             Self::AuftragBestaetigt { .. } => "TechnikAenderungAuftragBestaetigt",
             Self::AuftragAbgelehnt { .. } => "TechnikAenderungAuftragAbgelehnt",
@@ -225,9 +269,15 @@ impl EventPayload for TechnikAenderungEvent {
                 message_ref,
                 ..
             } => (Richtung::Eingang, orders_pid, message_ref),
+            Self::AntwortGesendet {
+                ordrsp_pid,
+                message_ref,
+                ..
+            } => (Richtung::Ausgang, ordrsp_pid, message_ref),
             Self::AuftragBestaetigt {
                 ordrsp_pid,
                 message_ref,
+                ..
             }
             | Self::AuftragAbgelehnt {
                 ordrsp_pid,
@@ -241,6 +291,23 @@ impl EventPayload for TechnikAenderungEvent {
             pid: Some(pid.as_u32()),
             message_ref: Some(message_ref.as_str().to_owned()),
         })
+    }
+
+    fn antwort(&self) -> Option<Antwortcode> {
+        match self {
+            Self::AntwortGesendet {
+                antwortcode,
+                codeliste,
+                ..
+            } => Some(Antwortcode {
+                code: antwortcode.clone(),
+                codeliste: Some(codeliste.clone()),
+            }),
+            Self::AuftragBestaetigt { antwort, .. } | Self::AuftragAbgelehnt { antwort, .. } => {
+                antwort.clone()
+            }
+            _ => None,
+        }
     }
 }
 
@@ -270,6 +337,23 @@ pub struct EingangData {
     pub location_id: Option<String>,
     /// Interchange reference of the inbound ORDERS.
     pub message_ref: MessageRef,
+    /// What the MSB's answer echoes from the ORDERS.
+    pub kopf: AuftragKopf,
+}
+
+/// What the MSB's ORDRSP 19005 / 19006 echoes from the received ORDERS 17011
+/// (ORDRSP AHB 1.1b Kap. 4.12, S. 50–53).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AuftragKopf {
+    /// The MSB the Auftrag was sent to — `NAD+MR`; the answer's sender.
+    pub empfaenger: String,
+    /// `BGM` DE 1004 — echoed in `SG1 RFF+ON` (Hinweis `[513]` / `[543]`).
+    pub dokumentennummer: String,
+    /// `BGM` DE 1001 — `Z12` or `Z93`, echoed in the answer's `BGM`.
+    pub beauftragung: String,
+    /// `DTM+203` Ausführungsdatum on a `Z12` Auftrag (`CCYYMMDDHHMM`), Muss on
+    /// the answer under `[83]`.
+    pub ausfuehrungsdatum: Option<String>,
 }
 
 /// Current state of a WiM Technikänderung process.
@@ -278,7 +362,8 @@ pub struct EingangData {
 /// New → AuftragGesendet → Bestaetigt
 ///                      ↘ Abgelehnt
 ///                      ↘ FristAbgelaufen
-/// New → AuftragEingegangen → FristAbgelaufen   (MSB side)
+/// New → AuftragEingegangen → Beantwortet       (MSB side)
+///                         ↘ FristAbgelaufen
 ///     ↘ Ungueltig
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -292,6 +377,15 @@ pub enum TechnikAenderungState {
     AuftragGesendet(AuftragData),
     /// MSB side: an Auftrag arrived; the MSB owes the ORDRSP 19005/19006.
     AuftragEingegangen(EingangData),
+    /// MSB side: the MSB answered the received Auftrag.
+    Beantwortet {
+        /// The received Auftrag.
+        eingang: EingangData,
+        /// 19005 or 19006.
+        ordrsp_pid: Pruefidentifikator,
+        /// The code.
+        antwortcode: String,
+    },
     /// MSB side: the received Auftrag failed its AHB check.
     Ungueltig {
         /// The findings.
@@ -336,6 +430,7 @@ impl TechnikAenderungState {
             Self::New => "New",
             Self::AuftragGesendet(_) => "AuftragGesendet",
             Self::AuftragEingegangen(_) => "AuftragEingegangen",
+            Self::Beantwortet { .. } => "Beantwortet",
             Self::Ungueltig { .. } => "Ungueltig",
             Self::Bestaetigt { .. } => "Bestaetigt",
             Self::Abgelehnt { .. } => "Abgelehnt",
@@ -357,7 +452,10 @@ impl TechnikAenderungState {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::Bestaetigt { .. } | Self::Abgelehnt { .. } | Self::Ungueltig { .. }
+            Self::Bestaetigt { .. }
+                | Self::Abgelehnt { .. }
+                | Self::Ungueltig { .. }
+                | Self::Beantwortet { .. }
         )
     }
 }
@@ -393,10 +491,26 @@ pub enum TechnikAenderungCommand {
         location_id: Option<String>,
         /// Interchange reference of the inbound ORDERS.
         message_ref: MessageRef,
+        /// What the MSB's answer echoes from the ORDERS.
+        kopf: AuftragKopf,
         /// `true` when the AHB check passed.
         validation_passed: bool,
         /// The findings when it did not.
         validation_errors: Vec<String>,
+    },
+    /// MSB side: answer the received Auftrag with ORDRSP 19005 / 19006.
+    SendAntwort {
+        /// Who ordered — with the ORDERS' `BGM` DE 1001 it selects the tree
+        /// ([`mako_pruefung::codes::aenderung_der_technik_baum`]).
+        besteller: mako_pruefung::codes::TechnikBesteller,
+        /// The code; its Cluster picks 19005 or 19006.
+        antwortcode: String,
+        /// `SG2 FTX+AAP` — Muss beside `A99` (`[28]`).
+        freitext: Option<String>,
+        /// `SG6 CTA`/`COM` — Muss on both answers (S. 53).
+        ansprechpartner: crate::geraeteubernahme::Ansprechpartner,
+        /// Reference of the outbound ORDRSP.
+        message_ref: MessageRef,
     },
     /// Inbound ORDRSP received.
     ReceiveOrdrsp {
@@ -406,6 +520,8 @@ pub enum TechnikAenderungCommand {
         reason: Option<String>,
         /// Message reference.
         message_ref: MessageRef,
+        /// `SG2 AJT` — the MSB's code and the tree it names.
+        antwort: Option<Antwortcode>,
     },
     /// Deadline fired.
     TimeoutExpired {
@@ -417,6 +533,106 @@ pub enum TechnikAenderungCommand {
 }
 
 impl CommandPayload for TechnikAenderungCommand {}
+
+// ── The MSB's answer ──────────────────────────────────────────────────────────
+
+/// The MSB's ORDRSP 19005 / 19006 to a received 17011 (ORDRSP AHB 1.1b Kap.
+/// 4.12, S. 50–53): `BGM` the ORDERS' DE 1001, `DTM+203` the ORDERS'
+/// Ausführungsdatum on a `Z12` Auftrag (`[83]`), `SG1 RFF+ON` its DE 1004,
+/// `SG2 AJT` the code with „EBD Nr." of the tree the Besteller and the
+/// Beauftragungsart select, `SG2 FTX+AAP` beside `A99` (`[28]`) and `SG6
+/// CTA`/`COM` the Ansprechpartner.
+///
+/// On a `Z93` Bestellung the Ablehnungen `A04` (a realistic Umsetzungszeitraum
+/// in `DTM+469`/`DTM+472`, `[78]`/`[79]`) and `A05` (the PRICAT in `SG1
+/// RFF+ACW`, `[80]`/`[81]`) carry facts this workflow does not hold, and are
+/// refused by name rather than sent without them.
+fn antwort(
+    eingang: &EingangData,
+    besteller: mako_pruefung::codes::TechnikBesteller,
+    antwortcode: String,
+    freitext: Option<&str>,
+    ansprechpartner: &crate::geraeteubernahme::Ansprechpartner,
+    message_ref: MessageRef,
+) -> Result<WorkflowOutput<TechnikAenderungEvent>, WorkflowError> {
+    use mako_pruefung::codes::TechnikBeauftragung;
+    let kopf = &eingang.kopf;
+    let art = beauftragungsart(&kopf.beauftragung).ok_or_else(|| {
+        WorkflowError::validation(format!(
+            "the Auftrag's BGM DE 1001 {:?} is neither Z12 nor Z93 — no tree answers it",
+            kopf.beauftragung
+        ))
+    })?;
+    let tree = mako_pruefung::codes::aenderung_der_technik_baum(besteller, art);
+    let code = mako_pruefung::codes::lookup(tree, &antwortcode).ok_or_else(|| {
+        WorkflowError::validation(format!("{antwortcode:?} is not published in {tree}"))
+    })?;
+    let ordrsp_pid = match code.ist_zustimmung() {
+        Some(true) => BESTAETIGUNG_PID,
+        Some(false) => ABLEHNUNG_PID,
+        None => {
+            return Err(WorkflowError::validation(format!(
+                "{antwortcode:?} of {tree} is neither a Zustimmung nor an Ablehnung"
+            )));
+        }
+    };
+    if art == TechnikBeauftragung::BestellungNachAngebot && matches!(code.code, "A04" | "A05") {
+        return Err(WorkflowError::validation(format!(
+            "{antwortcode} of {tree} needs {} on the 19006 (ORDRSP AHB 1.1b Kap. 4.12), \
+             which this answer does not carry",
+            if code.code == "A04" {
+                "the realistic Umsetzungszeitraum (DTM+469/DTM+472)"
+            } else {
+                "the PRICAT's BGM DE 1004 (SG1 RFF+ACW)"
+            }
+        )));
+    }
+    if code.braucht_bemerkung && freitext.is_none_or(|t| t.trim().is_empty()) {
+        return Err(WorkflowError::validation(format!(
+            "{antwortcode:?} of {tree} requires the problem named in SG2 FTX+AAP ([28])"
+        )));
+    }
+    if ansprechpartner.name.trim().is_empty() || ansprechpartner.kommunikation.is_empty() {
+        return Err(WorkflowError::validation(
+            "SG6 CTA/COM is Muss on 19005/19006: the Ansprechpartner needs a name and a channel",
+        ));
+    }
+    if art == TechnikBeauftragung::DirekteBeauftragung && kopf.ausfuehrungsdatum.is_none() {
+        return Err(WorkflowError::validation(
+            "a Z12 answer echoes the Auftrag's DTM+203 Ausführungsdatum ([83]); the received \
+             Auftrag carried none",
+        ));
+    }
+    let pid = Pruefidentifikator::new(ordrsp_pid)
+        .map_err(|e| WorkflowError::validation(format!("answer PID {ordrsp_pid}: {e}")))?;
+    let mut payload = serde_json::json!({
+        "pid": ordrsp_pid,
+        "sender": kopf.empfaenger,
+        "receiver": eingang.sender.as_str(),
+        "message_ref": message_ref.as_str(),
+        "document_code": kopf.beauftragung,
+        "document_id": message_ref.as_str(),
+        "order_reference": kopf.dokumentennummer,
+        "antwort_code": antwortcode,
+        "antwort_codeliste": tree,
+        "antwort_freitext": freitext,
+        "ansprechpartner": ansprechpartner,
+        "sparte": "strom",
+    });
+    if art == TechnikBeauftragung::DirekteBeauftragung {
+        payload["ausfuehrungsdatum"] = serde_json::json!(kopf.ausfuehrungsdatum);
+    }
+    let outbox = vec![PendingOutbox::new("ORDRSP", eingang.sender.as_str(), payload).caused_by(0)];
+    Ok(WorkflowOutput::with_outbox(
+        vec![TechnikAenderungEvent::AntwortGesendet {
+            ordrsp_pid: pid,
+            antwortcode,
+            codeliste: tree.to_owned(),
+            message_ref,
+        }],
+        outbox,
+    ))
+}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
@@ -478,12 +694,28 @@ impl Workflow for WimTechnikAenderungWorkflow {
                 sender,
                 location_id,
                 message_ref,
+                kopf,
             } => TechnikAenderungState::AuftragEingegangen(EingangData {
                 orders_pid: *orders_pid,
                 sender: sender.clone(),
                 location_id: location_id.clone(),
                 message_ref: message_ref.clone(),
+                kopf: kopf.clone(),
             }),
+            TechnikAenderungEvent::AntwortGesendet {
+                ordrsp_pid,
+                antwortcode,
+                ..
+            } => match state {
+                TechnikAenderungState::AuftragEingegangen(eingang) => {
+                    TechnikAenderungState::Beantwortet {
+                        eingang,
+                        ordrsp_pid: *ordrsp_pid,
+                        antwortcode: antwortcode.clone(),
+                    }
+                }
+                other => other,
+            },
             TechnikAenderungEvent::AuftragUngueltig { reason } => {
                 TechnikAenderungState::Ungueltig {
                     reason: reason.clone(),
@@ -558,10 +790,11 @@ impl Workflow for WimTechnikAenderungWorkflow {
                     "ORDERS",
                     recipient.as_str(),
                     serde_json::json!({
-                        "pid":        orders_pid.as_u32(),
-                        "location":   location_id,
-                        "orders_ref": message_ref.as_str(),
-                        "payload":    payload,
+                        "pid":         orders_pid.as_u32(),
+                        "location":    location_id,
+                        "orders_ref":  message_ref.as_str(),
+                        "document_id": message_ref.as_str(),
+                        "payload":     payload,
                     }),
                 )];
                 // The counterparty's Antwortfrist, from the published row for
@@ -583,6 +816,7 @@ impl Workflow for WimTechnikAenderungWorkflow {
                 sender,
                 location_id,
                 message_ref,
+                kopf,
                 validation_passed,
                 validation_errors,
             } => {
@@ -599,6 +833,7 @@ impl Workflow for WimTechnikAenderungWorkflow {
                     sender,
                     location_id,
                     message_ref,
+                    kopf,
                 }];
                 if !validation_passed {
                     events.push(TechnikAenderungEvent::AuftragUngueltig {
@@ -608,10 +843,34 @@ impl Workflow for WimTechnikAenderungWorkflow {
                 Ok(events.into())
             }
 
+            TechnikAenderungCommand::SendAntwort {
+                besteller,
+                antwortcode,
+                freitext,
+                ansprechpartner,
+                message_ref,
+            } => {
+                let TechnikAenderungState::AuftragEingegangen(eingang) = state else {
+                    return Err(WorkflowError::invalid_state(
+                        "AuftragEingegangen",
+                        state.label(),
+                    ));
+                };
+                antwort(
+                    eingang,
+                    besteller,
+                    antwortcode,
+                    freitext.as_deref(),
+                    &ansprechpartner,
+                    message_ref,
+                )
+            }
+
             TechnikAenderungCommand::ReceiveOrdrsp {
                 ordrsp_pid,
                 reason,
                 message_ref,
+                antwort,
             } => {
                 if state.is_terminal() {
                     return Ok(WorkflowOutput::events(vec![]));
@@ -631,12 +890,14 @@ impl Workflow for WimTechnikAenderungWorkflow {
                     TechnikAenderungEvent::AuftragBestaetigt {
                         ordrsp_pid,
                         message_ref,
+                        antwort,
                     }
                 } else {
                     TechnikAenderungEvent::AuftragAbgelehnt {
                         ordrsp_pid,
                         reason,
                         message_ref,
+                        antwort,
                     }
                 };
                 Ok(vec![event].into())
@@ -667,8 +928,8 @@ mod tests {
         }
     }
 
-    /// A 17011 starts the MSB's 10-WT answer window (WiM Teil 1 Kap. 3.3);
-    /// a 17118, which no Festlegung on hand quantifies, starts none.
+    /// A 17011 starts the MSB's 10-WT answer window (WiM Teil 1 Kap. 3.3); a
+    /// 17118 is GPKE Teil 3's and is not sent here.
     #[test]
     fn the_auftrag_registers_the_published_answer_window() {
         let sent = time::macros::datetime!(2026-10-07 10:00 UTC);
@@ -684,12 +945,13 @@ mod tests {
             mako_fristen::antwort::antwort_deadline(17_011, sent)
         );
 
-        let out = WimTechnikAenderungWorkflow::handle(
-            &TechnikAenderungState::default(),
-            auftrag(17_118, sent),
-        )
-        .expect("accepted");
-        assert!(out.deadlines.is_empty());
+        assert!(
+            WimTechnikAenderungWorkflow::handle(
+                &TechnikAenderungState::default(),
+                auftrag(17_118, sent),
+            )
+            .is_err()
+        );
     }
 }
 
@@ -703,6 +965,12 @@ mod eingang_tests {
             sender: MarktpartnerCode::new("9900000000003"),
             location_id: Some("DE00056266802AO6G56M11SN51G21M24S".to_owned()),
             message_ref: MessageRef::new("ORD-17011"),
+            kopf: AuftragKopf {
+                empfaenger: "9900555000005".to_owned(),
+                dokumentennummer: "TECH-4711".to_owned(),
+                beauftragung: BGM_DIREKTE_BEAUFTRAGUNG.to_owned(),
+                ausfuehrungsdatum: Some("202612312300".to_owned()),
+            },
             validation_passed: true,
             validation_errors: vec![],
         }
@@ -769,6 +1037,77 @@ mod eingang_tests {
         assert!(!lapsed.is_terminal());
     }
 
+    fn ansprechpartner() -> crate::geraeteubernahme::Ansprechpartner {
+        crate::geraeteubernahme::Ansprechpartner {
+            name: "Technik-Hotline".to_owned(),
+            kommunikation: vec![crate::geraeteubernahme::Kommunikationsweg::Telefon(
+                "+4922112345".to_owned(),
+            )],
+        }
+    }
+
+    fn antwort(
+        besteller: mako_pruefung::codes::TechnikBesteller,
+        code: &str,
+    ) -> TechnikAenderungCommand {
+        TechnikAenderungCommand::SendAntwort {
+            besteller,
+            antwortcode: code.to_owned(),
+            freitext: None,
+            ansprechpartner: ansprechpartner(),
+            message_ref: MessageRef::new("ORDRSP-1"),
+        }
+    }
+
+    /// The Besteller's tree decides: `A02` is the Zustimmung of `E_0249`
+    /// (19005) and a code `E_0249` does not publish is refused; the answer
+    /// echoes the Auftrag's `BGM` DE 1001 / 1004 and `DTM+203` and ends the
+    /// MSB's process.
+    #[test]
+    fn an_answered_auftrag_reaches_its_end_state() {
+        use mako_pruefung::codes::TechnikBesteller;
+        let offen = fold(
+            TechnikAenderungState::New,
+            &WimTechnikAenderungWorkflow::handle(&TechnikAenderungState::New, receive(17_011))
+                .expect("accepted"),
+        );
+        let out = WimTechnikAenderungWorkflow::handle(
+            &offen,
+            antwort(TechnikBesteller::Netzbetreiber, "A02"),
+        )
+        .expect("answered");
+        let p = &out.outbox[0].payload;
+        assert_eq!(p["pid"], BESTAETIGUNG_PID);
+        assert_eq!(p["antwort_codeliste"], "E_0249");
+        assert_eq!(p["document_code"], "Z12");
+        assert_eq!(p["order_reference"], "TECH-4711");
+        assert_eq!(p["ausfuehrungsdatum"], "202612312300");
+        assert_eq!(p["sender"], "9900555000005");
+        assert_eq!(
+            out.events[0].antwort().map(|a| a.code),
+            Some("A02".to_owned())
+        );
+        let ende = fold(offen.clone(), &out);
+        assert!(ende.is_terminal(), "{ende:?}");
+
+        // The LF's tree: `A03` (Vollmacht fehlt) is an Ablehnung of `E_0250`
+        // and unpublished in `E_0249`.
+        let out = WimTechnikAenderungWorkflow::handle(
+            &offen,
+            antwort(TechnikBesteller::Lieferant, "A03"),
+        )
+        .expect("refused");
+        assert_eq!(out.outbox[0].payload["pid"], ABLEHNUNG_PID);
+        assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0250");
+        assert!(
+            WimTechnikAenderungWorkflow::handle(
+                &offen,
+                antwort(TechnikBesteller::Netzbetreiber, "A03")
+            )
+            .is_err()
+        );
+    }
+
     /// 17118 is GPKE Teil 3's, answered by ORDRSP 19127: the MSB does not
     /// receive it as a Technikänderung.
     #[test]
@@ -813,11 +1152,14 @@ mod verlauf_tests {
             ordrsp_pid: pid(19_006),
             reason: None,
             message_ref: MessageRef::new("RSP-1"),
+            antwort: Some(Antwortcode::new("A01", Some("E_0249"))),
         };
         assert_eq!(
             abgelehnt.verlauf(),
             Some(stated(Richtung::Eingang, Some(19_006), Some("RSP-1")))
         );
+        // The MSB's code rides the received answer's envelope.
+        assert_eq!(abgelehnt.antwort().map(|a| a.code), Some("A01".to_owned()));
         let abgelaufen = TechnikAenderungEvent::DeadlineExpired {
             deadline_id: DeadlineId::new(),
             label: "x".into(),

@@ -244,7 +244,7 @@ fn wim_stoerungsmeldung_renders_to_ahb_valid_insrpt() {
         serde_json::json!({
             "type":          "Stoerungsmeldung",
             "pid":           23001,
-            "melo":          "DE00056266802AO6G56M11SN51G",
+            "melo":          "DE00056266802AO6G56M11SN51G21M24S",
             "receiver":      LFN,
             "document_date": "20261101",
             "message_ref":   "MSG-INSRPT-1",
@@ -261,7 +261,7 @@ fn wim_stoerungsmeldung_renders_to_ahb_valid_insrpt() {
         .validate_on_date(time::macros::date!(2026 - 11 - 01))
         .expect("validation runs");
     assert!(
-        report.is_valid(),
+        report.is_sendable(),
         "rendered INSRPT must satisfy the AHB, got: {:?}",
         report
             .iter_issues()
@@ -347,11 +347,11 @@ fn the_rendered_summenzeitreihe_still_validates() {
     );
     let rendered = render_to_wire_bytes(&msg, &registry()).expect("13003 must render");
     let parsed = edi_energy::parse(&rendered.bytes).expect("must parse");
-    let report = parsed
-        .validate_on_date(time::macros::date!(2026 - 06 - 30))
-        .expect("validation runs");
+    // Held against the release the message declares — the one in force on the
+    // day it is rendered, which is what the receiver checks it against.
+    let report = parsed.validate().expect("validation runs");
     assert!(
-        report.is_valid(),
+        report.is_sendable(),
         "rendered 13003 must satisfy the AHB, got: {:?}",
         report
             .iter_issues()
@@ -415,6 +415,198 @@ fn an_ersteinbau_status_names_its_messlokation_and_its_own_anwendungsfall() {
         "SG15 DTM+76 carries the planned Umstellungszeitpunkt in CCYYMMDD:\n{text}"
     );
     assert!(text.contains("RFF+Z13:21029"), "{text}");
+}
+
+/// **An unreported MSB-Wechsel ends with the 21013 the NB owes.**
+///
+/// WiM Teil 1 Kap. 2.3.2 Nr. 16: with no Gesamtvorgang report after the
+/// MSBN's window, the NB sends the „Mitteilung über das Scheitern des
+/// Gesamtvorgangs". The lapse of that window queues it, and what it queues
+/// renders to a 21013 the pre-send gate lets through — IFTSTA AHB 2.1
+/// Kap. 6.2: `STS+Z10+Z13+E17`, `SG14 LOC+172`, `RFF+Z13:21013`.
+#[test]
+fn an_unreported_msb_wechsel_renders_a_sendable_21013() {
+    use edi_energy::EdiEnergyMessage as _;
+    use mako_engine::ids::DeadlineId;
+    use mako_engine::types::{DeviceId, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow;
+    use mako_wim::geraetewechsel::{
+        DeviceChangeCommand as C, DeviceChangeState, GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL,
+        WimDeviceChangeWorkflow as W,
+    };
+
+    const NB: &str = "9900357000004";
+    const MSBN: &str = "9900077000006";
+    let step = |state: DeviceChangeState, cmd: C| {
+        let out = W::handle(&state, cmd).expect("accepted");
+        let state = out.events.iter().fold(state, W::apply);
+        (state, out)
+    };
+    let (state, _) = step(
+        DeviceChangeState::default(),
+        C::ReceiveUtilmd {
+            transaktionsgrund: Some("E03".to_owned()),
+            pid: Pruefidentifikator::new(55_042).expect("valid"),
+            sender: MarktpartnerCode::new(MSBN),
+            receiver: MarktpartnerCode::new(NB),
+            melo_id: MeLo::new(MELO),
+            device_id: DeviceId::new("ZHR-1"),
+            document_date: "20261102".to_owned(),
+            message_ref: MessageRef::new("UTILMD-1"),
+            vorgangsnummer: Some("VG-1".to_owned()),
+            process_date: Some("20261201".to_owned()),
+            validation_passed: true,
+            validation_errors: vec![],
+            received_at: time::macros::datetime!(2026-11-02 09:00 UTC),
+        },
+    );
+    let (state, _) = step(
+        state,
+        C::DispatchAntwort {
+            bestaetigt: true,
+            antwort_code: "E15".to_owned(),
+            bemerkung: None,
+            abweichender_termin: None,
+        },
+    );
+    let (_, fired) = step(
+        state,
+        C::TimeoutExpired {
+            deadline_id: DeadlineId::new(),
+            label: GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL.into(),
+        },
+    );
+    let entry = fired
+        .outbox
+        .iter()
+        .find(|o| o.message_type.as_ref() == "IFTSTA")
+        .expect("the lapse queues the 21013");
+    let msg = outbox("IFTSTA", entry.recipient.as_ref(), entry.payload.clone());
+    let wire = render_to_wire_bytes(&msg, &registry()).expect("21013 renders");
+    let text = String::from_utf8_lossy(&wire.bytes);
+    assert!(text.contains("STS+Z10+Z13+E17"), "{text}");
+    assert!(text.contains(&format!("LOC+172+{MELO}")), "{text}");
+    assert!(text.contains("RFF+Z13:21013"), "{text}");
+    assert!(
+        text.contains(&format!("NAD+MR+{MSBN}")),
+        "to the MSBN:\n{text}"
+    );
+
+    let report = edi_energy::parse(&wire.bytes)
+        .expect("parses")
+        .validate_on_date(mako_fristen::heute())
+        .expect("validation runs");
+    assert!(
+        report.is_sendable(),
+        "the pre-send gate refuses the 21013: {:?}",
+        report.sending_refusals().collect::<Vec<_>>()
+    );
+}
+
+/// Render `payload` as an IFTSTA and hold it against the pre-send gate.
+fn sendable_iftsta(recipient: &str, payload: serde_json::Value) -> String {
+    use edi_energy::EdiEnergyMessage as _;
+    let msg = outbox("IFTSTA", recipient, payload);
+    let wire = render_to_wire_bytes(&msg, &registry()).expect("renders");
+    let text = String::from_utf8_lossy(&wire.bytes).into_owned();
+    let report = edi_energy::parse(&wire.bytes)
+        .expect("parses")
+        .validate_on_date(mako_fristen::heute())
+        .expect("validation runs");
+    assert!(
+        report.is_sendable(),
+        "the pre-send gate refuses it: {:?}\n{text}",
+        report.sending_refusals().collect::<Vec<_>>()
+    );
+    text
+}
+
+/// **Each Gesamtvorgang IFTSTA renders its own column.** IFTSTA AHB 2.1
+/// Kap. 6.2: 21009 / 21013 `STS+Z10+Z13`, 21010 / 21012 `STS+Z10+Z14` with
+/// `DTM+293` the takeover instant, 21011 / 21012 `RFF+ACW` / `RFF+ADY` naming
+/// the report they answer, 21011 its `E_0232` code under `S_0057` (Strom) or
+/// `G_0055` (Gas), 21013 `E17`. None of them is the 21042 `STS+Z21+105`.
+#[test]
+fn every_gesamtvorgang_iftsta_renders_its_own_column() {
+    const NB: &str = "9900357000004";
+    const MSBN: &str = "9900077000006";
+    let base = |pid: u32, sender: &str, receiver: &str| {
+        serde_json::json!({
+            "pid": pid, "sender": sender, "receiver": receiver,
+            "melo": MELO, "sparte": "strom",
+        })
+    };
+    let mut p = base(21_009, MSBN, NB);
+    let t = sendable_iftsta(NB, p.clone());
+    assert!(
+        t.contains("STS+Z10+Z13'") && t.contains("RFF+Z13:21009"),
+        "{t}"
+    );
+
+    p = base(21_010, MSBN, NB);
+    p["zuordnungsbeginn"] = "20261201".into();
+    let t = sendable_iftsta(NB, p);
+    assert!(t.contains("STS+Z10+Z14'"), "{t}");
+    assert!(
+        t.contains("DTM+293:202611302300?+00:303"),
+        "00:00 Uhr des 01.12. in Strom:\n{t}"
+    );
+
+    p = base(21_011, NB, MSBN);
+    p["referenz_nachricht"] = "IFT-0815".into();
+    p["referenz_vorgang"] = "1".into();
+    p["antwort_code"] = "Z66".into();
+    p["antwort_codeliste"] = "S_0057".into();
+    let t = sendable_iftsta(MSBN, p);
+    assert!(t.contains("STS+Z10+Z13+Z66:S_0057"), "{t}");
+    assert!(
+        t.contains("RFF+ACW:IFT-0815") && t.contains("RFF+ADY:1"),
+        "{t}"
+    );
+
+    p = base(21_012, NB, MSBN);
+    p["referenz_nachricht"] = "IFT-0815".into();
+    p["referenz_vorgang"] = "1".into();
+    p["zuordnungsbeginn"] = "20261201".into();
+    let t = sendable_iftsta(MSBN, p);
+    assert!(
+        t.contains("STS+Z10+Z14'") && t.contains("RFF+ACW:IFT-0815"),
+        "{t}"
+    );
+    assert!(t.contains("DTM+293:202611302300?+00:303"), "{t}");
+
+    let t = sendable_iftsta(MSBN, base(21_013, NB, MSBN));
+    assert!(t.contains("STS+Z10+Z13+E17'"), "{t}");
+}
+
+/// A Gas 21011 names its code under `G_0055` and dates nothing: the Gas
+/// codelist rides where the MP-ID in `NAD+MR` is a Gas one (`[493]`).
+#[test]
+fn a_gas_21011_names_its_code_under_g_0055() {
+    let t = sendable_iftsta(
+        LFN,
+        serde_json::json!({
+            "pid": 21_011, "sender": GNB, "receiver": LFN, "melo": MELO,
+            "sparte": "gas", "referenz_nachricht": "IFT-1", "referenz_vorgang": "1",
+            "antwort_code": "Z66", "antwort_codeliste": "G_0055",
+        }),
+    );
+    assert!(t.contains("STS+Z10+Z13+Z66:G_0055"), "{t}");
+}
+
+/// **An IFTSTA PID without its own renderer arm is refused**, never rendered
+/// in another Anwendungsfall's shape.
+#[test]
+fn an_unlisted_iftsta_pid_is_refused() {
+    let msg = outbox(
+        "IFTSTA",
+        LFN,
+        serde_json::json!({ "pid": 21_007, "sender": GNB, "receiver": LFN, "melo": MELO }),
+    );
+    let Err(refused) = render_to_wire_bytes(&msg, &registry()) else {
+        panic!("21007 has no renderer arm and must be refused");
+    };
+    assert!(format!("{refused:?}").contains("21007"), "{refused:?}");
 }
 
 /// The `E_0233` answers name their Prüfschritt and their cluster's own status.
@@ -619,6 +811,7 @@ fn a_mabis_korrekturliste_renders_as_a_list_with_its_positions() {
                 },
             ],
             sender_rolle: "NB".to_owned(),
+            anforderungsart: Some(mako_mabis::listenabgleich::Anforderungsart::Einzelanforderung),
         },
     )
     .expect("the Korrekturliste is accepted");
@@ -707,9 +900,10 @@ fn a_mabis_gesamtablehnung_renders_to_parseable_utilmd() {
         &state,
         ListenabgleichCommand::SendGesamtAblehnung {
             // `E_0004` — the tree a 55065 is answered out of when the **ÜNB**
-            // distributed it, and the only one of the pair with a whole-list
+            // distributed it under a gültige Abonnierung, with a whole-list
             // Abonnement Prüfschritt.
             sender_rolle: "ÜNB".to_owned(),
+            anforderungsart: Some(mako_mabis::listenabgleich::Anforderungsart::Abonnement),
             abonnement_bestellt: Some(false),
             zeitraum_plausibel: Some(true),
             mabis_zp_passt: Some(true),

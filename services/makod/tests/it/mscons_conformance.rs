@@ -48,9 +48,9 @@ fn assert_conforms(pid: u32, payload: serde_json::Value) -> String {
         .unwrap_or_else(|e| panic!("PID {pid}: validation failed to run: {e}"));
 
     assert!(
-        report.is_valid(),
+        report.is_sendable(),
         "PID {pid}: rendered message does not conform to its profile: {:#?}\n{}",
-        report.errors(),
+        report.sending_refusals().collect::<Vec<_>>(),
         String::from_utf8_lossy(&bytes)
     );
 
@@ -100,8 +100,8 @@ fn arbeit_payload(pid: u32, with_maxima: bool) -> serde_json::Value {
         "order_reference": "BESTELLUNG-2026-1",
         "arbeit": {
             "quantity": "184500.000",
-            "from": "202601010000+00",
-            "to": "202605010000+00",
+            "from": "202512312300+00",
+            "to": "202604302200+00",
         },
     });
     if with_maxima {

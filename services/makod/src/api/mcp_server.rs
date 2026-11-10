@@ -160,7 +160,7 @@ pub struct SubmitCommandParams {
     /// | `geli.lieferende.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `transaktionsgrund` — `mako_markt::commands::GeliLieferendeAnmelden`, no other key |
     /// | `geli.kuendigung.anmelden` | `malo_id` (gas), `process_date` (YYYYMMDD), `lfa_mp_id` (the Altlieferant) — `mako_markt::commands::GeliKuendigungAnmelden`, no other key |
     /// | `geli.stammdaten-aenderung.beantworten` | `malo_id` (gas), `antwort_code` (a code of the Antwort column's Codeliste — `E15` on a 44115) — `mako_markt::commands::GeliStammdatenAenderungBeantworten`, no other key |
-    /// | `geli.stammdaten-aenderung.senden` | `malo_id` (gas), `pid` (44112 or 44109), `empfaenger_mp_id`, `aenderungsdatum` / `vertragsbeginn` (YYYYMMDD), `gruppen` (the changed groups); on a 44109 the LF's `abrechnungsintervall_monate`, `haushaltskunde`, `kunde` — `mako_markt::commands::GeliStammdatenAenderungSenden`, no other key |
+    /// | `geli.stammdaten-aenderung.senden` | `malo_id` (gas), `pid` (44112, 44123, 44175, 44109 or 44120), `empfaenger_mp_id`, `aenderungsdatum` / `vertragsbeginn` (YYYYMMDD), `gruppen` (the changed groups on a 44112 / 44109, none otherwise); on a 44109 the LF's `abrechnungsintervall_monate`, `haushaltskunde`, `kunde`, on a 44120 its `bilanzkreis` — `mako_markt::commands::GeliStammdatenAenderungSenden`, no other key |
     /// | `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id` |
     /// | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
     #[schemars(

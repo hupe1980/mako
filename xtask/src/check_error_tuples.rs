@@ -70,7 +70,7 @@ const MIN_FILES: usize = 100;
 
 /// `src` with every `#[cfg(test)]` item and every comment line blanked,
 /// newlines kept so an offset still maps to its line.
-fn production_text(src: &str) -> String {
+pub(crate) fn production_text(src: &str) -> String {
     let mut text = String::with_capacity(src.len());
     let mut skip_depth: Option<i64> = None;
     let mut opened = false;

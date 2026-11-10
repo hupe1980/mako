@@ -227,15 +227,17 @@ Muss), so `NbEntscheidung::Accept` carries `A51` / `A58` / `E15`.
 |---|------|------------|
 | — | `MaloGridRecord` exists for the MaLo | `Escalate` (a data gap, not a ground to refuse) |
 | 15 | Vorlauffrist — one full Werktag between receipt and Zuordnungsbeginn (LFW24, all Transaktionsgründe) | `Reject A07` |
+| 16–28 | Ruhende Marktlokation (`ZAP`): verbrauchend, Kundenanlage, Netzlokationen, iMS | `Reject A09` / `A08` / `A37` / `A47` / `A46`; no store records these facts, so a ruhende Marktlokation escalates at 18 |
 | 30 | MaLo participates in MaKo | `Reject A02` |
+| 50 | Neuanlage? A MaLo `marktd` has never seen supplied may be one | `Escalate` — no store records an Inbetriebnahme, so `A04` is never stated |
 | 60 | Zuordnungsermächtigung: Bilanzierungsgebiet matches, LF in the partner directory | `Reject A05` |
 | 70 | No other Anmeldung in Bearbeitung | `Reject A06` |
 
-A **ruhende** Marktlokation is not refused: Prüfschritt 30's Hinweis names only
+A **ruhende** Marktlokation is not refused at 30: its Hinweis names only
 stillgelegte Marktlokationen and the Modell-2-Zuordnung.
 
-**Strom, erzeugende Marktlokation** (Prüfschritte 220–830) uses `A45` / `A25`
-for the same two questions, then picks one of the **six** Vorlauffristen of
+**Strom, erzeugende Marktlokation** (Prüfschritte 220–830) asks the Neuanlage
+question at 220 as above and uses `A45` / `A25` for the same two questions, then picks one of the **six** Vorlauffristen of
 GPKE Teil 2 § 2.1.1, keyed on `(Geschäftsvorfall, bestehende, angemeldete
 Veräußerungsform)`. The angemeldete one is `SG10 CCI+Z22`; the bestehende one
 and the Ausfallvergütung flag come from `einsd`
@@ -260,6 +262,15 @@ identify is re-checked **daily for 60 Werktage** and only then refused `A07` /
 |---|---|
 | `GET /api/v1/neuanlage?status=offen` | The Prüflauf view, with `letzter_pruefungstag` (a refusal is admissible only after it) and the `pruefungen` count |
 | `PUT /api/v1/neuanlage/{id}/identifikation` | Body `{"malo_id": "…"}` (nothing else, not empty): the MaLo-ID the NB matched from its NIS/GIS; the next pass walks the tree with it |
+
+processd sends the answer with the process's id and the identified MaLo-ID.
+A Bestätigung has to say how the new Marktlokation is metered and which
+Messlokationen and Messstellenbetreiber it has. processd holds none of these
+facts, so makod reads them from marktd, the NB's record of that Marktlokation,
+on the Anmeldung's Vertragsbeginn. If marktd holds no record, makod refuses the
+Bestätigung, and the NB sends it itself with `gpke.neuanlage.bestaetigen`. A
+`ZW2` 55603 names its Tranche, which marktd does not supply, so the NB always
+sends that one itself.
 
 The branches share no code (`A01`–`A09` verbrauchend, `A10`–`A19` erzeugend).
 The Vorlauffrist is measured against the Übertragungstag (GPKE Teil 1 Kap. 7
@@ -384,8 +395,9 @@ stateDiagram-v2
 
 A daily worker enforces the three-month maximum (§38 Abs. 4 S. 1 EnWG, calendar
 months from `eog_seit`): `warn_days_before_expiry` ahead the case turns
-`expiring`, at expiry `expired`; both emit
-`de.markt.versorgung.ersatz-auslaufend` to `[eog] notify_webhook_url`. After
+`expiring`, at expiry `expired`; both enqueue
+`de.markt.versorgung.ersatz-auslaufend` in the transaction that moves the case,
+delivered to `[eog] notify_webhook_url` with retry. After
 expiry, Haushaltskunden pass into Grundversorgung without a market message;
 otherwise the NB secures the Bilanzkreis (vertragliche Ersatzbelieferung, STS
 `E06`) or interrupts the Anschlussnutzung. Cases are listed by
@@ -474,6 +486,8 @@ Bilanzierungsgebiet, and an `eeg` or `kwkg` list on a Gas row.
 | `E_0614` 500 | Liegt zu dem genannten Objekt ein Vertrag vor? | `vertragd` — a contract row |
 | `E_0609` 40 | Wurde die Vorlauffrist eingehalten? | `mako-fristen` |
 | `E_0615` 20 | Liegt die MaLo im Grundversorgungsgebiet des Empfängers? | `[lf] grundversorgungs_netzgebiete` |
+| `E_0615` 30 | Wurden die Fristen zur Anmeldung eingehalten? | `mako-fristen` — GPKE Teil 2 Kap. 2.3.2.2 Nr. 1: a Zuordnungsbeginn in the future takes 00:00–13:00 Uhr of the letzter WT before it; one not in the future („unverzüglich") escalates. The Gas Codeliste `E_3008` publishes no such step |
+| `E_0615` 50 | Besteht eine gesetzliche Pflicht zur Grund- oder Ersatzversorgung? | `marktd` — „nein" when another LF holds the MaLo; „ja" (§ 38 Abs. 1 EnWG) for a MaLo in Niederspannung/Niederdruck in a declared Netzgebiet that no other LF holds at the Zuordnungsbeginn; `E06` / `ZZD` (bilateral) escalate |
 
 Prüfschritt 50 compares names, not strings: `processd` forwards `NAD+Z09` as
 `?kunde=` and `vertragd` matches token sets; a shared Nachname alone is
@@ -762,7 +776,7 @@ Antwortfrist sweep.
 | `pid` | BDEW Prüfidentifikator (e.g. 55001) |
 | `family` | `gpke`, `wim`, `geli-gas`, `wim-gas`, `gabi-gas`, `mabis`, `emob`, `redispatch`, `invoic-storno`, `unknown` — the Festlegung of the PID's Antwortfrist; a two-Sparten WiM PID by `data.sparte`, else the counterparty's coding authority (`293` / `332`) |
 | `workflow_name` | From the `makoworkflow` CE extension |
-| `state` | `initiated` \| `running` \| `antwortfrist_abgelaufen` \| `completed` \| `rejected` \| `failed` |
+| `state` | `initiated` \| `running` \| `antwortfrist_abgelaufen` \| `completed` \| `rejected` \| `failed`. A `de.mako.process.completed` is `rejected` when its `data.accepted` is `false` or `data.outcome` is `"rejected"` — the type carries the Bestätigung and the Ablehnung alike — and `completed` otherwise; `de.mako.aperak.rejected` is `rejected` too |
 | `malo_id` | 11-digit Marktlokations-ID |
 | `partner_mp_id` | MP-ID of the counterparty |
 | `mdm_role` | Canonical Marktrolle (`LF`, `NB`, …) |
@@ -970,18 +984,20 @@ EBD Prüfschritt code (`pruefschritt_code`, a **Muss**), and `DTM+293`
 Fertigstellungsdatum — Muss on `Z14` and ≤ the document date (condition [495]),
 so a future `executed_at` is refused at the API (IFTSTA AHB 2.1 § 7.2).
 
-`204`: recorded, IFTSTA with `makod`. `202`: recorded, dispatch failed, order in
-the retry queue — the Lieferant has **not** been told.
+`202`: recorded, and the IFTSTA 21039 committed with it as an `event_outbox`
+command to `makod` (key `processd-sperr-iftsta-<order>`); the Lieferant is told
+once the outbox worker delivers it, which stamps `iftsta_dispatched_at` and
+`iftsta_ref`. `204`: an operator-created order, which owes no IFTSTA.
 
 A terminal order with `iftsta_dispatched_at IS NULL` has an uninformed
-Lieferant. A worker re-sends under the same idempotency key;
-`iftsta_next_attempt_at` is both claim lease and backoff, so replicas cannot
-double-send. It announces `de.sperr.iftsta.ausstehend` once when the 8 attempts
-are spent or `iftsta_faellig_am` has passed. `/stats` reports
+Lieferant. The command follows the shared outbox policy — retries with backoff,
+then the dead letter; `iftsta_attempts` and `iftsta_last_error` on the order are
+read off it. A sweep announces `de.sperr.iftsta.ausstehend` once when the
+command is dead-lettered or `iftsta_faellig_am` has passed. `/stats` reports
 `iftsta_outstanding` (in flight), `iftsta_ueberfaellig` (past the 1-WT window)
-and `iftsta_stuck` (past the retry budget — **the number that needs a human**).
-A stuck dispatch almost always means `makod` has no `gpke-sperrung` process for
-that MaLo in `ValidationPassed`; after fixing the cause, reset `iftsta_attempts`.
+and `iftsta_stuck` (dead-lettered — **the number that needs a human**). A stuck
+dispatch almost always means `makod` has no `gpke-sperrung` process for that
+MaLo in `ValidationPassed`; after fixing the cause, requeue the command.
 
 ### Emitted events
 
@@ -997,7 +1013,7 @@ delivered to `[sperr] erp_webhook_url`; without it the notices accumulate in
 | `de.sperr.fehlgeschlagen` | Not carried out — IFTSTA `Z13`, with the Prüfschritt code |
 | `de.sperr.storniert` | A pending order was withdrawn; no IFTSTA |
 | `de.sperr.ausfuehrung.ueberfaellig` | The 6-WT execution window closed with the order still open |
-| `de.sperr.iftsta.ausstehend` | The retry budget is spent **or** the § 3.5.1.2 Nr. 5 Frist has passed, and the LF is still uninformed |
+| `de.sperr.iftsta.ausstehend` | The IFTSTA command was dead-lettered **or** the § 3.5.1.2 Nr. 5 Frist has passed, and the LF is still uninformed |
 
 `agentd`'s `sperrd-agent` subscribes to the `de.sperr.*` glob. All four
 Sperrauftrag Cedar actions require the `NB` role and a tenant match;
@@ -1280,8 +1296,11 @@ about the MSBA's Messstellenbetriebsvertrag in `vertragd`
 `vertragd` derives `naechstmoeglich` from the notice period, capped by § 309
 Nr. 9 lit. c BGB.
 
-**Verpflichtungsanfrage (55168), `E_0240`.** Kap. 2.4.2 Nr. 4 leaves the answer
-„nach eigenem Ermessen" to the gMSB, so it escalates with its 1-Werktag window.
+**Verpflichtungsanfrage (55168), `E_0240`.** One transmitted after the 5. WT
+before the Zuordnungsende its `SG4 DTM+76` names is refused `E17` (Kap. 2.4.2
+Nr. 3); a late 44168 escalates, having no Ablehnungs-PID. Otherwise Kap. 2.4.2
+Nr. 4 leaves the answer „nach eigenem Ermessen" to the gMSB, so it escalates
+with its 1-Werktag window.
 Escalated decisions still write an `anmeldung_decisions` row.
 
 ---

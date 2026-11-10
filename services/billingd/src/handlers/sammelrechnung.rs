@@ -238,6 +238,7 @@ pub async fn post_sammelrechnung(
                 rechnung_json: &site.invoice.to_rechnung_json(),
                 total_netto_eur: site.invoice.netto_eur,
                 total_brutto_eur: site.invoice.brutto_eur,
+                steuerzeilen: &crate::steuerzeilen::aus_rechnung(&site.invoice),
             },
         )
         .await;

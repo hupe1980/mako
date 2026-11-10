@@ -417,16 +417,21 @@ impl Workflow for GpkeDatenabrufWorkflow {
                     malo: malo.clone(),
                     message_ref: message_ref.clone(),
                 };
-                let outbox = vec![PendingOutbox::new(
-                    "ORDERS",
-                    recipient.as_str(),
-                    serde_json::json!({
-                        "pid":        orders_pid.as_u32(),
-                        "malo":       malo.as_ref().map(|m| m.as_str()),
-                        "orders_ref": message_ref.as_str(),
-                        "payload":    payload,
-                    }),
-                )];
+                // The ORDERS names its Anfrage by `BGM` DE 1004 — the reference
+                // the MSB's Ablehnung echoes in `SG1 RFF+ON` — and the column's
+                // own fields come in `payload`, merged at the top.
+                let mut body = serde_json::json!({
+                    "pid":         orders_pid.as_u32(),
+                    "location":    malo.as_ref().map(|m| m.as_str()),
+                    "orders_ref":  message_ref.as_str(),
+                    "document_id": message_ref.as_str(),
+                });
+                if let (Some(target), serde_json::Value::Object(extra)) =
+                    (body.as_object_mut(), payload)
+                {
+                    target.extend(extra);
+                }
+                let outbox = vec![PendingOutbox::new("ORDERS", recipient.as_str(), body)];
                 // The counterparty's Antwortfrist, from the published row for
                 // this ORDERS; a PID no Festlegung quantifies registers nothing.
                 let frist: Vec<PendingDeadline> = antwortfrist(orders_pid.as_u32(), gesendet_am)

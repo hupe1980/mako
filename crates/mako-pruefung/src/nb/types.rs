@@ -294,6 +294,44 @@ pub struct AnmeldungAnfrage {
     /// Versorgungsstatus may use.
     #[serde(default)]
     pub abmeldeanfrage: Abmeldeanfrage,
+    /// What `E_0622` Prüfschritte 18–28 ask about a ruhende Marktlokation
+    /// (EBD 4.3 Kap. 6.6.1, S. 72 f.). Read only on
+    /// [`Marktlokationsart::Ruhend`]; every unanswered step reached escalates.
+    #[serde(default)]
+    pub ruhend: RuhendeAnmeldung,
+}
+
+// ── Ruhende Marktlokation (E_0622 Prüfschritte 18–28) ─────────────────────────
+
+/// The facts `E_0622` Prüfschritte 18–28 ask about an Anmeldung whose
+/// Ergänzung names a „Ruhende Marktlokation" (`ZAP`).
+///
+/// Every one is a fact about the NB's own records or the Anmeldung's
+/// product, none a default: `None` is „not assessed", and the walk
+/// escalates at the first step it reaches without an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RuhendeAnmeldung {
+    /// Prüfschritt 18 — is the ruhende Marktlokation (`SG5 LOC+Z22`) a
+    /// verbrauchende one in the NB's system? „nein" → `A09`.
+    pub ruhende_ist_verbrauchend: Option<bool>,
+    /// Prüfschritt 19 — does the Anmeldung form a new Kundenanlage
+    /// (Produktcode 9991 00000 276 9, Produkteigenschaft 9991 00000 293 3 or
+    /// 9991 00000 321 2)? „ja" → 20, „nein" → 25.
+    pub neubildung_kundenanlage: Option<bool>,
+    /// Prüfschritte 20 / 27 — are the Kundenanlage's Energiemengen determined
+    /// by a virtueller Summenzähler (§ 20 Abs. 1d EnWG bzw. § 10c EEG)?
+    /// Prüfschritt 20 asks it of the Kundenanlage to be formed, 27 of the
+    /// existing one; each walk reaches one of them.
+    pub virtueller_summenzaehler: Option<bool>,
+    /// Prüfschritte 22 / 28 — is the ruhende Marktlokation measured by an
+    /// iMS? „nein" → `A47` (22) or `A46` (28).
+    pub ruhende_ims: Option<bool>,
+    /// Prüfschritt 25 — is the Marktlokation of `SG5 LOC+Z16` a Marktlokation
+    /// „Kundenanlage"? „nein" → `A08`.
+    pub z16_ist_kundenanlage: Option<bool>,
+    /// Prüfschritt 26 — does the ruhende Marktlokation lie behind the same
+    /// Netzlokation(en) as the Kundenanlage's? „nein" → `A37`.
+    pub gleiche_netzlokationen: Option<bool>,
 }
 
 // ── Abmeldeanfrage ────────────────────────────────────────────────────────────

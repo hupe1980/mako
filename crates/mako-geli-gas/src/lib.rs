@@ -139,14 +139,11 @@
     clippy::map_unwrap_or,
     reason = "a pedantic style lint this crate does not adopt"
 )]
-#![expect(
-    clippy::items_after_statements,
-    reason = "a pedantic style lint this crate does not adopt"
-)]
 
 pub mod antwortfrist;
 pub mod datenabruf;
 pub mod gas_quality;
+pub mod geschaeftsdatenanfrage;
 pub mod invoic;
 pub mod lf_anmeldung;
 pub mod lf_stornierung;
@@ -154,6 +151,7 @@ pub mod lieferbeginn;
 pub mod mscons;
 pub mod partin;
 pub mod sperrung_lf;
+pub mod sperrung_msb;
 pub mod sperrung_nb;
 pub mod stammdatenaenderung;
 pub mod stornierung;
@@ -303,10 +301,20 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
             WorkflowDriver::of::<sperrung_nb::GeliGasSperrungNbWorkflow>(
                 sperrung_nb::WORKFLOW_NAME,
             ),
+            // gMSB side: receives the GNB's Anfrage Sperrung 17116, answers
+            // 19118 / 19119 out of `E_1001`.
+            WorkflowDriver::of::<sperrung_msb::GeliGasSperrungMsbWorkflow>(
+                sperrung_msb::WORKFLOW_NAME,
+            ),
             WorkflowDriver::of::<stammdatenaenderung::GeliGasStammdatenaenderungWorkflow>(
                 stammdatenaenderung::WORKFLOW_NAME,
             ),
             WorkflowDriver::of::<partin::GeliGasPartinWorkflow>(partin::WORKFLOW_NAME),
+            // Geschäftsdatenanfrage Gas: ORDERS 17101 / 17126 → UTILMD 44035 /
+            // 44060 or ORDRSP 19101, both sides.
+            WorkflowDriver::of::<geschaeftsdatenanfrage::GeliGasGeschaeftsdatenanfrageWorkflow>(
+                geschaeftsdatenanfrage::WORKFLOW_NAME,
+            ),
             // PID 31011 — Rechnung sonstige Leistung / AWH Sperrprozesse Gas (VNB → LFN/LFA).
             // GeLi Gas (BK7-24-01-009) billing for disconnection services; NOT GaBi Gas.
             WorkflowDriver::of::<invoic::GeliGasSperrprozesseInvoicWorkflow>(invoic::WORKFLOW_NAME),
@@ -328,6 +336,19 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         }
         // PIDs 44022–44024: role-conditional — NOT registered here.
         // See register_pids_with_roles() for the Nb-role guard.
+
+        // Geschäftsdatenanfrage Gas (BK7-24-01-009 Anlage Kap. 4.4): the
+        // Anfragen 17101 / 17126 open the NB's side, the UTILMD answers
+        // 44035 / 44060 resume the Anfragender's. The ORDRSP 19101 Ablehnung is
+        // GPKE's PID too, so it is registered for the Sparte Gas only.
+        for &pid in geschaeftsdatenanfrage::GDA_PIDS {
+            router.register(pid, geschaeftsdatenanfrage::WORKFLOW_NAME);
+        }
+        router.register_with_sparte(
+            geschaeftsdatenanfrage::ABLEHNUNG_PID,
+            mako_engine::types::Sparte::Gas,
+            geschaeftsdatenanfrage::WORKFLOW_NAME,
+        );
 
         // PIDs 44036/44037/44038 (Informationsmeldungen, NB→LFN/LFA/LFZ) —
         // AWH GeLi Gas V1.2 Kap. 2.5.2 SD Lieferbeginn Nr. 2 / 6 / 7. One-way:
@@ -356,6 +377,8 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         for &pid in datenabruf::ORDRSP_ABLEHNUNG_PIDS {
             router.register(pid, datenabruf::WORKFLOW_NAME);
         }
+        // UTILMD 55194 answers the 17104 (NB Strom → MSB Gas) and resumes it.
+        router.register(datenabruf::GDA_ANTWORT_PID, datenabruf::WORKFLOW_NAME);
 
         // PARTIN Gas Kommunikationsdaten (GeLi Gas, BK7-24-01-009).
         //
@@ -404,7 +427,12 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // resolve by the recipient's Sparte (registered Gas-qualified above).
         // Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas).
         // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
-        for &pid in sperrung_nb::SPERRUNG_PIDS {
+        // 17116 is the GNB's own outbound Anfrage to the gMSB; the gMSB
+        // receives it on `geli-gas-sperrung-msb` (`register_pids_with_roles`).
+        for &pid in sperrung_nb::SPERRUNG_PIDS
+            .iter()
+            .filter(|&&p| p != sperrung_msb::ANFRAGE_PID)
+        {
             sperrung_pid(router, pid, sperrung_nb::WORKFLOW_NAME);
         }
         for &pid in sperrung_nb::ORDCHG_STORNIERUNG_PIDS {
@@ -460,6 +488,38 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         router: &mut mako_engine::pid_router::PidRouter,
         roles: &mako_engine::marktrolle::DeploymentRoles,
     ) {
+        use mako_engine::marktrolle::Marktrolle;
+
+        // The gMSB receives one ORDERS of this module: the GNB's Anfrage
+        // Sperrung 17116 (Anwendungsübersicht 4.0 lfd. Nr. 12530, NB an MSB),
+        // Sparte-qualified because GPKE carries the same PID for its MSB.
+        if roles.is_all()
+            || roles.contains(Marktrolle::Msb)
+            || roles.contains(Marktrolle::Nmsb)
+            || roles.contains(Marktrolle::Amsb)
+        {
+            router.register(sperrung_msb::ANFRAGE_PID, sperrung_msb::WORKFLOW_NAME);
+            router.register_with_sparte(
+                sperrung_msb::ANFRAGE_PID,
+                mako_engine::types::Sparte::Gas,
+                sperrung_msb::WORKFLOW_NAME.to_owned(),
+            );
+        }
+        // Everything else is the GNB's and the LF's: a deployment that is only
+        // a gMSB registers none of it, so a GeLi Gas message misaddressed to it
+        // is refused as an unknown PID — except the NB's Stammdatenänderung
+        // 44113, which the gMSB answers 44115 („an MSB mit Prüfidentifikator
+        // 44113 … Die berechtigten Marktpartner antworten mit dem
+        // Prüfidentifikator 44115", UTILMD AHB Gas 1.2 Kap. 5.10.1, S. 97).
+        if !(roles.is_all() || roles.contains(Marktrolle::Nb) || roles.contains(Marktrolle::Lf)) {
+            if roles.contains(Marktrolle::Msb) || roles.contains(Marktrolle::Nmsb) {
+                for &pid in stammdatenaenderung::MSB_EMPFANGENE_PIDS {
+                    router.register(pid, stammdatenaenderung::WORKFLOW_NAME);
+                }
+            }
+            return;
+        }
+
         // Register all unconditional GeLi Gas PIDs first.
         self.register_pids(router);
 
@@ -482,7 +542,6 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // The Stornierung workflow itself is Use-Case-agnostic: it resolves the
         // Ursprungsprozess from `RFF+ACW`, so one owner serves the GeLi Gas
         // Lieferbeginn/-ende *and* the WiM Gas MSB-Wechsel.
-        use mako_engine::marktrolle::Marktrolle;
 
         // 44022 is inbound wherever this deployment can be the *recipient* of a
         // Stornierungsanfrage, which is every NB: GeLi Gas and WiM Gas both send

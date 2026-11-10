@@ -9,6 +9,7 @@
 //! | `list_dunning` | Active dunning cases |
 //! | `list_overdue` | All accounts with overdue invoices |
 //! | `list_sepa_collections` | SEPA collections and their lifecycle (SUBMITTED → SETTLED/REJECTED/RETURNED/REVERSED) |
+//! | `list_eeg_payouts` | The EEG payout orders the Netzbetreiber ran, by plant and billing month |
 //! | `suggest_payment_match` | AI payment reconciliation: match CAMT.054 to open Rechnungen |
 
 use axum::{
@@ -153,6 +154,21 @@ pub struct SepaCollectionParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct EegPayoutParams {
+    /// Billing year of the receipt chain paid.
+    pub year: Option<i16>,
+    /// Billing month (1–12) of the receipt chain paid.
+    pub month: Option<i16>,
+    /// Restrict to one plant's MaLo.
+    pub malo_id: Option<String>,
+    /// pain.002 status: `PDNG` | `ACCP` | `ACSC` | `RJCT` | `CANC`, or `NULL` for
+    /// orders not yet submitted.
+    pub status: Option<String>,
+    /// Maximum rows (default 100, capped at 1000).
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct OverdueParams {
     /// Maximum rows (default 100, capped at 1000), largest balance first.
     pub limit: Option<i64>,
@@ -183,7 +199,7 @@ pub struct ManualBuchungParams {
     pub malo_id: String,
     /// Buchungsart. One of: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE,
     /// EEG_AUSZAHLUNG, EEG_RUECKZAHLUNG, BANKRUECKLAST, SEPA_STORNO, MAHNGEBUEHR, VERZUGSZINSEN,
-    /// ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.
+    /// VERZUGSPAUSCHALE, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.
     pub entry_type: String,
     /// Amount in ct (× 10⁻² EUR). Positive = debit; negative = credit.
     pub amount_ct: i64,
@@ -390,6 +406,49 @@ issuing the reversal itself is an operator decision and is not exposed as a tool
     }
 
     #[tool(
+        description = "List the EEG payout orders the Netzbetreiber ran (§ 19 Abs. 1 EEG 2023): \
+each names its plant (tr_id), MaLo, billing month, amount in ct, creditor and pain.002 status. \
+Filter by year/month, malo_id or status (PDNG, ACCP, ACSC, RJCT, CANC, or NULL for not yet \
+submitted). Read-only; held to the NB role like GET /api/v1/eeg/payouts.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_eeg_payouts(
+        &self,
+        Parameters(p): Parameters<EegPayoutParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let filter = crate::pg::EegPayoutFilter {
+            malo_id: p.malo_id.as_deref(),
+            year: p.year,
+            month: p.month,
+            payment_type: None,
+            status: p
+                .status
+                .as_deref()
+                .map(|s| if s == "NULL" { None } else { Some(s) }),
+        };
+        match crate::pg::list_eeg_payouts(
+            &self.state.pool,
+            &self.state.tenant,
+            &filter,
+            p.limit.unwrap_or(100).clamp(1, 1000),
+        )
+        .await
+        {
+            Ok(rows) => {
+                let payouts: Vec<serde_json::Value> =
+                    rows.iter().map(crate::handlers::eeg_payout_json).collect();
+                ContentBlock::json(serde_json::json!({
+                    "count": payouts.len(),
+                    "payouts": payouts,
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None))
+            }
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
         description = "List all accounts with overdue invoices. Returns accounts with balance_ct > 0 and the oldest unpaid entry date. An EEG plant account is never listed: what a plant operator owes back is an EEG Rückforderung (GET /api/v1/eeg/rueckforderungen), not dunned.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -457,6 +516,7 @@ Also sets the SEPA billing_day (day of month for direct debit).",
                 abschlag_ct: Some(p.abschlag_ct),
                 billing_day: p.billing_day,
                 address: Default::default(),
+                verbraucher: None,
             },
         )
         .await
@@ -1025,7 +1085,7 @@ KORREKTUR (operator adjustment), GUTSCHRIFT (one-off credit). \
 The entry immediately updates the account balance. \
 Allowed entry_type: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE, \
 EEG_AUSZAHLUNG (a settled EEG payout), EEG_RUECKZAHLUNG (a plant operator's repayment of an EEG overpayment), \
-BANKRUECKLAST, SEPA_STORNO, MAHNGEBUEHR, VERZUGSZINSEN, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO. \
+BANKRUECKLAST, SEPA_STORNO, MAHNGEBUEHR, VERZUGSZINSEN, VERZUGSPAUSCHALE, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO. \
 amount_ct: positive = debit (increases balance); negative = credit (reduces balance). \
 ⚠ This is an authorised operator action — always document via reference_id and description.",
         annotations(read_only_hint = false, open_world_hint = false)
@@ -1199,7 +1259,7 @@ impl ServerHandler for AccountingdMcpHandler {
 /// Abschlagsforderung against every account due that day, `import_payments`
 /// books a ZAHLUNG per CAMT.054 entry, `update_abschlag` rewrites the monthly
 /// advance and the SEPA billing day, and `run_sepa_collection` emits a
-/// bank-submittable pain.008 carrying every mandate's IBAN. Five of the fourteen
+/// bank-submittable pain.008 carrying every mandate's IBAN. Five of the eighteen
 /// tools write, so the surface is not "read-only by construction".
 ///
 /// Every tool is mapped, not only the five that write, because accountingd's
@@ -1230,6 +1290,8 @@ pub fn tool_action(tool: &str) -> Option<&'static str> {
         | "get_parked_booking" => "read-books",
         // The collection register: mandates, IBANs and the entries of a run.
         "list_sepa_collections" => "read-banking",
+        // The EEG payouts are the Netzbetreiber's (§ 19 Abs. 1 EEG 2023).
+        "list_eeg_payouts" => "read-eeg-payouts",
         // The posture report the runner built at boot.
         "get_policy" => "read-policy",
         // ── Writes ───────────────────────────────────────────────────────────

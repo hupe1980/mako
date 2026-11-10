@@ -249,6 +249,25 @@ pub enum LfAbmeldungState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for LfAbmeldungState {
+    /// Occupied while the Lieferant still owes its answer to the NB's
+    /// Ankündigung: „Antwort auf Ankündigung der Beendigung der Zuordnung …
+    /// spätester ÜZ ist 05:00 Uhr des 1. WT nach dem ÜT von Nr. 1"
+    /// (BK6-24-174 GPKE Teil 2 Kap. 2.5.2.2 Prozessschritt 2, S. 61). A lapsed
+    /// window keeps it open — the NB's Beendigung aufgrund fehlender Antwort
+    /// (Prozessschritt 3) still answers it. Once answered, the process is
+    /// settled, and a later Ankündigung on the MaLo opens its own.
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::Eingegangen(_) | Self::ValidationPassed(_) => true,
+            Self::New | Self::AntwortGesendet { .. } | Self::Beendet(_) | Self::Rejected { .. } => {
+                false
+            }
+        }
+    }
+}
+
 impl LfAbmeldungState {
     /// Stable string label for the current variant.
     #[must_use]
@@ -563,6 +582,21 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 // The outbox entry *is* the answer. Without it the event log
                 // recorded the process as answered while the counterparty saw
                 // nothing but its Frist expire.
+                //
+                // The answer also completes the process for the ERP fan-out. On
+                // a Zustimmung the NB ends the Zuordnung zum Zuordnungsende
+                // (BK6-24-174 GPKE Teil 2 Kap. 2.5.2.2 Nr. 2, S. 62), so the
+                // Lieferant's Schlussablesung keys on it; on an Ablehnung the
+                // LF stays zugeordnet. `pid` is the answer sent, and
+                // `accepted`/`outcome` carry the verdict.
+                let completed = serde_json::json!({
+                    "pid":          response_code,
+                    "malo_id":      data.location_id.as_str(),
+                    "process_date": data.process_date,
+                    "accepted":     accepted,
+                    "outcome":      if accepted { "accepted" } else { "rejected" },
+                    "old_supplier": data.receiver.as_str(),
+                });
                 let outbox = vec![
                     crate::lf_antwort::antwort_outbox(
                         response_code,
@@ -574,6 +608,7 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                         data.vorgangsnummer.as_deref(),
                     )
                     .caused_by(0),
+                    PendingOutbox::new("ProcessCompleted", "", completed).caused_by(0),
                 ];
                 Ok(WorkflowOutput::with_outbox(
                     vec![LfAbmeldungEvent::AntwortGesendet {
@@ -707,6 +742,50 @@ mod tests {
         assert_eq!(LfAbmeldungEvent::Beendet.verlauf(), None);
     }
 
+    /// The answer completes the process for the ERP fan-out: a Zustimmung is
+    /// the step after which the NB ends the Zuordnung zum Zuordnungsende
+    /// (BK6-24-174 GPKE Teil 2 Kap. 2.5.2.2 Nr. 2, S. 62), so edmd orders the
+    /// Schlussablesung from it. An Ablehnung completes it as refused.
+    #[test]
+    fn the_answer_completes_the_process_with_its_verdict_and_date() {
+        for (antwort, pid, accepted) in [
+            (
+                crate::lf_antwort::LfAntwort::zustimmung("A10", "E_0609"),
+                55_008,
+                true,
+            ),
+            (
+                crate::lf_antwort::LfAntwort::ablehnung("A01", "E_0609"),
+                55_009,
+                false,
+            ),
+        ] {
+            let out =
+                GpkeLfAbmeldungWorkflow::handle(&LfAbmeldungState::New, ankuendigung_cmd(true))
+                    .unwrap();
+            let state = apply_all(LfAbmeldungState::New, &out.events);
+            let out = GpkeLfAbmeldungWorkflow::handle(
+                &state,
+                LfAbmeldungCommand::SendAntwort { antwort },
+            )
+            .unwrap();
+            let completed = out
+                .outbox
+                .iter()
+                .find(|o| &*o.message_type == "ProcessCompleted")
+                .expect("the answer completes the process");
+            assert_eq!(completed.payload["pid"], pid);
+            assert_eq!(completed.payload["accepted"], accepted);
+            assert_eq!(
+                completed.payload["outcome"],
+                if accepted { "accepted" } else { "rejected" }
+            );
+            assert_eq!(completed.payload["malo_id"], "51238696781");
+            assert_eq!(completed.payload["process_date"], "20260101");
+            assert_eq!(completed.caused_by_event_index, 0);
+        }
+    }
+
     #[test]
     fn lf_abmeldung_happy_path_bestaetigung() {
         let out = GpkeLfAbmeldungWorkflow::handle(&LfAbmeldungState::New, ankuendigung_cmd(true))
@@ -832,5 +911,48 @@ mod tests {
             .antwort(),
             None
         );
+    }
+
+    /// Held while the LF's answer is owed (GPKE Teil 2 Kap. 2.5.2.2 Nr. 2).
+    #[test]
+    fn the_malo_is_occupied_only_while_the_lfs_answer_is_owed() {
+        use mako_engine::workflow::OccupiesBusinessKey as _;
+        let data = LfAbmeldungData {
+            location_id: malo("51238696781"),
+            sender: mcod("9900357000004"),
+            receiver: mcod("4012345000023"),
+            document_date: "20251001".to_owned(),
+            process_date: "20260101".to_owned(),
+            pruefidentifikator: pid(55007),
+            vorgangsnummer: None,
+        };
+        for (state, occupied) in [
+            (LfAbmeldungState::Eingegangen(data.clone()), true),
+            (LfAbmeldungState::ValidationPassed(data.clone()), true),
+            (
+                LfAbmeldungState::FristAbgelaufen {
+                    label: "x".to_owned(),
+                    offen: Box::new(LfAbmeldungState::Eingegangen(data.clone())),
+                },
+                true,
+            ),
+            (LfAbmeldungState::New, false),
+            (
+                LfAbmeldungState::AntwortGesendet {
+                    data: data.clone(),
+                    response_pid: pid(55008),
+                },
+                false,
+            ),
+            (LfAbmeldungState::Beendet(data), false),
+            (
+                LfAbmeldungState::Rejected {
+                    reason: "x".to_owned(),
+                },
+                false,
+            ),
+        ] {
+            assert_eq!(state.occupies_business_key(), occupied, "{}", state.label());
+        }
     }
 }

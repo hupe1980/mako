@@ -212,6 +212,8 @@ pub async fn run_sperr_sequence(
                 // `sperrauftrag_ce_id IS NULL`, so the mark commits **before** the
                 // announcement. A lost announcement is replayable; a second §41f
                 // disconnection order is not.
+                // committed apart: the ORDERS is already on the market — a mark rolled
+                // back with a failed announcement would order a second disconnection.
                 if let Err(e) =
                     pg::mark_sperrauftrag_dispatched(pool, case_id, tenant, &reference).await
                 {
@@ -236,6 +238,8 @@ pub async fn run_sperr_sequence(
                         "process_id":      reference,
                     }),
                 );
+                // committed apart: announced after the dispatch mark above, which must survive
+                // a failed announcement.
                 announce(pool, &ce, case_id, &malo_id, "de.accounting.sperrauftrag").await;
                 summary.sperrauftraege += 1;
                 tracing::info!(%malo_id, verzug_ct, %reference, "accountingd: Sperrauftrag ORDERS 17115 dispatched (§41f EnWG)");
@@ -266,6 +270,7 @@ pub async fn run_sperr_sequence(
         match makod.post_command(&key, &cmd).await {
             Ok(accepted) => {
                 let reference = accepted.process_id.to_string();
+                // committed apart: the ORDERS is already on the market, as above.
                 if let Err(e) =
                     pg::mark_entsperrauftrag_dispatched(pool, case_id, tenant, &reference).await
                 {
@@ -287,6 +292,7 @@ pub async fn run_sperr_sequence(
                         "process_id":      reference,
                     }),
                 );
+                // committed apart: announced after the dispatch mark above, as for the Sperrauftrag.
                 announce(
                     pool,
                     &ce,

@@ -51,15 +51,15 @@ fn the_production_stack_builds_with_a_driver_per_workflow() {
 fn each_role_registers_its_module_set() {
     use makod::deployment::Rolle;
     let expected: &[(Rolle, &[&str])] = &[
-        (Rolle::LfStrom, &["gpke", "emob"]),
-        (Rolle::LfGas, &["geli-gas"]),
+        (Rolle::LfStrom, &["gpke", "mabis", "emob"]),
+        (Rolle::LfGas, &["geli-gas", "mako-gabi-gas"]),
         (
             Rolle::NbStrom,
             &["gpke", "wim", "mabis", "emob", "redispatch"],
         ),
         (Rolle::NbGas, &["wim", "geli-gas", "mako-gabi-gas"]),
         (Rolle::MsbStrom, &["gpke", "wim"]),
-        (Rolle::MsbGas, &["wim"]),
+        (Rolle::MsbGas, &["wim", "geli-gas"]),
         (Rolle::EsaStrom, &["wim"]),
     ];
     assert_eq!(
@@ -93,8 +93,9 @@ fn each_role_registers_its_module_set() {
 
 /// An LF-only deployment registers no NB module.
 ///
-/// MaBiS, Redispatch and GaBi Gas are network-operator obligations; a
-/// deployment declaring `lf-strom` alone must not route their PIDs.
+/// Redispatch, WiM and GaBi Gas are not the Lieferant Strom's; a deployment
+/// declaring `lf-strom` alone must not route their PIDs. MaBiS loads with the LF's own
+/// PIDs only (`mako_mabis::LF_PIDS`), pinned in `e2e_mabis_lf`.
 #[test]
 fn an_lf_strom_deployment_registers_no_network_module() {
     let names: Vec<&str> =
@@ -102,7 +103,7 @@ fn an_lf_strom_deployment_registers_no_network_module() {
             .iter()
             .map(|m| m.name())
             .collect();
-    for nb_only in ["mabis", "redispatch", "mako-gabi-gas", "wim"] {
+    for nb_only in ["redispatch", "mako-gabi-gas", "wim"] {
         assert!(
             !names.contains(&nb_only),
             "lf-strom registers {nb_only}: {names:?}"

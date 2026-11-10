@@ -25,8 +25,8 @@ container `HEALTHCHECK`. Every other setting lives in `edmd.toml`
 | Database | PostgreSQL 17+ (`migrations/0001_schema.sql`); readings in `meter_reads`, `esa_typ2_reads`, `meter_readings` (meterstore-owned, created by `create_tables` at startup). meterstore connects over TLS — `verify-full` unless `[database] url` names an `sslmode` (`disable` for the dev and test PostgreSQL) |
 | Auth | OIDC + Cedar `policies/edmd.cedar` — reads tenant-scoped, writes role-gated; service keys via `[[oidc.service_keys]]`. Refuses to start without `[oidc]` unless `allow_insecure_no_auth` |
 | Validation | every door runs `metering::vee::validation`, one series per register, through `ValidatedReads`; findings annotate, never reject. Overlapping spans are refused by an `EXCLUDE` constraint (`422`) |
-| Ersatzwerte | `metering::vee::substitute` — interpolation up to two hours, else the Vergleichswert of comparable days; needs `reason` and `bundesland` |
-| Balancing day | Strom on the calendar day, Gas on the Gastag (06:00–06:00) — `?sparte=` |
+| Ersatzwerte | `metering::vee::substitute` — interpolation up to two hours, else the Vergleichswert of comparable days; needs `reason`, and `bundesland` unless one is cached for the MaLo from `marktd` |
+| Balancing day | Strom on the calendar day, Gas on the Gastag (06:00–06:00) — `?sparte=`, else the MaLo's stored Sparte |
 | Events | `de.messwert.reading.*` (direct.stored, quality.warning, delivery.overdue/resumed, order.failed), `de.messwert.cls.*`, `de.messwert.smgw.cert.expiry-warning` |
 | Metrics | `GET /edmd/metrics` |
 
@@ -40,7 +40,7 @@ container `HEALTHCHECK`. Every other setting lives in `edmd.toml`
 | Reading orders | `/api/v1/reading-orders` (+ `/campaign`, `/{id}/complete`, `/cancel`, `/fail`), `GET /api/v1/compliance/jahresablesung/{year}` |
 | Quality | `/api/v1/quality-assessments/{malo_id}`, `/quality-score/{malo_id}`, `/corrections/{malo_id}`, `/confirmations`, `/surveillance/delivery` (+ `/scan`) |
 | SMGW · § 14a | `/api/v1/smgw`, `/smgw/{malo_id}`, `/smgw/compliance` (+ `/scan`) |
-| Sharing · virtual | `/api/v1/sharing/{community_id}/allocation`, `/sharing/readiness`, `/api/v1/virtual` |
+| Sharing · virtual | `/api/v1/sharing/{community_id}/allocation`, `/api/v1/sharing/participants/{malo_id}/allocation`, `/sharing/readiness`, `/api/v1/virtual` |
 | GDPR | `DELETE /api/v1/gdpr/erasure/{malo_id}`, `GET /api/v1/gdpr/erasures` — needs `[privacy] erasure_secret` |
 
 A materialising read defaults to the last 31 days and refuses a window wider

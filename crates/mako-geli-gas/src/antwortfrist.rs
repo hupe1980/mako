@@ -56,7 +56,8 @@ mod tests {
     fn every_trigger_is_an_anfrage_pid() {
         for o in ANTWORT_OBLIGATIONS {
             assert!(
-                crate::lieferbeginn::ANFRAGE_PIDS.contains(&o.trigger_pid),
+                crate::lieferbeginn::ANFRAGE_PIDS.contains(&o.trigger_pid)
+                    || crate::geschaeftsdatenanfrage::ANFRAGE_PIDS.contains(&o.trigger_pid),
                 "{} ({}) is not a GeLi Gas Anfrage PID",
                 o.trigger_pid,
                 o.name
@@ -68,6 +69,20 @@ mod tests {
     #[test]
     fn answer_pids_match_the_workflow_derivation() {
         for o in ANTWORT_OBLIGATIONS {
+            if let Some(rolle) =
+                crate::geschaeftsdatenanfrage::Anfragender::of_anfrage(o.trigger_pid)
+            {
+                assert_eq!(
+                    o.antwort_pids,
+                    (
+                        rolle.antwort_pid(),
+                        crate::geschaeftsdatenanfrage::ABLEHNUNG_PID
+                    ),
+                    "answer PIDs for {}",
+                    o.trigger_pid
+                );
+                continue;
+            }
             let accept = crate::lieferbeginn::response_pid_for(o.trigger_pid, true)
                 .expect("an answerable PID has a positive answer");
             let reject = crate::lieferbeginn::response_pid_for(o.trigger_pid, false)

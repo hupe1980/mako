@@ -33,7 +33,7 @@ spec:
 
       ## TRIGGERED BY
       - `de.billing.rechnung.erstellt` — analyse each new invoice for optimization potential
-      - `de.mako.process.completed` — WiM completion may indicate new iMSys available
+      - `de.mako.process.completed` — WiM completion may indicate new iMSys available. One type for both answers: `data.accepted: false` / `data.outcome: "rejected"` is the counterparty's Ablehnung — the process ended and did not happen
 
       ## PROCEDURE
 

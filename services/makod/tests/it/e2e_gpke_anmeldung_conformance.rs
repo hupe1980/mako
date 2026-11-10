@@ -67,12 +67,11 @@ fn render(payload: serde_json::Value) -> Result<String, RenderError> {
     let parsed = edi_energy::parse(&rendered.bytes).expect("rendered UTILMD must parse");
     let report = parsed.validate().expect("validation must run");
     assert!(
-        report.errors().is_empty(),
+        report.is_sendable(),
         "55077 does not pass its own AHB:\n{}\n{}",
         wire.replace('\'', "'\n"),
         report
-            .errors()
-            .iter()
+            .sending_refusals()
             .map(|i| format!("  [{}] {}", i.rule_id.as_deref().unwrap_or("-"), i.message))
             .collect::<Vec<_>>()
             .join("\n"),

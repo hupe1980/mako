@@ -178,22 +178,30 @@ pub async fn post_template_preview(
     if req.source.trim().is_empty() {
         return Err(OutputError::bad_request("EMPTY_SOURCE", "source is empty"));
     }
-    if req.kind == TemplateKind::Mahnung {
-        // Its own specimen, no carrier: a Mahnung is Textform, and the preview
-        // is the letter itself.
+    // Its own specimen, no carrier: a Mahnung and a Gebührenbescheid are
+    // letters, and the preview is the letter itself.
+    let letter = match req.kind {
+        TemplateKind::Mahnung => Some((
+            serde_json::to_string(&crate::document::mahnung::specimen()),
+            "mahnung",
+        )),
+        TemplateKind::Gebuehrenbescheid => Some((
+            serde_json::to_string(&crate::document::gebuehrenbescheid::specimen()),
+            "gebuehrenbescheid",
+        )),
+        _ => None,
+    };
+    if let Some((data, name)) = letter {
         let request = crate::document::RenderRequest {
             template: req.source,
-            data: Some(
-                serde_json::to_string(&crate::document::mahnung::specimen())
-                    .map_err(|e| OutputError::Internal(e.into()))?,
-            ),
+            data: Some(data.map_err(|e| OutputError::Internal(e.into()))?),
             attachment: None,
             standard: None,
             date: gate::SPECIMEN_DATE,
-            ident: "mako-template-preview-mahnung".to_owned(),
+            ident: format!("mako-template-preview-{name}"),
         };
         let rendered = crate::document::render::render_guarded(request, RENDER_BUDGET).await?;
-        return Ok(pdf_response("mahnung-vorschau.pdf", rendered.pdf));
+        return Ok(pdf_response(&format!("{name}-vorschau.pdf"), rendered.pdf));
     }
     if req.kind != TemplateKind::Invoice {
         // Rendering a Preisanpassung against an invoice specimen would fail on
@@ -251,6 +259,7 @@ pub async fn get_reference_template(
         TemplateKind::Invoice => crate::document::REFERENCE_INVOICE_TEMPLATE,
         TemplateKind::Mahnung => crate::document::REFERENCE_MAHNUNG_TEMPLATE,
         TemplateKind::Preisanpassung => crate::document::REFERENCE_PREISANPASSUNG,
+        TemplateKind::Gebuehrenbescheid => crate::document::REFERENCE_GEBUEHRENBESCHEID,
     };
     Ok((
         StatusCode::OK,
@@ -435,10 +444,12 @@ fn parse_kind(s: &str) -> OutputResult<TemplateKind> {
         "INVOICE" => Ok(TemplateKind::Invoice),
         "MAHNUNG" => Ok(TemplateKind::Mahnung),
         "PREISANPASSUNG" => Ok(TemplateKind::Preisanpassung),
+        "GEBUEHRENBESCHEID" => Ok(TemplateKind::Gebuehrenbescheid),
         other => Err(OutputError::bad_request(
             "UNKNOWN_TEMPLATE_KIND",
             format!(
-                "`{other}` is not a template kind — expected INVOICE, MAHNUNG or PREISANPASSUNG"
+                "`{other}` is not a template kind — expected INVOICE, MAHNUNG, PREISANPASSUNG \
+                 or GEBUEHRENBESCHEID"
             ),
         )),
     }
@@ -456,6 +467,7 @@ mod tests {
             TemplateKind::Invoice,
             TemplateKind::Mahnung,
             TemplateKind::Preisanpassung,
+            TemplateKind::Gebuehrenbescheid,
         ] {
             assert_eq!(parse_kind(k.as_str()).expect("round-trips"), k);
         }
@@ -649,15 +661,16 @@ fn render_admissible(
             "ATTACHMENT_REQUIRED",
             "an INVOICE render requires the attachment (the CII payload and its BT-24)",
         )),
-        (TemplateKind::Mahnung | TemplateKind::Preisanpassung, true) => {
-            Err(OutputError::unprocessable(
-                "ATTACHMENT_NOT_ALLOWED",
-                format!(
-                    "a {} is Textform and carries no embedded invoice — omit the attachment",
-                    kind.as_str()
-                ),
-            ))
-        }
+        (
+            TemplateKind::Mahnung | TemplateKind::Preisanpassung | TemplateKind::Gebuehrenbescheid,
+            true,
+        ) => Err(OutputError::unprocessable(
+            "ATTACHMENT_NOT_ALLOWED",
+            format!(
+                "a {} is Textform and carries no embedded invoice — omit the attachment",
+                kind.as_str()
+            ),
+        )),
         _ => Ok(()),
     }
 }
@@ -728,9 +741,10 @@ pub async fn render_with_stored_template(
             serde_json::to_string(&crate::document::DocumentView::of(model))
                 .map_err(|e| OutputError::Internal(e.into()))?
         }
-        (TemplateKind::Mahnung | TemplateKind::Preisanpassung, RenderSubject::View(view)) => {
-            view.to_string()
-        }
+        (
+            TemplateKind::Mahnung | TemplateKind::Preisanpassung | TemplateKind::Gebuehrenbescheid,
+            RenderSubject::View(view),
+        ) => view.to_string(),
         (TemplateKind::Invoice, RenderSubject::View(_)) => {
             return Err(OutputError::unprocessable(
                 "SUBJECT_MUST_BE_A_MODEL",
@@ -739,7 +753,10 @@ pub async fn render_with_stored_template(
                  about what a template may print",
             ));
         }
-        (TemplateKind::Mahnung | TemplateKind::Preisanpassung, RenderSubject::Model(_)) => {
+        (
+            TemplateKind::Mahnung | TemplateKind::Preisanpassung | TemplateKind::Gebuehrenbescheid,
+            RenderSubject::Model(_),
+        ) => {
             return Err(OutputError::unprocessable(
                 "SUBJECT_MUST_BE_A_VIEW",
                 format!(
@@ -1078,6 +1095,7 @@ pub async fn post_document(
             issued_by: Some(claims.sub()),
         },
         &channels,
+        &cfg.delivery,
     )
     .await
     .map_err(OutputError::Internal)?;
@@ -1231,16 +1249,9 @@ pub async fn post_delivery_status(
         Some(error) => {
             // Terminal: the channel has told us it did not arrive, so retrying
             // the same hand-off would only produce the same bounce.
-            crate::delivery::store::record_failure(
-                &pool,
-                &cfg.tenant,
-                delivery_id,
-                &error,
-                true,
-                time::Duration::ZERO,
-            )
-            .await
-            .map_err(OutputError::Internal)?;
+            crate::delivery::store::record_failure(&pool, &cfg.tenant, delivery_id, &error)
+                .await
+                .map_err(OutputError::Internal)?;
             tracing::error!(
                 %delivery_id, %error,
                 "outputd: a delivery channel reported the document did not arrive"

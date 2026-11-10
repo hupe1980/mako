@@ -33,6 +33,8 @@ struct OrdrespBuilderInner {
     /// SG2 `AJT` DE 1082 — the Entscheidungsbaum the Prüfschritt comes from.
     adjustment_ebd: Option<String>,
     adjustment_reason: Option<String>,
+    /// SG2 `FTX` with free text — `(DE 4451 qualifier, C108 text)`.
+    adjustment_text: Option<(String, String)>,
     item_description: bool,
     line_item: bool,
     /// `DTM+203` Ausführungsdatum — a `303` instant.
@@ -109,6 +111,7 @@ impl OrdrespBuilder<Unset, Unset> {
                 adjustment: None,
                 adjustment_ebd: None,
                 adjustment_reason: None,
+                adjustment_text: None,
                 item_description: false,
                 line_item: false,
                 execution_date: None,
@@ -229,6 +232,22 @@ impl<S, R> OrdrespBuilder<S, R> {
     /// coded 4451 qualifier (`∈ {AAP, ABO, Z27, Z28, Z33}`), not free text.
     pub fn adjustment_reason(mut self, ftx_qualifier: impl Into<String>) -> Self {
         self.inner.adjustment_reason = Some(ftx_qualifier.into());
+        self
+    }
+
+    /// Set the SG2 free-text answer — emits `FTX+<4451>+++<C108>` after the
+    /// `AJT`, the text split into the MIG's five `an..512` components.
+    ///
+    /// The Ablehnung Anfrage Sperrung 19119 makes `FTX+AAP` „Antwort (Freier
+    /// Text)" Muss beside `A02`/`A03` (ORDRSP AHB 1.1b Kap. 4.3.1, S. 18,
+    /// Bedingungen `[33]`/`[43]`), because the tree requires the problem
+    /// named. Text beyond 2 560 characters is cut.
+    pub fn adjustment_text(
+        mut self,
+        ftx_qualifier: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        self.inner.adjustment_text = Some((ftx_qualifier.into(), text.into()));
         self
     }
 
@@ -431,6 +450,17 @@ impl<S, R> OrdrespBuilder<S, R> {
         }
         if let Some(code) = &self.inner.adjustment_reason {
             emit_comp!(w, "FTX", [code]);
+        }
+        if let Some((qualifier, text)) = &self.inner.adjustment_text {
+            let chars: Vec<char> = text.chars().collect();
+            let chunks: Vec<String> = chars
+                .chunks(512)
+                .take(5)
+                .map(|c| c.iter().collect())
+                .collect();
+            let chunks: Vec<&str> = chunks.iter().map(String::as_str).collect();
+            let elements: [&[&str]; 4] = [&[qualifier.as_str()], &[""], &[""], &chunks];
+            w.write_composites("FTX", &elements).map_err(Error::Parse)?;
         }
         self.emit_parties(&mut w)?;
         // ── SG27: line item ──────────────────────────────────────────────────

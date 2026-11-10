@@ -166,7 +166,7 @@ impl ZuordnungsFall {
 /// Two facts, and only one of them is a judgement. `bilanzkreis` is what makes
 /// a Zustimmung an answer; `fehler` is the operator's channel for the `A99`
 /// „zuvor nicht spezifizierter Fehler" the walk cannot detect about itself.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ZuordnungsLage {
     /// The concrete Bilanzkreis this generation will be balanced in, already
     /// picked by the caller for the Marktlokation's **Bilanzierungsgebiet** —

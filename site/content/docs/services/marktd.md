@@ -264,6 +264,7 @@ is a `422` naming the stage in `code`:
 | `PUT` | `/api/v1/malos/{malo_id}` | `write-malo` | Upsert a Marktlokation through the gate; emits `de.markt.malo.updated` |
 | `GET` | `/api/v1/malos/{malo_id}` | `read-malo` | Typed `Marktlokation` plus the typed columns |
 | `GET` | `/api/v1/malos/{malo_id}/lastprofil` | `read-malo` | Lastprofil (SLP/TLP) of the MaLo |
+| `GET` | `/api/v1/malos/{malo_id}/bundesland` | `read-malo` | The Land of the MaLo's `lokationsadresse`, from its PLZ over the GeoNames postal code table for Germany (CC BY 4.0, `services/marktd/data/plz_bundesland.tsv`); a missing PLZ, an unknown one or one whose places lie in two Länder is `422` (`KEINE_POSTLEITZAHL`, `PLZ_UNBEKANNT`, `PLZ_MEHRDEUTIG`) |
 | `GET` | `/api/v1/malos` | `read-malo` | List MaLos (records that do not decode are skipped) |
 | `PUT` | `/api/v1/melos/{melo_id}` | `write-melo` | Upsert a Messlokation through the gate |
 | `GET` | `/api/v1/melos/{melo_id}` | `read-melo` | Typed `Messlokation` |
@@ -287,7 +288,7 @@ is a `422` naming the stage in `code`:
 | `GET/PUT` | `/api/v1/grundversorger/{nb_mp_id}` | `read-grundversorger` / `write-grundversorger` | §36 Abs. 2 EnWG Feststellung (`?sparte=STROM\|GAS`); optional `default_bilanzkreis` for an EoG ohne Antwort |
 | `POST` | `/api/v1/esa/einwilligungen` | `write-einwilligung` | Grant an ESA consent (§49 Abs. 2 Nr. 9 MsbG); emits `de.markt.einwilligung.erteilt` |
 | `GET` | `/api/v1/esa/einwilligungen` · `/{id}` | `read-einwilligung` | List active consents (`?esa_mp_id=`); one consent |
-| `DELETE` | `/api/v1/esa/einwilligungen/{id}` | `write-einwilligung` | Revoke (GDPR Art. 7(3)); emits `de.markt.einwilligung.widerrufen` and one ORDERS 17008 Abbestellung per covered location |
+| `DELETE` | `/api/v1/esa/einwilligungen/{id}` | `write-einwilligung` | Revoke (GDPR Art. 7(3)); commits `de.markt.einwilligung.widerrufen` and one ORDERS 17008 Abbestellung command per covered location with the revocation |
 | `PUT` | `/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}` | `write-einwilligung` | Prices of an accepted QUOTES 15003, filed by makod on the ORDRSP 19011 |
 | `GET` | `/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}?at=` | `read-einwilligung` | Prices in force; invoicd's basis for an ESA INVOIC 31009 (an ESA has no Preisblatt) |
 | `PUT/GET` | `/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}` | `write-einwilligung` / `read-einwilligung` | Framework agreement and AS4 certificate state |
@@ -388,18 +389,24 @@ is a `422` naming the stage in `code`:
 - **Partner role `LFG` is refused** (`422`): a gas supplier is `LF` +
   Rollencodetyp `DVGW`.
 
-### Consent expiry
+### The end of a consent
 
 `E_0256` Prüfschritt 8 code `A08` covers a consent „widerrufen **oder ihre
 Gültigkeit ist abgelaufen**", and both owe the ORDERS 17008 Abbestellung.
 `DELETE` covers the Widerruf; an **hourly sweep** closes every consent past its
-`valid_to` through the same path.
+`valid_to` (one at a time, `FOR UPDATE SKIP LOCKED`); a grant for the same ESA
+and Anschlussnutzer replaces the active consent.
 
-It takes one consent at a time (`FOR UPDATE SKIP LOCKED`) and commits the
-revocation together with its `de.markt.einwilligung.widerrufen` event; the 17008
-is dispatched after the commit, so one consent yields one Abbestellung. A
-failure leaves the consent open for the next sweep. The event's `grund` is
-`einwilligung_widerrufen` or `einwilligung_abgelaufen`.
+Every ending commits, in the transaction that sets `revoked_at`, its
+`de.markt.einwilligung.widerrufen` event and one `esa.abbestellung.beauftragen`
+command per location in `event_outbox`. A worker delivers the commands to makod
+(`POST /api/v1/commands`, keyed `esa-abbestellung:{consent}:{location}`) with
+retry and a dead-letter budget, so a makod outage delays the 17008 and never
+loses it; a `404` or `409` — nothing left to stop — discharges the command. A
+failure before the commit leaves the consent open for a retry. The event's
+`grund` is `einwilligung_widerrufen`, `einwilligung_abgelaufen` or
+`einwilligung_ersetzt`; a replacement abbestellt only the locations the new
+consent no longer covers.
 
 ---
 
@@ -1397,7 +1404,7 @@ Source: `urn:mako:marktd:tenant:{tenant}`.
 | `de.markt.msb-rahmenvertrag.updated` | contract id | MSB-Rahmenvertrag upsert (`sparte` in `data`) | ERP |
 | `de.markt.netzzugang.antrag.updated` | request id | §20b request upserted or advanced | `makod`, ERP |
 | `de.markt.einwilligung.erteilt` | consent id | Consent granted | `makod`, ERP |
-| `de.markt.einwilligung.widerrufen` | consent id | Revoked or expired (`grund`) | `makod` (17008), ERP |
+| `de.markt.einwilligung.widerrufen` | consent id | Revoked, expired or replaced (`grund`); the 17008 travels as its own outbox command | ERP |
 | `de.markt.subscription.test` | subscriber id | Test probe | the subscriber |
 | `de.markt.versorgung.changed` | `malo_id` | Every supply transition and the REST upsert | `vertragd`, `billingd`, ERP |
 | `de.markt.versorgung.gap-detected` | `malo_id` | Uncovered interval (§38 EnWG) | `processd` |

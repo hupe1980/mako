@@ -7,7 +7,8 @@
 //! that Antwort; without `geli.stammdaten-aenderung.beantworten` nothing can
 //! send it and the window lapses on a process nobody can close. The outbound
 //! side, `geli.stammdaten-aenderung.senden`, sends the LF's 44109 (Kap.
-//! 5.11.3) and the NB's 44112 with the groups that changed.
+//! 5.11.3) and the NB's 44112 with the groups that changed, and the 44120,
+//! 44123 and 44175 whole.
 
 use std::sync::Arc;
 
@@ -92,9 +93,12 @@ fn passes_its_profile(state: &CommandsApiState, msg: &mako_engine::outbox::Outbo
         msg.recipient.as_ref(),
         msg.payload.clone(),
     );
-    let findings =
-        crate::orchestrator::edifact_renderer::utilmd_ahb_findings(&pending, state.tenant_id)
-            .expect("renders");
+    let findings = crate::orchestrator::edifact_renderer::utilmd_ahb_findings(
+        &pending,
+        state.tenant_id,
+        &latest_format_version(),
+    )
+    .expect("renders");
     assert!(findings.is_empty(), "{}: {findings:#?}", msg.payload["pid"]);
 }
 
@@ -221,11 +225,19 @@ async fn an_aenderung_naming_no_changed_group_or_a_foreign_one_is_refused() {
         .expect_err("refused");
         assert!(format!("{err:?}").contains(nennt), "{nennt}: {err:?}");
     }
+    // The 44120 carries its SG8 whole, named by no group.
     let mut bila = aenderung_44109(&["GRUPPENZUORDNUNG"]);
     bila["pid"] = serde_json::json!(44120);
     let err = dispatch_command(&state, GELI_STAMMDATEN_AENDERUNG_SENDEN, &bila)
         .await
-        .expect_err("a 44120 is not assembled");
+        .expect_err("a 44120 names no group");
+    assert!(format!("{err:?}").contains("GRUPPENZUORDNUNG"), "{err:?}");
+    // The MSB's Änderungen are not sent from here.
+    let mut msb = aenderung_44109(&[]);
+    msb["pid"] = serde_json::json!(44159);
+    let err = dispatch_command(&state, GELI_STAMMDATEN_AENDERUNG_SENDEN, &msb)
+        .await
+        .expect_err("a 44159 is not assembled");
     assert!(matches!(err, DispatchError::NotImplemented(_)), "{err:?}");
     // The 44112 is the GNB's.
     let mut nb = aenderung_44109(&["MARKTGEBIET"]);

@@ -235,25 +235,31 @@ pub const MODULE_TABLE: &[ModuleRow] = &[
     },
     // GeliGasModule — GeLi Gas 3.0 44001–44024 (incl. the Stornierung it
     //   shares with WiM Gas) + ORDERS Sperrung Gas 17115–17117 + PARTIN Gas
-    //   37008–37014 + INVOIC 31011 (AWH Rechnung).
+    //   37008–37014 + INVOIC 31011 (AWH Rechnung). The gMSB receives one of
+    //   its ORDERS — the GNB's Anfrage Sperrung 17116 — and registers only
+    //   that (`GeliGasModule::register_pids_with_roles`).
     ModuleRow {
         name: "geli-gas",
-        rollen: &[Rolle::LfGas, Rolle::NbGas],
+        rollen: &[Rolle::LfGas, Rolle::NbGas, Rolle::MsbGas],
         build: || Box::new(mako_geli_gas::GeliGasModule),
     },
     // GaBiGasModule — INVOIC 31007/31008/31010 + REMADV 33001 +
     //   COMDIS 29001 + MSCONS 13013 Allokationsliste. BKV/MGV interactions
-    //   are GNB-side (BK7-24-01-008).
+    //   are GNB-side (BK7-24-01-008); the Lieferant Gas receives the 13013
+    //   (NB an LF) and registers that alone.
     ModuleRow {
         name: "mako-gabi-gas",
-        rollen: &[Rolle::NbGas],
+        rollen: &[Rolle::LfGas, Rolle::NbGas],
         build: || Box::new(mako_gabi_gas::GaBiGasModule),
     },
     // MabisModule — Bilanzkreisabrechnung Strom (BK6-24-174): MSCONS
-    //   Summenzeitreihen, IFTSTA Datenstatus, the MaBiS-ZP lifecycle.
+    //   Summenzeitreihen, IFTSTA Datenstatus, the MaBiS-ZP lifecycle. The
+    //   Lieferant is party to the LF-SZR, the LF-AASZR, the Lieferanten-
+    //   clearinglisten and the normierten Profile; on an LF-only deployment
+    //   the module registers those PIDs alone (`mako_mabis::LF_PIDS`).
     ModuleRow {
         name: "mabis",
-        rollen: &[Rolle::NbStrom],
+        rollen: &[Rolle::NbStrom, Rolle::LfStrom],
         build: || Box::new(mako_mabis::MabisModule),
     },
     // EmobModule — NZR-EMob / Modell 2 (BK6-20-160 Anlage 6, BK6-24-267):

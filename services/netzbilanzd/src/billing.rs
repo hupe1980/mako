@@ -884,7 +884,10 @@ mod tests {
                 satz_ct_per_kwh: dec!(1.32),
                 klasse,
                 niederspannung: None,
-                grenzpreis: None,
+                grenzpreis: Some(grid_billing::Grenzpreisvergleich {
+                    durchschnittspreis_ct_per_kwh: dec!(24.80),
+                    grenzpreis_ct_per_kwh: dec!(18.20),
+                }),
             });
             settle(&pos).expect("settle")
         };

@@ -44,7 +44,8 @@ fn the_documented_nne_examples_parse() {
                 "lf_mp_id": "9900012345678",
                 "sparte": "Strom",
                 "arbeitspreis": { "Einheitlich": { "menge_kwh": "1500", "preis_ct_per_kwh": "3.5" } },
-                "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde" },
+                "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde",
+                    "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" } },
                 "netzebene": "Niederspannung",
                 "artikel_ids": {
                     "NneArbeit": "1-02-0-002",
@@ -91,7 +92,8 @@ fn the_documented_nne_examples_parse() {
                     "preis_eur_per_kw": "12.50",
                     "system": { "MONAT": { "monate": "1" } }
                 },
-                "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde" },
+                "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde",
+                    "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" } },
                 "netzebene": "Niederspannung",
                 "jahresarbeit_kwh": "18000",
                 "tariff_sheet_id": "Preisblatt-NNE-2026-Q1",
@@ -253,7 +255,8 @@ fn the_smoke_test_body_parses() {
                 "lf_mp_id": "9900012345678",
                 "sparte": "Strom",
                 "arbeitspreis": { "Einheitlich": { "menge_kwh": "1500.000", "preis_ct_per_kwh": "3.500" } },
-                "konzessionsabgabe": { "satz_ct_per_kwh": "0.110", "klasse": "Sondervertragskunde" }
+                "konzessionsabgabe": { "satz_ct_per_kwh": "0.110", "klasse": "Sondervertragskunde",
+                    "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" } }
             }
         }]
     }));

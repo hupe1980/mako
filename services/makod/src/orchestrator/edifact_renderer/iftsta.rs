@@ -9,13 +9,17 @@
 //! | PIDs | Kapitel | `STS` DE 9015 | DE 4405 | Also carries |
 //! |---|---|---|---|---|
 //! | 21029 / 21030 / 21031 | 6.7 Ersteinbau eines iMS | `Z19` Ersteinbau iMS | `Z17` geplant · `Z30` zugestimmt · `Z31` widersprochen | `SG14 LOC+172` Meldepunkt (Muss), `SG15 DTM+76` geplanter Umstellungszeitpunkt, and on the two answers the `E_0233` Prüfschritt in DE 9013/1131 |
+//! | 21009 / 21010 | 6.2 Status des Gesamtvorgangs (MSBN → NB) | `Z10` MSB-Wechsel | `Z13` gescheitert · `Z14` erfolgreich | `SG14 LOC+172`; on 21010 `SG15 DTM+293` the takeover instant |
+//! | 21011 / 21012 | 6.2 (NB → MSBN / MSBA / LF) | `Z10` | `Z13` · `Z14` | `SG15 RFF+ACW` / `RFF+ADY` the report answered; on 21011 the `E_0232` / `E_2003` code under `S_0057` / `G_0055`; on 21012 `DTM+293` |
+//! | 21013 | 6.2 (NB → MSBN / MSBA / LF, WiM Teil 1 Kap. 2.3.2 Nr. 16–18) | `Z10` | `Z13` | `SG14 LOC+172`, DE 9013 `E17` with no Codeliste |
 //! | 21042 | 6.10 Umsetzungsstatus (UC 4.4, MSB → ESA) | `Z21` Bestellung | `105` beendet | `SG15 RFF+AGI` Beantragungsnummer, `SG15 DTM+93` Vertragsende |
 //!
 //! Rendering one family in the other's shape produces a well-formed message
 //! about the wrong subject: a Vorabinformation zum Ersteinbau that says
-//! „Bestellung beendet" and names no Messlokation.
+//! „Bestellung beendet" and names no Messlokation. So a PID without an arm is
+//! refused, never given a neighbour's shape.
 //!
-//! Source: IFTSTA AHB 2.1 (01.04.2026) Kap. 6.7 / 6.10.
+//! Source: IFTSTA AHB 2.1 (01.04.2026) Kap. 6.2 / 6.7 / 6.10.
 
 use super::*;
 
@@ -23,7 +27,9 @@ use super::*;
 ///
 /// | Field             | Required | Description                                    |
 /// |-------------------|----------|------------------------------------------------|
-/// | `pid`             | yes      | Prüfidentifikator → SG15 `RFF+Z13`             |
+/// | `pid`             | yes      | Prüfidentifikator → SG15 `RFF+Z13`; one with no arm is refused |
+/// | `referenz_nachricht` + `referenz_vorgang` | on 21011/21012 | `BGM` DE 1004 / `CNI` DE 1490 of the report answered → `RFF+ACW` / `RFF+ADY` |
+/// | `zuordnungsbeginn` + `sparte` | on 21010/21012 | takeover day → `DTM+293` (`303`, the day's beginning in the Sparte) |
 /// | `sender`          | yes      | Sender (MSB) MP-ID                             |
 /// | `receiver`        | no       | Receiver (ESA) MP-ID (falls back to `msg.recipient`) |
 /// | `sts_code`        | no       | STS DE4405 status reason; defaults per Anwendungsfall (see the table above) |
@@ -66,10 +72,22 @@ pub(super) fn render_iftsta(
     // „Bestellung beendet", which on an Ersteinbau Anwendungsfall is a
     // well-formed statement about something the process never touched.
     let (sts_category, default_reason) = match pid {
-        21_029 => ("Z19", "Z17"), // Ersteinbau iMS / geplant
-        21_030 => ("Z19", "Z30"), // Ersteinbau iMS / zugestimmt
-        21_031 => ("Z19", "Z31"), // Ersteinbau iMS / widersprochen
-        _ => ("Z21", "105"),      // Bestellung / beendet — UC 4.4 Umsetzungsstatus
+        21_009 | 21_011 | 21_013 => ("Z10", "Z13"), // MSB-Wechsel / gescheitert
+        21_010 | 21_012 => ("Z10", "Z14"),          // MSB-Wechsel / erfolgreich
+        21_029 => ("Z19", "Z17"),                   // Ersteinbau iMS / geplant
+        21_030 => ("Z19", "Z30"),                   // Ersteinbau iMS / zugestimmt
+        21_031 => ("Z19", "Z31"),                   // Ersteinbau iMS / widersprochen
+        21_042 => ("Z21", "105"),                   // Bestellung / beendet — UC 4.4
+        other => {
+            return Err(RenderError::InsufficientPayload {
+                message_type: mt.into(),
+                detail: format!(
+                    "IFTSTA {other} has no renderer arm — its AHB column is not built, and \
+                     no other Anwendungsfall's shape stands in for it"
+                )
+                .into(),
+            });
+        }
     };
     let sts_code = p
         .get("sts_code")
@@ -85,7 +103,41 @@ pub(super) fn render_iftsta(
         .status(sts_category, sts_code)
         .vorgangsnummer("1");
 
-    // `SG14 LOC+172` — Muss on the Ersteinbau Anwendungsfälle, and the only
+    // `SG15 STS` DE 9013 — the 21013 column fixes `E17` and names no Codeliste.
+    if pid == 21_013 {
+        builder = builder.status_code("E17");
+    }
+    // The Gesamtvorgang answers name the report they answer: `RFF+ACW` its
+    // `BGM` DE 1004, `RFF+ADY` its `CNI` DE 1490 (Muss on 21011 / 21012), and
+    // 21011 carries its `E_0232` / `E_2003` code — DE 9013 Muss.
+    if matches!(pid, 21_011 | 21_012) {
+        builder = builder
+            .referenz_nachricht(require_str(p, mt, "referenz_nachricht")?)
+            .referenz_vorgang(require_str(p, mt, "referenz_vorgang")?);
+    }
+    if pid == 21_011 {
+        builder = builder.pruefschritt(
+            require_str(p, mt, "antwort_code")?,
+            require_str(p, mt, "antwort_codeliste")?,
+        );
+    }
+    // `SG15 DTM+293` — on 21010 / 21012 the instant the MSBN takes over, the
+    // German day's beginning in its Sparte (`[UB3]`, `[521]`).
+    if matches!(pid, 21_010 | 21_012) {
+        let sparte = match require_str(p, mt, "sparte")? {
+            "gas" => mako_fristen::Sparte::Gas,
+            "strom" => mako_fristen::Sparte::Strom,
+            other => {
+                return Err(RenderError::InsufficientPayload {
+                    message_type: mt.into(),
+                    detail: format!("sparte {other:?} is neither \"strom\" nor \"gas\"").into(),
+                });
+            }
+        };
+        let beginn = require_str(p, mt, "zuordnungsbeginn")?;
+        builder = builder.fertigstellung(prozessdatum_303(mt, "zuordnungsbeginn", beginn, sparte)?);
+    }
+    // `SG14 LOC+172` — Muss on the Ersteinbau Anwendungsfälle and 21013, the only
     // thing that says which Messlokation is being rebuilt. `172` is IFTSTA's
     // one DE 3227 value in both Sparten, so the Zählpunktbezeichnung rides it
     // whichever key the workflow used.

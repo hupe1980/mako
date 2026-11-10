@@ -19,20 +19,20 @@ just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
 | | |
 |---|---|
 | **Database** | PostgreSQL — satellites (accounts, mandates, dunning, SEPA runs, booking drafts) in `public`, the ledger in the `ledger` schema; `migration_url` migrates, `url`'s role cannot rewrite the journal |
-| **Auth** | OIDC + Cedar `policies/accountingd.cedar` on every route; reads split into `read-account`, `read-banking`, `read-books`; the EEG payout run and its pain.002 status, the EnFG reads, the Rückforderungen, Aufrechnungen and Rückzahlungen are `NB`'s. `/webhook` is HMAC-verified |
+| **Auth** | OIDC + Cedar `policies/accountingd.cedar` on every route; reads split into `read-account`, `read-banking`, `read-books`; the EEG payout run, its orders (`read-eeg-payouts`) and its pain.002 status, the EnFG reads, the Rückforderungen, Aufrechnungen and Rückzahlungen are `NB`'s. `/webhook` is HMAC-verified |
 | **Ledger** | accountingd owns the chart of accounts (`ledger::Chart`) and the Buchungsart → postings map; every booking is a draft staged in its business transaction and booked after the commit (`booking`); a refused one parks for the Desk |
 | **SEPA** | pain.008 per collection date (CORE/B2B × sequence type), pain.001 payouts, pain.002 status (incl. Verification of Payee), pain.007 reversal, camt.055/029 recall; structured `PstlAdr` (or none) |
 | **Bank import** | camt.052/053/054 and a flat JSON import; only `BOOK` entries post, deduplicated on the bank reference |
-| **Dunning** | Mahnstufe 1→3, then Sperrandrohung → Sperrankündigung → Sperrauftrag (ORDERS 17115 via `makod`) → Entsperrauftrag (17117); Mahnsperren and Forderungseinwände are recorded acts; an EEG plant account is never dunned — its Rückforderung is served by `GET /api/v1/eeg/rueckforderungen` |
+| **Dunning** | Mahnstufe 1→3, then Sperrandrohung → Sperrankündigung → Sperrauftrag (ORDERS 17115 via `makod`) → Entsperrauftrag (17117). A live Mahnsperre or an `ACTIVE` payment plan holds both; a missed instalment defaults the plan (§ 41g Abs. 1 S. 11 EnWG). The § 288 Abs. 5 BGB Pauschale is claimed once per claim from a non-Verbraucher. EEG plant accounts are never dunned |
 | **Events** | `de.accounting.*` through the transactional outbox to `erp_webhook_url` |
-| **MCP** | 17 tools at `/mcp`, each authorized as its REST twin; the contract is pinned by `mcp.snapshot.json` |
+| **MCP** | 18 tools at `/mcp`, each authorized as its REST twin; the contract is pinned by `mcp.snapshot.json` |
 | **Metrics** | `GET /accountingd/metrics` (the runner owns `/metrics`) |
 
 ## Routes
 
 | Area | Routes |
 |---|---|
-| Accounts | `/api/v1/accounts/{malo_id}` and its `/balance`, `/ledger`, `/kontoauszug`, `/open-items`, `/clear`, `/buchen`, `/reconcile`, `/abschlag(e)`, `/vorauszahlung`, `/zahlungsinformation`, `/interest-charges`, `/payment-plans`, `/business-partner`, `/anonymize` |
+| Accounts | `/api/v1/accounts/{malo_id}` and its `/balance`, `/ledger`, `/kontoauszug`, `/open-items`, `/clear`, `/buchen`, `/reconcile`, `/abschlag(e)`, `/vorauszahlung`, `/zahlungsinformation`, `/interest-charges`, `/payment-plans`, `/locks`, `/business-partner`, `/anonymize` |
 | Reports | `GET /api/v1/aging`, `/offene-posten`, `/trial-balance`, `/business-partners/{kunden_nr}/{accounts,balance}` |
 | Dunning | `/api/v1/dunning`, `/{id}/locks`, `/{id}/einwaende`, `/{id}/abwendung/angebot`, `/{id}/resolve`, `/{account_id}/escalate` |
 | SEPA | `/api/v1/sepa/mandates`, `/run`, `/pain002`, `/reversals`, `/recalls`, `/camt029`, `/collections/{run_id}/entries` |
@@ -47,7 +47,7 @@ Top-level: `tenant`, `creditor_iban`, `creditor_id` (Gläubiger-ID),
 `creditor_name`, `pain008_schema` / `pain001_schema`, `erp_webhook_url`,
 `erp_hmac_secret`, `makod_url` / `makod_api_key` (without them the Sperr-Sequenz
 does not run), `sperrkosten_ct` / `entsperrkosten_ct`, `dunning_auto_enabled`,
-`dunning_grace_days`. Tables: `[http]` (`addr`), `[database]`, `[oidc]`, `[creditor_address]`,
+`dunning_grace_days`, `dunning_zahlungsfrist_stufe{1,2,3}_tage` and `dunning_fee_stufe{1,2,3}_ct` (required with `dunning_auto_enabled`). Tables: `[http]` (`addr`), `[database]`, `[oidc]`, `[creditor_address]`,
 `[eeg]`. `accountingd --check-config [--json]` prints every configuration
 finding (path, severity, source) and exits non-zero on a blocking one; the same
 findings are served at `GET /admin/einrichtung`, the posture at

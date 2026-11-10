@@ -134,143 +134,50 @@ async fn a_redelivered_orders_does_not_queue_a_second_disconnection() {
     );
 }
 
-/// A failed dispatch **keeps** the field report and queues a retry.
-///
-/// The report is a fact about the physical world; the dispatch is not. Rolling
-/// the claim back to `pending` would discard the first because the second
-/// failed.
+/// An outcome commits with the IFTSTA 21039 it owes: the field team's report
+/// never waits on makod, and the Auftragsstatus cannot be lost behind it.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_failed_dispatch_keeps_the_report_and_queues_a_retry() {
+async fn an_outcome_commits_with_its_iftsta_command() {
     let Some((pool, _pg)) = setup().await else {
         return;
     };
-    // Unroutable makod endpoint: every dispatch fails.
-    let makod = std::sync::Arc::new(mako_markt::makod_client::MakodClient::new(
-        "http://127.0.0.1:1",
-        secrecy::SecretString::from("test"),
-    ));
     let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("proc"))))
         .await
         .unwrap()
         .unwrap();
-
     let outcome = pg::Outcome::Failed {
         reason: "Zutritt verweigert",
         pruefschritt_code: Some("A04"),
         endgueltig: true,
     };
-    let reported = pg::report_outcome(&pool, &makod, id, TENANT, &outcome)
+    let reported = pg::report_outcome(&pool, id, TENANT, &outcome)
         .await
         .unwrap();
     assert_eq!(
         reported,
         pg::Reported::Recorded {
-            iftsta_dispatched: false
-        },
-        "the outcome is recorded and the caller is told the IFTSTA did not go out"
+            iftsta_queued: true
+        }
     );
-
     let row = pg::fetch_order_pg(&pool, id, TENANT)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(
-        row.status,
-        OrderStatus::Failed,
-        "the report is NOT rolled back"
-    );
-    assert_eq!(row.fail_reason.as_deref(), Some("Zutritt verweigert"));
+    assert_eq!(row.status, OrderStatus::Failed);
     assert_eq!(row.pruefschritt_code.as_deref(), Some("A04"));
-    assert!(row.iftsta_dispatched_at.is_none());
-    assert_eq!(row.iftsta_attempts, 1, "the failed attempt is counted");
-    assert!(row.iftsta_last_error.is_some());
+    assert!(row.iftsta_dispatched_at.is_none(), "not delivered yet");
+    assert_eq!(row.iftsta_attempts, 0);
 
-    // …and it is on the retry queue — but backed off, not due again this
-    // instant. The inline attempt counted itself and set the lease, so the
-    // worker does not re-send 250 ms later and burn the whole budget on a
-    // `makod` that is down for three seconds.
-    assert!(
-        pg::claim_iftsta_retry(&pool, TENANT)
-            .await
-            .unwrap()
-            .is_none(),
-        "the failed attempt backs the order off instead of leaving it due"
-    );
-
-    // Fast-forward past the backoff, which is what the worker's next sweep sees.
-    make_due(&pool, id).await;
-    let claimed = pg::claim_iftsta_retry(&pool, TENANT).await.unwrap();
-    assert_eq!(claimed.map(|o| o.id), Some(id));
-    let row = pg::fetch_order_pg(&pool, id, TENANT)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        row.iftsta_attempts, 2,
-        "the claim itself spends the attempt, so a dispatch that never reports \
-         its outcome still runs the budget down"
-    );
-}
-
-/// Two replicas sweeping at the same moment: exactly one sends the IFTSTA.
-///
-/// A Sperrauftrag-Status is a disconnection outcome the Lieferant acts on, and
-/// `makod` does not deduplicate on the idempotency key, so the claim has to be
-/// exclusive here. A pooled `SELECT … FOR UPDATE SKIP LOCKED` is not: its row
-/// lock is released when the implicit transaction commits — as the statement
-/// returns, before the caller has seen the row — so both replicas claim it and
-/// both dispatch.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn two_replicas_cannot_claim_the_same_iftsta() {
-    let Some((pool, _pg)) = setup().await else {
-        return;
-    };
-    let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("proc"))))
-        .await
-        .unwrap()
-        .unwrap();
-    sqlx::query("UPDATE sperr_orders SET status = 'executed', executed_at = now() WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    // Two independent pools, as two replicas would have.
-    let url = pool.connect_options();
-    let (a, b) = (
-        pool.clone(),
-        PgPool::connect_with((*url).clone()).await.unwrap(),
-    );
-    let (first, second) = tokio::join!(
-        pg::claim_iftsta_retry(&a, TENANT),
-        pg::claim_iftsta_retry(&b, TENANT),
-    );
-    let won = [first.unwrap(), second.unwrap()]
-        .into_iter()
-        .flatten()
-        .count();
-    assert_eq!(
-        won, 1,
-        "one order, one claim — a second claim would put a second IFTSTA 21039 \
-         for the same Sperrauftrag on the wire"
-    );
-
-    let row = pg::fetch_order_pg(&pool, id, TENANT)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(row.iftsta_attempts, 1, "only the winner spent an attempt");
-}
-
-/// Make an order due for its next IFTSTA attempt, as the backoff elapsing would.
-async fn make_due(pool: &PgPool, id: Uuid) {
-    sqlx::query("UPDATE sperr_orders SET iftsta_next_attempt_at = now() WHERE id = $1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .unwrap();
+    let body: serde_json::Value = sqlx::query_scalar(
+        "SELECT envelope->'body' FROM event_outbox WHERE kind = 'command' AND event_id = $1",
+    )
+    .bind(pg::iftsta_key(id))
+    .fetch_one(&pool)
+    .await
+    .expect("the IFTSTA is owed in the outbox");
+    assert_eq!(body["payload"]["auftragsstatus_code"], "Z13");
+    assert_eq!(body["payload"]["pruefschritt_code"], "A04");
 }
 
 /// A second outcome for the same order is refused.
@@ -284,10 +191,6 @@ async fn an_order_reaches_exactly_one_terminal_outcome() {
     let Some((pool, _pg)) = setup().await else {
         return;
     };
-    let makod = std::sync::Arc::new(mako_markt::makod_client::MakodClient::new(
-        "http://127.0.0.1:1",
-        secrecy::SecretString::from("test"),
-    ));
     let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("proc"))))
         .await
         .unwrap()
@@ -299,7 +202,7 @@ async fn an_order_reaches_exactly_one_terminal_outcome() {
         pruefschritt_code: Some("A01"),
     };
     assert!(matches!(
-        pg::report_outcome(&pool, &makod, id, TENANT, &executed)
+        pg::report_outcome(&pool, id, TENANT, &executed)
             .await
             .unwrap(),
         pg::Reported::Recorded { .. }
@@ -311,7 +214,7 @@ async fn an_order_reaches_exactly_one_terminal_outcome() {
         endgueltig: true,
     };
     assert_eq!(
-        pg::report_outcome(&pool, &makod, id, TENANT, &failed)
+        pg::report_outcome(&pool, id, TENANT, &failed)
             .await
             .unwrap(),
         pg::Reported::NotFound,
@@ -363,10 +266,10 @@ async fn cancelling_is_pending_only_and_announced() {
     );
 }
 
-/// The retry budget is bounded and exhaustion is escalated exactly once.
+/// A dead-lettered IFTSTA is escalated, once.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn an_exhausted_iftsta_is_escalated_once() {
+async fn a_dead_lettered_iftsta_is_escalated_once() {
     let Some((pool, _pg)) = setup().await else {
         return;
     };
@@ -374,41 +277,30 @@ async fn an_exhausted_iftsta_is_escalated_once() {
         .await
         .unwrap()
         .unwrap();
+    pg::report_outcome(&pool, id, TENANT, &executed())
+        .await
+        .unwrap();
+    // Still being delivered: not stuck.
+    assert!(
+        pg::list_stuck_iftsta(&pool, TENANT)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     sqlx::query(
-        "UPDATE sperr_orders SET status = 'executed', executed_at = now(), \
-         iftsta_attempts = $2, iftsta_last_error = 'connection refused' WHERE id = $1",
+        "UPDATE event_outbox SET dead_lettered_at = now(), attempts = 8, \
+         last_error = 'connection refused' WHERE event_id = $1",
     )
-    .bind(id)
-    .bind(pg::IFTSTA_MAX_ATTEMPTS)
+    .bind(pg::iftsta_key(id))
     .execute(&pool)
     .await
     .unwrap();
 
-    // Past the budget: the worker no longer hands it out.
-    assert!(
-        pg::claim_iftsta_retry(&pool, TENANT)
-            .await
-            .unwrap()
-            .is_none(),
-        "an exhausted order is not retried forever"
-    );
-
     let stuck = pg::list_stuck_iftsta(&pool, TENANT).await.unwrap();
     assert_eq!(stuck.len(), 1);
-    assert_eq!(
-        stuck[0].attempts,
-        pg::IFTSTA_MAX_ATTEMPTS,
-        "the announcement states the attempts actually made"
-    );
-    let mut tx = pool.begin().await.unwrap();
-    processd::sperr::events::iftsta_ausstehend(&mut tx, TENANT, &stuck[0])
-        .await
-        .unwrap();
-    pg::mark_iftsta_escalated(&mut *tx, id, TENANT)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
-
+    assert_eq!(stuck[0].attempts, 8, "the attempts actually made");
+    assert_eq!(stuck[0].last_error, "connection refused");
+    assert!(processd::sperr::worker::sweep(&pool, TENANT).await.unwrap());
     assert!(
         pg::list_stuck_iftsta(&pool, TENANT)
             .await
@@ -416,10 +308,27 @@ async fn an_exhausted_iftsta_is_escalated_once() {
             .is_empty(),
         "an escalated order is announced once, not on every sweep"
     );
+    assert_eq!(ausstehend(&pool).await, 1);
 
     let s = pg::stats_pg(&pool, TENANT).await.unwrap();
     assert_eq!(s.iftsta_outstanding, 1);
     assert_eq!(s.iftsta_stuck, 1);
+}
+
+fn executed() -> pg::Outcome<'static> {
+    pg::Outcome::Executed {
+        at: time::OffsetDateTime::now_utc(),
+        note: None,
+        pruefschritt_code: Some("A01"),
+    }
+}
+
+async fn ausstehend(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM event_outbox WHERE ce_type = $1")
+        .bind(mako_events::sperr::IFTSTA_AUSSTEHEND)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 /// Tenants do not see each other's disconnection queue.
@@ -557,10 +466,6 @@ async fn the_first_sperrversuch_does_not_close_the_order() {
     let Some((pool, _pg)) = setup().await else {
         return;
     };
-    let makod = std::sync::Arc::new(mako_markt::makod_client::MakodClient::new(
-        "http://127.0.0.1:1",
-        secrecy::SecretString::from("test"),
-    ));
     let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("zwei-versuche"))))
         .await
         .unwrap()
@@ -572,15 +477,12 @@ async fn the_first_sperrversuch_does_not_close_the_order() {
         endgueltig: false,
     };
 
-    let first = pg::report_outcome(&pool, &makod, id, TENANT, &versuch("niemand angetroffen"))
+    let first = pg::report_outcome(&pool, id, TENANT, &versuch("niemand angetroffen"))
         .await
         .unwrap();
     assert_eq!(
         first,
-        pg::Reported::VersuchNotiert {
-            sperrversuche: 1,
-            malo_id: "51238696012".to_owned(),
-        },
+        pg::Reported::VersuchNotiert { sperrversuche: 1 },
         "the first attempt is recorded, not reported"
     );
     let row = pg::fetch_order_pg(&pool, id, TENANT)
@@ -594,13 +496,13 @@ async fn the_first_sperrversuch_does_not_close_the_order() {
         "no IFTSTA Frist runs while the order is still open"
     );
 
-    let second = pg::report_outcome(&pool, &makod, id, TENANT, &versuch("erneut niemand"))
+    let second = pg::report_outcome(&pool, id, TENANT, &versuch("erneut niemand"))
         .await
         .unwrap();
     assert_eq!(
         second,
         pg::Reported::Recorded {
-            iftsta_dispatched: false
+            iftsta_queued: true
         },
         "the second attempt exhausts the allowance and closes the order"
     );
@@ -625,10 +527,6 @@ async fn an_endgueltige_verhinderung_closes_the_order_at_once() {
     let Some((pool, _pg)) = setup().await else {
         return;
     };
-    let makod = std::sync::Arc::new(mako_markt::makod_client::MakodClient::new(
-        "http://127.0.0.1:1",
-        secrecy::SecretString::from("test"),
-    ));
     let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("verfuegung"))))
         .await
         .unwrap()
@@ -636,7 +534,6 @@ async fn an_endgueltige_verhinderung_closes_the_order_at_once() {
 
     let reported = pg::report_outcome(
         &pool,
-        &makod,
         id,
         TENANT,
         &pg::Outcome::Failed {
@@ -650,7 +547,7 @@ async fn an_endgueltige_verhinderung_closes_the_order_at_once() {
     assert_eq!(
         reported,
         pg::Reported::Recorded {
-            iftsta_dispatched: false
+            iftsta_queued: true
         }
     );
     let row = pg::fetch_order_pg(&pool, id, TENANT)
@@ -707,19 +604,12 @@ async fn the_execution_window_is_stored_and_swept() {
     );
 }
 
-/// An IFTSTA that is past the Frist is escalated even with an untouched attempt
-/// counter.
-///
-/// The counter is only as durable as the write that advances it, and that write
-/// is the one made while the dispatch is already failing. Keying the escalation
-/// on the counter alone meant an order whose failures were never recorded held
-/// its full budget for ever, and the one alarm that says "a customer was
-/// disconnected and their Lieferant was never told"
-/// (`de.sperr.iftsta.ausstehend`) never fired. `iftsta_faellig_am` is stamped
-/// once, when the order goes terminal, so it survives whatever happens next.
+/// An IFTSTA past its Frist is escalated while its command is still being
+/// retried: the Lieferant is owed the Auftragsstatus by the 1. WT nach Abschluss
+/// (GPKE Teil 2 § 3.5.1.2 Nr. 5), whatever the delivery is doing.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn an_overdue_iftsta_is_escalated_even_when_no_attempt_was_ever_counted() {
+async fn an_overdue_iftsta_is_escalated_while_still_retrying() {
     let Some((pool, _pg)) = setup().await else {
         return;
     };
@@ -727,46 +617,21 @@ async fn an_overdue_iftsta_is_escalated_even_when_no_attempt_was_ever_counted() 
         .await
         .unwrap()
         .unwrap();
-    // Terminal, undispatched, past its 1. WT nach Abschluss — and with a budget
-    // that looks untouched, exactly as a lost `record_iftsta_failure` leaves it.
-    sqlx::query(
-        "UPDATE sperr_orders
-            SET status = 'executed', executed_at = now(),
-                iftsta_faellig_am = heute() - 1, iftsta_attempts = 0
-          WHERE id = $1",
-    )
-    .bind(id)
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let stuck = pg::list_stuck_iftsta(&pool, TENANT).await.unwrap();
-    assert_eq!(
-        stuck.len(),
-        1,
-        "an IFTSTA past its Frist was never announced because its attempts were never counted"
-    );
-    assert_eq!(stuck[0].id, id);
-    assert_eq!(
-        stuck[0].attempts, 0,
-        "the announcement must state the attempts actually made, not the cap"
-    );
-
-    // Still inside its retry budget, so the worker keeps trying in parallel with
-    // the escalation — announcing is not giving up.
-    assert!(
-        pg::claim_iftsta_retry(&pool, TENANT)
-            .await
-            .unwrap()
-            .is_some()
-    );
-
-    // And it is announced once, not on every sweep.
-    let mut tx = pool.begin().await.unwrap();
-    pg::mark_iftsta_escalated(&mut *tx, id, TENANT)
+    pg::report_outcome(&pool, id, TENANT, &executed())
         .await
         .unwrap();
-    tx.commit().await.unwrap();
+    sqlx::query("UPDATE sperr_orders SET iftsta_faellig_am = heute() - 1 WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let stuck = pg::list_stuck_iftsta(&pool, TENANT).await.unwrap();
+    assert_eq!(stuck.len(), 1);
+    assert_eq!(
+        stuck[0].attempts, 0,
+        "the attempts actually made, not a cap"
+    );
+    assert!(processd::sperr::worker::sweep(&pool, TENANT).await.unwrap());
     assert!(
         pg::list_stuck_iftsta(&pool, TENANT)
             .await
@@ -775,74 +640,38 @@ async fn an_overdue_iftsta_is_escalated_even_when_no_attempt_was_ever_counted() 
     );
 }
 
-/// An operator-created order whose closure cannot be written must not report
-/// itself dispatched.
-///
-/// This branch has no Lieferant to tell, so it closed the order locally and
-/// returned success without checking that the close was written. When the write
-/// failed the caller was told the IFTSTA was out while the row still read
-/// `iftsta_dispatched_at IS NULL` — and the retry worker then re-claimed that
-/// row on every 250 ms sweep for ever, taking the same branch each time and
-/// counting no attempt, so it never became stuck and no alarm could see it.
+/// An operator-created order owes no IFTSTA: no Lieferant is waiting, so it is
+/// closed in the transaction that records its outcome and nothing is queued.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_local_closure_that_cannot_be_written_is_not_reported_as_dispatched() {
+async fn an_operator_order_is_closed_without_an_iftsta() {
     let Some((pool, _pg)) = setup().await else {
         return;
     };
-    let makod = std::sync::Arc::new(mako_markt::makod_client::MakodClient::new(
-        "http://127.0.0.1:1",
-        secrecy::SecretString::from("test"),
-    ));
     let id = pg::create_order_pg(&pool, TENANT, &order(None))
         .await
         .unwrap()
         .unwrap();
-    sqlx::query("UPDATE sperr_orders SET status = 'executed', executed_at = now() WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    // Fault the database rather than the code: the closure write, and only it,
-    // is refused.
-    sqlx::raw_sql(
-        "CREATE FUNCTION block_iftsta_close() RETURNS trigger AS $$
-         BEGIN
-             IF NEW.iftsta_dispatched_at IS NOT NULL AND OLD.iftsta_dispatched_at IS NULL THEN
-                 RAISE EXCEPTION 'simulated database fault on record_iftsta';
-             END IF;
-             RETURN NEW;
-         END $$ LANGUAGE plpgsql;
-         CREATE TRIGGER chaos_iftsta BEFORE UPDATE ON sperr_orders
-             FOR EACH ROW EXECUTE FUNCTION block_iftsta_close();",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let target = pg::claim_iftsta_retry(&pool, TENANT)
-        .await
-        .unwrap()
-        .expect("the terminal, undispatched order is on the retry queue");
-    assert_eq!(target.id, id);
-    assert!(
-        !pg::dispatch_iftsta(
-            &pool,
-            &makod,
-            TENANT,
-            &target,
-            pg::AttemptAccounting::CountedByClaim
-        )
-        .await,
-        "the order was reported as dispatched while its row still says it was not"
+    assert_eq!(
+        pg::report_outcome(&pool, id, TENANT, &executed())
+            .await
+            .unwrap(),
+        pg::Reported::Recorded {
+            iftsta_queued: false
+        }
     );
-
     let row = pg::fetch_order_pg(&pool, id, TENANT)
         .await
         .unwrap()
         .unwrap();
-    assert!(row.iftsta_dispatched_at.is_none());
+    assert_eq!(row.iftsta_ref.as_deref(), Some("local"));
+    assert!(row.iftsta_dispatched_at.is_some());
+    let queued: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM event_outbox WHERE kind = 'command'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(queued, 0);
 }
 
 /// The order the dispatcher reads states the earliest Sperrtermin under
@@ -894,4 +723,173 @@ async fn the_order_view_states_the_msb_window_under_the_reading() {
     let wortlaut =
         pg::SperrOrderView::new(row().await, &Policy::explicit(MsbVorlaufLesart::Wortlaut));
     assert!(wortlaut.msb_fenster.expect("dated").eingehalten);
+}
+
+/// A fake makod answering `status`, recording each command it receives.
+async fn fake_makod(
+    status: u16,
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let rec = std::sync::Arc::clone(&seen);
+    let app = axum::Router::new().route(
+        "/api/v1/commands",
+        axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+            let rec = std::sync::Arc::clone(&rec);
+            async move {
+                rec.lock().unwrap().push(body);
+                (
+                    axum::http::StatusCode::from_u16(status).unwrap(),
+                    axum::Json(serde_json::json!({
+                        "process_id": "00000000-0000-0000-0000-0000000021a9",
+                        "idempotency_key": "k",
+                    })),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (url, seen)
+}
+
+/// With makod down the IFTSTA survives; when it returns the Auftragsstatus goes
+/// out once and the order is stamped dispatched. A command that keeps failing
+/// past the shared budget is dead-lettered and escalated from there.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_iftsta_reaches_makod_once_after_an_outage_or_escalates() {
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let fast = mako_service::outbox::OutboxConfig {
+        backoff: vec![std::time::Duration::ZERO],
+        lease: std::time::Duration::ZERO,
+        ..Default::default()
+    };
+    let key = secrecy::SecretString::from("test");
+    let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("proc"))))
+        .await
+        .unwrap()
+        .unwrap();
+    pg::report_outcome(&pool, id, TENANT, &executed())
+        .await
+        .unwrap();
+
+    // makod down.
+    let (down, _) = fake_makod(503).await;
+    processd::sperr::iftsta_worker(pool.clone(), down, key.clone())
+        .with_config(fast.clone())
+        .flush_once()
+        .await
+        .unwrap();
+    let row = pg::fetch_order_pg(&pool, id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.iftsta_dispatched_at.is_none());
+    assert_eq!(
+        row.iftsta_attempts, 1,
+        "the attempt is read off the command"
+    );
+    assert!(row.iftsta_last_error.is_some());
+
+    // makod back.
+    let (up, seen) = fake_makod(202).await;
+    let worker =
+        processd::sperr::iftsta_worker(pool.clone(), up, key.clone()).with_config(fast.clone());
+    worker.flush_once().await.unwrap();
+    worker.flush_once().await.unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1, "one IFTSTA on the wire");
+    assert_eq!(
+        seen.lock().unwrap()[0]["command"],
+        mako_markt::commands::GPKE_SPERRUNG_BESTAETIGEN
+    );
+    let row = pg::fetch_order_pg(&pool, id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.iftsta_dispatched_at.is_some());
+    assert_eq!(
+        row.iftsta_ref.as_deref(),
+        Some("00000000-0000-0000-0000-0000000021a9")
+    );
+
+    // A second order whose command never gets through.
+    let other = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("proc"))))
+        .await
+        .unwrap()
+        .unwrap();
+    pg::report_outcome(&pool, other, TENANT, &executed())
+        .await
+        .unwrap();
+    let (down, _) = fake_makod(503).await;
+    let worker = processd::sperr::iftsta_worker(pool.clone(), down, key).with_config(fast);
+    for _ in 0..=mako_service::outbox::OutboxConfig::default().max_attempts {
+        worker.flush_once().await.unwrap();
+    }
+    assert!(processd::sperr::worker::sweep(&pool, TENANT).await.unwrap());
+    assert_eq!(ausstehend(&pool).await, 1, "escalated from the dead letter");
+}
+
+/// Each state change of an order commits with the CloudEvent that announces
+/// it: the arrival, a failed Sperrversuch and the terminal outcome. Enqueued on
+/// a transaction of its own after the state committed, a failure between the
+/// two leaves the order moved and nothing announcing it — and nothing moves it
+/// again, so the event is never sent.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn every_state_change_commits_with_its_announcement() {
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let announced = |ce_type: &'static str, id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM event_outbox
+                  WHERE ce_type = $1 AND envelope->'data'->>'order_id' = $2",
+            )
+            .bind(ce_type)
+            .bind(id.to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("announce"))))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        announced(mako_events::sperr::AUFTRAG_EINGEGANGEN, id).await,
+        1,
+        "the order commits with its arrival"
+    );
+    let versuch = pg::Outcome::Failed {
+        reason: "niemand angetroffen",
+        pruefschritt_code: Some("A04"),
+        endgueltig: false,
+    };
+    pg::report_outcome(&pool, id, TENANT, &versuch)
+        .await
+        .unwrap();
+    assert_eq!(
+        announced(mako_events::sperr::VERSUCH_GESCHEITERT, id).await,
+        1,
+        "a Sperrversuch commits with its announcement"
+    );
+    pg::report_outcome(&pool, id, TENANT, &executed())
+        .await
+        .unwrap();
+    assert_eq!(
+        announced(mako_events::sperr::AUSGEFUEHRT, id).await,
+        1,
+        "the outcome commits with its announcement"
+    );
 }

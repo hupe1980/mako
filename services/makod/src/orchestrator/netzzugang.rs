@@ -179,55 +179,30 @@ impl NetzzugangSender {
 
         // ── Path 2: ERP webhook — operator submits via the NB Webportal ──────
         if let Some(webhook) = &self.webhook_url {
-            let body = serde_json::json!({
-                "specversion": "1.0",
-                "type": CE_TYPE_UEBERMITTLUNGSBEDARF,
-                "source": "urn:mako:netzzugang",
-                "id": msg.message_id.to_string(),
-                "subject": antrag.id.to_string(),
-                "time": time::OffsetDateTime::now_utc()
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .unwrap_or_default(),
-                "datacontenttype": "application/json",
-                "data": antrag,
-            });
-            // Serialize once so the (optional) signature covers the raw bytes
-            // actually sent — same construction and headers as
-            // `WebhookErpAdapter` (Standard Webhooks).
-            let body_bytes = serde_json::to_vec(&body).map_err(|e| {
-                EngineError::Deserialization(format!("netzzugang CloudEvent serialize: {e}"))
-            })?;
-            let webhook_id = body
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_owned();
-            let mut builder = self
-                .http
-                .post(webhook.as_ref())
-                .header("Content-Type", "application/json")
-                .header(mako_service::webhook::ID_HEADER, &webhook_id);
-            if let Some(secret) = &self.webhook_secret {
-                for (name, value) in mako_service::webhook::headers(
-                    secret.expose_secret().as_bytes(),
-                    &webhook_id,
-                    time::OffsetDateTime::now_utc().unix_timestamp(),
-                    &body_bytes,
-                ) {
-                    builder = builder.header(name, value);
-                }
-            }
-            let resp = builder
-                .body(body_bytes)
-                .send()
-                .await
-                .map_err(|e| EngineError::store(format!("netzzugang webhook: {e}")))?;
-            if !resp.status().is_success() {
-                return Err(EngineError::store(format!(
-                    "netzzugang webhook returned {}",
-                    resp.status()
-                )));
-            }
+            // The message id is the CloudEvent id, so an ERP deduplicating on
+            // `webhook-id` deduplicates on what makod calls the message, and
+            // every retry of it is the same event.
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("makod", &antrag.tenant),
+                CE_TYPE_UEBERMITTLUNGSBEDARF,
+                antrag.id.to_string(),
+                serde_json::to_value(&antrag).map_err(|e| {
+                    EngineError::Deserialization(format!("netzzugang CloudEvent data: {e}"))
+                })?,
+            )
+            .with_id(msg.message_id.to_string());
+            // durable: this runs inside the engine's outbox worker, which
+            // retries the `NetzzugangAntrag` message until this returns Ok.
+            mako_service::post_ce_with_retry(
+                &self.http,
+                webhook.as_ref(),
+                &ce,
+                self.webhook_secret
+                    .as_ref()
+                    .map(|s| s.expose_secret().as_bytes()),
+            )
+            .await
+            .map_err(|e| EngineError::store(format!("netzzugang webhook: {e}")))?;
             self.project_status(antrag.id, NetzzugangStatus::Uebermittelt, None)
                 .await;
             return Ok(());

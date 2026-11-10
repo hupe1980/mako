@@ -120,3 +120,58 @@ fn two_defects_are_both_reported() {
         .collect();
     assert_eq!(pfade, ["oidc", "eeg.debtor_iban"]);
 }
+
+/// Automatic dunning states a Zahlungsfrist and charges a Mahngebühr on every
+/// Mahnung, and both are the operator's: each Stufe's is required, and a
+/// missing one (or a zero Frist, or a negative fee) refuses the start at its
+/// own path.
+#[test]
+fn auto_dunning_without_its_zahlungsfristen_or_fees_is_refused() {
+    use mako_service::Daemon as _;
+    let complete = serde_json::json!({
+        "allow_insecure_no_auth": true,
+        "dunning_auto_enabled": true,
+        "dunning_zahlungsfrist_stufe1_tage": 14,
+        "dunning_zahlungsfrist_stufe2_tage": 14,
+        "dunning_zahlungsfrist_stufe3_tage": 7,
+        "dunning_fee_stufe1_ct": 0,
+        "dunning_fee_stufe2_ct": 500,
+        "dunning_fee_stufe3_ct": 1000,
+    });
+    let pfade = |change: &dyn Fn(&mut serde_json::Map<String, serde_json::Value>)| -> Vec<String> {
+        let mut v = complete.clone();
+        change(v.as_object_mut().expect("an object"));
+        accountingd::Accountingd::validate(&config(v))
+            .into_iter()
+            .map(|b| b.pfad)
+            .collect()
+    };
+    assert!(pfade(&|_| {}).is_empty(), "0 is a valid explicit fee");
+    assert_eq!(
+        pfade(&|m| {
+            m.remove("dunning_zahlungsfrist_stufe1_tage");
+            m.insert("dunning_zahlungsfrist_stufe2_tage".into(), 0.into());
+            m.remove("dunning_zahlungsfrist_stufe3_tage");
+        }),
+        [
+            "dunning_zahlungsfrist_stufe1_tage",
+            "dunning_zahlungsfrist_stufe2_tage",
+            "dunning_zahlungsfrist_stufe3_tage",
+        ]
+    );
+    assert_eq!(
+        pfade(&|m| {
+            m.remove("dunning_fee_stufe2_ct");
+            m.insert("dunning_fee_stufe3_ct".into(), (-1).into());
+        }),
+        ["dunning_fee_stufe2_ct", "dunning_fee_stufe3_ct"],
+        "an absent fee is no decision, and a negative one is no fee"
+    );
+    assert!(
+        pfade(&|m| {
+            m.retain(|k, _| k == "allow_insecure_no_auth");
+        })
+        .is_empty(),
+        "without automatic dunning nothing is required"
+    );
+}

@@ -101,6 +101,20 @@ impl PgNetzzugangRepository {
     /// epoch default falls back to `now()`); on update it stays untouched.
     /// Returns the id and the new optimistic-locking version.
     pub async fn upsert(&self, rec: &NetzzugangAntrag) -> Result<(Uuid, i64), MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::upsert_tx(&mut conn, rec).await
+    }
+
+    /// [`Self::upsert`] on the caller's transaction, so the request and its
+    /// `netzzugang.antrag.updated` event commit together.
+    pub async fn upsert_tx(
+        conn: &mut sqlx::PgConnection,
+        rec: &NetzzugangAntrag,
+    ) -> Result<(Uuid, i64), MdmError> {
         let id = if rec.id == Uuid::nil() {
             Uuid::new_v4()
         } else {
@@ -141,7 +155,7 @@ impl PgNetzzugangRepository {
         .bind(&rec.platform_ref)
         .bind(created_at)
         .bind(rec.submitted_at)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?
         // No row means the conflicting `id` belongs to another tenant. The
@@ -218,12 +232,37 @@ impl PgNetzzugangRepository {
         platform_ref: Option<String>,
         expected_version: Option<i64>,
     ) -> Result<Option<NetzzugangAntragRow>, MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::set_status_tx(
+            &mut conn,
+            tenant,
+            id,
+            status,
+            platform_ref,
+            expected_version,
+        )
+        .await
+    }
+
+    /// [`Self::set_status`] on the caller's transaction.
+    pub async fn set_status_tx(
+        conn: &mut sqlx::PgConnection,
+        tenant: &str,
+        id: Uuid,
+        status: NetzzugangStatus,
+        platform_ref: Option<String>,
+        expected_version: Option<i64>,
+    ) -> Result<Option<NetzzugangAntragRow>, MdmError> {
         let current: Option<i64> = sqlx::query_scalar(
             "SELECT version FROM netzzugang_antraege WHERE tenant = $1 AND id = $2",
         )
         .bind(tenant)
         .bind(id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -254,7 +293,7 @@ impl PgNetzzugangRepository {
         .bind(id)
         .bind(status.as_str())
         .bind(platform_ref)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
         row.map(|r| map_antrag(&r))

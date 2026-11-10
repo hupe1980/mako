@@ -39,7 +39,7 @@
 //! | `de.mako.aperak.accepted`    | `Running`                |
 //! | `de.mako.aperak.rejected`    | `Rejected` + ERC code    |
 //! | `de.mako.antwortfrist.abgelaufen`     | `AntwortfristAbgelaufen`          |
-//! | `de.mako.process.completed`  | `Completed`              |
+//! | `de.mako.process.completed`  | `Completed`, or `Rejected` when `data.accepted` is `false` / `data.outcome` is `"rejected"` |
 //! | `de.mako.process.failed`     | `Failed`                 |
 //!
 //! ## Two deadline clocks

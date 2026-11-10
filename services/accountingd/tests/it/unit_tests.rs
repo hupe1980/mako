@@ -222,6 +222,7 @@ fn every_entry_type_books_somewhere_deliberate() {
         "ABSCHLAG_VERRECHNUNG",
         "MAHNGEBUEHR",
         "VERZUGSZINSEN",
+        "VERZUGSPAUSCHALE",
         "EEG_GUTSCHRIFT",
         "EEG_MARKTPRAEMIE",
         "EEG_AUSZAHLUNG",
@@ -432,20 +433,18 @@ fn a_storno_nets_against_the_billing() {
 }
 
 // ── Dunning fee calculation ───────────────────────────────────────────────────
-// §286 BGB: dunning fees are recoverable costs. Standard values per
-// Mahnstufe are configurable; typical: 0 EUR (Stufe 1), 5 EUR (Stufe 2), 10 EUR (Stufe 3).
+// The Mahngebühr per Mahnstufe is required configuration
+// (`dunning_fee_stufe{1,2,3}_ct`); these pin how a fee in ct renders.
 
 #[test]
-fn dunning_fee_stufe2_default() {
-    // Stufe 2 default: 500 ct = 5.00 EUR
+fn a_500_ct_fee_renders_as_5_eur() {
     let fee_ct: i64 = 500;
     assert_eq!(format_ct_as_eur(fee_ct), "5.00");
     assert!(fee_ct > 0, "Dunning fee is a debit");
 }
 
 #[test]
-fn dunning_fee_stufe3_default() {
-    // Stufe 3 default: 1000 ct = 10.00 EUR
+fn a_1000_ct_fee_renders_as_10_eur() {
     let fee_ct: i64 = 1_000;
     assert_eq!(format_ct_as_eur(fee_ct), "10.00");
 }

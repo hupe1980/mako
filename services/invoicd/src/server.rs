@@ -57,7 +57,12 @@ impl Daemon for Invoicd {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await
-            .context("run invoicd migrations")
+            .context("run invoicd migrations")?;
+        // The `de.invoic.receipt.*` events commit with the receipt's
+        // conclusion here and are delivered from it.
+        mako_service::outbox::ensure_schema(pool)
+            .await
+            .context("ensure event_outbox schema")
     }
 
     /// Fail closed on both doors — the REST API and the inbound webhook each
@@ -167,9 +172,11 @@ async fn metrics(State(state): State<HandlerState>) -> Response {
             "SELECT COUNT(*) FROM invoic_receipts WHERE tenant = $1 \
              AND pay_by < now() + INTERVAL '3 days' AND dispatched_at IS NULL"
         ),
+        // `event_outbox` has no tenant column; the event's source names it.
         scalar(
-            "SELECT COUNT(*) FROM invoic_receipts WHERE tenant = $1 \
-             AND erp_notified_at IS NULL AND erp_attempts >= 5"
+            "SELECT COUNT(*) FROM event_outbox \
+             WHERE envelope->>'source' = 'urn:mako:invoicd:tenant:' || $1 \
+             AND ce_type LIKE 'de.invoic.receipt.%' AND dead_lettered_at IS NOT NULL"
         ),
         scalar("SELECT COUNT(*) FROM invoic_dlq WHERE tenant = $1 AND resolved_at IS NULL"),
     );
@@ -565,6 +572,12 @@ async fn dispatch_answer(
     if target.already_dispatched {
         return Err(ApiError::conflict("receipt already dispatched"));
     }
+    if target.outcome == "Offen" {
+        return Err(ApiError::unprocessable(
+            "the Entscheidungsbaum left Prüfschritte unanswered — this invoice has no answer \
+             to dispatch until a person states the missing facts",
+        ));
+    }
     let Some(invoice_ref) = target.invoice_ref else {
         return Err(ApiError::unprocessable(
             "receipt has no INVOIC message reference — the answer cannot be routed",
@@ -734,13 +747,13 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
     });
 
     if let Some(erp_url) = cfg.erp.webhook_url.clone() {
-        crate::erp_outbox::spawn(
-            pool.clone(),
-            tenant.clone(),
-            erp_url.clone(),
-            erp_hmac_secret.clone(),
-            ctx.http.clone(),
-            ctx.shutdown.clone(),
+        tokio::spawn(
+            mako_service::outbox::OutboxWorker::new(
+                pool.clone(),
+                erp_url.clone(),
+                erp_hmac_secret.clone(),
+            )
+            .run(ctx.shutdown.clone()),
         );
         crate::payment_overdue::spawn(
             pool.clone(),

@@ -438,6 +438,11 @@ pub async fn dispatch_command(
     let Some(desc) = COMMAND_REGISTRY.iter().find(|d| d.name == command) else {
         return Err(DispatchError::NotImplemented(command.to_owned()));
     };
+    tracing::debug!(
+        command,
+        workflow = desc.workflow.unwrap_or("-"),
+        "dispatching command"
+    );
     let outcome = (desc.dispatch)(state, payload).await;
     if matches!(outcome, Ok(DispatchOutcome::Spawned { .. })) {
         EngineMetrics::global()

@@ -143,6 +143,53 @@ pub const KUENDIGUNG_GRUND: &str = "E03";
 /// See [`KUENDIGUNG_GRUND`].
 pub const KUENDIGUNG_ERGAENZUNGEN: &[&str] = &["ZW3", "ZW4", "ZW5"];
 
+/// The Anmeldung neue verbrauchende Marktlokation — LF an NB (UTILMD AHB
+/// Strom 2.2 Kap. 8.4, S. 95).
+pub const NEUANLAGE_VERBRAUCHEND_PID: u32 = 55_600;
+/// The Anmeldung neue erzeugende Marktlokation — LF an NB (UTILMD AHB Strom
+/// 2.2 Kap. 8.5, S. 109).
+pub const NEUANLAGE_ERZEUGEND_PID: u32 = 55_601;
+/// The Anmeldungen neue Marktlokation this workflow sends.
+pub const NEUANLAGE_PIDS_LF: &[u32] = &[NEUANLAGE_VERBRAUCHEND_PID, NEUANLAGE_ERZEUGEND_PID];
+/// Both columns' one Transaktionsgrund, `E02` „Einzug in Neuanlage" (S. 97,
+/// 110).
+pub const NEUANLAGE_GRUND: &str = "E02";
+/// The Ergänzungen each column admits: `ZW4` „Verbrauchende Marktlokation" on
+/// the 55600 (S. 97); on the 55601 the Geschäftsvorfälle `ZW0` (Anmeldung
+/// 100 %) and `ZW2` — the column lists no `ZW1` (S. 110).
+#[must_use]
+pub fn neuanlage_ergaenzungen(pid: u32) -> &'static [&'static str] {
+    match pid {
+        NEUANLAGE_VERBRAUCHEND_PID => &["ZW4"],
+        NEUANLAGE_ERZEUGEND_PID => &[GESCHAEFTSVORFALL_1, GESCHAEFTSVORFALL_3],
+        _ => &[],
+    }
+}
+
+/// The NB's answers to an Anmeldung neue Marktlokation, routed back to this
+/// workflow: `(answer, Anmeldung it answers, Bestätigung?)` — 55602/55604
+/// answer the 55600, 55603/55605 the 55601 (Kap. 8.4, 8.5).
+pub const NEUANLAGE_ANTWORTEN: &[(u32, u32, bool)] = &[
+    (55_602, NEUANLAGE_VERBRAUCHEND_PID, true),
+    (55_603, NEUANLAGE_ERZEUGEND_PID, true),
+    (55_604, NEUANLAGE_VERBRAUCHEND_PID, false),
+    (55_605, NEUANLAGE_ERZEUGEND_PID, false),
+];
+/// The PIDs of [`NEUANLAGE_ANTWORTEN`].
+pub const NEUANLAGE_ANTWORT_PIDS_LF: &[u32] = &[55_602, 55_603, 55_604, 55_605];
+
+/// Correlation key under which the LF's Anmeldung neue Marktlokation is found
+/// by the NB's answer: the `SG4 IDE+24` Vorgangsnummer it carried, which every
+/// answer restates in `SG6 RFF+TN` (Muss on 55602–55605, S. 99, 114).
+///
+/// The Marktlokation is no key: the Anmeldung names it only „Wenn bekannt"
+/// (Bedingung `[165]`, S. 98, 112) and the Bestätigung names the one the NB
+/// identified.
+#[must_use]
+pub fn neuanlage_vorgang_key(vorgangsnummer: &str) -> String {
+    format!("lf-neuanlage-vorgang:{vorgangsnummer}")
+}
+
 /// The Anfrage-PIDs whose `SG4 STS+7` Ergänzung is a **Geschäftsvorfall**.
 ///
 /// The erzeugende Anmeldung admits `ZW0`/`ZW1`/`ZW2` and nothing else, where
@@ -241,6 +288,13 @@ pub enum LfAnmeldungEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         antwort: Option<Antwortcode>,
     },
+    /// The NB named the Marktlokation of an Anmeldung neue Marktlokation — the
+    /// `SG5 LOC+Z16` of its Bestätigung, Muss there (UTILMD AHB Strom 2.2 S.
+    /// 98, 112).
+    MarktlokationBenannt {
+        /// The Marktlokations-ID.
+        marktlokation: MaLo,
+    },
     /// Accepted Lieferbeginn Anmeldung activated (supply now live).
     Activated,
     /// A registered deadline expired before the NB responded.
@@ -257,6 +311,7 @@ impl EventPayload for LfAnmeldungEvent {
         match self {
             Self::Initiated { .. } => "LfAnmeldungInitiated",
             Self::AntwortReceived { .. } => "LfAnmeldungAntwortReceived",
+            Self::MarktlokationBenannt { .. } => "LfAnmeldungMarktlokationBenannt",
             Self::Activated => "LfAnmeldungActivated",
             Self::DeadlineExpired { .. } => "LfAnmeldungDeadlineExpired",
         }
@@ -280,7 +335,9 @@ impl EventPayload for LfAnmeldungEvent {
                 pid: Some(response_pid.as_u32()),
                 message_ref: Some(response_ref.as_str().to_owned()),
             }),
-            Self::Activated | Self::DeadlineExpired { .. } => None,
+            Self::MarktlokationBenannt { .. } | Self::Activated | Self::DeadlineExpired { .. } => {
+                None
+            }
         }
     }
 
@@ -396,9 +453,56 @@ pub struct Kundendaten {
     pub stammdaten: Stammdaten,
 }
 
+/// An Anmeldung neue Marktlokation 55600 / 55601 as the Lieferant sends it
+/// (GPKE Teil 2 Kap. 2.2; UTILMD AHB Strom 2.2 Kap. 8.4, 8.5).
+#[derive(Debug, Clone)]
+pub struct NeuanlageAnmeldung {
+    /// [`NEUANLAGE_VERBRAUCHEND_PID`] or [`NEUANLAGE_ERZEUGEND_PID`].
+    pub pid: Pruefidentifikator,
+    /// Our own market-partner ID (the Lieferant).
+    pub sender: MarktpartnerCode,
+    /// The Netzbetreiber, named by the caller: a Marktlokation not yet
+    /// registered has no record to resolve it from.
+    pub receiver: MarktpartnerCode,
+    /// `SG5 LOC+Z16` — Soll „Wenn bekannt" (Bedingung `[165]`, S. 98, 112).
+    pub marktlokation: Option<MaLo>,
+    /// `SG4 DTM+92` Datum Vertragsbeginn, Muss.
+    pub process_date: String,
+    /// `SG4 IDE+24` — the NB's answer restates it in `SG6 RFF+TN`.
+    pub vorgangsnummer: String,
+    /// `SG8 SEQ+Z79` Produktpaket — the Bilanzkreis, Muss (Kap. 5.3).
+    pub bilanzkreis: String,
+    /// `SG4 STS+7` Ergänzung — one of [`neuanlage_ergaenzungen`].
+    pub transaktionsgrund_ergaenzung: String,
+    /// `SG8 SEQ+Z79` Produkt `9991000002090` — Muss in Geschäftsvorfall 3
+    /// (`ZW2`) per Codeliste der Konfigurationen 1.4 Kap. 6.1.1.
+    pub tranchengroesse: Option<mako_engine::payload::Tranchengroesse>,
+    /// The Kunde's facts — Muss on the 55600 (`SG8 SEQ+Z01` Gruppenzuordnung,
+    /// `SG12 NAD+Z09`/`Z04`, S. 105–107), listed on no 55601.
+    pub kundendaten: Option<Kundendaten>,
+}
+
 /// Commands for the GPKE LF-side Anmeldung workflow.
 #[derive(Clone)]
 pub enum LfAnmeldungCommand {
+    /// ERP instructs the engine to register a new Marktlokation with its
+    /// Netzbetreiber — an Anmeldung neue Marktlokation 55600 / 55601.
+    InitiateNeuanlage(Box<NeuanlageAnmeldung>),
+    /// The NB's answer to an Anmeldung neue Marktlokation — 55602 / 55604 to
+    /// a 55600, 55603 / 55605 to a 55601.
+    HandleNeuanlageAntwort {
+        /// PID of the inbound answer.
+        response_pid: Pruefidentifikator,
+        /// Optional reason from the answer's `FTX`.
+        reason: Option<String>,
+        /// Message reference from the inbound answer.
+        response_ref: MessageRef,
+        /// `SG4 STS+E01` DE 9013 and DE 1131 of the answer.
+        antwort: Option<Antwortcode>,
+        /// `SG5 LOC+Z16` — the Marktlokation the NB names, Muss on a
+        /// Bestätigung (S. 98, 112).
+        marktlokation: Option<MaLo>,
+    },
     /// ERP instructs the engine to initiate a Lieferbeginn, Lieferende, or
     /// Kündigung Anmeldung as the Lieferant.
     ///
@@ -569,6 +673,13 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                     }
                 }
             }
+            LfAnmeldungEvent::MarktlokationBenannt { marktlokation } => match state {
+                LfAnmeldungState::Pending(mut data) => {
+                    data.location_id = marktlokation.clone();
+                    LfAnmeldungState::Pending(data)
+                }
+                other => other,
+            },
             LfAnmeldungEvent::Activated => match state {
                 LfAnmeldungState::Active(data) => LfAnmeldungState::Active(data),
                 other => other,
@@ -777,50 +888,78 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                     )));
                 }
 
-                // Carry malo_id so marktd's event_ingest can derive
-                // VersorgungsStatus without relying on the CE subject (a process
-                // UUID). Mirrors the GeLi Gas LFN workflow — without this outbox
-                // entry no `de.mako.process.completed` is ever emitted for a
-                // Strom supplier change, so `lf_mp_id_next` stays announced and
-                // never gets promoted to the active Lieferant.
-                let malo_id_str = match state {
-                    LfAnmeldungState::Pending(data) => data.location_id.as_str().to_owned(),
-                    _ => String::new(),
-                };
-                // `accepted`/`outcome` are the verdict, and they are the only
-                // thing that distinguishes a Bestätigung from an Ablehnung
-                // downstream: both leave through `de.mako.process.completed`,
-                // whose type says only that the process is terminal. A consumer
-                // keying on the type alone activates supply for a Marktlokation
-                // the NB refused.
-                //
-                // `reason` rides along so the refusal explains itself where it
-                // is read; without it a consumer knows a Lieferbeginn failed and
-                // cannot say why.
-                let outbox = vec![PendingOutbox::new(
-                    "ProcessCompleted",
-                    "",
-                    serde_json::json!({
-                        "pid":      response_pid.as_u32(),
-                        "malo_id":  malo_id_str,
-                        "accepted": accepted,
-                        "outcome":  if accepted { "accepted" } else { "rejected" },
-                        "reason":   reason,
-                        "antwortcode": antwort.as_ref().map(|a| a.code.as_str()),
-                        "codeliste":   antwort.as_ref().and_then(|a| a.codeliste.as_deref()),
-                    }),
-                )];
-
                 Ok(WorkflowOutput::with_outbox(
                     vec![LfAnmeldungEvent::AntwortReceived {
                         response_pid,
                         accepted,
-                        reason,
+                        reason: reason.clone(),
                         response_ref,
-                        antwort,
+                        antwort: antwort.clone(),
                     }],
-                    outbox,
+                    vec![process_completed(
+                        state,
+                        response_pid,
+                        accepted,
+                        reason.as_deref(),
+                        antwort.as_ref(),
+                        None,
+                    )],
                 ))
+            }
+
+            LfAnmeldungCommand::InitiateNeuanlage(anmeldung) => {
+                if !matches!(state, LfAnmeldungState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.label()));
+                }
+                initiate_neuanlage(*anmeldung)
+            }
+
+            LfAnmeldungCommand::HandleNeuanlageAntwort {
+                response_pid,
+                reason,
+                response_ref,
+                antwort,
+                marktlokation,
+            } => {
+                let LfAnmeldungState::Pending(data) = state else {
+                    return Err(WorkflowError::invalid_state("Pending", state.label()));
+                };
+                // The answer must be one to the Anmeldung this process sent: a
+                // 55602 answers a 55600 and nothing else.
+                let Some(&(_, _, accepted)) =
+                    NEUANLAGE_ANTWORTEN.iter().find(|(a, anmeldung, _)| {
+                        *a == response_pid.as_u32()
+                            && *anmeldung == data.pruefidentifikator.as_u32()
+                    })
+                else {
+                    return Err(WorkflowError::rejected(format!(
+                        "{response_pid} does not answer the Anmeldung {} this process sent",
+                        data.pruefidentifikator
+                    )));
+                };
+                let benannt = marktlokation
+                    .filter(|m| accepted && !m.as_str().is_empty() && *m != data.location_id);
+                let mut events = Vec::new();
+                if let Some(m) = benannt.clone() {
+                    events.push(LfAnmeldungEvent::MarktlokationBenannt { marktlokation: m });
+                }
+                events.push(LfAnmeldungEvent::AntwortReceived {
+                    response_pid,
+                    accepted,
+                    reason: reason.clone(),
+                    response_ref,
+                    antwort: antwort.clone(),
+                });
+                let completed = process_completed(
+                    state,
+                    response_pid,
+                    accepted,
+                    reason.as_deref(),
+                    antwort.as_ref(),
+                    benannt.as_ref(),
+                )
+                .caused_by(events.len() - 1);
+                Ok(WorkflowOutput::with_outbox(events, vec![completed]))
             }
 
             LfAnmeldungCommand::Activate => {
@@ -840,6 +979,158 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
             }
         }
     }
+}
+
+/// The Anmeldung neue Marktlokation a [`NeuanlageAnmeldung`] states, refused
+/// where its column cannot carry it (UTILMD AHB Strom 2.2 Kap. 8.4, 8.5).
+fn initiate_neuanlage(
+    a: NeuanlageAnmeldung,
+) -> Result<WorkflowOutput<LfAnmeldungEvent>, WorkflowError> {
+    let pid = a.pid.as_u32();
+    if !NEUANLAGE_PIDS_LF.contains(&pid) {
+        return Err(WorkflowError::rejected(format!(
+            "expected an Anmeldung neue Marktlokation (55600, 55601), got {pid}"
+        )));
+    }
+    let ergaenzungen = neuanlage_ergaenzungen(pid);
+    if !ergaenzungen.contains(&a.transaktionsgrund_ergaenzung.as_str()) {
+        return Err(WorkflowError::rejected(format!(
+            "{pid}: SG4 STS+7 ist Muss — Transaktionsgrund {NEUANLAGE_GRUND} und Ergänzung {} \
+             (UTILMD AHB Strom 2.2 Kap. 8.4/8.5), nicht {:?}",
+            ergaenzungen.join("/"),
+            a.transaktionsgrund_ergaenzung,
+        )));
+    }
+    // Kap. 5.3 makes the Produktpaket with the Bilanzkreis Muss on 55600 and
+    // 55601 as on every Anmeldung.
+    if a.bilanzkreis.trim().is_empty() {
+        return Err(WorkflowError::rejected(format!(
+            "{pid}: das Produktpaket SG8 SEQ+Z79 mit dem Bilanzkreis ist Muss \
+             (UTILMD AHB Strom 2.2 Kap. 5.3)"
+        )));
+    }
+    if a.transaktionsgrund_ergaenzung == GESCHAEFTSVORFALL_3 && a.tranchengroesse.is_none() {
+        return Err(WorkflowError::rejected(format!(
+            "{pid} im Geschäftsvorfall 3 ohne Tranchengröße: die Codeliste der \
+             Konfigurationen 1.4 Kap. 6.1.1 macht den Produkt-Code 9991000002090 bei \
+             STS+7++xxx+ZW2 zur Muss-Angabe"
+        )));
+    }
+    if a.vorgangsnummer.trim().is_empty() {
+        return Err(WorkflowError::rejected(format!(
+            "{pid}: SG4 IDE+24 Vorgangsnummer ist Muss — die Antwort des NB nennt sie in \
+             SG6 RFF+TN"
+        )));
+    }
+    // The 55600 names the Kunde and his Gruppenzuordnung, both Muss (S. 104,
+    // 106–107); the 55601 the Kunde at most (Kann, S. 122) and no
+    // Gruppenzuordnung.
+    let verbrauchend = pid == NEUANLAGE_VERBRAUCHEND_PID;
+    if verbrauchend && a.kundendaten.is_none() {
+        return Err(WorkflowError::rejected(
+            "55600: SG8 SEQ+Z01 Gruppenzuordnung und SG12 NAD+Z09/Z04 Kunde des \
+             Lieferanten sind Muss (UTILMD AHB Strom 2.2 Kap. 8.4)"
+                .to_owned(),
+        ));
+    }
+    let kundendaten = a.kundendaten;
+    let location_id = a.marktlokation.clone().unwrap_or_else(|| MaLo::new(""));
+    let event = LfAnmeldungEvent::Initiated {
+        pruefidentifikator: a.pid,
+        location_id,
+        sender: a.sender.clone(),
+        receiver: a.receiver.clone(),
+        process_date: a.process_date.clone(),
+    };
+    let outbox = PendingOutbox::typed(
+        a.receiver.as_str(),
+        &mako_engine::payload::UtilmdPayload {
+            pid,
+            sender: a.sender.as_str().to_owned(),
+            receiver: Some(a.receiver.as_str().to_owned()),
+            malo: a
+                .marktlokation
+                .map(|m| m.as_str().to_owned())
+                .filter(|m| !m.is_empty()),
+            process_date: Some(a.process_date),
+            vorgangsnummer: Some(a.vorgangsnummer),
+            transaktionsgrund: Some(NEUANLAGE_GRUND.to_owned()),
+            transaktionsgrund_ergaenzung: Some(a.transaktionsgrund_ergaenzung),
+            bilanzkreis: Some(a.bilanzkreis),
+            tranchengroesse: a.tranchengroesse,
+            kundengruppe: kundendaten
+                .as_ref()
+                .filter(|_| verbrauchend)
+                .map(|k| if k.haushaltskunde { "Z15" } else { "Z18" }.to_owned()),
+            stammdaten: kundendaten.map(|k| k.stammdaten).unwrap_or_default(),
+            ..Default::default()
+        },
+    );
+    Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))
+}
+
+/// The `ProcessCompleted` notification an answer leaves for marktd and the ERP.
+///
+/// `marktlokation` is the one the NB named in a Bestätigung of an Anmeldung
+/// neue Marktlokation, where the process held none or another.
+fn process_completed(
+    state: &LfAnmeldungState,
+    response_pid: Pruefidentifikator,
+    accepted: bool,
+    reason: Option<&str>,
+    antwort: Option<&Antwortcode>,
+    marktlokation: Option<&MaLo>,
+) -> PendingOutbox {
+    // Carry malo_id so marktd's event_ingest can derive
+    // VersorgungsStatus without relying on the CE subject (a process
+    // UUID). Mirrors the GeLi Gas LFN workflow — without this outbox
+    // entry no `de.mako.process.completed` is ever emitted for a
+    // Strom supplier change, so `lf_mp_id_next` stays announced and
+    // never gets promoted to the active Lieferant.
+    let malo_id_str = match (marktlokation, state) {
+        (Some(m), _) => m.as_str().to_owned(),
+        (None, LfAnmeldungState::Pending(data)) => data.location_id.as_str().to_owned(),
+        _ => String::new(),
+    };
+    // `accepted`/`outcome` are the verdict, and they are the only
+    // thing that distinguishes a Bestätigung from an Ablehnung
+    // downstream: both leave through `de.mako.process.completed`,
+    // whose type says only that the process is terminal. A consumer
+    // keying on the type alone activates supply for a Marktlokation
+    // the NB refused.
+    //
+    // `reason` rides along so the refusal explains itself where it
+    // is read; without it a consumer knows a Lieferbeginn failed and
+    // cannot say why.
+    // The date the Anfrage asked for — the Lieferbeginn on an
+    // Anmeldung, the Lieferende on an Abmeldung — and the Lieferant
+    // it is about, this one: without them marktd dates an ending
+    // the day the answer arrived and ends every assignment of a
+    // tranchierte Marktlokation.
+    let (process_date, lieferant) = match state {
+        LfAnmeldungState::Pending(data) => (
+            Some(data.process_date.clone()),
+            Some(data.sender.as_str().to_owned()),
+        ),
+        _ => (None, None),
+    };
+    let lieferant_key = if matches!(response_pid.as_u32(), 55_005 | 55_006) {
+        "old_supplier"
+    } else {
+        "new_supplier"
+    };
+    let mut completed = serde_json::json!({
+        "pid":      response_pid.as_u32(),
+        "malo_id":  malo_id_str,
+        "process_date": process_date,
+        "accepted": accepted,
+        "outcome":  if accepted { "accepted" } else { "rejected" },
+        "reason":   reason,
+        "antwortcode": antwort.map(|a| a.code.as_str()),
+        "codeliste":   antwort.and_then(|a| a.codeliste.as_deref()),
+    });
+    completed[lieferant_key] = serde_json::json!(lieferant);
+    PendingOutbox::new("ProcessCompleted", "", completed)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

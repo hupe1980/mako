@@ -107,7 +107,8 @@ pub struct GetImbalanceParams {
     /// Required: edmd holds the measured half of the saldo only. The bilanzierte
     /// Menge comes from the Bilanzkreisabrechnung, not from metering data.
     pub bilanziert_kwh: rust_decimal::Decimal,
-    /// `STROM` (default) or `GAS` — Gas balances on the 06:00 Gastag.
+    /// `STROM` or `GAS` — Gas balances on the 06:00 Gastag. Absent, the Sparte
+    /// the MaLo's readings are stored under; with none stored, refused.
     #[serde(default)]
     pub sparte: Option<String>,
 }
@@ -121,6 +122,11 @@ pub struct GetBillingPeriodParams {
     /// End of billing period — ISO 8601 date `YYYY-MM-DD` (inclusive).
     /// Defaults to `period_from` (single-day period) when omitted.
     pub period_to: Option<String>,
+    /// `STROM` · `GAS` · `WAERME` · `WASSER` — decides whether the period runs
+    /// on calendar days or Gastage. Absent, the Sparte the MaLo's readings are
+    /// stored under; with none stored, refused.
+    #[serde(default)]
+    pub sparte: Option<String>,
 }
 
 // ── Device history RAG ─────────────────────────────────────────────────────
@@ -260,9 +266,11 @@ pub struct TriggerSubstitutionParams {
     /// the same slot on the previous three days of the gap's day class, so the
     /// window has to hold three of them.
     pub prior_days: Option<u32>,
-    /// **Required** — the Bundesland whose holidays decide the day class
-    /// (`BE`, `NW`, `DE-BY`, …).
-    pub bundesland: String,
+    /// The Bundesland whose holidays decide the day class (`BE`, `NW`,
+    /// `DE-BY`, …). Absent, the Land cached for the MaLo from `marktd`; with
+    /// neither, refused.
+    #[serde(default)]
+    pub bundesland: Option<String>,
     /// Fill gaps longer than 2 h with the last measured value (`Z93`). Gas only.
     #[serde(default)]
     pub hold: bool,
@@ -380,6 +388,25 @@ pub struct EdmdMcpHandler {
     prompt_router: PromptRouter<EdmdMcpHandler>,
 }
 
+impl EdmdMcpHandler {
+    /// The Sparte a settlement tool runs on — the requested one, else the one
+    /// the MaLo's readings are stored under (`domain::settlement_sparte`).
+    async fn settlement_sparte(
+        &self,
+        malo_id: &str,
+        raw: Option<&str>,
+    ) -> Result<metering::Sparte, McpError> {
+        let stored = self
+            .state
+            .repo
+            .latest_read(malo_id, &self.state.tenant)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .map(|r| r.sparte);
+        crate::domain::settlement_sparte(raw, stored).map_err(|e| McpError::invalid_params(e, None))
+    }
+}
+
 #[tool_router]
 impl EdmdMcpHandler {
     fn new(state: Arc<EdmdMcpState>) -> Self {
@@ -493,18 +520,9 @@ impl EdmdMcpHandler {
         // Refused, not defaulted: an agent that mistypes the commodity would
         // otherwise get a Strom saldo for a gas measuring point — settled on the
         // calendar day instead of the 06:00 Gastag — with nothing to say so.
-        let sparte = match p.sparte.as_deref() {
-            None => metering::Sparte::Strom,
-            Some(raw) => crate::domain::parse_sparte(raw).ok_or_else(|| {
-                McpError::invalid_params(
-                    format!(
-                        "unknown sparte `{raw}`; expected one of {:?}",
-                        metering::Sparte::CODES
-                    ),
-                    None,
-                )
-            })?,
-        };
+        let sparte = self
+            .settlement_sparte(&p.malo_id, p.sparte.as_deref())
+            .await?;
 
         let report = match self
             .state
@@ -578,119 +596,41 @@ impl EdmdMcpHandler {
             .map_err(|_| McpError::invalid_params("period_to must be YYYY-MM-DD", None))?
             .unwrap_or(period_from);
 
-        // A billing period is a Berlin calendar period (Liefermonat), so its UTC
-        // window comes from the calendar — naive UTC midnight is 1–2 h off at
-        // every month edge and the wrong length across a DST transition.
-        let (Some(first), Some(last)) = (
-            metering::DayBoundary::Strom.day(period_from),
-            metering::DayBoundary::Strom.day(period_to),
-        ) else {
+        if period_to < period_from {
             return Err(McpError::invalid_params(
-                "the period lies outside the supported calendar",
+                "period_to must not precede period_from",
                 None,
             ));
-        };
-        let (from_ts, to_ts) = (first.start(), last.end());
-
-        // Query pre-aggregated billing periods first, fall back to raw aggregation.
-        let pre = sqlx::query(
-            r"SELECT arbeitsmenge_kwh, spitzenleistung_kw, brennwert_kwh_per_m3,
-                     zustandszahl, messtyp, sparte, quality, computed_at
-              FROM meter_billing_periods
-              WHERE malo_id = $1 AND period_from = $2 AND period_to = $3
-                AND tenant = $4",
-        )
-        .bind(&p.malo_id)
-        .bind(period_from)
-        .bind(period_to)
-        .bind(&self.state.tenant)
-        .fetch_optional(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        if let Some(row) = pre {
-            use sqlx::Row as _;
-            // arbeitsmenge_kwh and spitzenleistung_kw are NUMERIC(18,5) in the schema.
-            let arbeitsmenge: Option<rust_decimal::Decimal> =
-                row.try_get("arbeitsmenge_kwh").unwrap_or(None);
-            let spitzenleistung: Option<rust_decimal::Decimal> =
-                row.try_get("spitzenleistung_kw").unwrap_or(None);
-            ContentBlock::json(serde_json::json!({
-                "malo_id": p.malo_id,
-                "period_from": period_from.to_string(),
-                "period_to": period_to.to_string(),
-                "messtyp": row.try_get::<String, _>("messtyp").ok(),
-                "sparte": row.try_get::<String, _>("sparte").ok(),
-                "arbeitsmenge_kwh": arbeitsmenge.map(|d| d.to_string()),
-                "spitzenleistung_kw": spitzenleistung.map(|d| d.to_string()),
-                "brennwert_kwh_per_m3": row.try_get::<Option<String>, _>("brennwert_kwh_per_m3").ok().flatten(),
-                "zustandszahl": row.try_get::<Option<String>, _>("zustandszahl").ok().flatten(),
-                "quality": row.try_get::<String, _>("quality").ok(),
-                "computed_at": row.try_get::<time::OffsetDateTime, _>("computed_at").ok()
-                    .and_then(|t| {
-                        use time::format_description::well_known::Rfc3339;
-                        t.format(&Rfc3339).ok()
-                    }),
-                "source": "pre_aggregated",
-            }))
+        }
+        let sparte = self
+            .settlement_sparte(&p.malo_id, p.sparte.as_deref())
+            .await?;
+        // The same aggregate `GET /api/v1/billing-period/{malo_id}` serves —
+        // one implementation of the period window, the register projection and
+        // the cache.
+        let period = self
+            .state
+            .repo
+            .billing_period(&crate::domain::BillingPeriodQuery {
+                malo_id: p.malo_id.clone(),
+                period_from,
+                period_to,
+                tenant: self.state.tenant.clone(),
+                sparte,
+            })
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        match period {
+            Some(period) => ContentBlock::json(
+                serde_json::to_value(period)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+            )
             .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None))
-        } else {
-            // On-the-fly aggregation from the version-resolved series. `query`
-            // does not filter quality, so non-billable values (§ 40a Abs. 2
-            // EnWG: `QualityFlag::is_billable`) are dropped here.
-            let reads = self
-                .state
-                .repo
-                .query(&TimeSeriesQuery {
-                    malo_id: p.malo_id.clone(),
-                    from: from_ts,
-                    to: to_ts,
-                    sparte: None,
-                    tenant: self.state.tenant.clone(),
-                })
-                .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-            let billable: Vec<_> = reads.iter().filter(|r| r.quality.is_billable()).collect();
-
-            if billable.is_empty() {
-                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "no_data: No meter reads for MaLo '{}' in {}/{} — {}.",
-                    p.malo_id,
-                    p.period_from,
-                    p.period_to.as_deref().unwrap_or(&p.period_from),
-                    "ensure MSCONS data has been ingested for this period"
-                ))]));
-            }
-
-            // One canonical Bezug series, so the tool cannot answer with a
-            // prosumer's Einspeisung folded into its grid draw, or with a
-            // dual-tariff meter's consumption counted twice (`domain::register`).
-            let intervals =
-                crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
-            let total_kwh: rust_decimal::Decimal =
-                intervals.iter().map(metering::MeterInterval::value).sum();
-            // Peak demand is the interval's energy over its own length in hours,
-            // so an hourly series reports one instead of none.
-            let spitzenleistung_kw: Option<rust_decimal::Decimal> = intervals
-                .iter()
-                .filter_map(metering::MeterInterval::demand_kw)
-                .max();
-            let count = intervals.len();
-
-            ContentBlock::json(serde_json::json!({
-                "malo_id": p.malo_id,
-                "period_from": period_from.to_string(),
-                "period_to": period_to.to_string(),
-                "arbeitsmenge_kwh": Some(total_kwh.to_string()),
-                "spitzenleistung_kw": spitzenleistung_kw.map(|d| d.to_string()),
-                "read_count": count,
-                "source": "on_the_fly",
-                "note": "Pre-aggregated summary not available — computed from raw reads. Brennwert/Zustandszahl not yet available.",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "no_data: No billable reading for MaLo '{}' in {}/{}.",
+                p.malo_id, period_from, period_to
+            ))])),
         }
     }
 
@@ -950,7 +890,12 @@ Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverag
         // The **same** scorer the REST surface runs, not a second one: the
         // Sparte's preset, the observed grid and the requested window. An agent
         // and an operator asking the same question get the same answer.
-        let sparte = reads.first().map_or(metering::Sparte::Strom, |r| r.sparte);
+        let Some(sparte) = reads.first().map(|r| r.sparte) else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "no_data: No meter reads for MaLo '{}' in the window.",
+                p.malo_id
+            ))]));
+        };
         let report = crate::server::compute_quality(&intervals, sparte, from_dt, to_dt);
 
         ContentBlock::json(serde_json::json!({
@@ -1196,7 +1141,7 @@ Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverag
     }
 
     #[tool(
-        description = "Generate and store § 60 Abs. 1 MsbG Ersatzwerte (substitute values) for a gap window. The method follows MeteringCode 2006: gaps up to 2 h are interpolated (Z92), longer ones take the Vergleichswert of the same slot on comparable days (ZJ2 Strom, Z95 Gas); `hold` (gas only, Z93) and `confirmed_outage` (zeros) are opt-in. A slot no rule can fill is refused, never invented. Requires `reason` (STS+Z40) and `bundesland` (holidays decide the day class). Never overwrites a billable reading; every substitute is logged to substitute_value_log (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
+        description = "Generate and store § 60 Abs. 1 MsbG Ersatzwerte (substitute values) for a gap window. The method follows MeteringCode 2006: gaps up to 2 h are interpolated (Z92), longer ones take the Vergleichswert of the same slot on comparable days (ZJ2 Strom, Z95 Gas); `hold` (gas only, Z93) and `confirmed_outage` (zeros) are opt-in. A slot no rule can fill is refused, never invented. Requires `reason` (STS+Z40); `bundesland` (holidays decide the day class) defaults to the Land cached for the MaLo from marktd and is refused when neither is known. Never overwrites a billable reading; every substitute is logged to substitute_value_log (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
         annotations(
             destructive_hint = true,
             idempotent_hint = true,
@@ -1570,9 +1515,12 @@ Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverag
         // must not depend on which surface asked for it — including the
         // register projection and the billable-quality filter. A month missing
         // any slot is absent rather than reported short.
-        let sparte = reads
-            .first()
-            .map_or(crate::domain::Sparte::Strom, |r| r.sparte);
+        let Some(sparte) = reads.first().map(|r| r.sparte) else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "no_data: No meter reads for MaLo '{}' in the window.",
+                p.malo_id
+            ))]));
+        };
         let intervals =
             crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
         let months =

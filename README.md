@@ -30,11 +30,11 @@ proposes while code computes every Frist, amount and verdict.
 
 | Layer | What it is |
 |---|---|
-| **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon — 73 workflows over 473 Prüfidentifikatoren |
+| **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon — 76 workflows over 494 Prüfidentifikatoren |
 | **Market data** | `mako-markt` library · `marktd` hub (PostgreSQL, durable CloudEvents fan-out, OIDC/JWT) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer management** | `accountingd` ledger · `portald` portal · `outputd` documents · `vertragd` contracts · `productd` catalogue |
-| **Agent surface** | 11 of the 14 services expose an MCP server — **178 tools** — and `agentd` is the governed consumer: 29 specialists (27 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
+| **Agent surface** | 11 of the 14 services expose an MCP server — **179 tools** — and `agentd` is the governed consumer: 29 specialists (27 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
 | **Operator UI** | `desk/` — mako Desk: processes and their Verlauf, customers, Heute, Freigaben, and an assistant that cites every sentence and proposes decisions on Freigaben, invoice disputes and geparkte Buchungen. The `mako-desk` image runs behind an OIDC gateway; `just desk` for development ([guide](https://hupe1980.github.io/mako/docs/guide/desk/), [AGENTS](desk/AGENTS.md)) |
 | **Testing** | `makotest` — Python toolkit over the same Rust core: check digits, the answer Fristen, Entscheidungsbaum codes, AHB-validated EDIFACT, answering counterparties, a `pytest` plugin ([README](makotest/README.md)) |
 
@@ -156,7 +156,7 @@ config, deployment — is [mako docs · Services](https://hupe1980.github.io/mak
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 73 workflows over 473 Prüfidentifikatoren, AS4 · REST · iMS |
+| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 76 workflows over 494 Prüfidentifikatoren, AS4 · REST · iMS |
 | [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, durable CloudEvents fan-out |
 | [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Process decision engine — answers the published Entscheidungsbäume, escalates what it cannot decide; the process read model (KPIs, Fristen, the § 7a Abs. 5 EnWG Gleichbehandlung report) and the NB Sperr-/Entsperrauftrag queue |
 | [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 16 MCP tools |

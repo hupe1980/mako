@@ -548,7 +548,8 @@ impl ContrlAckService {
     }
 
     /// Emit a CONTRL Empfangsbestätigung for a successfully-parsed Gas interchange
-    /// or Gas APERAK receipt.
+    /// or Gas APERAK receipt, and the ERP notice of every APERAK and CONTRL the
+    /// interchange carries ([`notify_quittungen`](Self::notify_quittungen)).
     ///
     /// **Regulatory basis:**
     /// - CONTRL AHB 1.0 §2.3.1: "Der Empfänger der Übertragungsdatei **oder APERAK**
@@ -588,6 +589,82 @@ impl ContrlAckService {
     /// caller must make that durable (dead-letter): the CONTRL is the only proof
     /// of receipt the Gas sender gets, and nothing else would ever retry it.
     pub async fn emit_for_interchange(
+        &self,
+        messages: &[&AnyMessage],
+        interchange_ref: &str,
+        recipient_mp_id: &str,
+    ) -> Result<(), EngineError> {
+        // The Quittungen the interchange carries reach the ERP before anything
+        // else is decided about it: they are owed whatever the Sparte, and a
+        // failure to record them must not cost the CONTRL its obligation.
+        let notified = self.notify_quittungen(messages).await;
+        self.acknowledge_interchange(messages, interchange_ref, recipient_mp_id)
+            .await?;
+        notified
+    }
+
+    /// Enqueue the ERP notice of every APERAK and CONTRL in `messages`, each
+    /// under the process of the message it answers where the correlation index
+    /// names one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] when the outbox write fails; the caller
+    /// dead-letters it, as it does a failed CONTRL.
+    pub async fn notify_quittungen(&self, messages: &[&AnyMessage]) -> Result<(), EngineError> {
+        let mut notices = Vec::new();
+        for msg in messages {
+            let Some((notice, refs)) = quittung_notice(msg, self.tenant_id) else {
+                continue;
+            };
+            notices.push(match self.answered_process(&refs).await {
+                Some(identity) => attach_to_process(notice, &identity),
+                None => {
+                    tracing::info!(
+                        message_type = %notice.message_type,
+                        references = ?refs,
+                        "Quittung: no process holds the answered reference — the notice \
+                         keeps a process of its own",
+                    );
+                    notice
+                }
+            });
+        }
+        if notices.is_empty() {
+            return Ok(());
+        }
+        self.outbox
+            .enqueue_outbox_with_deadlines(&notices, &[])
+            .await
+            .inspect_err(|e| {
+                tracing::error!(
+                    error = %e,
+                    "Quittung: the ERP notice of a received APERAK or CONTRL was not enqueued",
+                );
+            })
+    }
+
+    /// The one process a Quittung answers: the first of `refs` that is a
+    /// correlation key of exactly one process. A lookup that fails leaves the
+    /// notice unattached rather than unannounced.
+    async fn answered_process(&self, refs: &[String]) -> Option<mako_engine::ids::ProcessIdentity> {
+        use mako_engine::registry::ProcessRegistry as _;
+        let registry = self.outbox.as_process_registry();
+        for key in refs.iter().filter(|k| !k.is_empty()) {
+            match registry.lookup_correlated(self.tenant_id, key).await {
+                Ok(mut found) if found.len() == 1 => return found.pop(),
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, key, "Quittung: correlation lookup failed");
+                }
+            }
+        }
+        None
+    }
+
+    /// The CONTRL Empfangsbestätigung half of
+    /// [`emit_for_interchange`](Self::emit_for_interchange).
+    async fn acknowledge_interchange(
         &self,
         messages: &[&AnyMessage],
         interchange_ref: &str,
@@ -938,6 +1015,128 @@ impl ContrlAckService {
     }
 }
 
+// ── Received Quittungen ──────────────────────────────────────────────────────
+
+/// The notice under the process that sent the message it answers: its
+/// process, stream, workflow and format version.
+fn attach_to_process(
+    mut notice: OutboxMessage,
+    identity: &mako_engine::ids::ProcessIdentity,
+) -> OutboxMessage {
+    notice.process_id = identity.process_id;
+    notice.stream_id = StreamId::for_process(identity.tenant_id, &identity.process_id);
+    notice.workflow_name = identity.workflow_id.name.clone();
+    notice.format_version = Some(identity.workflow_id.format_version.clone());
+    notice.payload["process_resolved"] = serde_json::Value::Bool(true);
+    notice
+}
+
+/// The ERP notice of one Quittung — an `AperakAccepted` or `AperakRejected`
+/// per APERAK, a `ContrlReceived` per CONTRL, nothing for any other message —
+/// with the references it names to the message it answers: the keys its
+/// process may be found under.
+///
+/// A counterparty's APERAK states whether it could process the message we
+/// sent it, and its CONTRL whether our interchange passed its syntax check;
+/// the ERP worker turns each notice into its CloudEvent.
+///
+/// - An APERAK is a Fehlermeldung when `BGM` DE 1001 is `313`, or when it
+///   names an `ERC` (APERAK AHB 1.1 Kap. 3: Anwendungsfall 29001
+///   „Fehlermeldung", 29002 „Anerkennungsmeldung"). The first `ERC` code rides
+///   as `error_code`, which the worker promotes into the CloudEvent's `makoerc`.
+/// - A CONTRL is a rejection unless `UCI` DE 0083 is `7` „Übertragung
+///   bestätigt" (CONTRL AHB 1.0 Kap. 2).
+///
+/// An APERAK names the answered message by its Dokumentennummer (`RFF+ACE`)
+/// and the Vorgang by `RFF+TN` / `RFF+ACW` (APERAK AHB 1.1 Kap. 3, S. 26–30);
+/// a CONTRL by the Datenaustauschreferenz (`UCI` DE 0020) and each message's
+/// reference (`UCM` DE 0062).
+fn quittung_notice(msg: &AnyMessage, tenant_id: TenantId) -> Option<(OutboxMessage, Vec<String>)> {
+    let (message_type, recipient, payload, refs) = match msg {
+        AnyMessage::Aperak(a) => {
+            let error_code = a.errors().first().map(|e| e.erc.error_code.clone());
+            let fehler = a.bgm().is_some_and(|b| b.document_code == "313") || error_code.is_some();
+            // `RFF+ACE` names the acknowledged message; `RFF+ACW` the Vorgang
+            // inside it, which is the fallback.
+            let rff = |qualifier: &str| {
+                a.segments()
+                    .iter()
+                    .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some(qualifier))
+                    .and_then(|s| s.component_str(0, 1))
+                    .map(str::to_owned)
+            };
+            let bezug = rff("ACE").or_else(|| rff("ACW"));
+            let mut refs: Vec<String> = a
+                .segments()
+                .iter()
+                .filter(|s| {
+                    s.tag == "RFF" && matches!(s.component_str(0, 0), Some("ACE" | "TN" | "ACW"))
+                })
+                .filter_map(|s| s.component_str(0, 1).map(str::to_owned))
+                .collect();
+            refs.dedup();
+            let sender = msg.nad_sender().unwrap_or_default().to_owned();
+            let payload = serde_json::json!({
+                "pid": if fehler {
+                    mako_engine::payload::APERAK_PID_FEHLER
+                } else {
+                    mako_engine::payload::APERAK_PID_ANERKENNUNG
+                },
+                "message_ref": msg.message_ref(),
+                "bezug_message_ref": bezug,
+                "error_code": error_code,
+                "sender": sender,
+                "receiver": msg.nad_receiver(),
+                "process_resolved": false,
+            });
+            let message_type = if fehler {
+                "AperakRejected"
+            } else {
+                "AperakAccepted"
+            };
+            (message_type, sender, payload, refs)
+        }
+        AnyMessage::Contrl(c) => {
+            let uci = c.uci();
+            let action = uci.and_then(|u| u.action_code.clone());
+            let sender = uci.and_then(|u| u.sender.clone()).unwrap_or_default();
+            let payload = serde_json::json!({
+                "message_ref": msg.message_ref(),
+                "interchange_ref": uci.map(|u| u.interchange_ref.clone()),
+                "accepted": action.as_deref() == Some("7"),
+                "action_code": action,
+                "sender": sender,
+                "receiver": uci.and_then(|u| u.recipient.clone()),
+                "process_resolved": false,
+            });
+            let refs = uci
+                .map(|u| u.interchange_ref.clone())
+                .into_iter()
+                .chain(
+                    c.message_responses()
+                        .iter()
+                        .map(|r| r.ucm.message_ref.clone()),
+                )
+                .collect();
+            ("ContrlReceived", sender, payload, refs)
+        }
+        _ => return None,
+    };
+    let process_id = ProcessId::new();
+    let notice = OutboxMessage::new(
+        StreamId::for_process(tenant_id, &process_id),
+        process_id,
+        tenant_id,
+        CorrelationId::new(),
+        ConversationId::new(),
+        EventId::new(),
+        message_type,
+        recipient,
+        payload,
+    );
+    Some((notice, refs))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// The window a Syntaxfehlermeldung earns, from the recipient's Sparte and the
@@ -1145,6 +1344,167 @@ fn sender_mp_id(msg: &AnyMessage) -> Option<Box<str>> {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod quittung_tests {
+    use edi_energy::{AnyMessage, Platform};
+    use mako_engine::ids::TenantId;
+
+    /// A Quittung names the message it answers (`RFF+ACE` Dokumentennummer,
+    /// `RFF+TN`/`ACW` Vorgangsnummer); where that reference is a correlation
+    /// key of one of our processes, the notice is that process's, so the ERP and
+    /// processd's projection see the APERAK on the process it refuses rather
+    /// than on a process of its own.
+    #[tokio::test]
+    async fn a_quittung_is_attached_to_the_process_it_answers() {
+        use mako_engine::outbox::OutboxStore as _;
+        use mako_engine::registry::ProcessRegistry as _;
+        let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+            .await
+            .expect("store");
+        let tenant = TenantId::new();
+        let process = mako_engine::ids::ProcessId::new();
+        let workflow = mako_engine::version::WorkflowId::new("gpke-lf-anmeldung", "FV2026-10-01");
+        let identity = mako_engine::ids::ProcessIdentity::new(process, tenant, workflow);
+        store
+            .as_process_registry()
+            .register_correlated(tenant, "00055001", process, identity)
+            .await
+            .expect("register");
+        let service = super::ContrlAckService::new(
+            std::sync::Arc::new(store.clone()),
+            tenant,
+            std::sync::Arc::new(
+                crate::core::party_registry::MpIdRegistry::from_config(&[
+                    crate::core::config::PartyConfig {
+                        mp_id: "9907317000007".to_owned(),
+                        roles: vec!["LF".to_owned()],
+                        primary: true,
+                        agency: None,
+                        as4: None,
+                    },
+                ])
+                .expect("registry"),
+            ),
+        );
+        let msg = parse(include_bytes!(
+            "../../../../crates/edi-energy/tests/fixtures/aperak/valid/beispiel_29001_verarbeitbarkeitsfehler.edi"
+        ));
+        service.notify_quittungen(&[&msg]).await.expect("notified");
+        let pending = store.pending_now(10).await.expect("pending");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].process_id, process,
+            "the answered process owns the notice"
+        );
+        assert_eq!(&*pending[0].workflow_name, "gpke-lf-anmeldung");
+        assert_eq!(pending[0].payload["process_resolved"], true);
+    }
+
+    /// A Quittung whose reference no process holds keeps a process of its own,
+    /// and says so.
+    #[tokio::test]
+    async fn an_unresolved_quittung_says_so() {
+        use mako_engine::outbox::OutboxStore as _;
+        let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+            .await
+            .expect("store");
+        let service = super::ContrlAckService::new(
+            std::sync::Arc::new(store.clone()),
+            TenantId::new(),
+            std::sync::Arc::new(
+                crate::core::party_registry::MpIdRegistry::from_config(&[
+                    crate::core::config::PartyConfig {
+                        mp_id: "9907317000007".to_owned(),
+                        roles: vec!["LF".to_owned()],
+                        primary: true,
+                        agency: None,
+                        as4: None,
+                    },
+                ])
+                .expect("registry"),
+            ),
+        );
+        let msg = parse(include_bytes!(
+            "../../../../crates/edi-energy/tests/fixtures/aperak/valid/beispiel_29002_anerkennungsmeldung.edi"
+        ));
+        service.notify_quittungen(&[&msg]).await.expect("notified");
+        let pending = store.pending_now(10).await.expect("pending");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].payload["process_resolved"], false);
+    }
+
+    fn parse(raw: &[u8]) -> AnyMessage {
+        Platform::with_all_profiles().parse(raw).expect("parses")
+    }
+
+    fn notice(raw: &[u8]) -> mako_engine::outbox::OutboxMessage {
+        let msg = parse(raw);
+        super::quittung_notice(&msg, TenantId::new())
+            .map(|(notice, _)| notice)
+            .expect("one notice per Quittung")
+    }
+
+    /// A Verarbeitbarkeitsfehlermeldung reaches the ERP as `AperakRejected`,
+    /// its `ERC` as the `error_code` the worker promotes into `makoerc`, and the
+    /// message it refuses as `bezug_message_ref`.
+    #[test]
+    fn a_fehlermeldung_is_an_aperak_rejected() {
+        let n = notice(include_bytes!(
+            "../../../../crates/edi-energy/tests/fixtures/aperak/valid/beispiel_29001_verarbeitbarkeitsfehler.edi"
+        ));
+        assert_eq!(&*n.message_type, "AperakRejected");
+        assert_eq!(n.payload["error_code"], "Z10");
+        assert_eq!(n.payload["pid"], 29001);
+        assert_eq!(n.payload["bezug_message_ref"], "00055001");
+        assert_eq!(n.payload["sender"], "4012345000023");
+        assert!(crate::core::erp_adapter::is_erp_notification(
+            &n.message_type
+        ));
+    }
+
+    /// An Anerkennungsmeldung reaches the ERP as `AperakAccepted`.
+    #[test]
+    fn an_anerkennungsmeldung_is_an_aperak_accepted() {
+        let n = notice(include_bytes!(
+            "../../../../crates/edi-energy/tests/fixtures/aperak/valid/beispiel_29002_anerkennungsmeldung.edi"
+        ));
+        assert_eq!(&*n.message_type, "AperakAccepted");
+        assert_eq!(n.payload["pid"], 29002);
+        assert!(n.payload["error_code"].is_null());
+        assert!(crate::core::erp_adapter::is_erp_notification(
+            &n.message_type
+        ));
+    }
+
+    /// A CONTRL reaches the ERP as `ContrlReceived`; `UCI` DE 0083 `7` is the
+    /// Empfangsbestätigung, anything else a rejection.
+    #[test]
+    fn a_contrl_is_a_contrl_received() {
+        let n = notice(
+            b"UNH+1+CONTRL:D:3:UN:2.0b'UCI+IC9+9900357000004:500+4012345000023:500+7'UNT+3+1'",
+        );
+        assert_eq!(&*n.message_type, "ContrlReceived");
+        assert_eq!(n.payload["interchange_ref"], "IC9");
+        assert_eq!(n.payload["accepted"], true);
+        assert!(crate::core::erp_adapter::is_erp_notification(
+            &n.message_type
+        ));
+
+        let n = notice(
+            b"UNH+1+CONTRL:D:3:UN:2.0b'UCI+IC9+9900357000004:500+4012345000023:500+4+12'UNT+3+1'",
+        );
+        assert_eq!(n.payload["accepted"], false);
+    }
+
+    /// Anything but a Quittung is not announced.
+    #[test]
+    fn a_business_message_yields_no_notice() {
+        let utilmd =
+            parse(b"UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+X'DTM+137:202610010000?+00:303'UNT+4+1'");
+        assert!(super::quittung_notice(&utilmd, TenantId::new()).is_none());
+    }
+}
 
 #[cfg(test)]
 mod tests {

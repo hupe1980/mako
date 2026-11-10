@@ -243,7 +243,7 @@ pub const SECT100_ABS47_GENEHMIGT_AB: Option<time::Date> = None;
 /// Whether § 100 Abs. 47 EEG 2023 may be applied to the period starting
 /// `periodenbeginn`, given the approval date `genehmigt_ab`.
 ///
-/// Keyed on the supply period like [`sect51b_anwendbar`]; an unknown period or
+/// Keyed on the supply period like [`sect51b_im_zeitraum`]; an unknown period or
 /// an absent approval is `false`.
 #[must_use]
 pub fn sect100_abs47_anwendbar_ab(
@@ -279,24 +279,198 @@ pub struct InvalidEegGesetz(pub i16);
 /// there is nothing to apply to an earlier period — and § 51b zeroes a tendered
 /// biogas plant's anzulegender Wert whenever the spot price is at or below
 /// 2 ct/kWh, which was common well before September 2025.
-pub const SECT51B_GENEHMIGT_AB: time::Date = time::macros::date!(2025 - 09 - 18);
+pub const SECT51B_GENEHMIGT_AB: time::Date = BIOMASSEPAKET_GENEHMIGT_AB;
 
-/// Whether § 51b EEG 2023 may be applied to a settlement of the period starting
-/// on `periodenbeginn` ([`SettleInput::billing_date`](crate::SettleInput)).
+/// Whether § 51b EEG 2023 applies to the whole settlement period `[von, bis]`.
 ///
 /// Keyed on the **supply period**, not on when the invoice is written: a
 /// Gutschrift issued in 2026 for August 2025 settles a supply § 51b did not
 /// reach.
 ///
-/// Two answers are deliberately conservative. An unknown period is `false` — a
-/// provision under a Genehmigungsvorbehalt is not applied on the strength of not
-/// knowing when the supply happened. So is a period *starting* before the
-/// approval day: a month straddling it has qualifying quarter-hours on both
-/// sides, and the input carries one Marktwert for the period. A settlement that
-/// needs the split bills the two parts as separate periods.
+/// `Ok(false)` before the approval and, for good, for a § 100 Abs. 37 plant
+/// (Satz 2, [`sect100_abs37_kohorte`]); `Ok(true)` from it. A period the
+/// approval falls inside is refused like § 44b and § 50a
+/// ([`sect101_abs2_fassung`]): § 51b reaches the days from 18.09.2025 and not
+/// those before, and one settlement cannot state both, so the two parts are
+/// billed as separate periods.
+///
+/// # Errors
+///
+/// [`GenehmigungImZeitraum`] for a period containing the approval day.
+pub fn sect51b_im_zeitraum(
+    von: time::Date,
+    bis: time::Date,
+    gebotstermin: Option<time::Date>,
+) -> Result<bool, GenehmigungImZeitraum> {
+    if sect100_abs37_kohorte(gebotstermin) {
+        return Ok(false);
+    }
+    if von >= SECT51B_GENEHMIGT_AB {
+        Ok(true)
+    } else if bis >= SECT51B_GENEHMIGT_AB {
+        Err(GenehmigungImZeitraum {
+            genehmigt_ab: SECT51B_GENEHMIGT_AB,
+            von,
+            bis,
+        })
+    } else {
+        Ok(false)
+    }
+}
+
+// ── § 101 Abs. 2 Satz 2 / § 100 Abs. 37 EEG 2023 — the Fassung of 24.02.2025 ──
+
+/// The day the European Commission approved the Biomassepaket: **18 September
+/// 2025**.
+///
+/// BGBl. 2025 I Nr. 52, „Gesetz zur Änderung des Erneuerbare-Energien-Gesetzes
+/// zur Flexibilisierung von Biogasanlagen und Sicherung der
+/// Anschlussförderung" (21.02.2025), rewrites § 44b Abs. 1 Satz 3 (Art. 1
+/// Nr. 9) and § 50a (Art. 1 Nr. 10) and puts both under § 101 Abs. 2. The
+/// Bundesnetzagentur's Bekanntmachung of the Gebotstermin 1. Oktober 2025
+/// (Ausschreibung Biomasse) states: „Die Europäische Kommission hat die im
+/// „Gesetz zur Änderung des Erneuerbare-Energien-Gesetzes zur
+/// Flexibilisierung von Biogasanlagen und Sicherung der Anschlussförderung“
+/// enthaltenen Regelungen mit Entscheidung vom 18.09.2025 beihilferechtlich
+/// genehmigt." (mirrored in `regulatories/bnetza/`). State aid case
+/// SA.118542; the non-confidential decision is not yet published in the
+/// Commission's register. The same approval dates [`SECT51B_GENEHMIGT_AB`].
+pub const BIOMASSEPAKET_GENEHMIGT_AB: time::Date = time::macros::date!(2025 - 09 - 18);
+
+/// The day **§ 44b Abs. 1 Satz 3 EEG 2023** became applicable in its current
+/// Fassung ([`BIOMASSEPAKET_GENEHMIGT_AB`]).
+///
+/// § 101 Abs. 2 Satz 1 reserves it until „der beihilferechtlichen Genehmigung
+/// durch die Europäische Kommission", and Satz 2 applies it „in der am 24.
+/// Februar 2025 geltenden Fassung" until then (Arbeitsausgabe 23.12.2025,
+/// p. 218). That Fassung exempts only § 44 plants from the 45 %-Quote; the
+/// current one also exempts „Biogasanlagen, die einen Zuschlag nach § 39
+/// erhalten haben" (Nr. 2).
+pub const SECT44B_ABS1_S3_GENEHMIGT_AB: Option<time::Date> = Some(BIOMASSEPAKET_GENEHMIGT_AB);
+
+/// The day **§ 50a Abs. 1 Satz 1 and Abs. 2 EEG 2023** became applicable in
+/// their current Fassung ([`BIOMASSEPAKET_GENEHMIGT_AB`]). Before it the
+/// Fassung of 24.02.2025 applies (§ 101 Abs. 2 Satz 2): a Flexibilitätszuschlag
+/// of 65 instead of 100 Euro pro Kilowatt installierter Leistung und Jahr
+/// ([`sect50a_zuschlag_eur_kw_jahr`]).
+pub const SECT50A_GENEHMIGT_AB: Option<time::Date> = Some(BIOMASSEPAKET_GENEHMIGT_AB);
+
+/// Which Fassung of a § 101 Abs. 2 Satz 2 provision governs a settlement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Sect101Abs2Fassung {
+    /// „in der am 24. Februar 2025 geltenden Fassung" — before the approval,
+    /// and for good for a § 100 Abs. 37 plant.
+    Vom24Februar2025,
+    /// The Fassung in force, from the approval on.
+    Geltend,
+}
+
+/// A settlement period an approval date falls inside: the days before it
+/// settle under one Fassung, the days from it under the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "die beihilferechtliche Genehmigung vom {genehmigt_ab} fällt in den Abrechnungszeitraum \
+     {von}–{bis}: § 101 Abs. 2 EEG 2023 trennt ihn in zwei Fassungen"
+)]
+pub struct GenehmigungImZeitraum {
+    /// The approval day.
+    pub genehmigt_ab: time::Date,
+    /// First day of the period.
+    pub von: time::Date,
+    /// Last day of the period.
+    pub bis: time::Date,
+}
+
+/// § 100 Abs. 37 Satz 1 EEG 2023 — whether a plant's anzulegender Wert was set
+/// „in einem Zuschlagsverfahren eines Gebotstermins nach dem Ablauf des 31.
+/// Dezember 2022 und vor dem 24. Februar 2025" (Arbeitsausgabe 23.12.2025,
+/// p. 214).
+///
+/// Such a plant keeps the Fassung of 24.02.2025 of the listed provisions for
+/// good, and Satz 2 never applies § 39i Abs. 2a or § 51b to it. The test is
+/// the **Gebotstermin**, not the day the Zuschlag was notified: a Gebotstermin
+/// of 01.02.2025 is awarded weeks after 24.02.2025 and is still in the cohort.
 #[must_use]
-pub fn sect51b_anwendbar(periodenbeginn: Option<time::Date>) -> bool {
-    periodenbeginn.is_some_and(|d| d >= SECT51B_GENEHMIGT_AB)
+pub fn sect100_abs37_kohorte(gebotstermin: Option<time::Date>) -> bool {
+    gebotstermin.is_some_and(|g| {
+        g > time::macros::date!(2022 - 12 - 31) && g < time::macros::date!(2025 - 02 - 24)
+    })
+}
+
+/// The Fassung of a § 101 Abs. 2 Satz 2 provision for the period `[von, bis]`.
+///
+/// A § 100 Abs. 37 plant takes the Fassung of 24.02.2025 whatever the date;
+/// any other plant takes it until `genehmigt_ab`, and the current one from it.
+///
+/// # Errors
+///
+/// [`GenehmigungImZeitraum`] for a period the approval falls inside — it is
+/// settled in two parts, never under one Fassung.
+pub fn sect101_abs2_fassung(
+    genehmigt_ab: Option<time::Date>,
+    von: time::Date,
+    bis: time::Date,
+    gebotstermin: Option<time::Date>,
+) -> Result<Sect101Abs2Fassung, GenehmigungImZeitraum> {
+    if sect100_abs37_kohorte(gebotstermin) {
+        return Ok(Sect101Abs2Fassung::Vom24Februar2025);
+    }
+    match genehmigt_ab {
+        Some(ab) if von >= ab => Ok(Sect101Abs2Fassung::Geltend),
+        Some(ab) if bis >= ab => Err(GenehmigungImZeitraum {
+            genehmigt_ab: ab,
+            von,
+            bis,
+        }),
+        _ => Ok(Sect101Abs2Fassung::Vom24Februar2025),
+    }
+}
+
+/// § 50a Abs. 1 Satz 1 EEG 2023 — the Flexibilitätszuschlag in Euro pro
+/// Kilowatt installierter Leistung und Jahr, by Fassung.
+///
+/// Fassung of 24.02.2025 (as amended by BGBl. 2024 I Nr. 327,
+/// gesetze-im-internet.de print, p. 81):
+/// „65 Euro pro Kilowatt installierter Leistung und Jahr"; current Fassung
+/// (Arbeitsausgabe 23.12.2025, p. 133): „100 Euro pro Kilowatt installierter
+/// Leistung und Jahr". Satz 2's 50 Euro for the Leistungsteil a
+/// Flexibilitätsprämie was drawn on is the same in both.
+#[must_use]
+pub const fn sect50a_zuschlag_eur_kw_jahr(fassung: Sect101Abs2Fassung) -> rust_decimal::Decimal {
+    match fassung {
+        Sect101Abs2Fassung::Vom24Februar2025 => {
+            rust_decimal::Decimal::from_parts(65, 0, 0, false, 0)
+        }
+        Sect101Abs2Fassung::Geltend => rust_decimal::Decimal::from_parts(100, 0, 0, false, 0),
+    }
+}
+
+/// § 44b Abs. 1 EEG 2023 — whether the 45 %-Quote of Sätze 1 and 2 reaches a
+/// plant's Strom aus Biogas, in the Fassung `fassung` of Satz 3.
+///
+/// Satz 1 reaches Strom aus Biogas from plants „mit einer installierten
+/// Leistung von mehr als 100 Kilowatt". Satz 3 exempts
+/// - in both Fassungen, Strom „aus Anlagen im Sinn des § 44, in denen Biogas
+///   eingesetzt wird, das durch anaerobe Vergärung von Biomasse … gewonnen
+///   worden ist" (`sect44_anlage`), and
+/// - in the current Fassung only, Nr. 2: Strom „aus Biogasanlagen, die einen
+///   Zuschlag nach § 39 erhalten haben" (`sect39_zuschlag`).
+///
+/// The Fassung of 24.02.2025 (as amended by BGBl. 2024 I Nr. 327,
+/// gesetze-im-internet.de print, p. 74) reads: „Die Sätze 1 und 2
+/// sind nicht für Strom aus Anlagen im Sinn von § 44 anzuwenden, in denen
+/// Biogas eingesetzt wird, das durch anaerobe Vergärung von Biomasse im Sinn
+/// der Biomasseverordnung gewonnen worden ist."
+#[must_use]
+pub fn sect44b_quote_anwendbar(
+    biogas: bool,
+    leistung_kw: rust_decimal::Decimal,
+    sect44_anlage: bool,
+    sect39_zuschlag: bool,
+    fassung: Sect101Abs2Fassung,
+) -> bool {
+    let ausgenommen = sect44_anlage || (fassung == Sect101Abs2Fassung::Geltend && sect39_zuschlag);
+    biogas && leistung_kw > rust_decimal::Decimal::ONE_HUNDRED && !ausgenommen
 }
 
 // ── Beihilfevorbehalt for every Teil-3 payment from 01.01.2027 ───────────────
@@ -527,7 +701,7 @@ impl Beihilfevorbehalt<'_> {
 
 /// The Beihilfevorbehalt for the supply period starting `periodenbeginn`.
 ///
-/// Keyed on the supply period, like [`sect51b_anwendbar`]: a Gutschrift issued
+/// Keyed on the supply period, like [`sect51b_im_zeitraum`]: a Gutschrift issued
 /// in 2027 for December 2026 settles a supply the EEG 2023 approval covers. An
 /// unknown period is [`Beihilfevorbehalt::Offen`] — a payment under a
 /// reservation is not made on the strength of not knowing when the supply

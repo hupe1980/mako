@@ -625,6 +625,11 @@ pub struct SolarProduct {
 }
 
 /// EEG feed-in Gutschrift — LF pays generator. Category: EEG.
+///
+/// It carries no KWKG-Zuschlag: § 6 Abs. 1 KWKG gives the Betreiber of a
+/// KWK-Anlage the claim „gegenüber dem Netzbetreiber, mit dessen Netz ihre
+/// KWK-Anlage unmittelbar oder mittelbar verbunden ist", which `einsd` settles.
+/// A product naming `kwkg_zuschlag_ct_per_kwh` is refused as an unknown field.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct EegProduct {
@@ -641,9 +646,6 @@ pub struct EegProduct {
     /// negative-price hours included.
     #[serde(default)]
     pub eeg_managementpraemie_ct_per_kwh: Option<Decimal>,
-    /// KWKG-Zuschlag (ct/kWh), credited on every fed-in kWh.
-    #[serde(default)]
-    pub kwkg_zuschlag_ct_per_kwh: Option<Decimal>,
     /// Plant capacity (kWp) — informational (MaStR / §48 EEG size class).
     #[serde(default)]
     pub anlage_kwp: Option<Decimal>,

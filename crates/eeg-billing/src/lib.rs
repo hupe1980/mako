@@ -122,7 +122,8 @@ pub type EuroAmount = billing::Amount<5>;
 
 pub use aw_reductions::{AwReductionApplied, AwReductionContext, Sect54SolarReduction};
 pub use biomasse::{
-    bemessungsleistung_stunden, sect39i_hoechstanteil, sect44b_jahreskontingent_kwh,
+    Zuschlag39, bemessungsleistung_stunden, sect39i_hoechstanteil, sect39i_mehrdeutig,
+    sect44b_jahreskontingent_kwh,
 };
 pub use error::SettlementError;
 pub use foerderdauer::{
@@ -156,10 +157,13 @@ pub use technology::{
     RepoweringScope,
 };
 pub use version::{
-    Beihilfegenehmigung, BeihilfegenehmigungUngueltig, Beihilferegelung, Beihilfevorbehalt,
-    EEG2023_BEIHILFEGENEHMIGUNG_BIS, EegGesetz, Fassung, InvalidEegGesetz,
-    LETZTE_TABELLIERTE_INBETRIEBNAHME, SECT100_ABS47_GENEHMIGT_AB, beihilfevorbehalt,
-    genehmigungen_pruefen, sect100_abs47_anwendbar, sect100_abs47_anwendbar_ab,
+    BIOMASSEPAKET_GENEHMIGT_AB, Beihilfegenehmigung, BeihilfegenehmigungUngueltig,
+    Beihilferegelung, Beihilfevorbehalt, EEG2023_BEIHILFEGENEHMIGUNG_BIS, EegGesetz, Fassung,
+    GenehmigungImZeitraum, InvalidEegGesetz, LETZTE_TABELLIERTE_INBETRIEBNAHME,
+    SECT44B_ABS1_S3_GENEHMIGT_AB, SECT50A_GENEHMIGT_AB, SECT100_ABS47_GENEHMIGT_AB,
+    Sect101Abs2Fassung, beihilfevorbehalt, genehmigungen_pruefen, sect44b_quote_anwendbar,
+    sect50a_zuschlag_eur_kw_jahr, sect51b_im_zeitraum, sect100_abs37_kohorte,
+    sect100_abs47_anwendbar, sect100_abs47_anwendbar_ab, sect101_abs2_fassung,
 };
 pub use zusammenfassung::{
     AnlageFuerZusammenfassung, SolarMontage, Steckersolar, ZusammenfassungErgebnis,

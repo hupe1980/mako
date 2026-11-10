@@ -301,7 +301,7 @@ pub use insrpt::InsrptBuilder;
 #[cfg(feature = "orders")]
 mod orders;
 #[cfg(feature = "orders")]
-pub use orders::OrdersBuilder;
+pub use orders::{OrdersBuilder, OrdersPosition};
 
 #[cfg(feature = "partin")]
 mod partin;

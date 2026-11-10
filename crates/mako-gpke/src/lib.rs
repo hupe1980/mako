@@ -73,6 +73,9 @@
 //! | 55600 | Anmeldung neue verb. MaLo (LF → NB)             |
 //! | 55601 | Anmeldung neue erz. MaLo (LF → NB)              |
 //!
+//! The Lieferant sends them from [`GpkeLfAnmeldungWorkflow`], and the NB's
+//! answers 55602–55605 route back there (`NEUANLAGE_ANTWORT_PIDS_LF`).
+//!
 //! ### NB-initiated Lieferende — routed to `gpke-lf-abmeldung`
 //!
 //! | PID   | Process name (AHB)                                   |
@@ -300,9 +303,9 @@ pub use geschaeftsdatenanfrage::{
     WORKFLOW_NAME as GDA_WORKFLOW_NAME,
 };
 pub use konfiguration::{
-    BeauftragungData, GpkeKonfigurationWorkflow, KONFIGURATION_WINDOW_LABEL, KonfigurationCommand,
-    KonfigurationEvent, KonfigurationProjection, KonfigurationRecord, KonfigurationState,
-    ORDERS_PIDS, ORDRSP_PIDS, WORKFLOW_NAME as KONFIGURATION_WORKFLOW_NAME,
+    BeauftragungData, GpkeKonfigurationWorkflow, KonfigurationCommand, KonfigurationEvent,
+    KonfigurationProjection, KonfigurationRecord, KonfigurationState, ORDERS_PIDS,
+    WORKFLOW_NAME as KONFIGURATION_WORKFLOW_NAME,
 };
 pub use konfiguration_aenderung::{
     GpkeKonfigurationAenderungWorkflow, IFTSTA_PIDS as KONFIGURATION_AENDERUNG_IFTSTA_PIDS,
@@ -321,8 +324,9 @@ pub use lf_abmeldung::{
 };
 pub use lf_anmeldung::{
     ANFRAGE_PIDS_LF, ANTWORT_PIDS_LF, GpkeLfAnmeldungWorkflow, LfAnmeldungCommand, LfAnmeldungData,
-    LfAnmeldungEvent, LfAnmeldungState, NB_RESPONSE_WINDOW_LABEL,
-    WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW_NAME,
+    LfAnmeldungEvent, LfAnmeldungState, NB_RESPONSE_WINDOW_LABEL, NEUANLAGE_ANTWORT_PIDS_LF,
+    NEUANLAGE_PIDS_LF, NeuanlageAnmeldung, WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW_NAME,
+    neuanlage_vorgang_key,
 };
 pub use lf_antwort::{
     AntwortForm, AntwortMesslokation, LfAntwort, LfVorgangsdaten, ZugeordneterMsb, antwort_outbox,
@@ -333,7 +337,8 @@ pub use messwerte::{
 };
 pub use neuanlage::{
     GpkeNeuanlageWorkflow, NEUANLAGE_ANTWORT_WINDOW_LABEL, NEUANLAGE_PIDS, NeuanlageCommand,
-    NeuanlageData, NeuanlageEvent, NeuanlageState, WORKFLOW_NAME as NEUANLAGE_WORKFLOW_NAME,
+    NeuanlageData, NeuanlageEvent, NeuanlageState, NeuanlageTranche,
+    WORKFLOW_NAME as NEUANLAGE_WORKFLOW_NAME,
 };
 pub use partin::{
     GpkePartinWorkflow, KommunikationsdatenCommand, KommunikationsdatenData,
@@ -395,34 +400,25 @@ pub use zuordnungsmeldung::{
 /// - PIDs 55600, 55601 (Neuanlage ANFRAGE, UTILMD) → `"gpke-neuanlage"`
 /// - PID 55007 (NB-seitiges Lieferende, UTILMD) → `"gpke-lf-abmeldung"`
 /// - PID 55607 (Ankündigung Zuordnung LF, UTILMD) → `"gpke-ankuendigung-zuordnung-lf"`
-/// - PIDs 17115/17116/17117 (Sperrung/Entsperrung, ORDERS) → `"gpke-sperrung"`
+/// - PIDs 17115/17117 (Sperrauftrag/Entsperrauftrag, ORDERS) → `"gpke-sperrung"`;
+///   the Anfrage Sperrung 17116 (MSB role) → `"gpke-sperrung-msb"`
 /// - **PID 55555** (Anfrage Daten der individuellen Bestellung, UTILMD) → `"gpke-anfrage-bestellung"`
 /// - PIDs 31001, 31002, 31005, 31006 (billing, INVOIC) → `"gpke-abrechnung"`
 ///   _(31003 → `mako-wim`; 31004 = Sparte-neutral universal Storno, checked by `invoicd`)_
-/// - PIDs 19001, 19002 (inbound ORDRSP, NB role only) → `"gpke-konfiguration"`
 /// - PID 17132 (Geschäftsdatenanfrage, ORDERS), its UTILMD answers 55035/55095/55060
 ///   and the ORDRSP 19101 → `"gpke-geschaeftsdatenanfrage"`
+/// - The GPKE Teil 3 ORDERS each role receives — the MSB 17118, 17121, 17123,
+///   17128–17131 and the Einrichtung 17134/17135, the NB 17120, 17122, 17123,
+///   17133, the LF 17122 — and their ORDRSP/IFTSTA answers →
+///   `"gpke-konfiguration-aenderung"`
 ///
-/// **Role-conditional PIDs (ORDRSP 19001/19002):**
-///
-/// PIDs 19001 (`Bestellbestätigung`) and 19002 (`Ablehnung der Bestellung`)
-/// are registered **only when [`DeploymentRoles`] contains [`Marktrolle::Nb`]**.
-///
-/// In the GPKE Konfiguration workflow:
-/// - NB sends outbound ORDERS 17134/17135 (via outbox) to the designated MSB.
-/// - The MSB responds with inbound ORDRSP 19001/19002, which must route back to
-///   `gpke-konfiguration` for the NB-role makod instance.
-///
-/// On a **nMSB** (Herausforderer-MSB) instance, the same PIDs 19001/19002 are
-/// the response to WiM Geräteübernahme ORDERS 17001 sent by the nMSB to the NB.
-/// They route to `wim-geraeteubernahme` instead. Set explicit [`DeploymentRoles`]
-/// to prevent both modules from claiming the same PIDs.
+/// **Not routed:** ORDRSP 19001/19002 answer the WiM Geräteübernahme (ORDRSP
+/// AHB 1.1b Kap. 4.9), not the NB's Einrichtung 17134, which no ORDRSP answers
+/// (GPKE Teil 3 Kap. 1.3.7.2); `mako-wim` routes them.
 ///
 /// **Not registered (outbound-only):**
 /// - PIDs 55002/55003, 55005/55006, 55017, 55018 are outbound ANTWORT messages derived by
 ///   `GpkeSupplierChangeWorkflow::handle`. They are never routed as inbound.
-/// - PIDs 17134, 17135 are outbound ORDERS messages dispatched via the outbox
-///   by `GpkeKonfigurationWorkflow`. They are never routed as inbound.
 ///
 /// PIDs 55007–55009 (NB-seitiges Lieferende) are handled by `GpkeLfAbmeldungWorkflow`.
 /// PIDs 55013–55015 (Ersatz-/Grundversorgung) are handled by `GpkeEogWorkflow`.
@@ -547,6 +543,23 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             for &pid in datenabruf_msb::ORDERS_PIDS {
                 router.register(pid, datenabruf_msb::WORKFLOW_NAME);
             }
+            // GPKE Teil 3: the ORDERS a MSB receives from the NB or the LF, or
+            // as the weiterer MSB from the MSB, and the weiterer MSB's answers
+            // to the ORDERS it sent (Anwendungsübersicht 4.0 lfd. Nr.
+            // 22540–23160). Both sides run `gpke-konfiguration-aenderung`,
+            // keyed apart.
+            for &pid in konfiguration_aenderung::ORDERS_EMPFANG_MSB_PIDS {
+                router.register(pid, konfiguration_aenderung::WORKFLOW_NAME);
+            }
+            for &pid in konfiguration_aenderung::ORDRSP_EMPFANG_MSB_PIDS {
+                router.register(pid, konfiguration_aenderung::WORKFLOW_NAME);
+            }
+            // The Einrichtung der Konfigurationen 17134 (NB an MSB) / 17135
+            // (MSB an MSB), ORDERS AHB 1.1b Kap. 4.17 — received on the same
+            // workflow's receiving side.
+            for &pid in konfiguration_aenderung::ORDERS_EINRICHTUNG_PIDS {
+                router.register(pid, konfiguration_aenderung::WORKFLOW_NAME);
+            }
         }
 
         // Everything below is the LF's and the NB's. A deployment that is only
@@ -614,7 +627,9 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // Prozessschritte 1/2. 21047 (Bearbeitungsstand) stays on the IFTSTA route.
         for &(aenderung_pid, rueckmeldung_pid, _) in stammdatenaenderung::STAMMDATEN_PAIRS {
             router.register(aenderung_pid, stammdatenaenderung::WORKFLOW_NAME);
-            router.register(rueckmeldung_pid, stammdatenaenderung::WORKFLOW_NAME);
+            if stammdatenaenderung::is_rueckmeldung_pid(rueckmeldung_pid) {
+                router.register(rueckmeldung_pid, stammdatenaenderung::WORKFLOW_NAME);
+            }
         }
 
         // PIDs 55156/55220/55673 (Rückmeldung/Bestellung Abrechnungsdaten, LF → NB)
@@ -716,27 +731,18 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             "gpke-abrechnung",
         );
 
-        // ORDRSP inbound PIDs for Konfigurationseinrichtung (19001/19002).
-        //
-        // NB role only: the NB sends ORDERS 17134/17135 outbound (via outbox)
-        // to the designated MSB and receives ORDRSP 19001/19002 back.
-        // On nMSB instances these same PIDs are WiM Geräteübernahme responses
-        // and route to `wim-geraeteubernahme` — controlled via DeploymentRoles.
-        if roles.contains(mako_engine::marktrolle::Marktrolle::Nb) {
-            for &pid in ORDRSP_PIDS {
-                // register_with_module enforces the documented guarantee: if both NB
-                // and nMSB roles are active simultaneously, build() panics before any
-                // message is processed instead of silently routing to the wrong workflow.
-                router.register_with_module(pid, "gpke-konfiguration", "gpke");
-            }
-        }
-
         // LF-side Anmeldung: inbound NB/LFA response PIDs (55002/55003, 55005/55006, 55017, 55018, 55078, 55080).
         // Registered so the AS4 inbound layer can route them by conversation ID
         // to the correct GpkeLfAnmeldungWorkflow instance (makod acting as LF).
         // 55078 = Bestätigung Anmeldung erz. MaLo (NB → LFN)
         // 55080 = Ablehnung Anmeldung erz. MaLo  (NB → LFN); PID 55079 unassigned
         for &pid in ANTWORT_PIDS_LF {
+            router.register(pid, lf_anmeldung::WORKFLOW_NAME);
+        }
+        // The NB's answers to the LF's Anmeldung neue Marktlokation (55602–
+        // 55605, NB → LF; UTILMD AHB Strom 2.2 Kap. 8.4, 8.5). The NB sends
+        // them and never receives them, so they route to the LF's process.
+        for &pid in NEUANLAGE_ANTWORT_PIDS_LF {
             router.register(pid, lf_anmeldung::WORKFLOW_NAME);
         }
 
@@ -790,14 +796,20 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             anfrage_bestellung::WORKFLOW_NAME,
         );
 
-        // GPKE Teil 3 Konfigurationsänderung — LF-initiated config change requests.
-        //
-        // LF sends ORDERS 17120/17122/17123/17128–17131/17133 to NB or MSB.
-        // NB/MSB responds with ORDRSP 19120–19133 (various confirmation/rejection/status PIDs).
-        // IFTSTA 21043/21044 are informational status/completion messages for this process.
-        // All routed to `gpke-konfiguration-aenderung`.
-        for &pid in konfiguration_aenderung::ORDERS_ANFRAGE_PIDS {
-            router.register(pid, konfiguration_aenderung::WORKFLOW_NAME);
+        // GPKE Teil 3 Konfigurationsänderung — both sides on
+        // `gpke-konfiguration-aenderung`, keyed apart. The NB receives
+        // 17120/17122/17123/17133, the LF 17122 (Anwendungsübersicht 4.0 lfd.
+        // Nr. 22180–22430, 21320); each sends the others and receives the
+        // ORDRSP 19120–19133 and IFTSTA 21043/21044 that answer them.
+        if roles.contains(Marktrolle::Nb) {
+            for &pid in konfiguration_aenderung::ORDERS_EMPFANG_NB_PIDS {
+                router.register(pid, konfiguration_aenderung::WORKFLOW_NAME);
+            }
+        }
+        if roles.contains(Marktrolle::Lf) {
+            for &pid in konfiguration_aenderung::ORDERS_EMPFANG_LF_PIDS {
+                router.register(pid, konfiguration_aenderung::WORKFLOW_NAME);
+            }
         }
         for &pid in konfiguration_aenderung::ORDRSP_PIDS {
             router.register(pid, konfiguration_aenderung::WORKFLOW_NAME);
@@ -874,7 +886,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             },
             ProfileRequirement {
                 message_type: "ORDRSP",
-                label: "ORDRSP Sperrung (19116/19117/19118/19119/19128/19129) + Konfiguration (19001/19002)",
+                label: "ORDRSP Sperrung (19116/19117/19118/19119/19128/19129)",
             },
             ProfileRequirement {
                 message_type: "ORDCHG",
@@ -918,8 +930,8 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             ("MSB_ANTWORT_PIDS", MSB_ANTWORT_PIDS),
             ("GPKE_INVOIC_PIDS", GPKE_INVOIC_PIDS),
             ("GPKE_REMADV_PIDS", GPKE_REMADV_PIDS),
-            ("ORDRSP_PIDS", ORDRSP_PIDS),
             ("ANTWORT_PIDS_LF", ANTWORT_PIDS_LF),
+            ("NEUANLAGE_ANTWORT_PIDS_LF", NEUANLAGE_ANTWORT_PIDS_LF),
             ("wechselprozesse::IFTSTA_PIDS", wechselprozesse::IFTSTA_PIDS),
             ("NEUANLAGE_PIDS", NEUANLAGE_PIDS),
             ("LF_ABMELDUNG_PIDS", LF_ABMELDUNG_PIDS),

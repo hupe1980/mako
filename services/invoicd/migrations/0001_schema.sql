@@ -61,6 +61,7 @@ CREATE TABLE invoic_receipts (
                                 'AcceptedPartial',  -- accepted with remarks (Storno)
                                 'Warn',             -- warnings, auto-approved
                                 'Dispute',          -- rejected
+                                'Offen',            -- held: the Entscheidungsbaum left a Prüfschritt unanswered
                                 'Resolved'          -- dispute closed by an operator
                             )),
                             -- No 'Paid': `outcome` is the plausibility verdict on
@@ -97,12 +98,6 @@ CREATE TABLE invoic_receipts (
     -- passed Zahlungsziel is announced once rather than every six hours until
     -- somebody acts on it.
     overdue_notified_at     TIMESTAMPTZ,
-
-    -- ERP notification outbox (durable at-least-once).
-    -- Backoff 30 s → 5 min → 30 min → 2 h; dead-lettered at `erp_attempts = 5`.
-    erp_notified_at         TIMESTAMPTZ,
-    erp_attempts            SMALLINT    NOT NULL DEFAULT 0,
-    erp_next_attempt_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     tenant                  TEXT        NOT NULL,
 
@@ -149,9 +144,6 @@ CREATE INDEX invoic_overdue_pending   ON invoic_receipts (tenant, pay_by)
       AND payment_confirmed_at IS NULL
       AND overdue_notified_at IS NULL
       AND dispatched_at IS NOT NULL;
--- The ERP outbox claim (see pg::receipts::claim_erp_pending).
-CREATE INDEX invoic_erp_pending       ON invoic_receipts (tenant, erp_next_attempt_at)
-    WHERE erp_notified_at IS NULL AND erp_attempts < 5;
 
 -- ── Dead-letter queue ─────────────────────────────────────────────────────────
 --

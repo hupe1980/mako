@@ -102,13 +102,20 @@ pub enum StammdatenObjekt {
     Tranche,
     /// Paket-ID der Marktlokation (NB-Wechsel bundling).
     PaketId,
+    /// The Lokationsbündelstruktur — every `SG5 LOC` of the bundle (`Z18`,
+    /// `Z16`, `Z22`, `Z20`, `Z19`, `Z17`; UTILMD AHB Strom 2.2 Kap. 9.1.10).
+    Lokationsbuendel,
+    /// „Daten auf individuelle Bestellung" (55553, Kap. 9.3.8), which names
+    /// no `SG5 LOC`.
+    IndividuelleBestellung,
 }
 
 impl StammdatenObjekt {
-    /// SG5 `LOC` qualifier (DE3227).
+    /// SG5 `LOC` qualifier (DE3227), or `None` for an object that names
+    /// several Lokationen (the Lokationsbündel) or none.
     #[must_use]
-    pub fn loc_qualifier(self) -> &'static str {
-        match self {
+    pub fn loc_qualifier(self) -> Option<&'static str> {
+        Some(match self {
             Self::Marktlokation => "Z16",
             Self::Messlokation => "Z17",
             Self::Netzlokation => "Z18",
@@ -116,7 +123,17 @@ impl StammdatenObjekt {
             Self::TechnischeRessource => "Z20",
             Self::Tranche => "Z21",
             Self::PaketId => "Z16", // carried on the MaLo
-        }
+            Self::Lokationsbuendel | Self::IndividuelleBestellung => return None,
+        })
+    }
+
+    /// Whether `marktd` holds typed columns this object's Änderung patches.
+    ///
+    /// The Lokationsbündelstruktur and the Daten auf individuelle Bestellung
+    /// have none, so their Änderung is answered without an apply intent.
+    #[must_use]
+    pub fn hat_marktd_spalten(self) -> bool {
+        !matches!(self, Self::Lokationsbuendel | Self::IndividuelleBestellung)
     }
 
     /// Stable wire label.
@@ -130,6 +147,8 @@ impl StammdatenObjekt {
             Self::TechnischeRessource => "TECHNISCHE_RESSOURCE",
             Self::Tranche => "TRANCHE",
             Self::PaketId => "PAKET_ID",
+            Self::Lokationsbuendel => "LOKATIONSBUENDEL",
+            Self::IndividuelleBestellung => "INDIVIDUELLE_BESTELLUNG",
         }
     }
 }
@@ -192,6 +211,41 @@ pub const STAMMDATEN_PAIRS: &[(u32, u32, StammdatenObjekt)] = &[
     (55686, 55687, StammdatenObjekt::Tranche),
     // S11 — NB → ÜNB (Stammdaten Bilanzkreistreue); 55671 is the ÜNB's Rückmeldung (inert)
     (55670, 55671, StammdatenObjekt::Marktlokation),
+    // S12 — NB → MSB / NB → LF, Änderung der Lokationsbündelstruktur and its
+    // Rückmeldung (UTILMD AHB Strom 2.2 Kap. 9.1.10; Anwendungsübersicht 4.0
+    // lfd. Nr. 23990/24060 and 23830/23900, `E_0409` / `E_0408`).
+    (55173, 55177, StammdatenObjekt::Lokationsbuendel),
+    (55175, 55180, StammdatenObjekt::Lokationsbuendel),
+    // S13 — NB → LF, Änderung der Blindabrechnungsdaten der NeLo (Kap. 9.1.9;
+    // lfd. Nr. 23840/23910, `E_0408`).
+    (55225, 55227, StammdatenObjekt::Netzlokation),
+    // S14 — MSB → NB / LF / weiterer MSB, Daten auf individuelle Bestellung
+    // (GPKE Teil 4 Kap. 1.4.4 Nr. 1/4/7, S. 12–14). Its Rückmeldung 55555
+    // (lfd. Nr. 24370/24510/24640, „Reaktion auf" 55553) is answered by the MSB
+    // with IFTSTA 21047 in `gpke-anfrage-bestellung`, which owns it inbound —
+    // see [`RUECKMELDUNG_ROUTED_ELSEWHERE`].
+    (55553, 55555, StammdatenObjekt::IndividuelleBestellung),
+    // S15 — NB → LF, the Abrechnungsdaten of GPKE Teil 2 Kap. 3.1.1.2 / 3.1.2.2
+    // Nr. 2 (S. 68 / 73): the LF's Rückmeldung is due „spätester ÜT ist der 2. WT
+    // nach dem ÜT von Nr. 1", and a lapse „gilt dies als Qualitätsrückmeldung ohne
+    // die Erwartung abweichender Inhalte" — the Stammdatenänderung shape. Their
+    // trees `E_0610` / `E_0611` are „Basiert auf EBD: E_0408" (EBD 4.3
+    // Kap. 6.8.1, S. 91; 6.16.1, S. 253). The NB receives the Rückmeldungen in
+    // `gpke-abrechnungsdaten`.
+    (55218, 55220, StammdatenObjekt::Marktlokation),
+    (55126, 55156, StammdatenObjekt::Marktlokation),
+    (55672, 55673, StammdatenObjekt::Marktlokation),
+];
+
+/// Rückmeldung PIDs of [`STAMMDATEN_PAIRS`] whose inbound copy another
+/// workflow answers, with that workflow: the party receiving them owes a
+/// Bearbeitungsstand (IFTSTA 21047), not a resumed Änderung. Only the
+/// Änderung of these pairs routes here.
+pub const RUECKMELDUNG_ROUTED_ELSEWHERE: &[(u32, &str)] = &[
+    (55_555, crate::anfrage_bestellung::WORKFLOW_NAME),
+    (55_156, crate::abrechnungsdaten::WORKFLOW_NAME),
+    (55_220, crate::abrechnungsdaten::WORKFLOW_NAME),
+    (55_673, crate::abrechnungsdaten::WORKFLOW_NAME),
 ];
 
 /// Return the object of an **Änderung** PID (the initiate direction).
@@ -212,10 +266,12 @@ pub fn rueckmeldung_pid_for(aenderung_pid: u32) -> Option<u32> {
         .map(|(_, r, _)| *r)
 }
 
-/// `true` when `pid` is a Rückmeldung PID (resumes a change we initiated).
+/// `true` when `pid` is a Rückmeldung PID this workflow receives (resumes a
+/// change we initiated) — not one [`RUECKMELDUNG_ROUTED_ELSEWHERE`] names.
 #[must_use]
 pub fn is_rueckmeldung_pid(pid: u32) -> bool {
     STAMMDATEN_PAIRS.iter().any(|(_, r, _)| *r == pid)
+        && !RUECKMELDUNG_ROUTED_ELSEWHERE.iter().any(|(r, _)| *r == pid)
 }
 
 /// `true` when `pid` is an Änderung PID (an inbound change to apply + answer).
@@ -742,7 +798,7 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                 // typed-column `patch_stammdaten` (MaLo/MeLo/NeLo/Tranche). SR/TR
                 // carry no grounded generic attributes (source-gated), so their
                 // patch is empty and they are acknowledged without an apply.
-                if patch.as_object().is_some_and(|o| !o.is_empty()) {
+                if objekt.hat_marktd_spalten() && patch.as_object().is_some_and(|o| !o.is_empty()) {
                     let data = StammdatenData {
                         location_id,
                         sender: sender_mp_id,
@@ -1024,6 +1080,40 @@ mod tests {
             assert!(seen.insert(*a), "duplicate Änderung PID {a}");
             assert!(seen.insert(*r), "duplicate Rückmeldung PID {r}");
         }
+    }
+
+    /// The Lokationsbündel, NeLo-Blindabrechnungs and Abrechnungsdaten pairs
+    /// answer their Änderung here, and the PIDs no AHB publishes stay out.
+    #[test]
+    fn the_teil_2_and_bundle_pairs_answer_here_and_the_unassigned_pids_stay_out() {
+        for (aenderung, rueckmeldung, objekt) in [
+            (55_173, 55_177, StammdatenObjekt::Lokationsbuendel),
+            (55_175, 55_180, StammdatenObjekt::Lokationsbuendel),
+            (55_225, 55_227, StammdatenObjekt::Netzlokation),
+            (55_126, 55_156, StammdatenObjekt::Marktlokation),
+            (55_218, 55_220, StammdatenObjekt::Marktlokation),
+            (55_672, 55_673, StammdatenObjekt::Marktlokation),
+            (55_553, 55_555, StammdatenObjekt::IndividuelleBestellung),
+        ] {
+            assert!(is_aenderung_pid(aenderung), "{aenderung}");
+            assert_eq!(rueckmeldung_pid_for(aenderung), Some(rueckmeldung));
+            assert_eq!(objekt_of(aenderung), Some(objekt));
+        }
+        // Received here: the Rückmeldung to a bundle or NeLo change we sent.
+        for pid in [55_177, 55_180, 55_227] {
+            assert!(is_rueckmeldung_pid(pid), "{pid}");
+        }
+        // Received elsewhere: the MSB's and the NB's Bearbeitungsstand legs.
+        for pid in [55_555, 55_156, 55_220, 55_673] {
+            assert!(!is_rueckmeldung_pid(pid), "{pid} is answered elsewhere");
+        }
+        // 55174, 55176, 55178 and 55179 exist in no AHB; 44170 is withdrawn.
+        for pid in [55_174, 55_176, 55_178, 55_179, 44_170] {
+            assert!(!is_aenderung_pid(pid) && rueckmeldung_pid_for(pid).is_none());
+            assert!(!STAMMDATEN_PAIRS.iter().any(|(_, r, _)| *r == pid), "{pid}");
+        }
+        assert!(!StammdatenObjekt::Lokationsbuendel.hat_marktd_spalten());
+        assert_eq!(StammdatenObjekt::Lokationsbuendel.loc_qualifier(), None);
     }
 
     // ── Berechtigter (receive → apply → Rückmeldung) ────────────────────────────

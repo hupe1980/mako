@@ -74,10 +74,13 @@
 //!     konzessionsabgabe: Some(Konzessionsabgabe {
 //!         satz_ct_per_kwh: d("0.11"),
 //!         klasse: KaKundengruppe::Sondervertragskunde,
-//!         // § 2 Abs. 7 classification facts and the Abs. 4 Grenzpreisvergleich,
-//!         // where the settlement holds them.
+//!         // § 2 Abs. 7 classification facts, where the settlement holds them,
+//!         // and the Abs. 4 Grenzpreisvergleich a Sondervertragskunde requires.
 //!         niederspannung: None,
-//!         grenzpreis: None,
+//!         grenzpreis: Some(grid_billing::Grenzpreisvergleich {
+//!             durchschnittspreis_ct_per_kwh: d("24.80"),
+//!             grenzpreis_ct_per_kwh: d("18.20"),
+//!         }),
 //!     }),
 //!     tariff_sheet_id: Some("Preisblatt-NNE-2025-Q1".into()),
 //!     sparte: grid_billing::Sparte::Strom,
@@ -180,6 +183,8 @@ pub use types::{
     // Input types
     GasAwhInput,
     GemeindeGroesse,
+    // § 2 Abs. 4 / Abs. 5 Nr. 2 KAV — whether a Konzessionsabgabe may be charged at all.
+    Grenzpreisvergleich,
     Grundpreis,
     // Presenting a settlement as an invoice: numbers, dates, Prüfidentifikator.
     InvoiceDocument,

@@ -264,19 +264,9 @@ async fn dispatch(
     accept: bool,
     detail: Option<&str>,
 ) -> anyhow::Result<()> {
-    let mut payload = serde_json::json!({
-        "process_id":   fall.process_id,
-        "antwort_code": antwort_code,
-        "antwort_tree": mako_pruefung::codes::EBD_NEUANLAGE,
-        "zustimmung":   accept,
-    });
-    if let Some(ebd) = antwort_codeliste {
-        payload["antwort_codeliste"] = serde_json::json!(ebd);
-    }
-    if let Some(detail) = detail {
-        payload["bemerkung"] = serde_json::json!(detail);
-        payload["reason"] = serde_json::json!(format!("{antwort_code}: {detail}"));
-    }
+    let body = antwort_body(fall, antwort_code, antwort_codeliste, detail);
+    let payload =
+        serde_json::to_value(&body).map_err(|e| anyhow::anyhow!("neuanlage answer body: {e}"))?;
     let cmd = ForwardCommand {
         marktrolle: Some("NB".to_owned()),
         command: if accept {
@@ -298,6 +288,36 @@ async fn dispatch(
         .await
         .map_err(|e| anyhow::anyhow!("neuanlage dispatch failed: {e}"))?;
     Ok(())
+}
+
+/// The answer body: the code, the process and the Marktlokation the
+/// identification named — the Bestätigung's `SG5 LOC+Z16` is Muss (UTILMD AHB
+/// Strom 2.2 S. 97, 112). What the NB knows of that Marktlokation —
+/// classification, Messlokationen, Messstellenbetreiber — processd does not
+/// hold; `makod` reads it from marktd, the NB's record, before it writes the
+/// answer.
+fn antwort_body(
+    fall: &NeuanlageFall,
+    antwort_code: &str,
+    antwort_codeliste: Option<&str>,
+    detail: Option<&str>,
+) -> mako_markt::commands::GpkeNeuanlageBeantworten {
+    mako_markt::commands::GpkeNeuanlageBeantworten {
+        malo_id: fall.malo_id.clone(),
+        process_id: Some(fall.process_id.to_string()),
+        antwort_code: antwort_code.to_owned(),
+        antwort_codeliste: Some(
+            antwort_codeliste
+                .unwrap_or(mako_pruefung::codes::EBD_NEUANLAGE)
+                .to_owned(),
+        ),
+        bemerkung: detail.map(ToOwned::to_owned),
+        transaktionsgrund_ergaenzung: None,
+        geplantes_produktpaket: None,
+        malo_msb: None,
+        messlokationen: Vec::new(),
+        tranche: None,
+    }
 }
 
 fn to_anfrage(fall: &NeuanlageFall) -> NeuanlageAnfrage {
@@ -430,6 +450,45 @@ fn parse_civil_date(raw: &str) -> Option<Date> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The automatic Bestätigung names the Marktlokation the identification
+    /// found: the answer's `SG5 LOC+Z16` is Muss, and an answer that names
+    /// none is refused at makod's door. The Lokationsdaten it leaves to makod,
+    /// which reads them from marktd.
+    #[test]
+    fn the_automatic_bestaetigung_names_the_identified_marktlokation() {
+        let now = OffsetDateTime::now_utc();
+        let heute = mako_fristen::heute();
+        let fall = NeuanlageFall {
+            id: Uuid::new_v4(),
+            tenant: "t".to_owned(),
+            process_id: Uuid::new_v4(),
+            pid: 55_600,
+            lf_mp_id: "9900000000002".to_owned(),
+            marktlokationsart: "VERBRAUCHEND".to_owned(),
+            veraeusserungsform: None,
+            uebertragungstag: heute,
+            zuordnungsbeginn: heute,
+            letzter_pruefungstag: heute,
+            status: "OFFEN".to_owned(),
+            malo_id: Some("51238696012".to_owned()),
+            pruefungen: 0,
+            letzte_pruefung_am: None,
+            antwortcode: None,
+            detail: None,
+            beantwortet_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let body = antwort_body(&fall, "A09", Some("E_0608"), None);
+        assert_eq!(body.malo_id.as_deref(), Some("51238696012"));
+        assert_eq!(
+            body.process_id.as_deref(),
+            Some(fall.process_id.to_string().as_str())
+        );
+        assert!(body.messlokationen.is_empty() && body.malo_msb.is_none());
+        assert!(body.transaktionsgrund_ergaenzung.is_none());
+    }
 
     /// A Veräußerungsform outside the published four opens the case anyway.
     ///

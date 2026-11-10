@@ -98,7 +98,12 @@ impl Daemon for Marktd {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await
-            .context("run marktd migrations")
+            .context("run marktd migrations")?;
+        // `event_outbox` carries the commands owed to makod (the ORDERS 17008
+        // Abbestellung of an ended consent); events go through `event_log`.
+        mako_service::outbox::ensure_schema(pool)
+            .await
+            .context("ensure event_outbox schema")
     }
 
     /// Fail closed: without `[oidc]` every request is admitted with dev claims,
@@ -194,8 +199,19 @@ impl Daemon for Marktd {
 
         let makod_client = Arc::new(mako_markt::makod_client::MakodClient::new(
             &cfg.makod.base_url,
-            makod_api_key,
+            makod_api_key.clone(),
         ));
+        // The commands owed to makod, persisted with the business write that
+        // owes them, drained with retry and a dead-letter budget.
+        tokio::spawn(
+            mako_service::outbox::OutboxWorker::commands(
+                pool.clone(),
+                crate::consent_lifecycle::MAKOD_UPSTREAM,
+                cfg.makod.base_url.clone(),
+                Some(makod_api_key),
+            )
+            .run(shutdown.clone()),
+        );
 
         // No in-memory event channel: producers persist every event to the
         // `event_log` outbox (marktd::outbox::enqueue) BEFORE any fan-out, and
@@ -214,15 +230,7 @@ impl Daemon for Marktd {
             tenant: tenant.clone(),
         });
 
-        spawn_workers(
-            &cfg,
-            &pool,
-            sub_repo,
-            &http,
-            &shutdown,
-            Arc::clone(&makod_client),
-            &tenant,
-        );
+        spawn_workers(&cfg, &pool, sub_repo, &http, &shutdown, &tenant);
 
         let mcp = crate::mcp_server::router(
             Arc::new(crate::mcp_server::MdmdMcpState {
@@ -292,6 +300,11 @@ fn malo_routes() -> Router<S> {
         .route("/api/v1/malos/{id}", get(get_malo).put(put_malo))
         // SLP profile for the NNE tariff zone and billingd.
         .route("/api/v1/malos/{id}/lastprofil", get(get_malo_lastprofil))
+        // The Land of the MaLo's address — edmd's Ersatzwert day class.
+        .route(
+            "/api/v1/malos/{id}/bundesland",
+            get(crate::handlers::bundesland::get_malo_bundesland),
+        )
         // NB grid topology (read by the processd NB module for Anmeldung STP).
         .route(
             "/api/v1/malos/{id}/grid",
@@ -676,7 +689,6 @@ fn spawn_workers(
     sub_repo: pg::PgSubscriptionRepository,
     http: &reqwest::Client,
     shutdown: &tokio_util::sync::CancellationToken,
-    makod: Arc<mako_markt::makod_client::MakodClient>,
     tenant: &str,
 ) {
     spawn_fanout(
@@ -706,7 +718,6 @@ fn spawn_workers(
     // Nothing in the market stops on its own.
     crate::consent_lifecycle::spawn_expiry_sweep(
         Arc::new(pg::PgEinwilligungRepository::new(pool.clone())),
-        makod,
         pool.clone(),
         tenant.to_owned(),
         shutdown.clone(),

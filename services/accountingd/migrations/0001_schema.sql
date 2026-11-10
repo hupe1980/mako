@@ -115,6 +115,12 @@ CREATE TABLE accounts (
     -- facts it depends on, not of the questions asked about it.
     verzug_ct           BIGINT      NOT NULL DEFAULT 0,
 
+    -- § 13 BGB — whether the customer is a Verbraucher. Decides the § 288
+    -- Abs. 5 BGB Pauschale, which only a Schuldner who „kein Verbraucher ist"
+    -- owes. NULL = not recorded, and no Pauschale is claimed on a fact nobody
+    -- has established.
+    verbraucher         BOOLEAN,
+
     -- BO4E Vorauszahlung COM: typed advance-payment schedule (§40 EnWG)
     vorauszahlung       JSONB,
     -- BO4E Zahlungsinformation COM: IBAN/BIC/Zahlungsart for SEPA batch export
@@ -411,6 +417,12 @@ CREATE TABLE dunning_locks (
                         -- §41f Abs. 1 S. 2 — the customer showed hinreichende
                         -- Aussicht that they will meet their obligations.
                         'zahlungsaussicht',
+                        -- § 87 InsO — the debtor is in Insolvenz: „Die
+                        -- Insolvenzgläubiger können ihre Forderungen nur nach
+                        -- den Vorschriften über das Insolvenzverfahren
+                        -- verfolgen." Automatic dunning opens and escalates no
+                        -- Mahnstufe on the account while it is live.
+                        'insolvenz',
                         -- Anything else an operator decides, always with a note.
                         'operator')),
     -- The citation the lock rests on, e.g. '§41g Abs. 1 S. 10 EnWG'. Free text
@@ -1163,10 +1175,22 @@ INSERT INTO ecb_base_rates (valid_from, rate_pct, source) VALUES
 -- to pay an overdue balance in structured installments without triggering Sperrung.
 --
 -- Lifecycle:
---   ACTIVE     → installments are due per schedule
---   COMPLETED  → all installments paid → auto-resolve related dunning cases
+--   ACTIVE     → installments are due per schedule; the account is kept out of
+--                the §§ 41f/41g sequence
+--   COMPLETED  → every installment PAID or WAIVED
 --   CANCELLED  → operator cancelled before completion
---   DEFAULTED  → installment missed → auto-escalate to next Mahnstufe
+--   DEFAULTED  → an installment fell due unpaid (OVERDUE). When the plan is the
+--                Ratenzahlung of an Abwendungsvereinbarung, its lock is lifted
+--                with `vereinbarung_gebrochen` in the same transaction
+--                (§ 41g Abs. 1 S. 11 EnWG), so the case resumes at a fresh
+--                § 41f Abs. 5 Ankündigung.
+--
+-- The daily dunning run (`pg::run_payment_plans`) matches and defaults: cash
+-- booked on the account since the plan's creation (ZAHLUNG less BANKRUECKLAST
+-- and SEPA_STORNO, read from `booking_drafts`) pays the installments in
+-- schedule order, recomputed absolutely each run; an installment still unpaid
+-- after its due date (against `heute()`) is OVERDUE and the plan DEFAULTED.
+-- COMPLETED, CANCELLED and DEFAULTED are final.
 --
 -- Creating a plan:  POST /api/v1/accounts/{malo_id}/payment-plans
 -- Listing plans:    GET  /api/v1/accounts/{malo_id}/payment-plans
@@ -1188,6 +1212,13 @@ CREATE TABLE payment_plans (
                     CHECK (status IN ('ACTIVE', 'COMPLETED', 'CANCELLED', 'DEFAULTED')),
     -- Optional reference to the dunning_case this plan resolves
     dunning_case_id UUID        REFERENCES dunning_cases (id),
+    -- The `abwendungsvereinbarung` lock this plan is the Ratenzahlung of
+    -- (§ 41g Abs. 1 S. 3 Nr. 1 EnWG). Set when the plan is created; the
+    -- default worker lifts it when the plan goes DEFAULTED.
+    abwendung_lock_id UUID      REFERENCES dunning_locks (lock_id),
+    -- When the default worker found an installment OVERDUE.
+    defaulted_at    TIMESTAMPTZ,
+    CHECK ((status = 'DEFAULTED') = (defaulted_at IS NOT NULL)),
     operator_sub    TEXT,
     note            TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1196,8 +1227,9 @@ CREATE TABLE payment_plans (
 
 COMMENT ON TABLE payment_plans IS
     'Zahlungsvereinbarung: structured payment plans for overdue balances. '
-    'ACTIVE plans suppress automatic Sperrung escalation. '
-    'DEFAULTED when an installment is missed (auto-escalates dunning).';
+    'ACTIVE plans keep the account out of the §§ 41f/41g sequence. '
+    'DEFAULTED when an installment falls due unpaid; a linked Abwendungsvereinbarung '
+    'lock is lifted with vereinbarung_gebrochen in the same transaction.';
 
 CREATE INDEX pp_account ON payment_plans (account_id, status);
 CREATE INDEX pp_tenant  ON payment_plans (tenant, status, created_at);
@@ -1222,7 +1254,8 @@ CREATE TABLE payment_plan_installments (
 
 COMMENT ON TABLE payment_plan_installments IS
     'Individual installments belonging to a payment_plan. '
-    'Status OVERDUE is set by the daily worker when due_date passes without payment. '
+    'PAID once the cash booked since the plan began covers it (ledger_entry_id = the '
+    'payment that completed it); OVERDUE once due_date passes unpaid. '
     'WAIVED = operator manually waived the installment (operator_sub logged in plan).';
 
 CREATE INDEX ppi_plan    ON payment_plan_installments (plan_id, installment_no);

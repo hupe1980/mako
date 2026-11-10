@@ -29,6 +29,16 @@ async fn the_mcp_server_passes_the_round_trips() {
     if let Some(db) = cfg["database"].as_table_mut() {
         db.remove("migration_url");
     }
+    // `dev/env.sh` supplies the warehouse the dev config's enabled `[archive]`
+    // needs; the suite gives it a throwaway one.
+    let warehouse = tempfile::tempdir().expect("warehouse tempdir");
+    cfg["archive"]
+        .as_table_mut()
+        .expect("an [archive] table")
+        .insert(
+            "storage_uri".to_owned(),
+            format!("file://{}", warehouse.path().display()).into(),
+        );
     let cfg = cfg
         .try_into()
         .expect("the dev configuration is an edmd one");

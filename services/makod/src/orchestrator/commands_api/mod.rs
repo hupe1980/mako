@@ -333,6 +333,7 @@ mod esa;
 mod gabi_gas;
 mod gda_stammdaten;
 mod geli_gas;
+mod geli_geschaeftsdatenanfrage;
 mod geschaeftsdatenanfrage;
 mod gpke;
 mod handler;
@@ -341,6 +342,7 @@ mod iftsta;
 mod invoic_stellen;
 mod lf_anmeldung_gas;
 mod mabis;
+mod msb_antworten;
 mod netzbilanz;
 mod netzzugang;
 pub mod probe;
@@ -351,6 +353,8 @@ mod vorgangsnummer;
 mod wim;
 
 #[cfg(test)]
+mod command_coverage_tests;
+#[cfg(test)]
 mod geli_frist_tests;
 #[cfg(test)]
 mod geli_lf_anmeldung_tests;
@@ -360,6 +364,10 @@ mod geli_stammdaten_aenderung_tests;
 mod gpke_lf_anmeldung_tests;
 #[cfg(test)]
 mod invoic_stellen_tests;
+#[cfg(test)]
+mod msb_antworten_tests;
+#[cfg(test)]
+mod neuanlage_tests;
 #[cfg(test)]
 mod outbound_answer_tests;
 #[cfg(test)]
@@ -373,10 +381,12 @@ use ersteinbau::*;
 use esa::*;
 use gabi_gas::*;
 use geli_gas::*;
+use geli_geschaeftsdatenanfrage::*;
 use geschaeftsdatenanfrage::*;
 use gpke::*;
 use iftsta::*;
 use mabis::*;
+use msb_antworten::*;
 use netzbilanz::*;
 use netzzugang::*;
 use stornierung::*;
@@ -403,7 +413,7 @@ fn current_workflow_id() -> WorkflowId {
 /// Festlegungen 6.1d § 2.5). EDIFACT has no Übergangsfrist, so a message
 /// stamped with the next release before its Stichtag is refused by the
 /// counterparty — the registry is filtered to `valid_from <= heute()` first.
-fn latest_format_version() -> mako_engine::version::FormatVersion {
+pub(crate) fn latest_format_version() -> mako_engine::version::FormatVersion {
     edi_energy::registry::ReleaseRegistry::global()
         .format_versions_in_force_on(mako_fristen::heute())
         .into_iter()
@@ -774,15 +784,38 @@ where
     W::State: Default + serde::Serialize,
     F: FnOnce(&W::State) -> Result<W::Command, DispatchError>,
 {
+    dispatch_to_process_in_version::<W, _>(state, business_key, workflow_name, |current, _| {
+        make_command(current)
+    })
+    .await
+}
+
+/// [`dispatch_to_process_with_state`] whose command also sees the format
+/// version the process runs under — what a door's pre-send check renders the
+/// answer in ([`eog_stammdaten::refuse_what_the_gate_refuses`]), because the
+/// outbox worker renders it in that version's release, not today's.
+async fn dispatch_to_process_in_version<W, F>(
+    state: &CommandsApiState,
+    business_key: &str,
+    workflow_name: &'static str,
+    make_command: F,
+) -> Result<DispatchOutcome, DispatchError>
+where
+    W: mako_engine::workflow::Workflow,
+    W::Command: mako_engine::workflow::CommandPayload + Clone,
+    W::State: Default + serde::Serialize,
+    F: FnOnce(&W::State, &mako_engine::version::FormatVersion) -> Result<W::Command, DispatchError>,
+{
     let identity = find_identity(state, business_key, workflow_name).await?;
     let process_id = identity.process_id;
+    let format_version = identity.workflow_id.format_version.clone();
     let process = mako_engine::process::Process::<
         W,
         Arc<mako_engine::store_slatedb::SlateDbStore>,
     >::from_identity(Arc::clone(&state.store), identity);
 
     let current = process.state().await?;
-    let domain_cmd = make_command(&current)?;
+    let domain_cmd = make_command(&current, &format_version)?;
     process
         .run(
             domain_cmd,

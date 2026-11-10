@@ -245,15 +245,15 @@ async fn dispatch_antwort(
     };
     // The answer is checked against its profile before anything is written —
     // the check the pre-send gate runs.
-    dispatch_to_process_with_state::<GpkeGeschaeftsdatenanfrageWorkflow, _>(
+    dispatch_to_process_in_version::<GpkeGeschaeftsdatenanfrageWorkflow, _>(
         state,
         &key,
         WORKFLOW_NAME,
-        move |current| {
+        move |current, fv| {
             use mako_engine::workflow::Workflow as _;
             let out = GpkeGeschaeftsdatenanfrageWorkflow::handle(current, cmd.clone())
                 .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, fv, &out.outbox)?;
             Ok(cmd)
         },
     )

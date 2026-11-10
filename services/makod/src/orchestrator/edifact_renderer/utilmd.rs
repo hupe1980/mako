@@ -79,7 +79,7 @@ pub(super) fn render_utilmd(
     // A **Listennachricht** is a different message shape: an `IDE+Z01` head
     // that is the Geschäftsvorfall, with one `IDE+24` member per disputed
     // Marktlokation under it. Rendered by its own path below.
-    if !u.positionen.is_empty() {
+    if !u.positionen.is_empty() || !u.listenmitglieder.is_empty() {
         return render_utilmd_liste(&u, msg);
     }
 
@@ -807,7 +807,6 @@ fn render_utilmd_liste(
     let zaehlpunkt = required(&u.mabis_zaehlpunkt, "mabis_zaehlpunkt")?;
     let version = required(&u.zeitreihen_version, "zeitreihen_version")?;
     let listennummer = required(&u.listennummer, "listennummer")?;
-    let codeliste = required(&u.antwort_codeliste, "antwort_codeliste")?;
 
     let release = release_for(msg, MessageType::Utilmd, ReleaseTrack::Strom)?;
     let edifact_pid = Pruefidentifikator::new(pid).map_err(|e| RenderError::MissingField {
@@ -834,6 +833,12 @@ fn render_utilmd_liste(
     if let Some(monat) = u.billing_period.as_deref().filter(|s| !s.is_empty()) {
         builder = builder.gueltigkeit_beginn(monat);
     }
+    // `SG1 RFF+AAV` „Nummer der Anfrage" — Muss on a list the Netzbetreiber
+    // distributes: the `BGM` DE 1004 of the ORDERS that ordered it (UTILMD AHB
+    // Strom 2.2 Kap. 13.2, Bedingung `[503]`, S. 1110).
+    if let Some(anfrage) = u.anfrage_referenz.as_deref().filter(|s| !s.is_empty()) {
+        builder = builder.rff(edi_energy::utilmd_codes::rff::NUMMER_DER_ANFRAGE, anfrage);
+    }
 
     // ── The head ─────────────────────────────────────────────────────────────
     let mut head = builder
@@ -848,6 +853,11 @@ fn render_utilmd_liste(
     let mut builder = head.done();
 
     // ── The members ──────────────────────────────────────────────────────────
+    let codeliste = if u.positionen.is_empty() {
+        ""
+    } else {
+        required(&u.antwort_codeliste, "antwort_codeliste")?
+    };
     for (i, pos) in u.positionen.iter().enumerate() {
         let malo = Some(pos.malo.as_str())
             .filter(|s| !s.is_empty())
@@ -880,6 +890,45 @@ fn render_utilmd_liste(
             .filter(|s| !s.is_empty())
         {
             member = member.referenz_vorgangsnummer(referenz);
+        }
+        builder = member.done();
+    }
+
+    // A list this participant distributes: one `IDE+24` per Marktlokation (or
+    // Tranche) with its Bilanzierungszeitraum and its `SG8` blocks as the
+    // sender holds them (Kap. 13.2, S. 1114–1121).
+    for (i, mitglied) in u.listenmitglieder.iter().enumerate() {
+        let malo = Some(mitglied.malo.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RenderError::MissingField {
+                message_type: mt.into(),
+                field: format!("listenmitglieder[{i}].malo").into(),
+            })?;
+        let vorgangsnummer = mitglied
+            .vorgangsnummer
+            .as_deref()
+            .map_or_else(|| format!("{listennummer}-{}", i + 1), ToOwned::to_owned);
+        let mut member = builder.transaction(vorgangsnummer).date(
+            edi_energy::utilmd_codes::dtm::BILANZIERUNGSBEGINN,
+            &mitglied.bilanzierungsbeginn,
+        );
+        if let Some(ende) = mitglied
+            .bilanzierungsende
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
+            member = member.date(edi_energy::utilmd_codes::dtm::BILANZIERUNGSENDE, ende);
+        }
+        member = member.marktlokation(malo);
+        if let Some(tranche) = mitglied.tranche.as_deref().filter(|s| !s.is_empty()) {
+            member = member.location(edi_energy::Lokationstyp::Tranche, tranche);
+        }
+        for block in &mitglied.stammdaten.bloecke {
+            let mut sg8 = member.stammdaten(&block.seq);
+            for segment in &block.segmente {
+                sg8 = sg8.segment(&segment.tag, segment.elemente.clone());
+            }
+            member = sg8.done();
         }
         builder = member.done();
     }
@@ -1349,8 +1398,8 @@ fn ergaenzung_admitted(release: &edi_energy::Release, pid: u32, code: &str) -> b
 }
 
 /// What the pre-send AHB gate would say about a UTILMD a command is about to
-/// write: render `pending` as the outbox worker will, parse it back and
-/// validate it against its profile on today's date.
+/// write for a process running under `format_version`: render `pending` as
+/// the outbox worker will, parse it back and validate it against its profile.
 ///
 /// `Ok(findings)` — empty when the message passes. `Err` when it does not
 /// render or parse at all. A command door that runs this before the spawn
@@ -1363,8 +1412,9 @@ fn ergaenzung_admitted(release: &edi_energy::Release, pid: u32, code: &str) -> b
 pub(crate) fn utilmd_ahb_findings(
     pending: &mako_engine::outbox::PendingOutbox,
     tenant_id: mako_engine::ids::TenantId,
+    format_version: &mako_engine::version::FormatVersion,
 ) -> Result<Vec<String>, String> {
-    Ok(utilmd_gate_check(pending, tenant_id)?
+    Ok(utilmd_gate_check(pending, tenant_id, format_version)?
         .findings
         .into_iter()
         .map(|e| e.message)
@@ -1377,12 +1427,20 @@ pub(crate) fn utilmd_ahb_findings(
 pub(crate) struct UtilmdGateCheck {
     /// The rendered interchange, as the gate parsed it.
     pub bytes: Vec<u8>,
-    /// The profile's errors; empty when the message passes.
+    /// What keeps it from being sent — the profile's errors and every
+    /// Formatbedingung finding; empty when the message passes.
     pub findings: Vec<edifact_rs::ValidationIssue>,
 }
 
-/// Render `pending` as the outbox worker will, parse it back and validate it
-/// against its profile on today's date.
+/// Render `pending` as the outbox worker will render it for a process running
+/// under `format_version`, parse it back and validate it as the pre-send gate
+/// does.
+///
+/// The worker renders a process step in the release of its process's format
+/// version (`release_for`), so the check must too: rendered in the release in
+/// force today, an answer to a process started before a cutover would be
+/// judged against a column it is never sent in. A door spawning a new process
+/// passes the format version it stamps on it — the one in force on its day.
 ///
 /// # Errors
 ///
@@ -1390,11 +1448,12 @@ pub(crate) struct UtilmdGateCheck {
 pub(crate) fn utilmd_gate_check(
     pending: &mako_engine::outbox::PendingOutbox,
     tenant_id: mako_engine::ids::TenantId,
+    format_version: &mako_engine::version::FormatVersion,
 ) -> Result<UtilmdGateCheck, String> {
     use edi_energy::EdiEnergyMessage as _;
     use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
     let process_id = ProcessId::new();
-    let msg = OutboxMessage::new(
+    let mut msg = OutboxMessage::new(
         StreamId::for_process(tenant_id, &process_id),
         process_id,
         tenant_id,
@@ -1405,13 +1464,14 @@ pub(crate) fn utilmd_gate_check(
         pending.recipient.clone(),
         pending.payload.clone(),
     );
+    msg.format_version = Some(format_version.clone());
     let rendered = render_utilmd(&pending.payload, &msg).map_err(|e| e.to_string())?;
     let parsed = edi_energy::parse(&rendered.bytes).map_err(|e| e.to_string())?;
     let report = parsed
         .validate_on_date(mako_fristen::heute())
         .map_err(|e| e.to_string())?;
     Ok(UtilmdGateCheck {
-        findings: report.errors().to_vec(),
+        findings: report.sending_refusals().cloned().collect(),
         bytes: rendered.bytes,
     })
 }

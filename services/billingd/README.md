@@ -16,7 +16,7 @@ just dev billingd      # dev/config/billingd.toml against the dev PostgreSQL
 
 | | |
 |---|---|
-| **Database** | PostgreSQL — `billing_records`, `invoice_number_series`, `event_outbox` |
+| **Database** | PostgreSQL — `billing_records`, `steuerzeilen` (typed Strom-/Energiesteuer lines per document), `invoice_number_series`, `event_outbox` |
 | **Auth** | OIDC on every business route (fail-closed; `allow_insecure_no_auth` for dev) + Cedar `policies/billingd.cedar`: reads for any tenant caller, issuing/correcting/releasing for `LF`, `MSB`, `ESA` |
 | **Products** | 13 categories, from STROM and GAS to WALLBOX, HEMS and SHARING |
 | **Rechnungsnummer** | fortlaufend per tenant (§ 14 Abs. 4 Nr. 4 UStG): `RE-` invoice, `SR-` Sammelrechnung, `ST-` Storno, `VG-` § 41e Gutschrift |
@@ -64,7 +64,8 @@ is recorded).
 - **Tables:** `[http]` (`addr`), `[database]`, `[policy]` (`behg_regime` — `rvo_bezugspreis` or
   `korridor`; `settlement_form` — `endrechnung` or `restrechnung`), `[rates]`
   (`mwst_rate`, dated statutory rows), `[seller]` (BG-5/BG-6 address),
-  `[e_rechnung]`, `[billing_runs]`, `[oidc]`, `[mcp]`. `--print-config` runs the
+  `[e_rechnung]`, `[billing_runs]`, `[gebuehrenbescheid]` (required to bill a
+  public-law Gebühr), `[oidc]`, `[mcp]`. `--print-config` runs the
   same validation as startup and prints the policy report; the report is also
   served at `GET /api/v1/policy` and by the MCP tool `get_policy`.
   `billingd --check-config [--json]` prints every configuration finding (path,

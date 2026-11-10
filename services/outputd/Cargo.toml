@@ -35,7 +35,6 @@ uuid         = { workspace = true }
 # needs nothing but a JSON parser.
 secrecy      = { version = "0.10", features = ["serde"] }
 base64       = { version = "0.22" }
-reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 
 # The EN 16931 machinery the *gates* need: the invoice specimen is a real

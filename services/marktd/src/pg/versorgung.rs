@@ -494,6 +494,11 @@ impl PgVersorgungsStatusRepository {
     /// Announced assignments are preserved, so a pending supplier switch
     /// survives the outgoing supplier's departure. `lieferende` defaults to
     /// today (Berlin civil date) when the process carries no date.
+    ///
+    /// Returns `false` when the call changes nothing — no running assignment
+    /// ended and the same Lieferende is already recorded. A deployment that is
+    /// NB and LF at once delivers the confirmation twice, once from each side's
+    /// process, and the second must not announce the § 38 gap again.
     pub async fn end_supply_tx(
         conn: &mut PgConnection,
         malo_id: &MaloId,
@@ -505,7 +510,15 @@ impl PgVersorgungsStatusRepository {
     ) -> Result<bool, MdmError> {
         let lieferende = lieferende.unwrap_or_else(crate::handlers::malo::today_berlin);
         ensure_root(&mut *conn, malo_id, tenant, nb_mp_id).await?;
-        sqlx::query(
+        let recorded: Option<Date> = sqlx::query_scalar(
+            "SELECT lieferende FROM versorgungsstatus WHERE malo_id = $1 AND tenant = $2",
+        )
+        .bind(malo_id.as_ref())
+        .bind(tenant)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(internal)?;
+        let ended = sqlx::query(
             r#"DELETE FROM lf_zuordnung
                WHERE malo_id = $1 AND tenant = $2 AND status = 'Aktiv'
                  AND ($3::text IS NULL OR lf_mp_id = $3)"#,
@@ -516,6 +529,9 @@ impl PgVersorgungsStatusRepository {
         .execute(&mut *conn)
         .await
         .map_err(super::write_error)?;
+        if ended.rows_affected() == 0 && recorded == Some(lieferende) {
+            return Ok(false);
+        }
 
         resync_lieferstatus(&mut *conn, malo_id, tenant).await?;
         sqlx::query(

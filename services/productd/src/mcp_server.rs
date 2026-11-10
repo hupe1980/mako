@@ -876,11 +876,11 @@ impl ProductdMcpHandler {
                  ## 4. Customer accepts (digital acceptance)\n\
                  POST /api/v1/angebote/{id}/annehmen\n\
                  { \"gewaehlte_variante\": 1 }  -- index into varianten array (0 = base offer)\n\
-                 -- Emits de.tarif.angebot.angenommen CloudEvent → ERP/vertragd creates Rahmenvertrag\n\n\
+                 -- Enqueues de.tarif.angebot.angenommen with the acceptance → ERP/vertragd creates Rahmenvertrag\n\n\
                  ## 5. Contract creation (automated via ERP webhook)\n\
                  -- ERP receives de.tarif.angebot.angenommen with positionen + chosen variant\n\
                  -- Creates Rahmenvertrag + N x Versorgungsvertrag in vertragd\n\
-                 -- Returns rahmenvertrag_id → productd links the Angebot\n\n\
+                 -- Returns rahmenvertrag_id → productd links the Angebot when the delivery completes\n\n\
                  ## Key facts\n\
                  - Angebot expires automatically after gueltig_bis (background worker)\n\
                  - jahreskosten includes NNE + KA if supplied in positionen\n\

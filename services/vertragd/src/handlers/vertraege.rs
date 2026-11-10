@@ -349,6 +349,67 @@ pub struct ProdukteQuery {
     pub to: Option<Date>,
 }
 
+/// Period of `GET /api/v1/malo/{malo_id}/sect14a`, both ends inclusive.
+#[derive(Deserialize)]
+pub struct Sect14aQuery {
+    pub from: Date,
+    pub to: Date,
+}
+
+/// `GET /api/v1/malo/{malo_id}/sect14a?from=&to=` — the § 14a EnWG module
+/// state of the MaLo's supply over a period, as ordered slices.
+///
+/// `billingd` selects the Modul 1/2/3 reductions it bills from this answer. A
+/// period no slice covers has no recorded state, and one two slices share
+/// changed module inside it; the caller sees both rather than a single value.
+pub async fn malo_sect14a(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(ctx): Extension<Arc<Ctx>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<Sect14aQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
+    if q.from > q.to {
+        return Err(ApiError::bad_request("from must not be after to"));
+    }
+    let slices = pg::malo_sect14a(&ctx.pool, ctx.tenant(), &malo_id, q.from, q.to)
+        .await
+        .map_err(ApiError::Internal)?;
+    ok(serde_json::json!({
+        "malo_id": malo_id,
+        "from": q.from.to_string(),
+        "to": q.to.to_string(),
+        "slices": slices,
+    }))
+}
+
+/// `POST /api/v1/malo/{malo_id}/sect14a` — record the § 14a EnWG modules the
+/// Anschlussnutzer holds from `gueltig_ab` on.
+///
+/// The slice in force on that day ends there and the new one opens; a later
+/// recorded state is `409`, since history is not rewritten here.
+pub async fn record_sect14a(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(ctx): Extension<Arc<Ctx>>,
+    Path(malo_id): Path<String>,
+    Json(input): Json<pg::Sect14aInput>,
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "write-netzentgeltmodule", ctx.tenant())?;
+    match pg::record_sect14a(&ctx.pool, ctx.tenant(), &malo_id, &input).await {
+        Ok(module) => ok(serde_json::json!({
+            "malo_id": malo_id,
+            "module": module,
+            "gueltig_ab": input.gueltig_ab.to_string(),
+        })),
+        Err(pg::Sect14aError::KeineKomponente(_)) => Err(ApiError::NotFound),
+        Err(e @ pg::Sect14aError::KeinModul) => Err(ApiError::unprocessable(e.to_string())),
+        Err(e @ pg::Sect14aError::SpaetererStand(_)) => Err(ApiError::conflict(e.to_string())),
+        Err(pg::Sect14aError::Db(e)) => Err(ApiError::Internal(e.into())),
+    }
+}
+
 /// `GET /api/v1/malo/{malo_id}/produkte` — which product a MaLo is billed on.
 ///
 /// The single source of truth for the MaLo→product mapping. It is a contract

@@ -123,10 +123,8 @@ impl EdifactIngestDispatcher {
             //   17011 Bestellung Angebot Änderung Technik (NB/LF → MSB),
             //         owned by `wim-technik-aenderung`.
             //
-            // Note: PIDs 19001/19002 are multi-domain — GPKE Konfiguration (NB role)
-            // and WiM Geräteübernahme (nMSB role) share them.  Role-conditional
-            // routing in the PidRouter ensures only one workflow is registered per
-            // role (both cannot be active simultaneously — build() panics if both are).
+            // The MSBA's answers 19001/19002/19015/19016 reach the MSBN's own
+            // workflow, `wim-geraeteubernahme-msbn`, below.
             "wim-geraeteubernahme" => match pid {
                 17001 | 17009 => {
                     let cmd =
@@ -158,6 +156,29 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
+            // ── WiM Geräteübernahme — MSBN side ──────────────────────────────
+            // The MSBA's ORDRSP 19001/19002 (to a 17001) and 19015/19016 (to a
+            // 17009) carry no Messlokation: they name the ORDERS by its BGM DE
+            // 1004 in SG1 RFF+ON, which the MSBN's process runs under. Resume
+            // only; an answer without a sent ORDERS is `process_not_found`.
+            "wim-geraeteubernahme-msbn" => {
+                if mako_wim::geraeteubernahme_msbn::ANTWORT_PIDS.contains(&pid) {
+                    let cmd = adapters::wim_geraeteubernahme_msbn_registry().dispatch(raw, &fv)?;
+                    let order_ref = extract_order_ref_from_msg(msg);
+                    self.resume_by_key::<mako_wim::geraeteubernahme_msbn::WimGeraeteubernahmeMsbnWorkflow>(
+                        inbound,
+                        &order_ref,
+                        "wim-geraeteubernahme-msbn",
+                        cmd,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "wim-geraeteubernahme-msbn",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
             // ── WiM Rechnung (Strom) — PID 31009 ─────────────────────────────
             // PID 31009: MSB-Rechnung (MSB → NB, multi-domain GPKE/WiM) — spawn.
             "wim-invoic" => match pid {
@@ -631,11 +652,14 @@ impl EdifactIngestDispatcher {
                     )
                     .await
                 } else if mako_wim::TECHNIK_AENDERUNG_ORDRSP_PIDS.contains(&pid) {
+                    // The 19005/19006 carries no Lokation: it names the 17011 by
+                    // its BGM DE 1004 in SG1 RFF+ON (ORDRSP AHB 1.1b Kap. 4.12,
+                    // Hinweise [513] / [543]), the key the sent Auftrag runs under.
                     let cmd = adapters::wim_technik_aenderung_registry().dispatch(raw, &fv)?;
-                    let melo_id = extract_melo_from_orders(msg);
+                    let order_ref = extract_order_ref_from_msg(msg);
                     self.resume_by_key::<WimTechnikAenderungWorkflow>(
                         inbound,
-                        &melo_id,
+                        &order_ref,
                         "wim-technik-aenderung",
                         cmd,
                     )

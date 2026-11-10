@@ -498,6 +498,7 @@ mod tests {
                 direktvermarktungspflichtig: None,
             }),
             abmeldeanfrage,
+            ruhend: crate::nb::types::RuhendeAnmeldung::default(),
         }
     }
 

@@ -68,10 +68,10 @@ use mako_gpke::{
     GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
     GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow,
     GpkeDatenabrufMsbWorkflow, GpkeDatenabrufWorkflow, GpkeGeschaeftsdatenanfrageWorkflow,
-    GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
-    GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungMsbWorkflow, GpkeSperrungWorkflow,
-    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow,
+    GpkeKonfigurationAenderungWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
+    GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow, GpkePartinWorkflow,
+    GpkeSperrungLfWorkflow, GpkeSperrungMsbWorkflow, GpkeSperrungWorkflow, GpkeStornierungWorkflow,
+    GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow,
 };
 use mako_mabis::{MabisBillingWorkflow, MabisClearinglisteWorkflow};
 use mako_wim::{
@@ -233,14 +233,14 @@ impl IngestOutcome {
 /// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
 ///
 /// A parameter rather than a `W::State: OccupiesBusinessKey` bound because only
-/// 50 of the 65 workflow names dispatched here supply a verdict at all — 37
-/// through that trait, 13 through an inherent terminal-state closure — and the
+/// 54 of the 65 workflow names dispatched here supply a verdict at all — 39
+/// through that trait, 15 through an inherent terminal-state closure — and the
 /// verdict is domain knowledge that belongs in the workflow's own crate — makod
 /// only *consumes* what a crate has already published (that trait, or an
 /// inherent `is_terminal()`). The four INVOIC families and the Redispatch
-/// Aktivierung pass [`occupied_by_own_reference`]. An arm without a verdict decides on index
-/// presence alone; `cargo xtask check-occupancy` counts those arms and refuses
-/// an increase.
+/// Aktivierung pass [`occupied_by_own_reference`]. An arm without a verdict would decide on
+/// index presence alone; `cargo xtask check-occupancy` counts those arms and
+/// refuses any.
 type Occupancy<W> = fn(&<W as Workflow>::State) -> bool;
 
 /// What the door knows about one inbound message beyond its content: when it
@@ -653,11 +653,13 @@ impl EdifactIngestDispatcher {
         "gabi-gas-mmma",
         "gabi-gas-nomination",
         "geli-gas-datenabruf",
+        mako_geli_gas::geschaeftsdatenanfrage::WORKFLOW_NAME,
         "geli-gas-lf-anmeldung",
         "geli-gas-mscons",
         "geli-gas-partin",
         "geli-gas-sperrprozesse-invoic",
         "geli-gas-sperrung-lf",
+        "geli-gas-sperrung-msb",
         "geli-gas-sperrung-nb",
         "geli-gas-stammdatenaenderung",
         "geli-gas-stornierung",
@@ -700,6 +702,7 @@ impl EdifactIngestDispatcher {
         "wim-device-change",
         "wim-ersteinbau",
         "wim-geraeteubernahme",
+        "wim-geraeteubernahme-msbn",
         "wim-insrpt",
         "wim-invoic",
         "wim-preisanfrage",
@@ -1200,7 +1203,7 @@ impl EdifactIngestDispatcher {
             };
             return self
                 .store
-                .as_dead_letter_sink()
+                .as_dead_letter_sink(self.tenant_id)
                 .reject(
                     &mako_engine::dead_letter::DeadLetterReason::NotDispatchable {
                         workflow_name: workflow_name.to_owned(),
@@ -1418,57 +1421,7 @@ impl EdifactIngestDispatcher {
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    /// Look up an existing process by business key and workflow name.
-    ///
-    /// If a matching process exists, execute `cmd` on it and return
-    /// [`IngestOutcome::Dispatched`].  Otherwise spawn a new process, execute
-    /// `cmd`, register the process under `key`, and return
-    /// [`IngestOutcome::Spawned`].
-    ///
-    /// `key` is whatever business key identifies the process for this message
-    /// family — a MaLo for most GPKE flows, but a MeLo for WiM, an invoice
-    /// reference for INVOIC/REMADV, or an order reference for the LOC-less
-    /// ORDRSP/ORDCHG answers. The correlation index is untyped by design.
-    ///
-    /// `spawn_deadlines`: zero or more business `(label, due_at)` pairs to
-    /// register atomically with the events in a single `WriteBatch` via
-    /// [`Process::run`] with [`RunOptions::deadlines`].  Pass `&[]` for
-    /// workflows that have no deadlines (e.g. pure continuation handlers).
-    /// They are only registered for freshly-spawned processes — resuming an
-    /// existing process must not re-register (they were set at spawn).
-    ///
-    /// The APERAK delivery window is not one of them: `inbound` carries it
-    /// ([`aperak_window`]), and it is registered on a spawn and on a resume
-    /// alike, because the obligation belongs to each message.
-    async fn spawn_or_resume<W>(
-        &self,
-        inbound: Inbound<'_>,
-        key: &str,
-        workflow_name_static: &'static str,
-        cmd: W::Command,
-        fv: &FormatVersion,
-        spawn_deadlines: &[(&'static str, time::OffsetDateTime)],
-    ) -> Result<IngestOutcome, EngineError>
-    where
-        W: Workflow + 'static,
-        W::Command: CommandPayload + Clone,
-        W::State: serde::Serialize,
-        Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
-    {
-        self.spawn_or_resume_keyed::<W>(
-            inbound,
-            key,
-            workflow_name_static,
-            cmd,
-            fv,
-            spawn_deadlines,
-            &[],
-            None,
-        )
-        .await
-    }
-
-    /// [`spawn_or_resume`](Self::spawn_or_resume) with an occupancy verdict.
+    /// [`spawn_or_resume_keyed`](Self::spawn_or_resume_keyed) with an occupancy verdict.
     ///
     /// Pass this wherever the message is *initiating* and the workflow's own
     /// crate publishes a terminal-state verdict — either
@@ -1508,9 +1461,33 @@ impl EdifactIngestDispatcher {
         .await
     }
 
-    /// [`spawn_or_resume`](Self::spawn_or_resume) that also indexes the process
-    /// under `extra_keys` (e.g. an inbound ORDERS' Belegnummer) so a later
-    /// LOC-less ORDRSP/ORDCHG can resume it by the echoed order reference.
+    /// Look up an existing process by business key and workflow name.
+    ///
+    /// If a matching process exists, execute `cmd` on it and return
+    /// [`IngestOutcome::Dispatched`].  Otherwise spawn a new process, execute
+    /// `cmd`, register the process under `key`, and return
+    /// [`IngestOutcome::Spawned`].
+    ///
+    /// `key` is whatever business key identifies the process for this message
+    /// family — a MaLo for most GPKE flows, but a MeLo for WiM, an invoice
+    /// reference for INVOIC/REMADV, or an order reference for the LOC-less
+    /// ORDRSP/ORDCHG answers. The correlation index is untyped by design.
+    ///
+    /// `spawn_deadlines`: zero or more business `(label, due_at)` pairs to
+    /// register atomically with the events in a single `WriteBatch` via
+    /// [`Process::run`] with [`RunOptions::deadlines`].  Pass `&[]` for
+    /// workflows that have no deadlines (e.g. pure continuation handlers).
+    /// They are only registered for freshly-spawned processes — resuming an
+    /// existing process must not re-register (they were set at spawn).
+    ///
+    /// The APERAK delivery window is not one of them: `inbound` carries it
+    /// ([`aperak_window`]), and it is registered on a spawn and on a resume
+    /// alike, because the obligation belongs to each message.
+    ///
+    /// It also indexes the process under `extra_keys` (e.g. an inbound ORDERS'
+    /// Belegnummer) so a later LOC-less ORDRSP/ORDCHG can resume it by the
+    /// echoed order reference. `occupies` is the workflow's verdict on whether
+    /// a found process still holds the key ([`Occupancy`]).
     #[expect(
         clippy::too_many_arguments,
         reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
@@ -2482,17 +2459,28 @@ mod wim;
 /// The correlation-index entries that make `process` findable under `keys`,
 /// skipping empty ones. Passed to [`RunOptions::correlations`] so a key lands
 /// in the same write as the events that justify it.
+/// The correlation index entries a spawn writes: one per business key, and one
+/// under the process's own id.
+///
+/// The id is how a caller names a process that has no business key yet — the
+/// answer to an Anmeldung neue Marktlokation that named no Marktlokation
+/// (Bedingung `[165]` „Wenn bekannt") carries the `process_id` its
+/// `de.mako.process.initiated` event published. Without the entry that answer
+/// finds no process.
 fn correlation_entries<'k, W: Workflow>(
     tenant_id: TenantId,
     process: &Process<W, Arc<SlateDbStore>>,
     keys: impl IntoIterator<Item = &'k str>,
 ) -> Vec<CorrelationEntry> {
     let identity = process.identity();
+    let own = process.process_id().to_string();
     keys.into_iter()
         .filter(|k| !k.is_empty())
-        .map(|k| CorrelationEntry {
+        .map(ToOwned::to_owned)
+        .chain(std::iter::once(own))
+        .map(|tag| CorrelationEntry {
             tenant_id,
-            tag: k.to_owned(),
+            tag,
             process_id: process.process_id(),
             identity: identity.clone(),
         })

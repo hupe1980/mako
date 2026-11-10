@@ -138,7 +138,7 @@ impl ProcessdMcpHandler {
     }
 
     #[tool(
-        description = "Aggregate counters: pending/executed/failed/cancelled; overdue_pending (past the date the Lieferant asked for) and frist_ueberschritten (past the 6-Werktage window of GPKE Teil 2 § 3.5.1.2 Nr. 1 — the regulatory one); iftsta_outstanding (terminal orders whose IFTSTA 21039 has not reached the Lieferant, so their gpke-sperrung-lf process cannot close), iftsta_ueberfaellig (of those, past the 1-Werktag window after completion) and iftsta_stuck (past the retry budget, needs a human).",
+        description = "Aggregate counters: pending/executed/failed/cancelled; overdue_pending (past the date the Lieferant asked for) and frist_ueberschritten (past the 6-Werktage window of GPKE Teil 2 § 3.5.1.2 Nr. 1 — the regulatory one); iftsta_outstanding (terminal orders whose IFTSTA 21039 has not reached the Lieferant, so their gpke-sperrung-lf process cannot close), iftsta_ueberfaellig (of those, past the 1-Werktag window after completion) and iftsta_stuck (its outbox command was dead-lettered, needs a human).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_sperr_stats(&self) -> Result<CallToolResult, McpError> {
@@ -157,16 +157,16 @@ impl ProcessdMcpHandler {
                 "iftsta_stuck":         s.iftsta_stuck,
                 "health": {
                     // Outstanding on its own is normal for a few seconds after an
-                    // execution — the retry worker is mid-flight. Stuck is not:
-                    // it means the retry budget ran out.
+                    // execution — the outbox is delivering. Stuck is not: the
+                    // command was dead-lettered.
                     "iftsta_ok": s.iftsta_stuck == 0,
                     "note": if s.iftsta_stuck > 0 {
-                        "ACTION REQUIRED: iftsta_stuck orders exhausted the retry budget. \
+                        "ACTION REQUIRED: iftsta_stuck orders' IFTSTA commands were dead-lettered. \
                          The Lieferant has not been told the outcome. Check whether the \
                          makod gpke-sperrung process for each exists and is in \
                          ValidationPassed."
                     } else if s.iftsta_outstanding > 0 {
-                        "IFTSTA dispatches in flight; the retry worker is still trying."
+                        "IFTSTA dispatches in flight; the outbox is still delivering them."
                     } else {
                         "Every terminal order has been reported to its Lieferant."
                     },
@@ -294,8 +294,8 @@ impl ProcessdMcpHandler {
                 "**IFTSTA 21039 sweep**\n\n\
                  **Step 1 — `get_sperr_stats`**\n\
                  - `iftsta_stuck = 0`: nothing to do. Any `iftsta_outstanding` are \
-                   dispatches in flight; the retry worker is on them.\n\
-                 - `iftsta_stuck > 0`: those orders exhausted the retry budget. Each \
+                   dispatches in flight; the outbox is delivering them.\n\
+                 - `iftsta_stuck > 0`: those orders' IFTSTA commands were dead-lettered. Each \
                    one is a Lieferant who does not know what happened to their \
                    Sperrauftrag, and a `gpke-sperrung-lf` process that cannot close.\n\n\
                  **Step 2 — diagnose, do not re-run**\n\
@@ -309,9 +309,9 @@ impl ProcessdMcpHandler {
                  queue by another route and there is no market correspondent to \
                  report to.\n\n\
                  **Step 3 — after the cause is fixed**\n\
-                 Reset `iftsta_attempts` for the affected order and the worker picks it \
-                 up again on its next pass. The retry re-uses the same idempotency key, \
-                 so a message that did reach makod is not sent twice.\n\n\
+                 Requeue the order's dead-lettered command (`processd-sperr-iftsta-<id>` \
+                 in `event_outbox`) and the outbox worker delivers it again under the \
+                 same idempotency key.\n\n\
                  **Do not** re-run `PUT .../execute`. The order is already terminal \
                  and that route claims on `status = 'pending'`, so it returns 404 and \
                  dispatches nothing.\n\n\

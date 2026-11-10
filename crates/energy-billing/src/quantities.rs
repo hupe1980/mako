@@ -1087,10 +1087,11 @@ pub struct Quantities {
     ///
     /// ## Data source
     ///
-    /// The caller supplies it: `billingd` takes it from the calculation
-    /// request's `energy_share` field and does not fetch it. The community's
-    /// allocation is served by `edmd` (`GET /api/v1/sharing/{community_id}/allocation`)
-    /// for the caller to read.
+    /// `billingd` reads it from `edmd`
+    /// (`GET /api/v1/sharing/participants/{malo_id}/allocation`): the
+    /// participant's sum of capped quarter-hour shares, divided multiply-first.
+    /// A SHARING period without one is refused there, not billed without the
+    /// credit.
     pub energy_share: Option<EnergyShareMeterInput>,
 }
 

@@ -919,12 +919,13 @@ pub fn apply_vertrag(
 /// `E_0615` / `E_3008` — what this deployment can say about its own statutory
 /// supply duty for the Marktlokation the NB just assigned it.
 ///
-/// Two of the three Prüfschritte are answerable from configuration and the
-/// supply state; the third is not, and says so.
+/// `netzebene` is the Marktlokation's BO4E `Netzebene` from `marktd`.
 #[must_use]
 pub fn eog_zustaendigkeit(
     config: &LfModuleConfig,
     versorgung: Option<&VersorgungsStatusRecord>,
+    anfrage: &LfAnfrage,
+    netzebene: Option<&str>,
 ) -> mako_pruefung::EogZustaendigkeit {
     // Prüfschritt 20 — Zuständigkeit. A declared list makes both answers
     // possible; an empty one makes neither, because „we hold no Netzgebiet on
@@ -940,29 +941,71 @@ pub fn eog_zustaendigkeit(
         })
     };
 
-    // Prüfschritt 50 — „Besteht eine gesetzliche Pflicht zur Grund- oder
-    // Ersatzversorgung …?" A Marktlokation that already has a supplier is not a
-    // Grund-/Ersatzversorgungsfall, and `marktd`'s supply state says so
-    // positively. The converse is *not* symmetric: `Unbeliefert` in our records
-    // does not establish that the statutory case has arisen — an Einzug the ERP
-    // has not booked yet looks identical — so it stays unknown and escalates.
-    let gesetzliche_pflicht = versorgung.and_then(|vs| {
-        matches!(vs.lieferstatus, LieferStatus::Beliefert)
-            .then_some(false)
-            .filter(|_| !vs.aktive().any(|z| z.lf_mp_id == config.own_mp_id))
+    // Prüfschritt 30 — „Wurden die Fristen zur Anmeldung eingehalten?" GPKE
+    // Teil 2 Kap. 2.3.2.2 Nr. 1 (S. 35 f.): a Zuordnungsbeginn in the future
+    // takes the window 00:00–13:00 Uhr of the letzter WT before it; one that is
+    // not takes „unverzüglich", measured from when the Zuordnungsgrund arose,
+    // which nothing here records — that case stays unknown and escalates.
+    let frist_eingehalten = anfrage.termin.and_then(|zuordnungsbeginn| {
+        mako_fristen::vorlauf::eog_ankuendigung_fristgerecht(
+            anfrage.eingang,
+            zuordnungsbeginn,
+            mako_fristen::HolidayCalendar::BdewMaKo,
+        )
     });
 
     mako_pruefung::EogZustaendigkeit {
         zustaendig,
-        // Prüfschritt 30 — „Wurden die Fristen zur Anmeldung eingehalten?"
-        // GPKE Teil 2 § 2.3 lets the Zuordnungsbeginn of an Ersatz-/Grund-
-        // versorgung lie in the past, so there is no Vorlauffrist on the wire to
-        // measure. `A03` is an operator finding, and an unknown verdict here is
-        // a pass rather than an escalation because the step has nothing to
-        // evaluate.
-        frist_eingehalten: None,
-        gesetzliche_pflicht,
+        frist_eingehalten,
+        gesetzliche_pflicht: gesetzliche_pflicht(config, versorgung, anfrage, netzebene),
     }
+}
+
+/// `E_0615` Prüfschritt 50 — „Besteht eine gesetzliche Pflicht zur Grund- oder
+/// Ersatzversorgung, oder eine vertragliche Pflicht zur Ersatzbelieferung bzw.
+/// Übergangsversorgung?" (EBD 4.3 Kap. 6.7.1, S. 89).
+///
+/// - **nein** — a Marktlokation another supplier holds at the Zuordnungsbeginn
+///   is no Grund-/Ersatzversorgungsfall, and `marktd`'s supply state says so.
+/// - **ja** — the gesetzliche Ersatzversorgung of § 38 Abs. 1 Satz 1 EnWG:
+///   „Sofern Letztverbraucher über das Energieversorgungsnetz der allgemeinen
+///   Versorgung in Niederspannung oder Niederdruck Energie beziehen, ohne dass
+///   dieser Bezug einer Lieferung oder einem bestimmten Liefervertrag
+///   zugeordnet werden kann, gilt die Energie als von dem Unternehmen
+///   geliefert, das nach § 36 Abs. 1 berechtigt und verpflichtet ist." So:
+///   this supplier is the Grundversorger of the Netzgebiet (Prüfschritt 20),
+///   the Marktlokation is in Niederspannung or Niederdruck, and no other
+///   supplier holds it at the Zuordnungsbeginn.
+/// - **unknown** — everything else, including the two contractual grounds the
+///   UTILMD AHB Strom 2.2 makes bilateral: `E06` Ersatzbelieferung (`[580]`)
+///   and `ZZD` Übergangsversorgung (`[681]`).
+fn gesetzliche_pflicht(
+    config: &LfModuleConfig,
+    versorgung: Option<&VersorgungsStatusRecord>,
+    anfrage: &LfAnfrage,
+    netzebene: Option<&str>,
+) -> Option<bool> {
+    let vs = versorgung?;
+    let fremd = |z: &&mako_markt::repository::LfZuordnung| z.lf_mp_id != config.own_mp_id;
+    if matches!(vs.lieferstatus, LieferStatus::Beliefert) && vs.aktive().any(|z| fremd(&z)) {
+        return Some(false);
+    }
+    if anfrage.grund_ist("E06") || anfrage.grund_ist("ZZD") {
+        return None;
+    }
+    let grundversorger = config
+        .grundversorgungs_netzgebiete
+        .iter()
+        .any(|nb| nb == &vs.nb_mp_id);
+    let niederspannung = matches!(netzebene, Some("NSP" | "ND"));
+    let zuordnungsbeginn = anfrage.termin?;
+    // A supplier holds it at the Zuordnungsbeginn unless its assignment ends
+    // before; one with no stated start is read as holding it.
+    let gehalten = vs.zuordnungen.iter().filter(fremd).any(|z| {
+        z.zuordnungsbeginn.is_none_or(|b| b <= zuordnungsbeginn)
+            && z.zuordnungsende.is_none_or(|e| e > zuordnungsbeginn)
+    });
+    (grundversorger && niederspannung && !gehalten).then_some(true)
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
@@ -1003,7 +1046,30 @@ pub async fn process_lf_antwort(
             |e| warn!(%e, malo_id = %payload.anfrage.malo_id, "processd LF: marktd fetch failed"),
         )?;
 
-    payload.eog_zustaendigkeit = eog_zustaendigkeit(config, versorgung.as_ref());
+    // The Zuordnungsermächtigung is granted per Bilanzierungsgebiet (MaBiS
+    // Kap. 10.2.1), which is a Marktlokations-Stammdatum rather than a supply
+    // state — so it is fetched only for the two processes that need it. The
+    // E/G Zustimmung names a Bilanzkreis by the same key, and its Prüfschritt
+    // 50 reads the Netzebene. A lookup failure leaves both unknown, and the
+    // decision escalates rather than naming a BK authorised for a different
+    // Bilanzierungsgebiet.
+    let malo = if matches!(payload.process.walk, Walk::ZuordnungLf | Walk::AnmeldungEog) {
+        reader
+            .get_malo(&payload.anfrage.malo_id)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    let bilanzierungsgebiet = malo.as_ref().and_then(|m| m.bilanzierungsgebiet.clone());
+
+    payload.eog_zustaendigkeit = eog_zustaendigkeit(
+        config,
+        versorgung.as_ref(),
+        &payload.anfrage,
+        malo.as_ref().and_then(|m| m.netzebene.as_deref()),
+    );
     let anfrage = &payload.anfrage;
     let mut lage = lage_from_versorgung(anfrage, versorgung.as_ref(), &config.own_mp_id);
 
@@ -1020,24 +1086,6 @@ pub async fn process_lf_antwort(
     {
         lage = apply_vertrag(lage, &vertrag, anfrage.termin);
     }
-
-    // The Zuordnungsermächtigung is granted per Bilanzierungsgebiet (MaBiS
-    // § 10.2.1), which is a Marktlokations-Stammdatum rather than a supply
-    // state — so it is fetched only for the one process that needs it. A lookup
-    // failure leaves it unknown, and the decision escalates rather than naming a
-    // BK authorised for a different Bilanzierungsgebiet.
-    // The E/G Zustimmung names a Bilanzkreis by the same key.
-    let bilanzierungsgebiet =
-        if matches!(payload.process.walk, Walk::ZuordnungLf | Walk::AnmeldungEog) {
-            reader
-                .get_malo(&anfrage.malo_id)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|m| m.bilanzierungsgebiet)
-        } else {
-            None
-        };
 
     let entscheidung = entscheide(
         &payload,
@@ -2177,11 +2225,8 @@ mod tests {
         }
     }
 
-    /// A declared Netzgebiet resolves Prüfschritt 20; the statutory question at
-    /// Prüfschritt 50 still needs an operator unless the records settle it.
-    #[test]
-    fn a_declared_netzgebiet_resolves_the_eog_zustaendigkeit() {
-        let cfg = LfModuleConfig {
+    fn eog_cfg() -> LfModuleConfig {
+        LfModuleConfig {
             marktd_url: String::new(),
             marktd_api_key: SecretString::from(String::new()),
             vertragd_url: None,
@@ -2194,15 +2239,40 @@ mod tests {
             eog_auto_respond: false,
             eog_versorgungsart: None,
             eog_abrechnungsintervall_monate: None,
+        }
+    }
+
+    /// A 55013 received Thu 20.08.2026 11:00 Uhr for a Zuordnungsbeginn
+    /// Fri 21.08.2026 — inside GPKE Teil 2 Kap. 2.3.2.2 Nr. 1 Frist I.
+    fn eog_payload(extra: serde_json::Value) -> Option<LfAnfragePayload> {
+        let mut data = serde_json::json!({
+            "transaktionsgrund_ergaenzung": "ZW4",
+            "transaktionsgrund": "Z36",
+            "process_date": "2026-08-21",
+        });
+        if let (Some(d), Some(e)) = (data.as_object_mut(), extra.as_object()) {
+            for (k, v) in e {
+                d.insert(k.clone(), v.clone());
+            }
+        }
+        LfAnfragePayload::parse(&event(55_013, data))
+    }
+
+    /// A declared Netzgebiet resolves Prüfschritt 20.
+    #[test]
+    fn a_declared_netzgebiet_resolves_the_eog_zustaendigkeit() {
+        let Some(p) = eog_payload(serde_json::json!({})) else {
+            return;
         };
+        let cfg = eog_cfg();
         let vs = make_vs(LieferStatus::Unbeliefert, None);
-        let z = eog_zustaendigkeit(&cfg, Some(&vs));
+        let z = eog_zustaendigkeit(&cfg, Some(&vs), &p.anfrage, Some("NSP"));
         assert_eq!(z.zustaendig, Some(true), "the MaLo's NB is our Netzgebiet");
 
         let mut other = make_vs(LieferStatus::Unbeliefert, None);
         other.nb_mp_id = "9911111111111".to_owned();
         assert_eq!(
-            eog_zustaendigkeit(&cfg, Some(&other)).zustaendig,
+            eog_zustaendigkeit(&cfg, Some(&other), &p.anfrage, Some("NSP")).zustaendig,
             Some(false)
         );
 
@@ -2211,7 +2281,78 @@ mod tests {
             grundversorgungs_netzgebiete: Vec::new(),
             ..cfg
         };
-        assert_eq!(eog_zustaendigkeit(&empty, Some(&vs)).zustaendig, None);
+        assert_eq!(
+            eog_zustaendigkeit(&empty, Some(&vs), &p.anfrage, Some("NSP")).zustaendig,
+            None
+        );
+    }
+
+    /// A 55013 the records settle is decided, not escalated: inside its Frist
+    /// (Prüfschritt 30) for an unsupplied Marktlokation in Niederspannung in
+    /// this Grundversorger's Netzgebiet, the § 38 Abs. 1 EnWG Ersatzversorgung
+    /// holds (Prüfschritt 50) and `E_0615` agrees with `A09` (EBD 4.3 Kap.
+    /// 6.7.1, S. 89).
+    #[test]
+    fn a_decidable_55013_is_decided() {
+        let Some(p) = eog_payload(serde_json::json!({})) else {
+            return;
+        };
+        let cfg = eog_cfg();
+        let vs = make_vs(LieferStatus::Unbeliefert, None);
+        let z = eog_zustaendigkeit(&cfg, Some(&vs), &p.anfrage, Some("NSP"));
+        assert_eq!(z.frist_eingehalten, Some(true));
+        assert_eq!(z.gesetzliche_pflicht, Some(true));
+        let p = LfAnfragePayload {
+            eog_zustaendigkeit: z,
+            ..p
+        };
+        let d = entscheide(&p, &LfVertragslage::default(), &Default::default());
+        assert_eq!(
+            d.as_antwort().map(|a| a.code.as_str()),
+            Some("A09"),
+            "{d:?}"
+        );
+
+        // Outside the window — a Zuordnungsbeginn Mon 24.08. takes the morning
+        // of Fri 21.08. — the Frist is not kept, and `E_0615` refuses `A03`.
+        let early =
+            eog_payload(serde_json::json!({ "process_date": "2026-08-24" })).expect("routed");
+        let z = eog_zustaendigkeit(&cfg, Some(&vs), &early.anfrage, Some("NSP"));
+        assert_eq!(z.frist_eingehalten, Some(false));
+        let early = LfAnfragePayload {
+            eog_zustaendigkeit: z,
+            ..early
+        };
+        let d = entscheide(&early, &LfVertragslage::default(), &Default::default());
+        assert_eq!(
+            d.as_antwort().map(|a| a.code.as_str()),
+            Some("A03"),
+            "{d:?}"
+        );
+
+        // A Zuordnungsbeginn already reached takes Frist II, „unverzüglich",
+        // which nothing measures.
+        let reached =
+            eog_payload(serde_json::json!({ "process_date": "2026-08-20" })).expect("routed");
+        let z = eog_zustaendigkeit(&cfg, Some(&vs), &reached.anfrage, Some("NSP"));
+        assert_eq!(z.frist_eingehalten, None);
+
+        // Mittelspannung, or a contractual ground: the statute does not settle it.
+        assert_eq!(
+            eog_zustaendigkeit(&cfg, Some(&vs), &p.anfrage, Some("MSP")).gesetzliche_pflicht,
+            None
+        );
+        let e06 = eog_payload(serde_json::json!({ "transaktionsgrund": "E06" })).expect("routed");
+        assert_eq!(
+            eog_zustaendigkeit(&cfg, Some(&vs), &e06.anfrage, Some("NSP")).gesetzliche_pflicht,
+            None
+        );
+        // Another supplier holds it: no Grund-/Ersatzversorgungsfall.
+        let held = make_vs(LieferStatus::Beliefert, Some("9911111111111"));
+        assert_eq!(
+            eog_zustaendigkeit(&cfg, Some(&held), &p.anfrage, Some("NSP")).gesetzliche_pflicht,
+            Some(false)
+        );
     }
 
     /// The Gas Kündigung answers from its own Codeliste — `Z12`, not `A06` — and

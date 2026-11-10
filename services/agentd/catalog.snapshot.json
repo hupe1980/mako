@@ -537,7 +537,7 @@
       "titel": "Messstellenwechsel",
       "zweck": "Verfolgt Wechsel des Messstellenbetreibers und hängende Ableseaufträge.",
       "version": "2.0.0",
-      "digest": "59755dfca3aa0e23cd28a8eca2a82fce8e13770f032d156bd598d709b0a97d54",
+      "digest": "047bdd3fc7a4b87ec36e1fa9e30fa3642f4d8a6dca182d1389717e30d110ad51",
       "ausloeser": [
         "de.messwert.reading.quality.warning",
         "de.messwert.reading.direct.stored",
@@ -581,7 +581,7 @@
       "titel": "Messwertqualität",
       "zweck": "Findet Lücken in Messwerten, liest ihre Qualität und nennt, welches Ersatzwertverfahren zulässig ist.",
       "version": "2.0.0",
-      "digest": "54274fc8b93b5a273fc4f289978e2ed9e061892ff3fa95acf648eace3dfa5694",
+      "digest": "a6aa0b43b2b73938b04a640d4a647573591a3ee8c21ce6e19a7f4c48b6b68a27",
       "ausloeser": [
         "de.messwert.reading.quality.warning",
         "de.mako.process.completed"
@@ -639,7 +639,7 @@
       "titel": "Dynamische Tarife",
       "zweck": "Findet Kunden mit intelligentem Messsystem, für die ein dynamischer Tarif in Frage kommt.",
       "version": "2.0.0",
-      "digest": "8c9b9e95e2d9394b92bff94b760e8b08c32a7f867b100f3580cb20754c7b0251",
+      "digest": "4be846997caa55c4a0b62a65edbaa9d3669685c19eb6429a64bb344716240684",
       "ausloeser": [
         "de.billing.rechnung.erstellt",
         "de.mako.process.completed"
@@ -824,7 +824,7 @@
       "titel": "Sperraufträge",
       "zweck": "Verfolgt Sperr- und Entsperraufträge und meldet, was über dem gewünschten Termin liegt.",
       "version": "2.0.0",
-      "digest": "37433b7773e52b8bbfc2f38ba8f5e8dcfd0524f66daeb39ddd66660ecce47db6",
+      "digest": "e92a908db03806e2aaf8dd7156c233943ed1585ac8bcfc388de7b3b955cea8ab",
       "ausloeser": [
         "de.accounting.sperrauftrag",
         "de.sperr.*",
@@ -947,7 +947,7 @@
       "titel": "Ersatzwerte",
       "zweck": "Empfiehlt für fehlende Messwerte das Ersatzwertverfahren, mit Begründung.",
       "version": "2.0.0",
-      "digest": "4037994713ebafa6d91096f1dbeb31a0e424bf8b995ee5e7f27c6f69fa845758",
+      "digest": "9b9c71ca77be1c034894540490c3f36e0941f596dfb798fd329663a93156e3dc",
       "ausloeser": [
         "de.messwert.reading.quality.warning",
         "de.mako.process.completed"

@@ -157,8 +157,10 @@ pub(crate) async fn community_allocation(
         .zip(&consumption)
         .map(|((_, _, tenant), series)| (*tenant, series))
         .collect();
-    let allocated = metering::allocation::community::allocate(&plant_series, &inputs, &key)
+    let mut allocated = metering::allocation::community::allocate(&plant_series, &inputs, &key)
         .map_err(|e| unprocessable(e.to_string()))?;
+    multiply_first(&mut allocated, &key)
+        .map_err(|at| unprocessable(format!("the community allocation overflows at {at}")))?;
     Ok(CommunityAllocation {
         plant: plant_series,
         rows: allocated,
@@ -166,6 +168,223 @@ pub(crate) async fn community_allocation(
         key,
         legal_basis,
     })
+}
+
+/// Re-divide each interval's pool multiply-first, for the keys whose fraction
+/// is a quotient.
+///
+/// `metering` 0.25's `community::allocate` forms the fraction first —
+/// `cut(1 ÷ n)` or `cut(cᵢ ÷ Σ c)` — and multiplies the pool by it, so a
+/// three-way equal split of 10 kWh credits 3.333330 kWh each where the share
+/// is 3.333333. A billed share is `pool × wᵢ ÷ Σ w`, multiplied before it
+/// divides and cut to [`metering::precision::ALLOCATION_DP`] places toward
+/// zero; the § 42b Abs. 5 `Pos()` cap and the residual follow from it as
+/// before, so `Σ allocated + residual == pool` still holds per interval.
+///
+/// A [`Constant`](metering::allocation::community::AllocationKey::Constant)
+/// key states its fractions and divides nothing; a
+/// [`Cascading`](metering::allocation::community::AllocationKey::Cascading)
+/// key re-offers what a cap refused and is left as `metering` computed it.
+///
+/// # Errors
+///
+/// The interval start at which a value leaves `Decimal`'s range.
+pub(crate) fn multiply_first(
+    rows: &mut [metering::allocation::community::AllocationRow],
+    key: &metering::allocation::community::AllocationKey,
+) -> Result<(), OffsetDateTime> {
+    use metering::allocation::community::AllocationKey;
+    use metering::precision::ALLOCATION_DP;
+    use rust_decimal::Decimal;
+
+    let proportional = match key {
+        AllocationKey::Proportional => true,
+        AllocationKey::EqualShares => false,
+        AllocationKey::Constant { .. } | AllocationKey::Cascading { .. } => return Ok(()),
+    };
+    for row in rows {
+        let at = row.from;
+        let pool = row.pool();
+        let weights: Vec<Decimal> = row
+            .shares
+            .iter()
+            .map(|s| {
+                if proportional {
+                    s.consumption.max(Decimal::ZERO)
+                } else {
+                    Decimal::ONE
+                }
+            })
+            .collect();
+        let total = weights
+            .iter()
+            .try_fold(Decimal::ZERO, |acc, w| acc.checked_add(*w))
+            .ok_or(at)?;
+        let mut taken = Decimal::ZERO;
+        for (share, weight) in row.shares.iter_mut().zip(&weights) {
+            let nominal = if total.is_zero() {
+                Decimal::ZERO
+            } else {
+                let dividend = pool.checked_mul(*weight).ok_or(at)?;
+                let mut q = dividend
+                    .checked_div(total)
+                    .ok_or(at)?
+                    .trunc_with_scale(ALLOCATION_DP);
+                // `checked_div` rounds its 28th digit; a quotient rounded up
+                // across the cut is one unit too large, and one unit back
+                // restores `q × Σ w ≤ pool × wᵢ`.
+                if q.checked_mul(total).ok_or(at)? > dividend {
+                    q -= Decimal::new(1, ALLOCATION_DP);
+                }
+                q
+            };
+            share.share = nominal;
+            share.allocated = nominal.min(share.consumption.max(Decimal::ZERO));
+            taken = taken.checked_add(share.allocated).ok_or(at)?;
+        }
+        row.residual = pool - taken;
+    }
+    Ok(())
+}
+
+/// The `(plant, tenant)` Messlokationen of every community whose
+/// `COMMUNITY_SHARE` rule files its tenant's readings under `malo` — the
+/// communities that MaLo takes part in, each once.
+///
+/// The match is on the tenant's own source, not on any source: the plant's
+/// MaLo is named by every participant's rule and is no participant.
+///
+/// # Errors
+///
+/// A failed query, or a stored rule that no longer reads as one.
+pub async fn community_participations(
+    pool: &sqlx::PgPool,
+    tenant: &str,
+    malo: &metering::MaloId,
+) -> anyhow::Result<Vec<(metering::MeloId, metering::MeloId)>> {
+    use crate::domain::virtual_meter::VirtualMeterRule;
+    use anyhow::Context as _;
+    use sqlx::Row as _;
+
+    let rows = sqlx::query(
+        r"SELECT rule_json
+          FROM virtual_meter_configs
+          WHERE tenant = $2
+            AND rule_type = 'COMMUNITY_SHARE'
+            AND rule_json->'COMMUNITY_SHARE'->'sources'
+                  ->>(rule_json->'COMMUNITY_SHARE'->>'tenant') = $1
+          ORDER BY virtual_malo_id",
+    )
+    .bind(malo.as_str())
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("participant query failed (MaLo {malo})"))?;
+    let mut found: Vec<(metering::MeloId, metering::MeloId)> = Vec::new();
+    for row in &rows {
+        let rule_json: serde_json::Value = row.try_get("rule_json")?;
+        let rule = VirtualMeterRule::from_json(&rule_json).with_context(|| {
+            format!("a stored community rule sourcing MaLo {malo} could not be read")
+        })?;
+        if let VirtualMeterRule::CommunityShare { plant, tenant, .. } = rule
+            && !found.contains(&(plant, tenant))
+        {
+            found.push((plant, tenant));
+        }
+    }
+    Ok(found)
+}
+
+/// `GET /api/v1/sharing/participants/{malo_id}/allocation?from=RFC3339&to=RFC3339`
+///
+/// One participant's allocation, found by the Marktlokation its consumption is
+/// filed under: the community is the `COMMUNITY_SHARE` rule whose tenant
+/// Messlokation that MaLo sources, and the figure is the participant's sum of
+/// capped interval shares from [`community_allocation`] — the quantity a
+/// § 42c invoice credits.
+///
+/// `404` when no community names the MaLo, and `422` when two do: one invoice
+/// credits one community's allocation, and picking either would credit the
+/// wrong one.
+pub(crate) async fn get_participant_allocation(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<LastgangParams>,
+) -> impl IntoResponse {
+    use rust_decimal::Decimal;
+
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
+    let malo: metering::MaloId = match malo_id.parse() {
+        Ok(m) => m,
+        Err(e) => return ApiError::bad_request(format!("malo_id: {e}")).into_response(),
+    };
+
+    let found = match community_participations(state.repo.pool(), &state.tenant, &malo).await {
+        Ok(found) => found,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    let (plant, tenant) = match found.as_slice() {
+        [] => {
+            return ApiError::not_found("no community names this MaLo as a participant")
+                .with_fields(serde_json::json!({ "malo_id": malo.as_str() }))
+                .into_response();
+        }
+        [one] => *one,
+        many => {
+            return ApiError::unprocessable_with(
+                "the MaLo is a participant of more than one community; one invoice credits \
+                 one community's allocation"
+                    .to_owned(),
+                serde_json::json!({
+                    "malo_id": malo.as_str(),
+                    "communities": many.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+                }),
+            )
+            .into_response();
+        }
+    };
+
+    let community = match community_allocation(&state, &plant, from, to).await {
+        Ok(c) => c,
+        Err(response) => return response,
+    };
+    let mut allocated_kwh = Decimal::ZERO;
+    let mut production_kwh = Decimal::ZERO;
+    let mut interval_count = 0_usize;
+    for row in &community.rows {
+        production_kwh += row.pool();
+        if let Some(share) = row.share(&tenant) {
+            allocated_kwh += share.allocated;
+            interval_count += 1;
+        }
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "malo_id":              malo.as_str(),
+            "community_id":         plant.as_str(),
+            "tenant_melo_id":       tenant.as_str(),
+            "key":                  serde_json::to_value(&community.key).unwrap_or_default(),
+            "from":                 from,
+            "to":                   to,
+            "interval_count":       interval_count,
+            "allocated_kwh":        allocated_kwh.to_string(),
+            "total_production_kwh": production_kwh.to_string(),
+        })),
+    )
+        .into_response()
 }
 
 /// `GET /api/v1/sharing/{community_id}/allocation?from=RFC3339&to=RFC3339`
@@ -501,46 +720,50 @@ pub(crate) async fn get_sharing_readiness(
                     .is_none_or(crate::domain::register::is_energy_register)
             })
             .max_by_key(|g| g.intervals.len());
-        let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
+        // A dominant register exists only where readings do, and they name
+        // their Sparte: none is assumed for an empty window.
+        let sparte = reads.first().map(|r| r.sparte);
 
-        let (delivery, reasons, resolution, coverage_pct) =
-            match dominant.map(|g| crate::domain::vee::series_of(sparte, g.intervals)) {
-                None => (
-                    Delivery::Absent,
-                    vec![
-                        metering::allocation::sharing::Finding::NoReadings
-                            .as_str()
-                            .to_owned(),
-                    ],
-                    None,
-                    None,
-                ),
-                Some(Err(defect)) => (
-                    Delivery::Insufficient,
-                    vec![defect.code().to_owned()],
-                    None,
-                    None,
-                ),
-                Some(Ok(series)) => {
-                    let (delivery, findings) = assess_delivery(&series, period, threshold);
-                    let covered: i64 = series
-                        .iter()
-                        .filter(|iv| iv.quality().is_billable() && period.contains(iv.from()))
-                        .map(|iv| (iv.to().min(to) - iv.from()).whole_seconds().max(0))
-                        .sum();
-                    let coverage = (Decimal::from(covered) * Decimal::ONE_HUNDRED / window_secs)
-                        .round_dp_with_strategy(
-                            2,
-                            rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                        );
-                    (
-                        delivery,
-                        findings.iter().map(|f| f.as_str().to_owned()).collect(),
-                        Some(series.resolution().to_string()),
-                        Some(coverage),
-                    )
-                }
-            };
+        let (delivery, reasons, resolution, coverage_pct) = match dominant
+            .zip(sparte)
+            .map(|(g, sparte)| crate::domain::vee::series_of(sparte, g.intervals))
+        {
+            None => (
+                Delivery::Absent,
+                vec![
+                    metering::allocation::sharing::Finding::NoReadings
+                        .as_str()
+                        .to_owned(),
+                ],
+                None,
+                None,
+            ),
+            Some(Err(defect)) => (
+                Delivery::Insufficient,
+                vec![defect.code().to_owned()],
+                None,
+                None,
+            ),
+            Some(Ok(series)) => {
+                let (delivery, findings) = assess_delivery(&series, period, threshold);
+                let covered: i64 = series
+                    .iter()
+                    .filter(|iv| iv.quality().is_billable() && period.contains(iv.from()))
+                    .map(|iv| (iv.to().min(to) - iv.from()).whole_seconds().max(0))
+                    .sum();
+                let coverage = (Decimal::from(covered) * Decimal::ONE_HUNDRED / window_secs)
+                    .round_dp_with_strategy(
+                        2,
+                        rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+                    );
+                (
+                    delivery,
+                    findings.iter().map(|f| f.as_str().to_owned()).collect(),
+                    Some(series.resolution().to_string()),
+                    Some(coverage),
+                )
+            }
+        };
 
         let required_action = match delivery {
             Delivery::Delivering => "keine",
@@ -584,4 +807,70 @@ pub(crate) async fn get_sharing_readiness(
         "items":                items,
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::multiply_first;
+    use metering::allocation::community::{AllocationKey, allocate};
+    use metering::{DayBoundary, MeloId, MeterInterval, QualityFlag, Resolution, Series};
+    use rust_decimal::Decimal;
+    use rust_decimal::dec;
+    use time::macros::datetime;
+
+    fn one(kwh: Decimal) -> Series {
+        let iv = MeterInterval::quarter_hour(
+            datetime!(2026-06-01 12:00 UTC),
+            kwh,
+            QualityFlag::Measured,
+        )
+        .expect("an interval");
+        Series::new(Resolution::QUARTER_HOUR, DayBoundary::Strom, vec![iv]).expect("a series")
+    }
+
+    fn melo(n: u8) -> MeloId {
+        format!("DE00012345678900000000000000000{n:02}")
+            .parse()
+            .expect("a MeLo")
+    }
+
+    /// **Invariant: a billed share multiplies before it divides.**
+    ///
+    /// Three equal participants of a 10 kWh pool are each owed
+    /// `10 × 1 ÷ 3`, cut to six places: 3.333333 kWh. Forming the fraction
+    /// first — `cut(1 ÷ 3) = 0.333333`, then `× 10` — credits 3.333330 kWh and
+    /// drops 0.00001 kWh per participant into the residual, which no
+    /// participant is then credited.
+    #[test]
+    fn a_three_way_split_multiplies_before_it_divides() {
+        let plant = one(dec!(10));
+        let tenants = [one(dec!(100)), one(dec!(100)), one(dec!(100))];
+        let inputs: Vec<(MeloId, &Series)> = (1..=3).map(melo).zip(tenants.iter()).collect();
+        for key in [AllocationKey::EqualShares, AllocationKey::Proportional] {
+            let mut rows = allocate(&plant, &inputs, &key).expect("allocates");
+            multiply_first(&mut rows, &key).expect("in range");
+            let row = &rows[0];
+            for s in &row.shares {
+                assert_eq!(s.allocated, dec!(3.333333), "{key:?}: {s:?}");
+            }
+            assert_eq!(row.residual, dec!(0.000001), "{key:?}");
+            assert_eq!(row.allocated() + row.residual, row.pool(), "{key:?}");
+        }
+    }
+
+    /// The § 42b Abs. 5 Satz 4 cap still binds after the re-division: a
+    /// participant is never credited more than it consumed in the interval.
+    #[test]
+    fn the_cap_still_binds_after_the_re_division() {
+        let plant = one(dec!(10));
+        let tenants = [one(dec!(1)), one(dec!(100)), one(dec!(100))];
+        let inputs: Vec<(MeloId, &Series)> = (1..=3).map(melo).zip(tenants.iter()).collect();
+        let key = AllocationKey::EqualShares;
+        let mut rows = allocate(&plant, &inputs, &key).expect("allocates");
+        multiply_first(&mut rows, &key).expect("in range");
+        let row = &rows[0];
+        assert_eq!(row.shares[0].allocated, dec!(1));
+        assert_eq!(row.shares[1].allocated, dec!(3.333333));
+        assert_eq!(row.allocated() + row.residual, row.pool());
+    }
 }

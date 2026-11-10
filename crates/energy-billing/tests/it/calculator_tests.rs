@@ -1655,34 +1655,19 @@ fn eeg_marktpraemie_adds_to_settlement() {
     assert!(has_mp, "Marktpraemie position must appear");
 }
 
+/// § 6 Abs. 1 KWKG gives the KWK-Anlagenbetreiber the Zuschlag „gegenüber dem
+/// Netzbetreiber"; a Lieferant's EEG product owes none, so naming one is
+/// refused rather than credited on top of what the Netzbetreiber pays.
 #[test]
-fn eeg_kwkg_zuschlag_credit_in_eeg_billing() {
-    let (_f, _t) = period();
-    let tariff = j(
+fn an_eeg_product_naming_a_kwkg_zuschlag_is_refused() {
+    let r: Result<Product, _> = serde_json::from_str(
         r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"0","kwkg_zuschlag_ct_per_kwh":"8.0"}"#,
     );
-    let m = EegMeterInput {
-        einspeisung_kwh: dec!(400),
-        ..Default::default()
-    };
-    let r = bill_credit(
-        &tariff,
-        Quantities {
-            eeg: Some(m.clone()),
-            ..Default::default()
-        },
-    );
-    // 400 × 8.0 ct × 1.19 = 38.08 EUR
+    let err = r.expect_err("the KWKG Zuschlag is the Netzbetreiber's");
     assert!(
-        r.brutto_eur > dec!(37) && r.brutto_eur < dec!(39),
-        "KWKG Zuschlag brutto: {}",
-        r.brutto_eur
+        err.to_string().contains("kwkg_zuschlag_ct_per_kwh"),
+        "{err}"
     );
-    let has_kwkg = r
-        .positions
-        .iter()
-        .any(|p| p.description.to_lowercase().contains("kwkg") || p.has_tag("kwkg_zuschlag"));
-    assert!(has_kwkg, "KWKG position must appear in EEG billing");
 }
 
 // ── §42a Gemeinschaftlicher Eigenverbrauch ────────────────────────────────────
@@ -1996,45 +1981,6 @@ fn eeg_negativpreis_suspension_reduces_verguetung() {
     // Both results must satisfy the arithmetic invariant
     r_full.assert_valid();
     r_susp.assert_valid();
-}
-
-#[test]
-fn eeg_kwkg_not_affected_by_negativpreis_suspension() {
-    // §51 only suspends EEG payments. KWKG Zuschlag is NOT suspended (different law).
-    let (_f, _t) = period();
-    let tariff = j(
-        r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"0","kwkg_zuschlag_ct_per_kwh":"8.0"}"#,
-    );
-
-    let m_no_susp = EegMeterInput {
-        einspeisung_kwh: dec!(400),
-        ..Default::default()
-    };
-    let m_susp = EegMeterInput {
-        einspeisung_kwh: dec!(400),
-        kwh_during_negative_epex: Some(dec!(400)),
-    };
-
-    let r_no = bill_credit(
-        &tariff,
-        Quantities {
-            eeg: Some(m_no_susp.clone()),
-            ..Default::default()
-        },
-    );
-    let r_yes = bill_credit(
-        &tariff,
-        Quantities {
-            eeg: Some(m_susp.clone()),
-            ..Default::default()
-        },
-    );
-
-    // KWKG uses full kwh — suspension only affects EEG Vergütung/Marktprämie
-    assert_eq!(
-        r_no.brutto_eur, r_yes.brutto_eur,
-        "KWKG Zuschlag must NOT be affected by §51 EEG suspension"
-    );
 }
 
 // ── BillingResult method coverage ─────────────────────────────────────────────

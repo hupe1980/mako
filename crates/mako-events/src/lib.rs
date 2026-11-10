@@ -89,6 +89,13 @@ pub mod mako {
     /// production `BdewAs4Sender` path does not emit it. The CloudEvent is the
     /// delivery envelope carrying the interchange, not a notification about it.
     pub const EDIFACT_OUTBOUND: &str = "de.mako.edifact.outbound";
+    /// An inbound message was refused into the dead-letter queue, or an
+    /// outbound one was given up after its delivery budget. makod writes it in
+    /// the same transaction as the dead-letter record, so every record has one.
+    /// `data` carries `dead_letter_id`, `reason` (the category label),
+    /// `detail`, `rejected_at` and — where the message named them — `pid`,
+    /// `message_ref`, `message_type`, `sender` and `receiver`.
+    pub const DEAD_LETTER_RECORDED: &str = "de.mako.dead-letter.recorded";
     // Design note: there are deliberately NO per-process outcome types
     // (`de.mako.gpke.lieferbeginn.bestaetigt` and friends). Process outcomes
     // are the generic `PROCESS_*`/`APERAK_*` family — the process family
@@ -656,6 +663,7 @@ pub fn all() -> &'static [&'static str] {
         mako::MALO_IDENTIFIED,
         mako::ABMELDEANFRAGE_BEANTWORTET,
         mako::EDIFACT_OUTBOUND,
+        mako::DEAD_LETTER_RECORDED,
         mako::NETZZUGANG_UEBERMITTLUNGSBEDARF,
         // de.markt.*
         markt::MALO_UPDATED,

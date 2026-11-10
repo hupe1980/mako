@@ -143,6 +143,7 @@ fn gate_findings(stammdaten: mako_engine::payload::Stammdaten) -> Vec<String> {
     crate::orchestrator::edifact_renderer::utilmd_ahb_findings(
         pending,
         TenantId::from_party_id(LF_MP_ID),
+        &latest_format_version(),
     )
     .expect("the 44001 renders")
 }

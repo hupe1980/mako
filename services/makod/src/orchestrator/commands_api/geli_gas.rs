@@ -370,7 +370,11 @@ pub(super) async fn dispatch_geli_eog_anmelden(
             domain_cmd.clone(),
         )
         .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-        super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(
+            state,
+            &latest_format_version(),
+            &out.outbox,
+        )?;
     }
 
     // Duplicate guard: refuse only while an Anfrage this GNB sent for the
@@ -727,7 +731,11 @@ async fn spawn_geli_lf_anmeldung(
             domain_cmd.clone(),
         )
         .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-        super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(
+            state,
+            &latest_format_version(),
+            &out.outbox,
+        )?;
     }
 
     // Duplicate guard — a GNB rejection is terminal and must not retire the
@@ -1153,11 +1161,11 @@ pub(super) async fn dispatch_geli_eog_antwort(
         },
     )?;
 
-    dispatch_to_process_with_state::<GeliGasSupplierChangeWorkflow, _>(
+    dispatch_to_process_in_version::<GeliGasSupplierChangeWorkflow, _>(
         state,
         malo_id.as_str(),
         mako_geli_gas::WORKFLOW_NAME,
-        move |current| {
+        move |current, fv| {
             use mako_engine::workflow::Workflow as _;
             let cmd = GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
@@ -1169,7 +1177,7 @@ pub(super) async fn dispatch_geli_eog_antwort(
             };
             let out = GeliGasSupplierChangeWorkflow::handle(current, cmd.clone())
                 .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, fv, &out.outbox)?;
             Ok(cmd)
         },
     )
@@ -1400,8 +1408,17 @@ async fn original_antwortfrist(
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StammdatenAnfrageAntwortBody {
-    /// The Meldepunkt the Anfrage named; the process is found by it.
-    malo_id: String,
+    /// The Marktlokation the Anfrage named as its Meldepunkt; the process is
+    /// found by it. Exactly one of `malo_id` and `melo_id`.
+    #[serde(default)]
+    malo_id: Option<String>,
+    /// The Messlokation the Anfrage named, where its column formats the
+    /// Meldepunkt as a Zählpunktbezeichnung — the MSB's 44140 and the LF's
+    /// 44162 (UTILMD AHB Gas 1.2 Kap. 5.12.1, S. 149; Kap. 5.12.7, `[951]`).
+    /// The process is found by it, and the Marktlokation whose Stammdaten
+    /// answer it is the one marktd assigns it to on the Änderungsdatum.
+    #[serde(default)]
+    melo_id: Option<String>,
     /// `SG4 STS+E01` DE 9013 — a code of the Antwort column's Codeliste
     /// (`mako_geli_gas::stammdatenaenderung::ANFRAGE_ANTWORTEN`): `ZG2`
     /// „Gültiges Ergebnis nach der Datenprüfung", `ZG0`, `ZG4` or `ZJ5` where
@@ -1493,18 +1510,34 @@ async fn dispatch_geli_stammdaten_anfrage_antwort(
                 "geli.stammdaten.anfrage.beantworten payload: {e}"
             ))
         })?;
-    let malo_id = extract_malo_id(&serde_json::json!({ "malo_id": body.malo_id }))?;
+    // The Meldepunkt the process is keyed on, and whether it is a
+    // Messlokation whose Marktlokation marktd has to name.
+    let (meldepunkt, ueber_melo) = match (&body.malo_id, &body.melo_id) {
+        (Some(malo), None) => (
+            extract_malo_id(&serde_json::json!({ "malo_id": malo }))?.to_string(),
+            false,
+        ),
+        (None, Some(melo)) => (
+            super::extract_melo_id(&serde_json::json!({ "melo_id": melo }))?.to_string(),
+            true,
+        ),
+        _ => {
+            return Err(DispatchError::InvalidPayload(
+                "name the Anfrage's Meldepunkt as exactly one of malo_id and melo_id".to_owned(),
+            ));
+        }
+    };
     let antwort_code = body.antwort_code.trim().to_owned();
 
     let current = super::current_state::<GeliGasStammdatenaenderungWorkflow>(
         state,
-        malo_id.as_str(),
+        &meldepunkt,
         WORKFLOW_NAME,
     )
     .await?;
     let GasStammdatenState::AnfrageOffen(anfrage) = current.offen() else {
         return Err(DispatchError::InvalidPayload(format!(
-            "the Gas Stammdaten process on {malo_id} holds no open Anfrage zur \
+            "the Gas Stammdaten process on {meldepunkt} holds no open Anfrage zur \
              Stammdatenänderung (state {})",
             current.label()
         )));
@@ -1555,9 +1588,16 @@ async fn dispatch_geli_stammdaten_anfrage_antwort(
     };
 
     let stammdaten = match spalte.antwort_pid {
-        // The NB's: marktd's record on the Änderungsdatum.
+        // The NB's: marktd's record on the Änderungsdatum, for the Meldepunkt
+        // or — where it is a Messlokation — the Marktlokation marktd assigns
+        // it to on that day.
         44_142 | 44_157 if traegt_daten => {
             let stichtag = super::eog_stammdaten::stichtag(&anfrage.aenderungsdatum)?;
+            let malo_id = if ueber_melo {
+                malo_der_melo(state, &meldepunkt, stichtag).await?
+            } else {
+                meldepunkt.clone()
+            };
             let record = super::eog_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
             if spalte.antwort_pid == 44_142 {
                 super::eog_stammdaten::gas_44142(&record, &anfrage.angefragt)?
@@ -1568,22 +1608,22 @@ async fn dispatch_geli_stammdaten_anfrage_antwort(
         // `[590]` on both columns: the Messlokationen, whatever the code.
         44_181 | 44_182 => {
             let stichtag = super::eog_stammdaten::stichtag(&anfrage.aenderungsdatum)?;
-            let record = super::eog_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
+            let record = super::eog_stammdaten::lesen(state, &meldepunkt, stichtag).await?;
             super::eog_stammdaten::gas_malo_struktur(&record)
         }
         // The LF's: its own facts.
         44_138 if traegt_daten => {
-            super::eog_stammdaten::lf_44138(malo_id.as_str(), &anfrage.angefragt, &lf)?
+            super::eog_stammdaten::lf_44138(&meldepunkt, &anfrage.angefragt, &lf)?
         }
         44_151 => super::eog_stammdaten::lf_44151(&anfrage.angefragt, &lf)?,
         _ => mako_engine::payload::Stammdaten::default(),
     };
 
-    dispatch_to_process_with_state::<GeliGasStammdatenaenderungWorkflow, _>(
+    dispatch_to_process_in_version::<GeliGasStammdatenaenderungWorkflow, _>(
         state,
-        malo_id.as_str(),
+        &meldepunkt,
         WORKFLOW_NAME,
-        move |current| {
+        move |current, fv| {
             use mako_engine::workflow::Workflow as _;
             let cmd = mako_geli_gas::GasStammdatenCommand::SendAnfrageAntwort {
                 antwort_code,
@@ -1591,11 +1631,61 @@ async fn dispatch_geli_stammdaten_anfrage_antwort(
             };
             let out = GeliGasStammdatenaenderungWorkflow::handle(current, cmd.clone())
                 .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, fv, &out.outbox)?;
             Ok(cmd)
         },
     )
     .await
+}
+
+/// The Marktlokation marktd assigns the Messlokation `melo_id` to on
+/// `stichtag` — the one whose Stammdaten answer an Anfrage keyed on the
+/// Messlokation. Refused naming the Messlokation when marktd assigns it to
+/// none, or to more than one, on that day: either way no single record is the
+/// answer.
+async fn malo_der_melo(
+    state: &CommandsApiState,
+    melo_id: &str,
+    stichtag: time::Date,
+) -> Result<String, DispatchError> {
+    use mako_markt::domain::Lokationstyp;
+    let marktd = state.marktd_client.as_deref().ok_or_else(|| {
+        DispatchError::MarktdUnavailable(
+            "no [marktd] client is configured — the Marktlokation of the Messlokation cannot \
+             be read"
+                .to_owned(),
+        )
+    })?;
+    let tag = stichtag.to_string();
+    let edges = marktd
+        .get_lokationen(melo_id, "melo", Some(&tag))
+        .await
+        .map_err(|e| DispatchError::MarktdUnavailable(e.to_string()))?;
+    let mut malos: Vec<String> = edges
+        .into_iter()
+        .filter_map(|e| match (e.von_typ, e.nach_typ) {
+            (Lokationstyp::Malo, Lokationstyp::Melo) if e.nach_id == melo_id => Some(e.von_id),
+            (Lokationstyp::Melo, Lokationstyp::Malo) if e.von_id == melo_id => Some(e.nach_id),
+            _ => None,
+        })
+        .collect();
+    malos.sort();
+    malos.dedup();
+    match malos.as_slice() {
+        [malo] => Ok(malo.clone()),
+        _ => Err(DispatchError::StammdatenUnvollstaendig {
+            malo_id: melo_id.to_owned(),
+            fehlend: vec![format!(
+                "the one Marktlokation of Messlokation {melo_id} on {tag} — marktd assigns it \
+                 to {}",
+                if malos.is_empty() {
+                    "none".to_owned()
+                } else {
+                    malos.join(", ")
+                }
+            )],
+        }),
+    }
 }
 
 pub(super) fn cmd_geli_stammdaten_aenderung_beantworten<'a>(
@@ -1637,11 +1727,11 @@ async fn dispatch_geli_stammdaten_aenderung_antwort(
     let antwort_code = body.antwort_code.trim().to_owned();
     let malo = malo_id.to_string();
 
-    dispatch_to_process_with_state::<GeliGasStammdatenaenderungWorkflow, _>(
+    dispatch_to_process_in_version::<GeliGasStammdatenaenderungWorkflow, _>(
         state,
         malo_id.as_str(),
         WORKFLOW_NAME,
-        move |current| {
+        move |current, fv| {
             use mako_engine::workflow::Workflow as _;
             if !matches!(current.offen(), GasStammdatenState::ValidationPassed(_)) {
                 return Err(DispatchError::InvalidPayload(format!(
@@ -1653,7 +1743,7 @@ async fn dispatch_geli_stammdaten_aenderung_antwort(
             let cmd = mako_geli_gas::GasStammdatenCommand::SendAntwort { antwort_code };
             let out = GeliGasStammdatenaenderungWorkflow::handle(current, cmd.clone())
                 .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-            super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, fv, &out.outbox)?;
             Ok(cmd)
         },
     )
@@ -1709,17 +1799,32 @@ fn aenderung_gruppen(
     }
 }
 
-/// The Verantwortlicher sends a nicht bilanzierungsrelevante
-/// **Stammdatenänderung**: the NB's 44112 with marktd's record on the
-/// Änderungsdatum, the LF's 44109 with the facts its command states. Each data
-/// group is sent „Wenn Wert innerhalb SG bzw. Segment geändert wird" (`[92]`),
-/// so the command names the changed groups and is refused naming none.
+/// The Änderungen that carry their data whole, and the role that sends each:
+/// the NB's bilanzierungsrelevante 44123, whose `SG8` „Daten der
+/// Marktlokation" is Muss with the Prognosegrundlage and what it implies
+/// (UTILMD AHB Gas 1.2 Kap. 5.11.1, S. 114–116); the NB's 44175, which lists
+/// the Marktlokation and every Messlokation of its new structure (Kap. 5.11.2,
+/// S. 119, `[590]`); the LF's bilanzierungsrelevante 44120, whose `SG8` is
+/// Muss with the Bilanzkreis (Kap. 5.11.4, S. 127).
+fn ganze_aenderung(pid: u32) -> Option<&'static str> {
+    match pid {
+        44_123 | 44_175 => Some("GNB"),
+        44_120 => Some("LFG"),
+        _ => None,
+    }
+}
+
+/// The Verantwortlicher sends a **Stammdatenänderung**: the NB's with
+/// marktd's record on the Änderungsdatum, the LF's with the facts its command
+/// states. On a nicht bilanzierungsrelevante 44112 / 44109 each data group is
+/// sent „Wenn Wert innerhalb SG bzw. Segment geändert wird" (`[92]`), so the
+/// command names the changed groups and is refused naming none.
 ///
-/// The other Änderung PIDs are refused `501` naming the PID: the
-/// bilanzierungsrelevanten 44120 / 44123 make `SG8` „Daten der Marktlokation"
-/// Muss as a whole, the 44175 restructures the Marktlokation, and the
-/// MSB's 44116 / 44117 / 44159 / 44160 and the NB's 44113 to the MSB are
-/// roles makod does not send them in.
+/// The bilanzierungsrelevante 44123 carries marktd's Prognosegrundlage and
+/// what it implies, the 44175 every Messlokation of the Marktlokation
+/// ([`ganze_aenderung`]), the LF's 44120 its Bilanzkreis — each whole, named
+/// by no group. The other Änderung PIDs are refused `501` naming the PID: the
+/// MSB's 44116 / 44117 / 44159 / 44160 and the NB's 44113 to the MSB.
 async fn dispatch_geli_stammdaten_aenderung_senden(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -1738,10 +1843,12 @@ async fn dispatch_geli_stammdaten_aenderung_senden(
             ))
         })?;
     let malo_id = extract_malo_id(&serde_json::json!({ "malo_id": body.malo_id }))?;
-    let Some((rolle, zulaessig)) = aenderung_gruppen(body.pid) else {
+    let ganz = ganze_aenderung(body.pid);
+    let Some((rolle, zulaessig)) = aenderung_gruppen(body.pid).or(ganz.map(|r| (r, &[][..])))
+    else {
         return Err(DispatchError::NotImplemented(format!(
-            "an Änderung {} is not assembled — makod sends the NB's 44112 and the LF's 44109 \
-             (UTILMD AHB Gas 1.2 Kap. 5.10.1, 5.11.3)",
+            "an Änderung {} is not assembled — makod sends the NB's 44112, 44123 and 44175 and \
+             the LF's 44109 and 44120 (UTILMD AHB Gas 1.2 Kap. 5.10.1, 5.11.1–5.11.4)",
             body.pid
         )));
     };
@@ -1765,7 +1872,7 @@ async fn dispatch_geli_stammdaten_aenderung_senden(
         }
         gruppen.push(gruppe);
     }
-    if gruppen.is_empty() {
+    if gruppen.is_empty() && ganz.is_none() {
         return Err(DispatchError::InvalidPayload(format!(
             "gruppen is empty — an Änderung {} sends the groups whose value changed (UTILMD AHB \
              Gas 1.2, Bedingung [92])",
@@ -1774,6 +1881,12 @@ async fn dispatch_geli_stammdaten_aenderung_senden(
     }
     let stichtag = super::eog_stammdaten::stichtag(&body.aenderungsdatum)?;
     super::eog_stammdaten::stichtag(&body.vertragsbeginn)?;
+    if body.bilanzkreis.is_some() && body.pid != 44_120 {
+        return Err(DispatchError::InvalidPayload(format!(
+            "bilanzkreis is a fact of the LF's 44120 and is not carried on a {}",
+            body.pid
+        )));
+    }
 
     let lf_felder = [
         (
@@ -1783,15 +1896,35 @@ async fn dispatch_geli_stammdaten_aenderung_senden(
         ("haushaltskunde", body.haushaltskunde.is_some()),
         ("kunde", body.kunde.is_some()),
     ];
-    let stammdaten = if body.pid == 44_112 {
+    let stammdaten = if rolle == "GNB" {
         if let Some((feld, _)) = lf_felder.iter().find(|(_, gesetzt)| *gesetzt) {
             return Err(DispatchError::InvalidPayload(format!(
-                "the 44112 reads its Stammdaten from marktd — {feld} is a fact of the LF's 44109 \
-                 and is not carried"
+                "the {} reads its Stammdaten from marktd — {feld} is a fact of the LF's 44109 \
+                 and is not carried",
+                body.pid
             )));
         }
         let record = super::eog_stammdaten::lesen(state, malo_id.as_str(), stichtag).await?;
-        super::eog_stammdaten::gas_44112(&record, &gruppen)?
+        match body.pid {
+            44_123 => super::eog_stammdaten::gas_44157(&record)?,
+            44_175 => super::eog_stammdaten::gas_malo_struktur(&record),
+            _ => super::eog_stammdaten::gas_44112(&record, &gruppen)?,
+        }
+    } else if body.pid == 44_120 {
+        if let Some((feld, _)) = lf_felder.iter().find(|(_, gesetzt)| *gesetzt) {
+            return Err(DispatchError::InvalidPayload(format!(
+                "the 44120 carries the Bilanzkreis alone — {feld} is a fact of the LF's 44109"
+            )));
+        }
+        super::eog_stammdaten::lf_44151(
+            &[AngefragteGruppe::Bilanzkreis],
+            &super::eog_stammdaten::LfAnfrageFakten {
+                abrechnungsintervall_monate: None,
+                haushaltskunde: None,
+                kunde: None,
+                bilanzkreis: Some(body.bilanzkreis.as_deref().unwrap_or_default()),
+            },
+        )?
     } else {
         if let Some(m) = body.abrechnungsintervall_monate
             && !mako_markt::commands::ABRECHNUNGSINTERVALLE_MONATE.contains(&m)
@@ -1830,7 +1963,11 @@ async fn dispatch_geli_stammdaten_aenderung_senden(
             domain_cmd.clone(),
         )
         .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
-        super::eog_stammdaten::refuse_what_the_gate_refuses(state, &out.outbox)?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(
+            state,
+            &latest_format_version(),
+            &out.outbox,
+        )?;
     }
 
     let occupancy = find_occupying_process::<GeliGasStammdatenaenderungWorkflow>(

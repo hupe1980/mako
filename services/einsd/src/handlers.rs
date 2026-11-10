@@ -481,10 +481,17 @@ pub fn build_settlement_ce(
             // supersedes an earlier one. Named for that, because a consumer that
             // sums twelve monthly events would charge the year twelve times over.
             //
-            // Never netted into `settlement_eur`. §52 Abs. 6 Satz 2 permits the
-            // Aufrechnung against the §19 Abs. 1 claim, but that is the ledger's
-            // decision and it has to be able to see both sides to make it.
+            // Never netted into `settlement_eur`: the receipt and its Gutschrift
+            // state the whole § 19 Abs. 1 claim, and an elected set-off travels
+            // beside it as `sect52.aufgerechnet_eur`, which accountingd records
+            // as the Aufrechnung that pays that much of the claim.
             "pflichtzahlung_kumuliert_eur": result.pflichtzahlung_kumuliert_eur,
+            // § 52 — what this month adds to that claim (`monat_eur`, negative
+            // where an Abs. 3 cure reduces it), the part set off against this
+            // receipt's § 19 Abs. 1 claim under `[policy] sect52_aufrechnung`
+            // (`aufgerechnet_eur`, Abs. 6 Satz 2) and the part owed apart from
+            // the payout (`rest_eur`, Abs. 6 Satz 1). Null where no claim runs.
+            "sect52": result.sect52,
         }),
     )
     .with_id(ce_id.to_string());
@@ -557,19 +564,21 @@ pub async fn enqueue_settlement_ce(
     Ok(())
 }
 
-/// Emit `de.eeg.anlage.foerderung-auslaufend` for a plant about to expire.
-pub async fn emit_foerderung_alert_ce(
+/// Enqueue `de.eeg.anlage.foerderung-auslaufend` for a plant about to expire,
+/// on the caller's transaction — the one that records the alert as sent, so
+/// the mark and the event commit together.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` when the enqueue fails.
+pub async fn enqueue_foerderung_alert_ce(
+    conn: &mut sqlx::PgConnection,
     cfg: &EinsdConfig,
-    client: &reqwest::Client,
     tr_id: &str,
     malo_id: &str,
     foerderendedatum: time::Date,
     days_remaining: i64,
-) {
-    let Some(webhook_url) = cfg.erp_webhook_url.as_deref() else {
-        return;
-    };
-
+) -> Result<(), sqlx::Error> {
     let ce = mako_service::CloudEvent::new(
         mako_service::source("einsd", &cfg.tenant),
         mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
@@ -581,28 +590,26 @@ pub async fn emit_foerderung_alert_ce(
             "days_remaining": days_remaining,
         }),
     );
-
-    let secret = cfg.erp_hmac_secret.as_deref().map(str::as_bytes);
-    if let Err(e) = mako_service::post_ce_with_retry(client, webhook_url, &ce, secret).await {
-        tracing::warn!(tr_id, error = %e, "einsd: förderung alert delivery failed");
-    }
+    mako_service::outbox::enqueue(conn, &ce).await
 }
 
-/// Emit `de.eeg.settlement.batch-due` when a monthly settlement batch is due.
+/// Enqueue `de.eeg.settlement.batch-due` when a monthly settlement batch is due.
 ///
-/// The auto-settle worker fires this at the start of its monthly run so the
+/// The auto-settle worker enqueues this at the start of its monthly run so the
 /// `einsd-batch-agent` in `agentd` can run its §52 sweep / review over the same
-/// batch. Best-effort (an orchestration signal, not a payout).
-pub async fn emit_batch_due_ce(
+/// batch. Nothing re-derives the signal once the run has started, so it rides
+/// the outbox rather than a single POST.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` when the enqueue fails.
+pub async fn enqueue_batch_due_ce(
+    pool: &PgPool,
     cfg: &EinsdConfig,
-    client: &reqwest::Client,
     billing_year: i16,
     billing_month: i16,
     unsettled_count: usize,
-) {
-    let Some(webhook_url) = cfg.erp_webhook_url.as_deref() else {
-        return;
-    };
+) -> Result<(), sqlx::Error> {
     let ce = mako_service::CloudEvent::new(
         mako_service::source("einsd", &cfg.tenant),
         mako_events::eeg::SETTLEMENT_BATCH_DUE,
@@ -613,10 +620,9 @@ pub async fn emit_batch_due_ce(
             "unsettled_plants": unsettled_count,
         }),
     );
-    let secret = cfg.erp_hmac_secret.as_deref().map(str::as_bytes);
-    if let Err(e) = mako_service::post_ce_with_retry(client, webhook_url, &ce, secret).await {
-        tracing::warn!(error = %e, "einsd: batch-due signal delivery failed");
-    }
+    let mut tx = pool.begin().await?;
+    mako_service::outbox::enqueue(&mut tx, &ce).await?;
+    tx.commit().await
 }
 
 // ── EEG Anlage CRUD ───────────────────────────────────────────────────────────
@@ -1050,9 +1056,10 @@ pub struct MarktwertQuery {
 /// **two different series**, and which one a plant settles on follows its
 /// Inbetriebnahme/Zuschlag date (Nr. 2), never the operator's choice.
 ///
-/// `erzeugungsart` must match an `erzeugungsart` column value (e.g.
-/// `WIND_ONSHORE`, `SOLAR_AUFDACH`, `BIOMASSE`) or `DEFAULT` for the generic
-/// fallback row.
+/// `erzeugungsart` is `SOLAR`, `WIND_ONSHORE` or `WIND_OFFSHORE` for the
+/// Anlage 1 Nr. 3.3 / 4.3 values, a Nr. 3.2 technology (`BIOMASSE`, …), or
+/// `DEFAULT` for the spot mean, which only Nr. 3.2 Energieträger read. A solar
+/// Bauform is refused (`crate::pg::marktwert_schluessel_pruefen`).
 ///
 /// A **Monatsmarktwert** needs `billing_month` and is final when published. A
 /// **Jahresmarktwert** takes no month and may be `vorlaeufig` — the ÜNB publish
@@ -2804,6 +2811,9 @@ pub async fn post_regionalnachweis(
 ///
 /// Record a granted per-kWh Stromsteuerbefreiung for grid-transited electricity
 /// (§53c EEG 2023). The schema rejects an amount above the §3 StromStG full rate.
+/// A retried POST answers `200` with the row on file; a row starting later
+/// closes the one in force (`geschlossen`); a second figure on the same day or
+/// one overlapping a later row is refused (`422`).
 ///
 /// **Cedar action**: `manage-lifecycle`
 pub async fn post_stromsteuerbefreiung(
@@ -2832,13 +2842,18 @@ pub async fn post_stromsteuerbefreiung(
     )
     .await
     {
-        Ok(id) => (
-            StatusCode::CREATED,
+        Ok(erfasst) => (
+            if erfasst.neu {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
             Json(serde_json::json!({
-                "id": id,
+                "id": erfasst.id,
                 "tr_id": tr_id,
                 "paragraph": "§53c EEG 2023",
                 "abzug_ct_kwh": req.befreiung_ct_kwh,
+                "geschlossen": erfasst.geschlossen,
             })),
         )
             .into_response(),

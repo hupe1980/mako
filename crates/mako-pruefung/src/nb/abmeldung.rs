@@ -243,6 +243,25 @@ pub fn evaluate_abmeldung(
     e_0607_verbrauchend(anfrage, vs, sparte, today, *config)
 }
 
+/// An escalation at `pruefschritt` when the Abmeldung names no
+/// Transaktionsgrund: the step asks which one it is, and an absent `SG4 STS+7`
+/// is not „none of them".
+fn transaktionsgrund_fehlt(
+    anfrage: &AbmeldungAnfrage,
+    pruefschritt: u16,
+) -> Option<NbEntscheidung> {
+    anfrage
+        .transaktionsgrund
+        .is_none()
+        .then(|| NbEntscheidung::Escalate {
+            reason: format!(
+                "MaLo {}: die Abmeldung nennt keinen Transaktionsgrund (SG4 STS+7), und E_0607 \
+             Prüfschritt {pruefschritt} fragt nach ihm.",
+                anfrage.malo_id
+            ),
+        })
+}
+
 /// Prüfschritt 90 / 570 — „Erfolgt die Aufhebung einer zukünftigen Zuordnung zu
 /// demselben Zeitpunkt, welcher dem Lieferanten im Lieferbeginn bestätigt
 /// wurde?"
@@ -307,7 +326,14 @@ fn e_0607_verbrauchend(
     // ── Prüfschritte 60/90: Aufhebung einer zukünftigen Zuordnung ────────────
     //
     // Strom only: `G_0007` publishes no counterpart, and putting `A06` on a
-    // 44006 would state a code the Gas Codeliste does not contain.
+    // 44006 would state a code the Gas Codeliste does not contain. 60 and 70
+    // each ask „Liegt der Transaktionsgrund … vor?" (EBD 4.3 Kap. 6.3.1,
+    // S. 52 f.); an Abmeldung naming none answers neither.
+    if sparte == Sparte::Strom
+        && let Some(e) = transaktionsgrund_fehlt(anfrage, 60)
+    {
+        return e;
+    }
     if sparte == Sparte::Strom
         && let Some(refusal) = check_aufhebung_zeitpunkt(anfrage, vs, "A06", 90)
     {
@@ -456,6 +482,9 @@ fn e_0607_erzeugend(
     }
 
     // ── 560/570: Aufhebung einer zukünftigen Zuordnung ───────────────────────
+    if let Some(e) = transaktionsgrund_fehlt(anfrage, 560) {
+        return e;
+    }
     if let Some(refusal) = check_aufhebung_zeitpunkt(anfrage, vs, "A23", 570) {
         return refusal;
     }
@@ -574,8 +603,18 @@ fn check_vorlauffrist_gas(
     }
 
     // Lieferantenwechsel: „Wechsel sind nur in die Zukunft gerichtet möglich"
-    // (GeLi Gas 3.0 Kap. 3.2.1).
-    if anfrage.transaktionsgrund.as_deref() == Some("E03") {
+    // (GeLi Gas 3.0 Kap. 3.2.1). A retroactive date is lawful or not by the
+    // Transaktionsgrund alone, so one naming none is not decided here.
+    let Some(grund) = anfrage.transaktionsgrund.as_deref() else {
+        return Some(NbEntscheidung::Escalate {
+            reason: format!(
+                "Rückwirkende Gas-Abmeldung zum {d} (Eingang {today}) ohne Transaktionsgrund \
+                 (SG4 STS+7) — ein rückwirkender Wechsel ist unzulässig, ein Auszug im \
+                 Sechs-Wochen-Fenster nicht."
+            ),
+        });
+    };
+    if grund == "E03" {
         return Some(reject(
             Sparte::Gas,
             "A02",

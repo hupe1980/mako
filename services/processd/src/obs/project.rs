@@ -61,7 +61,7 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
         return Ok(Projected::Ignored);
     }
 
-    let Some(state_val) = ProcessState::from_ce_type(ce_type) else {
+    let Some(state_val) = ProcessState::from_event(ce_type, &event["data"]) else {
         debug!(
             ce_type,
             "processd obs: mako event type without a process state, skipping"

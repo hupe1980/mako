@@ -17,13 +17,6 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-/// `erp_attempts` value at which an ERP delivery is terminally dead-lettered.
-///
-/// [`claim_erp_pending`] excludes rows that have reached it, so it is the single
-/// definition of "unselectable" — `erp_next_attempt_at` is `NOT NULL` and must
-/// never be used as the sentinel.
-pub const DEAD_LETTER_ATTEMPTS: i16 = 5;
-
 /// The BO4E schema version a `Rechnung` was read under.
 ///
 /// Server-derived provenance, taken from the type that parsed it rather than
@@ -201,8 +194,38 @@ pub async fn receipt_outcome(
     .await
 }
 
-pub async fn mark_dispatched(
+/// Conclude a checked receipt: stamp `dispatched_at` when the market answer
+/// went out, and enqueue the receipt's CloudEvent for the ERP, in one
+/// transaction.
+///
+/// The `de.invoic.receipt.*` event states whether the answer went out, so it
+/// cannot commit with the receipt itself; it commits with the stamp that
+/// records the answer, and the `mako_service::outbox` worker delivers it with
+/// retry. A failure before this commit leaves the inbound event unanswered, and
+/// makod redelivers it.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` when the update, the enqueue or the commit fails.
+pub async fn conclude(
     pool: &PgPool,
+    tenant: &str,
+    process_id: Uuid,
+    dispatched_at: Option<OffsetDateTime>,
+    event: Option<&mako_service::CloudEvent>,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    if let Some(at) = dispatched_at {
+        mark_dispatched(&mut *tx, tenant, process_id, at).await?;
+    }
+    if let Some(ce) = event {
+        mako_service::outbox::enqueue(&mut tx, ce).await?;
+    }
+    tx.commit().await
+}
+
+pub async fn mark_dispatched(
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     process_id: Uuid,
     dispatched_at: OffsetDateTime,
@@ -214,7 +237,7 @@ pub async fn mark_dispatched(
     .bind(dispatched_at)
     .bind(process_id)
     .bind(tenant)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -291,223 +314,6 @@ pub async fn dispatch_target(
             antwort,
         },
     ))
-}
-
-/// Mark an ERP notification as delivered.
-///
-/// # Errors
-///
-/// Returns `sqlx::Error` on database failure.
-pub async fn mark_erp_notified(
-    pool: &PgPool,
-    tenant: &str,
-    process_id: Uuid,
-    delivered_at: OffsetDateTime,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE invoic_receipts SET erp_notified_at = $1 \
-         WHERE tenant = $3 AND process_id = $2",
-    )
-    .bind(delivered_at)
-    .bind(process_id)
-    .bind(tenant)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Schedule the retry after a failed ERP delivery.
-///
-/// Backoff: 30 s → 5 min → 30 min → 2 h, then the attempt cap stops it.
-///
-/// This does **not** advance `erp_attempts` — [`claim_erp_pending`] does, in the
-/// same statement that leases the row. Counting here instead made the whole
-/// retry budget depend on this one write landing: lose it (a database error, a
-/// worker killed between the POST and the update) and the row came back due with
-/// its budget untouched, so a receipt the ERP will never accept was POSTed every
-/// lease period for ever — precisely what the cap exists to stop. The inline
-/// first attempt in `handler::emit_receipt_event` is not claimed, so it passes
-/// the attempt count it observed.
-///
-/// The terminal attempt keeps the last backoff rather than an "infinite" one:
-/// `now() + (i64::MAX/2 * INTERVAL '1 second')` raises `interval out of range`,
-/// which aborted the very UPDATE that would have raised `erp_attempts` to the
-/// cap — so the row stayed at 4 and was retried forever. [`DEAD_LETTER_ATTEMPTS`]
-/// alone makes it unselectable.
-///
-/// # Errors
-///
-/// Returns `sqlx::Error` on database failure.
-pub async fn record_erp_failure(
-    pool: &PgPool,
-    tenant: &str,
-    process_id: Uuid,
-    attempts: i16,
-) -> Result<(), sqlx::Error> {
-    let delay_secs: i64 = match attempts {
-        0 => 30,
-        1 => 300,
-        2 => 1_800,
-        _ => 7_200,
-    };
-    sqlx::query(
-        r"UPDATE invoic_receipts
-          SET erp_next_attempt_at = now() + ($1 * INTERVAL '1 second')
-          WHERE tenant = $3 AND process_id = $2",
-    )
-    .bind(delay_secs)
-    .bind(process_id)
-    .bind(tenant)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Dead-letter an ERP notification after a **permanent** rejection (a 4xx — a
-/// mis-addressed or malformed webhook no retry can fix).
-///
-/// Sets `erp_attempts` to the cap in one statement, so the outbox worker never
-/// re-queries it and it surfaces as dead-lettered
-/// (`erp_attempts >= 5 AND erp_notified_at IS NULL`).
-///
-/// # Errors
-///
-/// Returns `sqlx::Error` on database failure.
-pub async fn dead_letter_erp(
-    pool: &PgPool,
-    tenant: &str,
-    process_id: Uuid,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE invoic_receipts SET erp_attempts = $2 \
-         WHERE tenant = $3 AND process_id = $1",
-    )
-    .bind(process_id)
-    .bind(DEAD_LETTER_ATTEMPTS)
-    .bind(tenant)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// A receipt awaiting ERP notification, as claimed by the outbox worker.
-#[derive(Debug)]
-pub struct ErpPendingRow {
-    pub process_id: Uuid,
-    pub pid: i16,
-    pub sender_mp_id: String,
-    pub outcome: String,
-    pub pay_by: Option<OffsetDateTime>,
-    pub findings_count: i64,
-    pub erp_attempts: i16,
-    pub dispatched: bool,
-}
-
-/// Claim the next batch of receipts awaiting ERP notification.
-///
-/// # Why this is an `UPDATE … RETURNING`
-///
-/// A `SELECT … FOR UPDATE SKIP LOCKED` on the pool holds nothing: sqlx runs a
-/// pooled statement in its own implicit transaction, which commits as the query
-/// returns, so the row locks are gone before the caller sees the rows and two
-/// replicas claim the same batch.
-///
-/// Pushing `erp_next_attempt_at` forward *as part of the claim* makes it atomic
-/// without holding a transaction across the HTTP deliveries that follow: a
-/// concurrent worker's `erp_next_attempt_at <= now()` does not match. The lease
-/// equals the poll interval, so a worker that dies mid-batch releases its claim
-/// on the next tick instead of stranding the rows.
-///
-/// # The claim is also what counts the attempt
-///
-/// `erp_attempts` is advanced here and nowhere else on the worker path, because
-/// `erp_attempts >= DEAD_LETTER_ATTEMPTS` *is* the dead-letter state. Advancing
-/// it after the delivery instead left the budget hostage to a write that can
-/// fail: a lost [`dead_letter_erp`] or [`record_erp_failure`] returned the row to
-/// the pending index with its budget intact, and a receipt the ERP had already
-/// refused with a 4xx was re-POSTed every lease period without limit. Counting
-/// at the claim means the budget is spent by the attempt being *made*, so the
-/// row reaches the dead-letter state on its own even when every outcome write is
-/// lost.
-///
-/// # Errors
-///
-/// Returns `sqlx::Error` on database failure.
-pub async fn claim_erp_pending(
-    pool: &PgPool,
-    tenant: &str,
-    limit: i64,
-    lease_secs: i64,
-) -> Result<Vec<ErpPendingRow>, sqlx::Error> {
-    let rows = sqlx::query_as::<
-        _,
-        (
-            Uuid,
-            i16,
-            String,
-            String,
-            Option<OffsetDateTime>,
-            i64,
-            i16,
-            bool,
-        ),
-    >(
-        r"UPDATE invoic_receipts
-             SET erp_attempts        = erp_attempts + 1,
-                 erp_next_attempt_at = now() + ($4 * INTERVAL '1 second')
-          WHERE process_id IN (
-              SELECT process_id FROM invoic_receipts
-               WHERE tenant = $1
-                 AND erp_notified_at IS NULL
-                 AND erp_attempts < $3
-                 AND erp_next_attempt_at <= now()
-               ORDER BY erp_next_attempt_at
-               LIMIT $2
-               FOR UPDATE SKIP LOCKED
-          )
-          RETURNING process_id, pid, sender_mp_id, outcome, pay_by,
-                    -- ::bigint: jsonb_array_length returns int4, which does not
-                    -- decode into the i64 below — the claim failed on every row.
-                    jsonb_array_length(findings)::bigint,
-                    -- The count *before* this attempt, which is what
-                    -- `ErpPendingRow::erp_attempts` means to its readers (the
-                    -- back-off step and the log's attempt number).
-                    -- ::smallint: int2 - int4 is int4, and the i16 below refuses
-                    -- to decode it — the same trap as the ::bigint above.
-                    (erp_attempts - 1)::smallint,
-                    dispatched_at IS NOT NULL",
-    )
-    .bind(tenant)
-    .bind(limit)
-    .bind(DEAD_LETTER_ATTEMPTS)
-    .bind(lease_secs)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(
-            |(
-                process_id,
-                pid,
-                sender_mp_id,
-                outcome,
-                pay_by,
-                findings_count,
-                erp_attempts,
-                dispatched,
-            )| ErpPendingRow {
-                process_id,
-                pid,
-                sender_mp_id,
-                outcome,
-                pay_by,
-                findings_count,
-                erp_attempts,
-                dispatched,
-            },
-        )
-        .collect())
 }
 
 /// Close a dispute after operator negotiation, recording who closed it.

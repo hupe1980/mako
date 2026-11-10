@@ -15,7 +15,7 @@
 
 use time::Date;
 
-use mako_fristen::{HolidayCalendar, add_werktage, berlin_date, next_werktag};
+use mako_fristen::{HolidayCalendar, berlin_date};
 
 use crate::codes::{E_0609_CODES, E_3002_CODES, EBD_ABMELDUNG, EBD_ABMELDUNG_GAS};
 use crate::lf::types::{Bekannt, LfAnfrage, LfEntscheidung, LfVertragslage, Lokationsart};
@@ -109,10 +109,15 @@ pub fn pruefe_abmeldung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntsche
         );
     }
 
-    // Prüfschritt 30/510 — Lieferende zum identischen Abmeldedatum bereits bestätigt?
-    if let (Some(bestaetigt), Some(termin)) = (lage.bestaetigtes_zuordnungsende, anfrage.termin)
-        && bestaetigt == termin
-    {
+    // Prüfschritt 30/510 — „Wurde bereits zum identischen Abmeldedatum … die
+    // Lieferende-Meldung positiv bestätigt?" (EBD 4.3 Kap. 6.4.1, S. 60). An
+    // Abmeldung naming no Abmeldedatum leaves the comparison without a side.
+    let abmeldedatum =
+        match anfrage.termin_oder_eskalation(ebd, if verbrauchend { 30 } else { 510 }) {
+            Ok(t) => t,
+            Err(e) => return *e,
+        };
+    if lage.bestaetigtes_zuordnungsende == Some(abmeldedatum) {
         code!(c("A02", "A21"), 30);
     }
 
@@ -306,14 +311,10 @@ fn naechster_monatserster(von: Date) -> Date {
 /// Werktag — which is inside the MaBiS Erstaufschlag for the month that has
 /// just been supplied, the settlement run that needs the Zuordnung right.
 fn eingang_nach_fuenftem_werktag(anfrage: &LfAnfrage, lieferende: Date) -> bool {
-    let Ok(monatserster) = Date::from_calendar_date(lieferende.year(), lieferende.month(), 1)
-    else {
-        return false;
-    };
-    // The 1st is itself the first Werktag when it falls on one, so the count
-    // starts there rather than a day later.
-    let erster_wt = next_werktag(monatserster, HolidayCalendar::BdewMaKo);
-    let fuenfter_wt = add_werktage(erster_wt, 4, HolidayCalendar::BdewMaKo);
+    let fuenfter_wt = mako_fristen::abmeldung::bkv_deaktivierung_spaetester_uet(
+        lieferende,
+        HolidayCalendar::BdewMaKo,
+    );
     berlin_date(anfrage.eingang) > fuenfter_wt
 }
 
@@ -337,10 +338,12 @@ pub fn pruefe_abmeldung_gas(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEnt
     let termin = anfrage.termin;
 
     // `Z08` — der angefragte Geschäftsvorfall wurde bereits zum gleichen
-    // Zeitpunkt bestätigt.
-    if let (Some(bestaetigt), Some(t)) = (lage.bestaetigtes_zuordnungsende, termin)
-        && bestaetigt == t
-    {
+    // Zeitpunkt bestätigt. Without the Termin the comparison has no side.
+    let t = match anfrage.termin_oder_eskalation(ebd, 0) {
+        Ok(t) => t,
+        Err(e) => return *e,
+    };
+    if lage.bestaetigtes_zuordnungsende == Some(t) {
         gas_code!(list, ebd, "Z08", 0, termin);
     }
 
@@ -361,7 +364,11 @@ pub fn pruefe_abmeldung_gas(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEnt
 
     // `Z09` — Transaktionsgrund und mitgelieferte Daten passen nicht zusammen:
     // a Stilllegung the supplier knows is not happening.
-    if anfrage.grund_ist(crate::STILLLEGUNG) {
+    let grund = match anfrage.transaktionsgrund_oder_eskalation(ebd, 0) {
+        Ok(g) => g,
+        Err(e) => return *e,
+    };
+    if grund == crate::STILLLEGUNG {
         match lage.keine_stilllegung {
             Bekannt::Ja => gas_code!(list, ebd, "Z09", 0, termin),
             Bekannt::Unbekannt => {

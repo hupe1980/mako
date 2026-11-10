@@ -9,15 +9,34 @@ use super::*;
 const IMBALANCE_LEGAL_BASIS: &str =
     "GPKE (BK6-24-174) Teil 1 Kap. 8.4 (Strom) · GaBi Gas 2.1 (BK7-24-01-008) Ziff. 3a (Gas)";
 
-/// The commodity a settlement query balances on, from `?sparte=`.
-///
-/// Defaults to Strom, because that is the calendar-day case and the historic
-/// behaviour of these endpoints. `sparte=gas` selects the 06:00–06:00 Gastag —
-/// the boundary GaBi Gas settles on, and the one an aggregate must use or it
-/// carries six hours of the neighbouring day.
-fn sparte_of(raw: Option<&str>) -> crate::domain::Sparte {
-    raw.and_then(crate::domain::parse_sparte)
-        .unwrap_or(crate::domain::Sparte::Strom)
+/// The commodity a settlement query balances on: `?sparte=`, else the Sparte
+/// the MaLo's readings are stored under (`domain::settlement_sparte`). A gas
+/// period runs on the 06:00–06:00 Gastag, so a read assuming Strom would carry
+/// six hours of the neighbouring day.
+async fn sparte_of(
+    state: &HandlerState,
+    malo_id: &str,
+    raw: Option<&str>,
+) -> Result<crate::domain::Sparte, axum::response::Response> {
+    let stored = match state.repo.latest_read(malo_id, &state.tenant).await {
+        Ok(r) => r.map(|r| r.sparte),
+        Err(crate::domain::error::EdmError::InvalidMaloId { malo_id, reason }) => {
+            return Err(ApiError::bad_request(format!("{malo_id}: {reason}")).into_response());
+        }
+        Err(e) => {
+            return Err(ApiError::internal(
+                anyhow::Error::from(e).context(format!("stored sparte of MaLo {malo_id}")),
+            )
+            .into_response());
+        }
+    };
+    crate::domain::settlement_sparte(raw, stored).map_err(|e| {
+        ApiError::unprocessable_with(
+            e,
+            serde_json::json!({ "expected": crate::domain::Sparte::CODES }),
+        )
+        .into_response()
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,8 +85,9 @@ pub(crate) async fn get_deliveries(
 /// `GET /api/v1/imbalance/{malo_id}/{year}/{month}` query parameters.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ImbalanceParams {
-    /// `strom` (default) · `gas` — the saldo aggregates over the commodity's
-    /// balancing day, and for Gas that is the 06:00 Gastag.
+    /// `strom` · `gas` — the saldo aggregates over the commodity's balancing
+    /// day, and for Gas that is the 06:00 Gastag. Absent, the Sparte the MaLo's
+    /// readings are stored under; with none stored, `422`.
     sparte: Option<String>,
     /// The **bilanzierte** (profile-allocated) quantity for the period, in kWh.
     ///
@@ -119,16 +139,13 @@ pub(crate) async fn get_imbalance(
                             als Parameter zu übergeben.", "legal_basis": IMBALANCE_LEGAL_BASIS })).into_response();
     };
 
+    let sparte = match sparte_of(&state, &malo_id, params.sparte.as_deref()).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     match state
         .repo
-        .imbalance(
-            &malo_id,
-            from,
-            to,
-            &state.tenant,
-            sparte_of(params.sparte.as_deref()),
-            bilanziert_kwh,
-        )
+        .imbalance(&malo_id, from, to, &state.tenant, sparte, bilanziert_kwh)
         .await
     {
         Ok(report) => {
@@ -187,8 +204,9 @@ pub(crate) struct BillingPeriodParams {
     from: Option<String>,
     /// ISO 8601 date `YYYY-MM-DD` — end of billing period (inclusive).
     to: Option<String>,
-    /// `strom` (default) · `gas` · `wasser` · `waerme` — decides whether the
-    /// period runs on calendar days or on the Gastag.
+    /// `strom` · `gas` · `wasser` · `waerme` — decides whether the period runs
+    /// on calendar days or on the Gastag. Absent, the Sparte the MaLo's
+    /// readings are stored under; with none stored, `422`.
     sparte: Option<String>,
 }
 
@@ -235,12 +253,16 @@ pub(crate) async fn get_billing_period(
         return ApiError::bad_request("'to' must be >= 'from'").into_response();
     }
 
+    let sparte = match sparte_of(&state, &malo_id, params.sparte.as_deref()).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     let q = BillingPeriodQuery {
         malo_id: malo_id.clone(),
         period_from,
         period_to,
         tenant: state.tenant.clone(),
-        sparte: sparte_of(params.sparte.as_deref()),
+        sparte,
     };
 
     match state.repo.billing_period(&q).await {

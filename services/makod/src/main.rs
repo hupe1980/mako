@@ -1154,7 +1154,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // to drain on shutdown. Clones go to the REST and AS4 ingest state (so
     // ingest-path rejections land in the durable dead-letter queue, § 147 AO /
     // GoBD), to the outbox workers, and to the EngineBuilder below.
-    let dl_sink = store.as_dead_letter_sink();
+    let dl_sink = store.as_dead_letter_sink(tenant_id);
     let dl_sink_ingest = dl_sink.clone();
     let dl_sink_workers = dl_sink.clone();
 

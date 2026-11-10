@@ -51,6 +51,9 @@ async fn test_pool() -> Option<(PgPool, PgContainer)> {
         .execute(&pool)
         .await
         .expect("apply schema");
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
     Some((pool, container))
 }
 
@@ -245,11 +248,15 @@ async fn the_database_refuses_an_unproven_invoice_template() {
         "a MAHNUNG row may not claim a PDF/A carrier proof",
     );
 
-    // Both Textform kinds store on the same proof, and only on it: a level
+    // The Textform kinds store on the same proof, and only on it: a level
     // that established merely that the template compiled would let a
     // PREISANPASSUNG layout printing none of what § 41 Abs. 5 EnWG requires be
     // rolled out.
-    for kind in [TemplateKind::Mahnung, TemplateKind::Preisanpassung] {
+    for kind in [
+        TemplateKind::Mahnung,
+        TemplateKind::Preisanpassung,
+        TemplateKind::Gebuehrenbescheid,
+    ] {
         let hash = template_store::publish(
             &pool,
             tenant,
@@ -603,6 +610,11 @@ fn a_document<'a>(subject: &'a str, content: &'a [u8]) -> docs::NewDocument<'a> 
     }
 }
 
+/// Delivery on, no relay of any kind configured.
+fn cfg() -> outputd::config::DeliveryConfig {
+    outputd::config::DeliveryConfig::default()
+}
+
 /// Issuing is idempotent on `(tenant, kind, subject_ref)`, and the stored bytes
 /// come back byte-for-byte.
 ///
@@ -615,9 +627,14 @@ async fn issuing_the_same_subject_twice_sends_one_document() {
         return;
     };
     let pdf = b"%PDF-1.7 first".as_slice();
-    let (first, created) = docs::issue(&pool, &a_document("case-1", pdf), &[Channel::Portal])
-        .await
-        .expect("issue");
+    let (first, created) = docs::issue(
+        &pool,
+        &a_document("case-1", pdf),
+        &[Channel::Portal],
+        &cfg(),
+    )
+    .await
+    .expect("issue");
     assert!(created);
     assert_eq!(first.deliveries.len(), 1);
 
@@ -628,6 +645,7 @@ async fn issuing_the_same_subject_twice_sends_one_document() {
         &pool,
         &a_document("case-1", b"%PDF-1.7 second".as_slice()),
         &[Channel::Portal, Channel::Email],
+        &cfg(),
     )
     .await
     .expect("issue again");
@@ -659,7 +677,7 @@ async fn a_channel_with_no_target_is_suppressed_with_its_reason() {
     };
     let mut doc = a_document("case-2", b"%PDF-1.7".as_slice());
     doc.recipient.email = None;
-    let (issued, _) = docs::issue(&pool, &doc, &[Channel::Portal, Channel::Email])
+    let (issued, _) = docs::issue(&pool, &doc, &[Channel::Portal, Channel::Email], &cfg())
         .await
         .expect("issue");
 
@@ -682,15 +700,17 @@ async fn a_channel_with_no_target_is_suppressed_with_its_reason() {
         .iter()
         .find(|d| d.channel == "PORTAL")
         .expect("portal queued");
-    assert_eq!(portal.status, "PENDING");
+    assert_eq!(
+        portal.status, "DELIVERED",
+        "publishing is the portal delivery, recorded at issue"
+    );
 }
 
-/// The worker's claim moves a delivery out of the due set, so two replicas
-/// never send the same document twice — and the claim releases on the backoff,
-/// so a replica that dies mid-send loses nothing.
+/// The portal publication is recorded as delivered, with its evidence, in the
+/// transaction that issues the document; a read is recorded once.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_claimed_delivery_is_not_claimed_again() {
+async fn a_portal_delivery_is_published_at_issue() {
     let Some((pool, _pg)) = test_pool().await else {
         return;
     };
@@ -698,45 +718,28 @@ async fn a_claimed_delivery_is_not_claimed_again() {
         &pool,
         &a_document("case-3", b"%PDF-1.7".as_slice()),
         &[Channel::Portal],
+        &cfg(),
     )
     .await
     .expect("issue");
-
-    let first = docs::claim_due(&pool, TENANT, 10, time::Duration::minutes(5), true)
-        .await
-        .expect("claim");
-    assert_eq!(first.len(), 1);
-    assert_eq!(first[0].attempts, 1, "the claim counts the attempt");
-    assert_eq!(first[0].channel, Channel::Portal);
-
-    let second = docs::claim_due(&pool, TENANT, 10, time::Duration::minutes(5), true)
-        .await
-        .expect("claim again");
-    assert!(second.is_empty(), "the backoff holds the claim");
-
-    docs::record_success(
-        &pool,
-        TENANT,
-        first[0].delivery_id,
-        true,
-        Some(serde_json::json!({"published": "portal-inbox"})),
-    )
-    .await
-    .expect("record success");
-
-    let after = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
-        .await
-        .expect("deliveries");
-    assert_eq!(after[0].status, "DELIVERED");
+    let portal = &issued.deliveries[0];
+    assert_eq!(portal.status, "DELIVERED");
     assert!(
-        after[0].delivered_at.is_some(),
+        portal.delivered_at.is_some(),
         "a DELIVERED row states when — the schema refuses one that does not"
+    );
+    assert_eq!(
+        portal
+            .evidence
+            .as_ref()
+            .and_then(|e| e["published"].as_str()),
+        Some("portal-inbox")
     );
 
     // The portal read receipt: more than § 126b BGB asks for, and exactly what
     // a dispute over a § 41f notice asks about.
     assert!(
-        docs::record_read(&pool, TENANT, first[0].delivery_id)
+        docs::record_read(&pool, TENANT, portal.delivery_id)
             .await
             .expect("record read")
     );
@@ -744,14 +747,29 @@ async fn a_claimed_delivery_is_not_claimed_again() {
         .await
         .expect("deliveries");
     assert!(after[0].read_at.is_some());
+
+    // With delivery disabled nothing is set going.
+    let off = outputd::config::DeliveryConfig {
+        enabled: false,
+        ..cfg()
+    };
+    let (issued, _) = docs::issue(
+        &pool,
+        &a_document("case-3-off", b"%PDF-1.7".as_slice()),
+        &[Channel::Portal],
+        &off,
+    )
+    .await
+    .expect("issue");
+    assert_eq!(issued.deliveries[0].status, "PENDING");
 }
 
-/// A failed attempt stays `PENDING` until the ceiling, then becomes `FAILED` —
+/// A delivery the outbox gave up on becomes `FAILED` with the last error —
 /// the state that says a customer never received something the platform
 /// believes it sent.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_failing_delivery_retries_and_then_gives_up() {
+async fn a_delivery_the_outbox_gave_up_on_is_failed() {
     let Some((pool, _pg)) = test_pool().await else {
         return;
     };
@@ -759,42 +777,39 @@ async fn a_failing_delivery_retries_and_then_gives_up() {
         &pool,
         &a_document("case-4", b"%PDF-1.7".as_slice()),
         &[Channel::Email],
+        &cfg(),
     )
     .await
     .expect("issue");
     let delivery_id = issued.deliveries[0].delivery_id;
+    assert_eq!(
+        outputd::delivery::worker::sweep(&pool, TENANT)
+            .await
+            .unwrap(),
+        0
+    );
 
-    docs::record_failure(
-        &pool,
-        TENANT,
-        delivery_id,
-        "relay answered 503",
-        false,
-        time::Duration::ZERO,
+    sqlx::query(
+        "UPDATE event_outbox SET dead_lettered_at = now(), attempts = 8, \
+         last_error = 'relay answered 503' WHERE event_id = $1",
     )
+    .bind(docs::delivery_key(delivery_id))
+    .execute(&pool)
     .await
-    .expect("record failure");
-    let rows = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
-        .await
-        .unwrap();
-    assert_eq!(rows[0].status, "PENDING", "retryable");
-    assert_eq!(rows[0].last_error.as_deref(), Some("relay answered 503"));
-
-    docs::record_failure(
-        &pool,
-        TENANT,
-        delivery_id,
-        "relay answered 503",
-        true,
-        time::Duration::ZERO,
-    )
-    .await
-    .expect("give up");
+    .unwrap();
+    assert_eq!(
+        outputd::delivery::worker::sweep(&pool, TENANT)
+            .await
+            .unwrap(),
+        1
+    );
     let rows = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
         .await
         .unwrap();
     assert_eq!(rows[0].status, "FAILED");
-    assert!(rows[0].delivered_at.is_none());
+    assert_eq!(rows[0].attempts, 8);
+    assert_eq!(rows[0].last_error.as_deref(), Some("relay answered 503"));
+    assert!(rows[0].next_attempt_at.is_none());
 }
 
 /// A bounce on a delivered notice turns it into the failure it was.
@@ -813,6 +828,7 @@ async fn a_bounce_on_a_delivered_notice_records_the_failure() {
         &pool,
         &a_document("case-bounce", b"%PDF-1.7".as_slice()),
         &[Channel::Email],
+        &cfg(),
     )
     .await
     .expect("issue");
@@ -822,16 +838,9 @@ async fn a_bounce_on_a_delivered_notice_records_the_failure() {
         .await
         .expect("delivered");
     // The bounce DSN, as `POST /api/v1/deliveries/{id}/status` records it.
-    docs::record_failure(
-        &pool,
-        TENANT,
-        delivery_id,
-        "550 5.1.1 mailbox unavailable",
-        true,
-        time::Duration::ZERO,
-    )
-    .await
-    .expect("a bounce on a DELIVERED row is recorded, not refused by the CHECK");
+    docs::record_failure(&pool, TENANT, delivery_id, "550 5.1.1 mailbox unavailable")
+        .await
+        .expect("a bounce on a DELIVERED row is recorded, not refused by the CHECK");
     let rows = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
         .await
         .unwrap();
@@ -857,15 +866,9 @@ async fn a_bounce_on_a_delivered_notice_records_the_failure() {
 ///
 /// The pull model — the print service calls `GET /api/v1/spool`, fetches the
 /// bytes and reports back — is how most Druckdienstleister integrate, and it is
-/// what a deployment with no `postal_relay_url` has chosen. The worker must not
-/// treat it as a failed push: a row claimed every tick and failed with "no
-/// postal_relay_url configured" reaches `FAILED` at `max_attempts`, and since
-/// `postal_spool` lists `PENDING` rows, every letter would silently leave the
-/// spool about half a day after issuing — unprinted, unsent, and visible only
-/// in a status column nobody queries.
-///
-/// The test runs the real worker loop past the retry ceiling, advancing the
-/// backoff clock between passes so the budget would genuinely be spent.
+/// what a deployment with no `postal_relay_url` has chosen. So no push is
+/// enqueued for it: a push would spend a retry budget, reach `FAILED`, and
+/// take the letter out of the spool unprinted.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_postal_delivery_without_a_relay_stays_in_the_spool() {
@@ -876,27 +879,19 @@ async fn a_postal_delivery_without_a_relay_stays_in_the_spool() {
         &pool,
         &a_document("case-post", b"%PDF-1.7".as_slice()),
         &[Channel::Post],
+        &cfg(),
     )
     .await
     .expect("issue");
     assert_eq!(issued.deliveries[0].status, "PENDING");
-
-    // The pull deployment: delivery is on, and no relay of any kind exists.
-    let cfg = outputd::config::DeliveryConfig::default();
-    assert!(cfg.postal_relay_url.is_none());
-    let http = reqwest::Client::new();
-
-    for _ in 0..=cfg.max_attempts + 1 {
-        outputd::delivery::worker::tick(&pool, TENANT, &cfg, &http)
-            .await
-            .expect("tick");
-        // Advance the backoff clock: without this the ceiling is days away and
-        // the loop proves nothing about what happens when it is reached.
-        sqlx::query("UPDATE document_deliveries SET next_attempt_at = now()")
-            .execute(&pool)
-            .await
-            .expect("advance the backoff clock");
-    }
+    let pushed: i64 = sqlx::query_scalar("SELECT count(*) FROM event_outbox")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pushed, 0, "no push is owed for a pulled letter");
+    outputd::delivery::worker::sweep(&pool, TENANT)
+        .await
+        .unwrap();
 
     let rows = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
         .await
@@ -946,6 +941,7 @@ async fn an_unscoped_document_query_returns_nothing() {
         &pool,
         &a_document("case-5", b"%PDF-1.7".as_slice()),
         &[Channel::Portal],
+        &cfg(),
     )
     .await
     .expect("issue");
@@ -993,6 +989,7 @@ async fn the_postal_spool_lists_what_is_waiting() {
         &pool,
         &a_document("case-6", b"%PDF-1.7".as_slice()),
         &[Channel::Post, Channel::Portal],
+        &cfg(),
     )
     .await
     .expect("issue");
@@ -1006,5 +1003,110 @@ async fn the_postal_spool_lists_what_is_waiting() {
             .as_deref()
             .is_some_and(|t| t.contains("Berlin")),
         "the address travels with the spool entry"
+    );
+}
+
+/// A relay that records each push and answers `status`.
+type Pushes = std::sync::Arc<std::sync::Mutex<Vec<(axum::http::HeaderMap, Vec<u8>)>>>;
+
+async fn relay(status: u16) -> (String, Pushes) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let rec = std::sync::Arc::clone(&seen);
+    let app = axum::Router::new().route(
+        "/push",
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let rec = std::sync::Arc::clone(&rec);
+                async move {
+                    rec.lock().unwrap().push((headers, body.to_vec()));
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        r#"{"message_id":"relay-1"}"#,
+                    )
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/push", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (url, seen)
+}
+
+/// A relay outage leaves the Mahnung `PENDING` with its push owed; when the
+/// relay returns the document goes out once, signed under the delivery's id,
+/// and the relay's receipt lands on the row as the evidence.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_relay_outage_delays_the_mahnung_and_never_loses_it() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    const SECRET: &str = "relay-shared-secret";
+    let mut doc = a_document("case-owed", b"%PDF-1.7".as_slice());
+    doc.kind = "MAHNUNG";
+    let (issued, _) = docs::issue(&pool, &doc, &[Channel::Email], &cfg())
+        .await
+        .expect("issue");
+    let id = issued.deliveries[0].delivery_id;
+    let fast = mako_service::outbox::OutboxConfig {
+        backoff: vec![std::time::Duration::ZERO],
+        lease: std::time::Duration::ZERO,
+        ..Default::default()
+    };
+    let worker = |url: String| {
+        outputd::delivery::worker::relay_worker(
+            pool.clone(),
+            TENANT.to_owned(),
+            Channel::Email,
+            url,
+            Some(secrecy::SecretString::from(SECRET)),
+        )
+        .with_config(fast.clone())
+    };
+
+    let (down, _) = relay(503).await;
+    worker(down).flush_once().await.unwrap();
+    let rows = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].status, "PENDING", "an outage is not a failure");
+    assert_eq!(rows[0].attempts, 1);
+
+    let (up, seen) = relay(200).await;
+    let w = worker(up);
+    w.flush_once().await.unwrap();
+    w.flush_once().await.unwrap();
+    let pushes = seen.lock().unwrap().clone();
+    assert_eq!(pushes.len(), 1, "delivered once");
+    let (headers, body) = &pushes[0];
+    assert_eq!(
+        mako_service::webhook::verify_request(Some(SECRET.as_bytes()), headers, body),
+        Ok(Some(mako_service::webhook::WebhookId(docs::delivery_key(
+            id
+        )))),
+        "signed under the delivery, so a retry is the same message"
+    );
+    assert_eq!(
+        headers["authorization"],
+        format!("Bearer {SECRET}").as_str()
+    );
+    let pushed: serde_json::Value = serde_json::from_slice(body).unwrap();
+    assert_eq!(pushed["kind"], "MAHNUNG");
+    assert_eq!(pushed["to"], "erika@example.test");
+
+    let rows = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].status, "SENT");
+    assert!(rows[0].first_sent_at.is_some());
+    assert_eq!(
+        rows[0]
+            .evidence
+            .as_ref()
+            .and_then(|e| e["message_id"].as_str()),
+        Some("relay-1")
     );
 }

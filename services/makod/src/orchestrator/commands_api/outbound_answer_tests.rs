@@ -238,9 +238,12 @@ fn assert_renders_to_its_profile(
 ) {
     let pending =
         mako_engine::outbox::PendingOutbox::new("UTILMD", recipient.as_str(), payload.clone());
-    let findings =
-        crate::orchestrator::edifact_renderer::utilmd_ahb_findings(&pending, state.tenant_id)
-            .expect("the answer renders");
+    let findings = crate::orchestrator::edifact_renderer::utilmd_ahb_findings(
+        &pending,
+        state.tenant_id,
+        &latest_format_version(),
+    )
+    .expect("the answer renders");
     assert!(findings.is_empty(), "{}: {findings:#?}", payload["pid"]);
 }
 

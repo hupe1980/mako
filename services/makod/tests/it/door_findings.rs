@@ -154,7 +154,7 @@ async fn post(
         max_body_bytes: 1024 * 1024,
         partner_store: None,
         tenant_id: tenant,
-        dl_sink: Arc::new(store.as_dead_letter_sink()),
+        dl_sink: Arc::new(store.as_dead_letter_sink(tenant)),
         dispatcher: Some(Arc::new(dispatcher(&store, refused))),
         contrl_ack: None,
     });
@@ -222,9 +222,9 @@ fn assert_passes_the_aperak_ahb(payload: &mako_engine::payload::AperakPayload) -
         .validate()
         .expect("validation runs");
     assert!(
-        report.errors().is_empty(),
+        report.is_sendable(),
         "the door's APERAK fails the APERAK AHB:\n{wire}\n{:?}",
-        report.errors()
+        report.sending_refusals().collect::<Vec<_>>()
     );
     wire
 }

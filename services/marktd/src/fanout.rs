@@ -459,6 +459,8 @@ impl Worker {
         let mut req = self
             .http
             .post(&d.webhook_url)
+            // durable: one `event_delivery` row per subscriber, retried until delivered
+            // or dead-lettered.
             .header("Content-Type", "application/cloudevents+json")
             .timeout(self.config.delivery_timeout)
             .body(body);

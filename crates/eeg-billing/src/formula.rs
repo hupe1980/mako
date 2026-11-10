@@ -63,7 +63,49 @@ fn total(positions: &[SettlePosition]) -> Option<Decimal> {
 /// fall back on, so for a supply period before the approval § 51b reduces
 /// nothing and §§ 51 and 51a govern the plant like any other.
 fn sect51b_verdraengt_sect51(input: &SettleInput) -> bool {
-    input.tariff_source.is_biogas_sect51b() && crate::version::sect51b_anwendbar(input.billing_date)
+    // A straddled period never reaches here: `calculate_settlement` refuses it
+    // first ([`sect51b_zeitraum_geteilt`]).
+    input
+        .tariff_source
+        .sect51b_im_zeitraum(abrechnungszeitraum(input))
+        .unwrap_or(false)
+}
+
+/// The settlement period `[billing_date, last day of its month]`, `None`
+/// without a billing date.
+fn abrechnungszeitraum(input: &SettleInput) -> Option<(time::Date, time::Date)> {
+    let von = input.billing_date?;
+    let bis =
+        time::Date::from_calendar_date(von.year(), von.month(), von.month().length(von.year()))
+            .ok()?;
+    Some((von, bis))
+}
+
+/// § 101 Abs. 2 EEG 2023: a § 51b plant's period the approval falls inside is
+/// refused, never settled as if § 51b reached none of it.
+fn sect51b_zeitraum_geteilt(input: &SettleInput) -> Option<SettleOutput> {
+    let e = input
+        .tariff_source
+        .sect51b_im_zeitraum(abrechnungszeitraum(input))
+        .err()?;
+    Some(SettleOutput {
+        settlement_eur: None,
+        eligible_kwh: input.einspeisemenge_kwh,
+        positions: vec![crate::model::SettlePosition {
+            description: format!("§51b EEG 2023: {e}"),
+            legal_basis: "§101 Abs. 2 EEG 2023".to_owned(),
+            kwh: input.einspeisemenge_kwh.unwrap_or(Decimal::ZERO),
+            rate_ct_kwh: Decimal::ZERO,
+            eur: Decimal::ZERO,
+        }],
+        status: SettlementStatus::GenehmigungImZeitraum,
+        pflichtzahlung_eur: None,
+        pflichtzahlung_faelligkeitsdatum: None,
+        verlaengerungsanspruch_qh: 0,
+        dezentrale_einspeisung_anspruch_verloren: false,
+        billing_days_fraction_applied: None,
+        faelligkeitsdatum: None,
+    })
 }
 
 /// Whether §51 actually bites for this plant in this period.
@@ -452,6 +494,9 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
 /// assert_eq!(out.settlement_eur, Some(d("8.11")));
 /// ```
 pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
+    if let Some(geteilt) = sect51b_zeitraum_geteilt(input) {
+        return geteilt;
+    }
     // ── §52 EEG 2023 Pflichtzahlungen (multiple violations, §52 Abs. 5 cap) ────
     // Every violation is spread over the calendar months it runs in and each
     // month is capped on its own at 10 €/kW — see `sect52_abs5_gedeckelt`.
@@ -1454,10 +1499,9 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             // settlement of an earlier period must not zero the AW — near-zero
             // spot prices were common well before then, and doing so withholds a
             // payment that was owed.
-            if input.tariff_source.is_biogas_sect51b()
-                && crate::version::sect51b_anwendbar(input.billing_date)
-                && epex_ct <= dec!(2)
-            {
+            // § 100 Abs. 37 Satz 2 excludes it for a plant awarded in a
+            // Gebotstermin after 31.12.2022 and before 24.02.2025.
+            if sect51b_verdraengt_sect51(input) && epex_ct <= dec!(2) {
                 // AW = 0 for this period; payment is zero.
                 return SettleOutput {
                     settlement_eur: Some(Decimal::ZERO),

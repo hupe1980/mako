@@ -32,9 +32,12 @@ pub enum ProcessState {
     /// `de.mako.antwortfrist.abgelaufen` received — the GPKE / GeLi Gas
     /// workflow saw its business Antwortfrist lapse unanswered.
     AntwortfristAbgelaufen,
-    /// `de.mako.process.completed` received — happy path finished.
+    /// `de.mako.process.completed` received with a positive verdict — the
+    /// process did what it set out to do.
     Completed,
-    /// `de.mako.aperak.rejected` received — ERC code rejection.
+    /// The counterparty refused: `de.mako.aperak.rejected` (an ERC code), or a
+    /// `de.mako.process.completed` whose verdict is negative — an Ablehnung
+    /// such as a 55003/55080 answering an Anmeldung.
     Rejected,
     /// `de.mako.process.failed` received — unrecoverable failure.
     ///
@@ -44,15 +47,28 @@ pub enum ProcessState {
 }
 
 impl ProcessState {
-    /// Parse from the CE type string.
+    /// The state a CloudEvent moves the process into, from its type and, for a
+    /// `de.mako.process.completed`, the verdict in its `data`.
+    ///
+    /// `de.mako.process.completed` is one type for a Bestätigung and an
+    /// Ablehnung (BK6-24-174 GPKE Teil 2: 55002/55078 confirm an Anmeldung,
+    /// 55003/55080 refuse it): it says the process ended, and `data.accepted` /
+    /// `data.outcome` say how. Keyed on the type alone, every refused Anmeldung
+    /// reads as a supply that started. A completion that states no verdict is
+    /// one that has no refusal to report — a Stammdatenänderung, a delivered
+    /// Messwert — and is `Completed`.
     #[must_use]
-    pub fn from_ce_type(ce_type: &str) -> Option<Self> {
+    pub fn from_event(ce_type: &str, data: &serde_json::Value) -> Option<Self> {
         match ce_type {
             mako_events::mako::PROCESS_INITIATED => Some(Self::Initiated),
             mako_events::mako::APERAK_ACCEPTED => Some(Self::Running),
             mako_events::mako::APERAK_REJECTED => Some(Self::Rejected),
             mako_events::mako::ANTWORTFRIST_ABGELAUFEN => Some(Self::AntwortfristAbgelaufen),
-            mako_events::mako::PROCESS_COMPLETED => Some(Self::Completed),
+            mako_events::mako::PROCESS_COMPLETED => Some(if verdict_is_negative(data) {
+                Self::Rejected
+            } else {
+                Self::Completed
+            }),
             mako_events::mako::PROCESS_FAILED => Some(Self::Failed),
             _ => None,
         }
@@ -110,6 +126,14 @@ impl ProcessState {
     pub fn is_unsuccessful_ending(self) -> bool {
         matches!(self, Self::Rejected | Self::Failed)
     }
+}
+
+/// Whether a completion's `data` states a negative verdict: `accepted: false`,
+/// or `outcome: "rejected"`. Either one refusing is a refusal — a payload whose
+/// two keys disagree must not be read as a confirmation.
+fn verdict_is_negative(data: &serde_json::Value) -> bool {
+    data.get("accepted").and_then(serde_json::Value::as_bool) == Some(false)
+        || data.get("outcome").and_then(serde_json::Value::as_str) == Some("rejected")
 }
 
 /// Deadline risk classification for a live process.
@@ -462,6 +486,45 @@ impl ProcessProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One type carries both answers, so the verdict decides the state: an
+    /// Ablehnung (55003/55080) is a refusal, a Bestätigung (55002/55078) a
+    /// completion, and a completion stating no verdict has none to report.
+    #[test]
+    fn a_completion_is_read_by_its_verdict() {
+        let completed = mako_events::mako::PROCESS_COMPLETED;
+        let read = |data| ProcessState::from_event(completed, &data);
+        assert_eq!(
+            read(serde_json::json!({ "accepted": false, "outcome": "rejected" })),
+            Some(ProcessState::Rejected)
+        );
+        assert_eq!(
+            read(serde_json::json!({ "outcome": "rejected" })),
+            Some(ProcessState::Rejected)
+        );
+        assert_eq!(
+            read(serde_json::json!({ "accepted": false })),
+            Some(ProcessState::Rejected)
+        );
+        // Two keys that disagree are not a confirmation.
+        assert_eq!(
+            read(serde_json::json!({ "accepted": true, "outcome": "rejected" })),
+            Some(ProcessState::Rejected)
+        );
+        assert_eq!(
+            read(serde_json::json!({ "accepted": true, "outcome": "accepted" })),
+            Some(ProcessState::Completed)
+        );
+        assert_eq!(read(serde_json::json!({})), Some(ProcessState::Completed));
+        assert_eq!(
+            ProcessState::from_event(
+                mako_events::mako::APERAK_ACCEPTED,
+                &serde_json::json!({ "accepted": false })
+            ),
+            Some(ProcessState::Running),
+            "only a completion carries the business verdict"
+        );
+    }
 
     fn answered(code: Option<&str>, codeliste: Option<&str>) -> ProcessProjection {
         ProcessProjection {

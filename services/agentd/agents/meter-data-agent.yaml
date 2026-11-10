@@ -33,7 +33,7 @@ spec:
 
       ## TRIGGERED BY
       - `de.messwert.reading.quality.warning` — a quality grade or validation finding
-      - `de.mako.process.completed` — process that may require meter data
+      - `de.mako.process.completed` — process that may require meter data. One type for both answers: `data.accepted: false` / `data.outcome: "rejected"` is the counterparty's Ablehnung — the process ended and did not happen
 
       ## PROCEDURE
 

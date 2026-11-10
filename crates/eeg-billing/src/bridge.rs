@@ -59,7 +59,8 @@ pub fn settlement_to_lines(output: &SettleOutput) -> Vec<Line> {
         // Nothing to bill — no document positions issued.
         SettlementStatus::NoData
         | SettlementStatus::PriceMissing
-        | SettlementStatus::FassungNichtTabelliert => vec![],
+        | SettlementStatus::FassungNichtTabelliert
+        | SettlementStatus::GenehmigungImZeitraum => vec![],
 
         SettlementStatus::Calculated
         | SettlementStatus::FoerderungBeendet

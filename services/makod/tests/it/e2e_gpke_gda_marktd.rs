@@ -295,11 +295,10 @@ fn gated(om: &mako_engine::outbox::OutboxMessage) -> String {
         .validate_on_date(mako_fristen::heute())
         .expect("the AHB validation runs");
     assert!(
-        report.is_valid(),
+        report.is_sendable(),
         "the rendered 55035 violates its AHB profile: {:#?}\n{}",
         report
-            .errors()
-            .iter()
+            .sending_refusals()
             .map(|e| &e.message)
             .collect::<Vec<_>>(),
         text.replace('\'', "'\n"),

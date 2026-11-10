@@ -318,6 +318,8 @@ async fn a_refused_neuanlage_does_not_block_the_next_one() {
         "gpke-neuanlage",
         vec![mako_gpke::NeuanlageCommand::SendAntwort {
             antwort: mako_gpke::LfAntwort::ablehnung("A03", "E_0608"),
+            marktlokation: None,
+            tranche: None,
         }],
     )
     .await;

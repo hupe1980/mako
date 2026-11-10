@@ -540,9 +540,11 @@ CREATE TABLE sperr_orders (
 
     -- ── IFTSTA 21039 dispatch ────────────────────────────────────────────────
     -- `iftsta_dispatched_at IS NULL` on a terminal order is the one state that
-    -- needs work: the LF's gpke-sperrung-lf process cannot close without it. The
-    -- retry worker drains these; `iftsta_attempts` bounds it and
-    -- `iftsta_last_error` says why it is stuck.
+    -- needs work: the LF's gpke-sperrung-lf process cannot close without it.
+    -- The IFTSTA itself is an `event_outbox` command committed with the
+    -- outcome (key `processd-sperr-iftsta-<id>`); its delivery stamps
+    -- `iftsta_dispatched_at`, and its attempts and last error are read off the
+    -- command.
     -- „…spätester ÜT ist der 1. WT nach dem Abschluss des Sperrauftrags"
     -- (GPKE Teil 2 § 3.5.1.2 Nr. 5 / § 3.5.2.2 Nr. 4). Set when the order turns
     -- terminal; an outstanding IFTSTA past this date is a missed Frist, not
@@ -550,16 +552,6 @@ CREATE TABLE sperr_orders (
     iftsta_faellig_am   DATE,
     iftsta_ref          TEXT,
     iftsta_dispatched_at TIMESTAMPTZ,
-    iftsta_attempts     INTEGER     NOT NULL DEFAULT 0,
-    iftsta_last_error   TEXT,
-    -- The claim lease *and* the retry backoff, in one column. A worker takes an
-    -- order by pushing this forward, so a second replica's `<= now()` no longer
-    -- matches it and cannot dispatch the same 21039 — a disconnection order the
-    -- customer's Lieferant would receive twice. NOT NULL with a `now()` default,
-    -- so a newly terminal order is due at once and the column is never a
-    -- sentinel: `iftsta_attempts >= IFTSTA_MAX_ATTEMPTS` is the only unselectable
-    -- state.
-    iftsta_next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     iftsta_escalated_at TIMESTAMPTZ,
 
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -575,15 +567,10 @@ COMMENT ON TABLE sperr_orders IS
     '17115/17117 and by operators; drained by the field team. Terminal orders '
     'are reported to the LF with IFTSTA 21039 (AHB 2.1 §7.2).';
 
-COMMENT ON COLUMN sperr_orders.iftsta_next_attempt_at IS
-    'When this order may next be claimed for an IFTSTA dispatch. The claim '
-    'pushes it forward, which is what stops two replicas sending the same '
-    'Sperrauftrag-Status to the Lieferant.';
-
 COMMENT ON COLUMN sperr_orders.iftsta_dispatched_at IS
     'When the IFTSTA 21039 command reached makod. NULL on a terminal order means '
-    'the Lieferant has not been told the outcome — the retry worker is still '
-    'trying, or gave up and emitted de.sperr.iftsta.ausstehend.';
+    'the Lieferant has not been told the outcome — the outbox is still '
+    'delivering it, or dead-lettered it and de.sperr.iftsta.ausstehend was emitted.';
 
 CREATE INDEX so_tenant_status ON sperr_orders (tenant, status);
 CREATE INDEX so_malo_status   ON sperr_orders (malo_id, status);
@@ -600,6 +587,6 @@ CREATE INDEX so_vorlauf_verletzt ON sperr_orders (tenant, created_at DESC)
 CREATE INDEX so_pending_frist ON sperr_orders (tenant, ausfuehrung_faellig_am)
     WHERE status = 'pending' AND ausfuehrung_faellig_am IS NOT NULL
       AND ausfuehrung_eskaliert_at IS NULL;
--- The retry worker's queue, in the order it is claimed: due first.
-CREATE INDEX so_iftsta_open   ON sperr_orders (tenant, iftsta_next_attempt_at)
+-- Terminal orders still owing their IFTSTA, by Frist — the escalation sweep.
+CREATE INDEX so_iftsta_open   ON sperr_orders (tenant, iftsta_faellig_am)
     WHERE status IN ('executed', 'failed') AND iftsta_dispatched_at IS NULL;

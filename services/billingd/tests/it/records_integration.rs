@@ -65,6 +65,7 @@ fn draft<'a>(
         rechnung_json: json,
         total_netto_eur: netto,
         total_brutto_eur: netto * dec!(1.19),
+        steuerzeilen: &[],
     }
 }
 
@@ -192,6 +193,7 @@ async fn storno(pool: &PgPool, original: Uuid, nr: &str, reason: Option<&str>) -
         &pg::NewBillingRecord {
             total_netto_eur: dec!(-100),
             total_brutto_eur: dec!(-119),
+            steuerzeilen: &[],
             ..draft(dec!(-100), nr, &json)
         },
         original,
@@ -571,6 +573,7 @@ async fn insert_period(
             period_to: to,
             total_netto_eur: brutto / dec!(1.19),
             total_brutto_eur: brutto,
+            steuerzeilen: &[],
             ..draft(brutto, &nr, &json)
         },
     )
@@ -722,6 +725,7 @@ async fn reads_are_tenant_scoped() {
             period_to: date!(2026 - 02 - 28),
             total_netto_eur: dec!(200),
             total_brutto_eur: dec!(238),
+            steuerzeilen: &[],
             ..draft(dec!(200), "BILL-OWNER-2026-02", &json)
         },
     )
@@ -998,6 +1002,7 @@ async fn the_summary_counts_bundles_and_their_children_once() {
                     period_to: date!(2026 - 02 - 28),
                     total_netto_eur: dec!(100),
                     total_brutto_eur: dec!(119),
+                    steuerzeilen: &[],
                     ..draft(dec!(100), &nr, &json)
                 },
             )
@@ -1365,4 +1370,426 @@ async fn a_decided_record_leaves_the_review_queue() {
             .await
             .expect("reviewer");
     assert_eq!(by.as_deref(), Some("anna"));
+}
+
+/// **Invariant: an invoice's Strom- and Energiesteuer lines are stored typed by
+/// the statement that stores the invoice, and a Storno nets them to zero.**
+///
+/// The Steueranmeldung (§ 8 StromStG) is a sum over these rows, grouped by
+/// ground. A line left inside the invoice JSON is a line no declaration
+/// counts; a Storno that carried none would leave the cancelled supply
+/// declared; a re-run of a draft that kept the old lines beside the new
+/// would declare the supply twice.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn tax_lines_are_stored_typed_and_a_storno_nets_them_to_zero() {
+    use billingd::steuerzeilen::{Art, Steuer, Steuerzeile};
+    let Some((pool, _pg)) = test_pool("steuerzeilen").await else {
+        return;
+    };
+    let zeilen = [
+        Steuerzeile {
+            steuer: Steuer::Stromsteuer,
+            art: Art::Regelsatz,
+            rechtsgrundlage: "§ 3 StromStG".to_owned(),
+            menge: dec!(1000),
+            einheit: "kWh".to_owned(),
+            satz_ct: dec!(2.05),
+            betrag_eur: dec!(20.50),
+        },
+        Steuerzeile {
+            steuer: Steuer::Stromsteuer,
+            art: Art::Ermaessigung,
+            rechtsgrundlage: "§ 9 Abs. 2 Nr. 1 StromStG".to_owned(),
+            menge: dec!(200),
+            einheit: "kWh".to_owned(),
+            satz_ct: dec!(1.142),
+            betrag_eur: dec!(2.284),
+        },
+    ];
+    let json = body();
+    let record = |zeilen| pg::NewBillingRecord {
+        steuerzeilen: zeilen,
+        ..draft(dec!(100), "BILL-2026-01", &json)
+    };
+
+    // A re-run of the draft replaces its lines rather than adding to them.
+    pg::insert_billing_record(&pool, &record(&zeilen[..1]))
+        .await
+        .expect("first draft");
+    let original = pg::insert_billing_record(&pool, &record(&zeilen))
+        .await
+        .expect("re-run");
+    let stored = pg::steuerzeilen_of(&pool, TENANT, original)
+        .await
+        .expect("read back");
+    assert_eq!(stored.len(), 2, "two grounds, two rows: {stored:?}");
+    assert_eq!(
+        (
+            stored[1].art.as_str(),
+            stored[1].rechtsgrundlage.as_str(),
+            stored[1].menge
+        ),
+        ("ERMAESSIGUNG", "§ 9 Abs. 2 Nr. 1 StromStG", dec!(200))
+    );
+    assert!(stored.iter().all(|z| z.period_from == date!(2026 - 01 - 01)
+        && z.period_to == date!(2026 - 01 - 31)));
+
+    dispatch(&pool, original).await;
+    let st = storno(&pool, original, "ST-2026-000001", Some("Ablesefehler")).await;
+    let negated = pg::steuerzeilen_of(&pool, TENANT, st).await.expect("read");
+    assert_eq!(negated.len(), 2, "{negated:?}");
+
+    let netted: Vec<(String, String, rust_decimal::Decimal, rust_decimal::Decimal)> =
+        sqlx::query_as(
+            "SELECT steuer, art, sum(menge), sum(betrag_eur) FROM steuerzeilen
+             GROUP BY steuer, art ORDER BY art",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("net");
+    assert_eq!(netted.len(), 2);
+    for (steuer, art, menge, betrag) in netted {
+        assert_eq!(steuer, "STROMSTEUER");
+        assert!(
+            menge.is_zero() && betrag.is_zero(),
+            "{art}: the Storno must take back what the original declared ({menge} kWh, {betrag} EUR)"
+        );
+    }
+}
+
+/// The `steuerzeilen` CHECK lists and the Rust enums that write them agree in
+/// both directions: a variant the CHECK omits fails every insert carrying it,
+/// and a CHECK value no variant writes is a ground no line can have.
+#[test]
+fn the_tax_line_checks_match_the_enums() {
+    use billingd::steuerzeilen::{Art, Steuer};
+    let schema = SCHEMA.split_whitespace().collect::<Vec<_>>().join(" ");
+    let check = |column: &str| -> Vec<String> {
+        let start = schema
+            .find(&format!("{column} TEXT NOT NULL CHECK ({column} IN ("))
+            .unwrap_or_else(|| panic!("steuerzeilen.{column} carries a CHECK list"));
+        let list = &schema[start..];
+        let list = &list[list.find("IN (").expect("IN") + 4..list.find("))").expect("))")];
+        list.split(',')
+            .map(|v| v.trim().trim_matches('\'').to_owned())
+            .collect()
+    };
+    assert_eq!(
+        check("steuer"),
+        Steuer::ALL.map(|s| s.as_str().to_owned()).to_vec()
+    );
+    assert_eq!(
+        check("art"),
+        Art::ALL.map(|a| a.as_str().to_owned()).to_vec()
+    );
+}
+
+/// **Invariant: a period's Gebühr is stored as a Gebührenbescheid record beside
+/// its supply invoice, under one run.** The Bescheid carries its view and no
+/// EN 16931 model, occupies its own slot of `br_unique_original`, and the
+/// schema refuses a Bescheid without a view.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_gebuehr_is_stored_as_a_bescheid_beside_its_invoice() {
+    use energy_billing::{
+        BillingContext, BillingPeriod, GridInput, InvoiceType, Product, Quantities,
+        Rechnungsempfaenger, RegulatoryRates, WasserMeterInput,
+    };
+    let Some((pool, _pg)) = test_pool("gebuehrenbescheid").await else {
+        return;
+    };
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"WASSER","wasser_mengenpreis_eur_per_m3":"2.10",
+             "schmutzwasser_eur_per_m3":"2.60","abwasser_regime":"PUBLIC_LAW_FEE"}"#,
+    )
+    .expect("a WASSER product");
+    let rates = RegulatoryRates::default();
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(
+            BillingContext {
+                malo_id: MALO.to_owned(),
+                lf_mp_id: TENANT.to_owned(),
+                rechnungsnummer: "RE-2026-000001".to_owned(),
+                period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+                    .expect("a period"),
+                invoice_type: InvoiceType::Initial,
+                regulatory_rates: rates.clone(),
+                rechnungsempfaenger: Some(Rechnungsempfaenger {
+                    name: Some("Erika Mustermann".to_owned()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            &Quantities {
+                wasser: Some(WasserMeterInput {
+                    frischwasser_m3: dec!(120),
+                    months: Some(dec!(1)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("bills");
+    let cfg: billingd::config::BillingdConfig = serde_json::from_value(serde_json::json!({
+        "database": { "url": "postgres://localhost/x" },
+        "tenant": TENANT,
+        "productd_url": "http://localhost:9080",
+        "edmd_url": "http://localhost:8380",
+        "marktd_url": "http://localhost:8080",
+        "gebuehrenbescheid": {
+            "rechtsbehelf": "Widerspruch",
+            "frist": "innerhalb eines Monats nach Bekanntgabe",
+            "behoerde": "Stadtwerke Musterstadt",
+            "zahlungsfrist_tage": 30,
+        },
+    }))
+    .expect("config");
+
+    let mut belege = billingd::gebuehrenbescheid::trennen(invoice);
+    billingd::gebuehrenbescheid::eine_lauf_id(&mut belege);
+    let lieferung = belege.lieferung.expect("supply");
+    let mut gebuehr = belege.gebuehr.expect("Gebühr");
+    gebuehr.context.rechnungsnummer = "GB-2026-000001".to_owned();
+    let view = billingd::gebuehrenbescheid::view(&gebuehr, &cfg).expect("view");
+
+    let mut tx = pool.begin().await.expect("begin");
+    let json = lieferung.to_rechnung_json();
+    let supply = pg::insert_billing_record(
+        &mut *tx,
+        &pg::NewBillingRecord {
+            product_code: "WASSER-BASIS",
+            category: "WASSER",
+            rechnungsnummer: "RE-2026-000001",
+            total_netto_eur: lieferung.netto_eur,
+            total_brutto_eur: lieferung.brutto_eur,
+            ..draft(dec!(0), "RE-2026-000001", &json)
+        },
+    )
+    .await
+    .expect("supply invoice");
+    let bescheid = billingd::gebuehrenbescheid::speichern(
+        &mut tx,
+        &cfg,
+        &gebuehr,
+        &view,
+        "WASSER-BASIS",
+        "WASSER",
+        false,
+    )
+    .await
+    .expect("Bescheid beside it");
+    tx.commit().await.expect("commit");
+
+    let b = pg::fetch_billing_record(&pool, TENANT, bescheid)
+        .await
+        .expect("read")
+        .expect("stored");
+    assert_eq!(b.dokumentart, "GEBUEHRENBESCHEID");
+    assert_eq!(b.product_code, "WASSER-BASIS:GEBUEHR");
+    assert!(b.en16931_json.is_none() && b.en16931_blocked.is_some());
+    assert_eq!(b.bescheid_json.as_ref(), Some(&view));
+    assert_eq!(b.outcome, "dispatched");
+    let s = pg::fetch_billing_record(&pool, TENANT, supply)
+        .await
+        .expect("read")
+        .expect("stored");
+    assert_eq!(s.dokumentart, "RECHNUNG");
+    let run = |r: &serde_json::Value| {
+        r["zusatzAttribute"]
+            .as_array()
+            .and_then(|a| a.iter().find(|z| z["name"] == "mako:billing_run_id"))
+            .map(|z| z["wert"].clone())
+    };
+    assert!(run(&s.rechnung_json).is_some());
+    assert_eq!(run(&s.rechnung_json), run(&b.rechnung_json), "one run");
+
+    let refused =
+        sqlx::query("UPDATE billing_records SET dokumentart = 'GEBUEHRENBESCHEID' WHERE id = $1")
+            .bind(supply)
+            .execute(&pool)
+            .await;
+    assert!(refused.is_err(), "a Bescheid without its view is refused");
+}
+
+/// **Invariant: the § 40b run sends a period's Gebührenbescheid exactly as it
+/// sends the invoice beside it** — through outputd's document endpoint, on the
+/// same channels to the same recipient. A Bescheid stored and never sent
+/// starts no Rechtsbehelfsfrist.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_mixed_periods_run_delivers_both_documents() {
+    use energy_billing::{
+        BillingContext, BillingPeriod, GridInput, InvoiceType, Product, Quantities,
+        Rechnungsempfaenger, RegulatoryRates, WasserMeterInput,
+    };
+    use std::sync::{Arc, Mutex};
+    let Some((pool, _pg)) = test_pool("bescheid_versand").await else {
+        return;
+    };
+
+    // An outputd that records every document it is asked to issue.
+    let issued: Arc<Mutex<Vec<(String, serde_json::Value)>>> = Arc::default();
+    let seen = Arc::clone(&issued);
+    let app = axum::Router::new().route(
+        "/api/v1/documents/issue/{kind}",
+        axum::routing::post(
+            move |axum::extract::Path(kind): axum::extract::Path<String>,
+                  axum::Json(body): axum::Json<serde_json::Value>| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.lock().expect("lock").push((kind, body));
+                    axum::Json(serde_json::json!({
+                        "document_id": uuid::Uuid::new_v4(),
+                        "template_hash": "a".repeat(64),
+                    }))
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let outputd = format!("http://{}", listener.local_addr().expect("addr"));
+    tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let cfg: billingd::config::BillingdConfig = serde_json::from_value(serde_json::json!({
+        "database": { "url": "postgres://localhost/x" },
+        "tenant": TENANT,
+        "productd_url": "http://127.0.0.1:9",
+        "edmd_url": "http://127.0.0.1:9",
+        "marktd_url": "http://127.0.0.1:9",
+        "vertragd_url": "http://127.0.0.1:9",
+        "outputd_url": outputd,
+        "seller_name": "Stadtwerke Musterstadt",
+        "seller_vat_id": "DE123456789",
+        "gebuehrenbescheid": {
+            "rechtsbehelf": "Widerspruch",
+            "frist": "innerhalb eines Monats nach Bekanntgabe",
+            "behoerde": "Stadtwerke Musterstadt",
+            "zahlungsfrist_tage": 30,
+        },
+    }))
+    .expect("config");
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"WASSER","wasser_mengenpreis_eur_per_m3":"2.10",
+             "schmutzwasser_eur_per_m3":"2.60","abwasser_regime":"PUBLIC_LAW_FEE"}"#,
+    )
+    .expect("a WASSER product");
+    let rates = RegulatoryRates::default();
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(
+            BillingContext {
+                malo_id: MALO.to_owned(),
+                lf_mp_id: TENANT.to_owned(),
+                rechnungsnummer: "RE-2026-000001".to_owned(),
+                period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+                    .expect("a period"),
+                invoice_type: InvoiceType::Initial,
+                regulatory_rates: rates.clone(),
+                rechnungsempfaenger: Some(Rechnungsempfaenger {
+                    name: Some("Erika Mustermann".to_owned()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            &Quantities {
+                wasser: Some(WasserMeterInput {
+                    frischwasser_m3: dec!(120),
+                    months: Some(dec!(1)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("bills");
+    let mut belege = billingd::gebuehrenbescheid::trennen(invoice);
+    billingd::gebuehrenbescheid::eine_lauf_id(&mut belege);
+    let lieferung = belege.lieferung.expect("supply");
+    let mut gebuehr = belege.gebuehr.expect("Gebühr");
+    gebuehr.context.rechnungsnummer = "GB-2026-000001".to_owned();
+    let view = billingd::gebuehrenbescheid::view(&gebuehr, &cfg).expect("view");
+
+    // The run's write: the invoice issued with its e-invoice model, the
+    // Bescheid beside it.
+    let mut tx = pool.begin().await.expect("begin");
+    let json = lieferung.to_rechnung_json();
+    let supply = pg::insert_billing_record(
+        &mut *tx,
+        &pg::NewBillingRecord {
+            product_code: "WASSER-BASIS",
+            category: "WASSER",
+            rechnungsnummer: "RE-2026-000001",
+            total_netto_eur: lieferung.netto_eur,
+            total_brutto_eur: lieferung.brutto_eur,
+            ..draft(dec!(0), "RE-2026-000001", &json)
+        },
+    )
+    .await
+    .expect("supply invoice");
+    pg::mark_dispatched_tx(&mut *tx, supply)
+        .await
+        .expect("issued");
+    billingd::einvoice::store(&mut tx, supply, &lieferung, &cfg, MALO)
+        .await
+        .expect("the supply invoice has its e-invoice");
+    let bescheid = billingd::gebuehrenbescheid::speichern(
+        &mut tx,
+        &cfg,
+        &gebuehr,
+        &view,
+        "WASSER-BASIS",
+        "WASSER",
+        false,
+    )
+    .await
+    .expect("Bescheid");
+    tx.commit().await.expect("commit");
+
+    let deps = Arc::new(billingd::clients::BillingDeps {
+        cfg: Arc::new(cfg),
+        productd: Arc::new(billingd::clients::ProductdClient::new(
+            "http://127.0.0.1:9",
+            None,
+        )),
+        edmd: Arc::new(billingd::clients::EdmdClient::new(
+            "http://127.0.0.1:9",
+            None,
+        )),
+        marktd: Arc::new(mako_markt::marktd_client::MarktdClient::new(
+            "http://127.0.0.1:9",
+            secrecy::SecretString::from(String::new()),
+            reqwest::Client::new(),
+        )),
+        vertragd: Arc::new(billingd::clients::VertragdClient::new(
+            "http://127.0.0.1:9",
+            None,
+        )),
+        outputd: Arc::new(billingd::clients::OutputdClient::new(&outputd, None)),
+        accountingd: None,
+    });
+    billingd::billing_runs::versenden(&pool, &deps, MALO, &[supply, bescheid]).await;
+
+    let issued = issued.lock().expect("lock").clone();
+    let kinds: Vec<&str> = issued.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(kinds, vec!["INVOICE", "GEBUEHRENBESCHEID"], "both are sent");
+    let (_, rechnung) = &issued[0];
+    let (_, bescheid_body) = &issued[1];
+    assert_eq!(bescheid_body["subject_ref"], "GB-2026-000001");
+    assert_eq!(bescheid_body["view"], view);
+    for key in ["channels", "recipient", "malo_id"] {
+        assert_eq!(
+            rechnung[key], bescheid_body[key],
+            "same {key} as the invoice"
+        );
+    }
+    for id in [supply, bescheid] {
+        let row = pg::fetch_billing_record(&pool, TENANT, id)
+            .await
+            .expect("read")
+            .expect("stored");
+        assert!(row.template_hash.is_some(), "the sent layout is pinned");
+    }
 }

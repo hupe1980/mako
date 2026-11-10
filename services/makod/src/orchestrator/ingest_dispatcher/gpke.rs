@@ -140,13 +140,18 @@ impl EdifactIngestDispatcher {
                     // clock, opened by `dispatch` for every message.
                     let received = received_at;
                     let process_due_at = antwort_due_at(pid, received);
-                    self.spawn_or_resume::<GpkeSupplierChangeWorkflow>(
+                    // An answered Anfrage settles the MaLo, so the next
+                    // Anmeldung — or the Lieferende reusing this workflow name
+                    // on it — opens its own process (`OccupiesBusinessKey` on
+                    // `SupplierChangeState`).
+                    self.spawn_or_resume_guarded::<GpkeSupplierChangeWorkflow>(
                         inbound,
                         malo_id.as_str(),
                         "gpke-supplier-change",
                         cmd,
                         &fv,
                         &[(mako_gpke::GPKE_PROCESS_RESPONSE_LABEL, process_due_at)],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -192,13 +197,14 @@ impl EdifactIngestDispatcher {
                     // 05:00 Uhr des 1. WT nach dem ÜT (GPKE Teil 2, SD
                     // Lieferende von NB an LF Prozessschritt 2).
                     let process_due_at = antwort_due_at(pid, received);
-                    self.spawn_or_resume::<GpkeLfAbmeldungWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeLfAbmeldungWorkflow>(
                         inbound,
                         malo_id.as_str(),
                         "gpke-lf-abmeldung",
                         cmd,
                         &fv,
                         &[(mako_gpke::LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, process_due_at)],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -431,6 +437,35 @@ impl EdifactIngestDispatcher {
                     )
                     .await
                 }
+                // The NB's answer to the LF's Anmeldung neue Marktlokation —
+                // resume under the Anmeldung's Vorgangsnummer, which the answer
+                // restates in `SG6 RFF+TN` (Muss on 55602–55605, UTILMD AHB
+                // Strom 2.2 S. 99, 114). The Marktlokation is no key: the
+                // Anmeldung named it only „Wenn bekannt" ([165]). The one a
+                // Bestätigung names becomes a key of the process.
+                55602..=55605 => {
+                    let cmd = adapters::gpke_lf_neuanlage_antwort_registry().dispatch(raw, &fv)?;
+                    let referenz = referenz_vorgangsnummer(msg);
+                    let key = if referenz.is_empty() {
+                        String::new()
+                    } else {
+                        mako_gpke::neuanlage_vorgang_key(referenz)
+                    };
+                    let malo_id = extract_malo_from_msg(msg);
+                    let extra: Vec<&str> = [malo_id.as_str()]
+                        .into_iter()
+                        .filter(|m| !m.is_empty())
+                        .collect();
+                    self.resume_by_key_indexing::<GpkeLfAnmeldungWorkflow>(
+                        inbound,
+                        &key,
+                        "gpke-lf-anmeldung",
+                        cmd,
+                        &[],
+                        &extra,
+                    )
+                    .await
+                }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "gpke-lf-anmeldung",
                     reason: "pid_not_in_resume_table",
@@ -552,49 +587,13 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
-            // ── GPKE Konfiguration — PIDs 17134/17135 (NB role) ──────────────
-            // PIDs 17134/17135: NB sends ORDERS Konfiguration to MSB — spawn.
-            // PIDs 19001/19002: MSB → NB ORDRSP Bestätigung/Ablehnung — resume.
-            //
-            // Role guard: registered only when DeploymentRoles contains Nb.
-            // nMSB instances use PIDs 19001/19002 for wim-geraeteubernahme instead.
-            "gpke-konfiguration" => match pid {
-                17134 | 17135 => {
-                    let cmd = adapters::gpke_konfiguration_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_malo_from_msg(msg);
-                    // `mako_fristen::antwort` has no published window for the
-                    // GPKE Teil 3 Konfigurationsbestellung yet, so this falls
-                    // back to the operating convention — and says so, rather
-                    // than citing a Festlegung that does not state it.
-                    let received = received_at;
-                    let process_due_at = antwort_due_at(pid, received);
-                    self.spawn_or_resume_guarded::<GpkeKonfigurationWorkflow>(
-                        inbound,
-                        malo_id.as_str(),
-                        "gpke-konfiguration",
-                        cmd,
-                        &fv,
-                        &[(mako_gpke::KONFIGURATION_WINDOW_LABEL, process_due_at)],
-                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
-                    )
-                    .await
-                }
-                19001 | 19002 => {
-                    let cmd = adapters::gpke_konfiguration_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_key::<GpkeKonfigurationWorkflow>(
-                        inbound,
-                        malo_id.as_str(),
-                        "gpke-konfiguration",
-                        cmd,
-                    )
-                    .await
-                }
-                _ => Ok(IngestOutcome::Skipped {
-                    workflow_name: "gpke-konfiguration",
-                    reason: "pid_not_in_dispatch_table",
-                }),
-            },
+            // ── GPKE Konfiguration — the NB's Einrichtung 17134 ──────────────
+            // Outbound only: no ORDRSP answers it (GPKE Teil 3 Kap. 1.3.7.2), and
+            // the MSB receives it on `gpke-konfiguration-aenderung`.
+            "gpke-konfiguration" => Ok(IngestOutcome::Skipped {
+                workflow_name: "gpke-konfiguration",
+                reason: "pid_not_in_dispatch_table",
+            }),
             // ── GPKE Stornierung — PIDs 55022/55023/55024 ────────────────────
             // PIDs 55022–55024: UTILMD Stornierung Lieferbeginn/Lieferende — spawn.
             "gpke-stornierung" => match pid {
@@ -987,8 +986,55 @@ impl EdifactIngestDispatcher {
                     .await
                 }
             }
-            // ── GPKE Konfigurationsänderung ORDRSP ────────────────────────────
-            // LF sends ORDERS (PIDs 19120–19133); NB/MSB responds with ORDRSP.
+            // ── GPKE Teil 3 Konfigurationsänderung ────────────────────────────
+            // Receiving side: an ORDERS opens the recipient's process under the
+            // sender and its BGM DE 1004 (`konfiguration_aenderung::auftrag_key`),
+            // which the answer's SG1 RFF+ON echoes, indexed under the Lokation
+            // too; a 17120 opens the NB's 1-WT window (GPKE Teil 3 Kap. 1.3.2.2
+            // Nr. 2). Requesting side: the ORDRSP / IFTSTA answers resume.
+            "gpke-konfiguration-aenderung"
+                if mako_gpke::konfiguration_aenderung::ist_auftrag(pid) =>
+            {
+                let cmd = adapters::gpke_konfiguration_auftrag_registry().dispatch(raw, &fv)?;
+                let mako_gpke::KonfigurationAenderungCommand::ReceiveAuftrag { auftrag, .. } = &cmd
+                else {
+                    unreachable!("the adapter builds ReceiveAuftrag");
+                };
+                let key = if auftrag.dokumentennummer.is_empty() {
+                    String::new()
+                } else {
+                    mako_gpke::konfiguration_aenderung::auftrag_key(
+                        auftrag.absender.as_str(),
+                        &auftrag.dokumentennummer,
+                    )
+                };
+                let lokation = auftrag.lokation.clone().unwrap_or_default();
+                let extra: Vec<&str> = [lokation.as_str()]
+                    .into_iter()
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                let frist: Vec<(&'static str, time::OffsetDateTime)> =
+                    mako_gpke::konfiguration_aenderung::eingang_antwortfrist(pid, received_at)
+                        .map(|due| {
+                            (
+                                mako_gpke::konfiguration_aenderung::EINGANG_WINDOW_LABEL,
+                                due,
+                            )
+                        })
+                        .into_iter()
+                        .collect();
+                self.spawn_or_resume_keyed::<GpkeKonfigurationAenderungWorkflow>(
+                    inbound,
+                    &key,
+                    "gpke-konfiguration-aenderung",
+                    cmd,
+                    &fv,
+                    &frist,
+                    &extra,
+                    Some(|s| !s.is_terminal()),
+                )
+                .await
+            }
             "gpke-konfiguration-aenderung" => {
                 // ORDRSP responses (17102/17113) and IFTSTA Bestellungsantwort/
                 // -beendigung (21043/21044) both resume the process by MaLo.
@@ -1014,5 +1060,23 @@ impl EdifactIngestDispatcher {
             }
             wf_name => unknown_workflow_skip(wf_name, pid),
         }
+    }
+}
+
+/// The `SG6 RFF+TN` Referenz Vorgangsnummer of a UTILMD's first Vorgang — the
+/// request's `SG4 IDE+24` an answer restates; empty when it carries none.
+fn referenz_vorgangsnummer(msg: &AnyMessage) -> &str {
+    match msg {
+        AnyMessage::Utilmd(u) => u
+            .transactions()
+            .first()
+            .and_then(|t| {
+                t.references
+                    .iter()
+                    .find(|r| r.qualifier == edi_energy::utilmd_codes::rff::REFERENZ_VORGANGSNUMMER)
+            })
+            .and_then(|r| r.reference.as_deref())
+            .unwrap_or_default(),
+        _ => "",
     }
 }

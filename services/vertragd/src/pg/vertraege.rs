@@ -625,7 +625,7 @@ pub async fn insert_versorgungsvertrag(
                     strom.as_ref(),
                     gas.as_ref(),
                 )?;
-                if outbound::enqueue(&mut *tx, tenant, &task).await? {
+                if outbound::enqueue(&mut tx, tenant, &task).await? {
                     dispatched += 1;
                 }
             }
@@ -727,13 +727,13 @@ pub async fn fetch_vertrag(
 ///
 /// Propagates storage errors.
 pub async fn list_komponenten(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     vertrag_id: Uuid,
 ) -> Result<Vec<VertragskomponenteRow>> {
     Ok(
         sqlx::query_as("SELECT * FROM vertragskomponenten WHERE vertrag_id=$1 ORDER BY created_at")
             .bind(vertrag_id)
-            .fetch_all(pool)
+            .fetch_all(executor)
             .await?,
     )
 }
@@ -1126,11 +1126,14 @@ pub async fn schedule_lieferende(
 /// transition: a Kündigung set the end date, and the contract then sat in
 /// `GEKÜNDIGT` for ever with components that were still nominally in supply.
 ///
+/// Runs on the caller's transaction, which enqueues each closed contract's
+/// `de.vertrag.abgeschlossen` before it commits: a closed contract is no longer
+/// due on the next run, so one committed without its event is never announced.
+///
 /// # Errors
 ///
 /// Propagates storage errors.
-pub async fn close_due_supply(pool: &PgPool, tenant: &str) -> Result<Vec<Uuid>> {
-    let mut tx = pool.begin().await?;
+pub async fn close_due_supply(conn: &mut sqlx::PgConnection, tenant: &str) -> Result<Vec<Uuid>> {
     sqlx::query(
         "UPDATE vertragskomponenten
             SET status = 'BEENDET', updated_at = now()
@@ -1140,7 +1143,7 @@ pub async fn close_due_supply(pool: &PgPool, tenant: &str) -> Result<Vec<Uuid>> 
             AND lieferende < heute()",
     )
     .bind(tenant)
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     // A contract is over when nothing under it is in supply or on its way
@@ -1159,9 +1162,8 @@ pub async fn close_due_supply(pool: &PgPool, tenant: &str) -> Result<Vec<Uuid>> 
           RETURNING v.id",
     )
     .bind(tenant)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut *conn)
     .await?;
-    tx.commit().await?;
     Ok(closed.into_iter().map(|(id,)| id).collect())
 }
 
@@ -1305,7 +1307,7 @@ pub async fn kuendige_vertrag(
                 // depend on the Lieferende reaching the NB, so it is its own
                 // task — a processd outage must not cost the customer the
                 // reading their Schlussrechnung is built from.
-                let ablesung = outbound::ablesung(k.id, malo_id, true, input.lieferende);
+                let ablesung = outbound::ablesung(k.id, malo_id, &k.sparte, true, input.lieferende);
                 // Superseding, not plain enqueue: a Kündigung widerrufen and
                 // re-issued to a different date must replace the reading order
                 // it scheduled, not sit behind it.
@@ -1425,38 +1427,31 @@ pub async fn widerruf_kuendigung(
     // parked row. One already performed is reported, because only `processd`
     // (UTILMD) or `edmd` (reading order) can withdraw it now.
     let lieferende_bereits_versandt: Vec<Uuid> = sqlx::query_scalar(
-        r"SELECT komp_id FROM outbound_tasks
-           WHERE kind = 'LIEFERENDE' AND completed_at IS NOT NULL
-             AND tenant = $2
-             AND komp_id IN (
-                 SELECT id FROM vertragskomponenten
-                  WHERE vertrag_id = $1 AND tenant = $2
-                    AND lieferende IS NOT NULL AND lieferende > heute()
+        r"SELECT k.id FROM vertragskomponenten k
+           WHERE k.vertrag_id = $1 AND k.tenant = $2
+             AND k.lieferende IS NOT NULL AND k.lieferende > heute()
+             AND EXISTS (
+                 SELECT 1 FROM event_outbox o
+                  WHERE o.kind = 'command' AND o.ce_type = 'LIEFERENDE'
+                    AND o.delivered_at IS NOT NULL
+                    AND starts_with(o.event_id, $2 || '/LIEFERENDE:' || k.id::text)
              )",
     )
     .bind(id)
     .bind(tenant)
     .fetch_all(&mut *conn)
     .await?;
-    sqlx::query(
-        // Tenant on both sides, as in `storniere_vertrag`: `komp_id` is a
-        // foreign key, so the subquery alone decides which rows are reached.
-        r"UPDATE outbound_tasks
-          SET dead_lettered_at = now(),
-              last_error = 'Kündigung widerrufen',
-              dedupe_key = dedupe_key || ':widerrufen:' || id
-          WHERE kind IN ('LIEFERENDE', 'ABLESUNG_ENDE')
-            AND completed_at IS NULL AND dead_lettered_at IS NULL
-            AND tenant = $2
-            AND komp_id IN (
-                SELECT id FROM vertragskomponenten
-                 WHERE vertrag_id = $1 AND tenant = $2
-                   AND lieferende IS NOT NULL AND lieferende > heute()
-            )",
+    outbound::park(
+        &mut *conn,
+        tenant,
+        id,
+        &[
+            outbound::TaskKind::Lieferende,
+            outbound::TaskKind::AblesungEnde,
+        ],
+        true,
+        "Kündigung widerrufen",
     )
-    .bind(id)
-    .bind(tenant)
-    .execute(&mut *conn)
     .await?;
 
     // Revert exactly what this Kündigung scheduled — components whose supply
@@ -1542,25 +1537,14 @@ pub async fn storniere_vertrag(pool: &PgPool, id: Uuid, tenant: &str) -> Result<
     // the customer cancelled before supply began, so there is nothing to
     // register. One that already reached processd is the operator's to cancel
     // there — which is exactly what the response says.
-    sqlx::query(
-        // The tenant predicate is carried on both sides rather than inferred
-        // from the join: `komp_id` is a foreign key, not this table's own key,
-        // so the subquery alone decides which rows are reached and an id that
-        // resolves in another tenant would dead-letter that tenant's tasks.
-        r"UPDATE outbound_tasks
-          SET dead_lettered_at = now(),
-              last_error = 'Vertrag storniert vor Lieferbeginn'
-          WHERE kind = 'LIEFERBEGINN'
-            AND completed_at IS NULL AND dead_lettered_at IS NULL
-            AND tenant = $2
-            AND komp_id IN (
-                SELECT id FROM vertragskomponenten
-                 WHERE vertrag_id = $1 AND tenant = $2
-            )",
+    outbound::park(
+        &mut tx,
+        tenant,
+        id,
+        &[outbound::TaskKind::Lieferbeginn],
+        false,
+        "Vertrag storniert vor Lieferbeginn",
     )
-    .bind(id)
-    .bind(tenant)
-    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(())

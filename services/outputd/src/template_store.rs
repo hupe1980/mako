@@ -79,6 +79,9 @@ pub enum TemplateKind {
     Mahnung,
     /// § 41 Abs. 5 EnWG price-change notice — Textform.
     Preisanpassung,
+    /// Bescheid über eine öffentlich-rechtliche Gebühr — the Abwassergebühr a
+    /// municipal operator issues beside its taxable supply invoice.
+    Gebuehrenbescheid,
 }
 
 impl TemplateKind {
@@ -89,6 +92,7 @@ impl TemplateKind {
             Self::Invoice => "INVOICE",
             Self::Mahnung => "MAHNUNG",
             Self::Preisanpassung => "PREISANPASSUNG",
+            Self::Gebuehrenbescheid => "GEBUEHRENBESCHEID",
         }
     }
 }

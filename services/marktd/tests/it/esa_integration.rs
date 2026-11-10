@@ -31,6 +31,9 @@ async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
         .execute(&pool)
         .await
         .expect("apply schema");
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
     Some((pool, container))
 }
 
@@ -721,6 +724,140 @@ async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
     assert_eq!(
         events, 1,
         "exactly one expiry event — the failed sweep left none behind"
+    );
+}
+
+/// The Abbestellungen owed to makod, as `(einwilligung_id, location)` pairs.
+async fn abbestellungen(pool: &PgPool) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT envelope->'body'->'payload'->>'einwilligung_id', \
+                envelope->'body'->'payload'->>'malo_id' \
+           FROM event_outbox WHERE kind = 'command' AND upstream = 'makod' \
+          ORDER BY 2",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read abbestellungen")
+}
+
+async fn widerrufen_events(pool: &PgPool, grund: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM event_log WHERE ce_type = $1 AND envelope->'data'->>'grund' = $2",
+    )
+    .bind(mako_events::markt::EINWILLIGUNG_WIDERRUFEN)
+    .bind(grund)
+    .fetch_one(pool)
+    .await
+    .expect("count events")
+}
+
+/// **A Widerruf whose event fails stays revocable.** `revoked_at`, the
+/// `einwilligung.widerrufen` event and the Abbestellung per location commit
+/// together: a committed `revoked_at` alone answers the customer's retry with
+/// 404 and leaves the ESA receiving Messwerte with no lawful basis.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_widerruf_whose_event_fails_stays_revocable() {
+    let Some((pool, _pg)) = test_pool("widerruf-atomic").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool.clone());
+    let id = repo
+        .grant(consent("AN-W", &["51238696012", "51238696781"]))
+        .await
+        .unwrap();
+
+    sqlx::query("ALTER TABLE event_log RENAME TO event_log_away")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        repo.revoke(TENANT, id).await.is_err(),
+        "the Widerruf fails with its event"
+    );
+    sqlx::query("ALTER TABLE event_log_away RENAME TO event_log")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let rec = repo.get(TENANT, id).await.unwrap().unwrap();
+    assert!(
+        rec.revoked_at.is_none(),
+        "a Widerruf without its event must not commit"
+    );
+    assert!(abbestellungen(&pool).await.is_empty());
+
+    // The retry completes it: one event, one Abbestellung per location.
+    assert!(repo.revoke(TENANT, id).await.unwrap().is_some());
+    assert_eq!(widerrufen_events(&pool, "einwilligung_widerrufen").await, 1);
+    let id = id.to_string();
+    assert_eq!(
+        abbestellungen(&pool).await,
+        vec![
+            (id.clone(), "51238696012".to_owned()),
+            (id, "51238696781".to_owned()),
+        ]
+    );
+}
+
+/// The expiry sweep persists the Abbestellung in the transaction that closes
+/// the consent, so a makod outage delays the 17008 and never loses it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_expiry_persists_its_abbestellungen() {
+    let Some((pool, _pg)) = test_pool("expiry-abbestellung").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool.clone());
+    let today = time::macros::date!(2026 - 06 - 15);
+    let id = repo
+        .grant(EinwilligungRecord {
+            valid_to: Some(time::macros::date!(2026 - 06 - 14)),
+            ..consent("AN-E", &["51238696012"])
+        })
+        .await
+        .unwrap();
+    let closed = marktd::consent_lifecycle::close_expired(&pool, TENANT, today, id)
+        .await
+        .unwrap();
+    assert!(closed.is_some());
+    assert_eq!(
+        abbestellungen(&pool).await,
+        vec![(id.to_string(), "51238696012".to_owned())]
+    );
+    // A second sweep finds nothing and owes nothing more.
+    assert!(
+        marktd::consent_lifecycle::close_expired(&pool, TENANT, today, id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(abbestellungen(&pool).await.len(), 1);
+}
+
+/// A grant that supersedes an active consent ends it like a Widerruf: the old
+/// consent's `einwilligung.widerrufen` is emitted, and only the locations the
+/// new consent no longer covers are abbestellt — a covered one keeps its lawful
+/// flow.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_superseding_grant_ends_the_old_consent() {
+    let Some((pool, _pg)) = test_pool("supersede-ends").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool.clone());
+    let old = repo
+        .grant(consent("AN-S", &["51238696012", "51238696781"]))
+        .await
+        .unwrap();
+    repo.grant(consent("AN-S", &["51238696012"])).await.unwrap();
+
+    assert_eq!(
+        widerrufen_events(&pool, marktd::consent_lifecycle::GRUND_ERSETZT).await,
+        1
+    );
+    assert_eq!(
+        abbestellungen(&pool).await,
+        vec![(old.to_string(), "51238696781".to_owned())]
     );
 }
 

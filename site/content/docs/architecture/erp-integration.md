@@ -303,11 +303,11 @@ against a settled invoice whose REMADV never left.
 
 Payment events use `source: "urn:mako:invoicd:tenant:{tenant}"` and `subject: "{process_id}"`.
 
-**Durable at-least-once.** The first attempt runs inline after the market
-answer is dispatched; a transport error or `5xx` is retried (30 s → 5 min →
-30 min → 2 h, dead-lettered after 5 attempts); a `4xx` dead-letters at once.
-Batches are claimed with a lease. Track `invoic_receipts.erp_notified_at` and
-the `invoicd_erp_dead_lettered_total` gauge.
+**Durable at-least-once.** The event is enqueued in `event_outbox` with the
+receipt's dispatch stamp and delivered by the `mako_service::outbox` worker: a
+transport error, `429` or `5xx` is retried (30 s × 4ⁿ capped at 2 h,
+dead-lettered after 8 attempts); any other `4xx` dead-letters at once. Track the
+`invoicd_erp_dead_lettered_total` gauge.
 
 **Request signing:** when `[erp] hmac_secret` is configured, every POST includes
 [Standard Webhooks] headers computed over `{webhook-id}.{webhook-timestamp}.{body}`.
@@ -343,21 +343,22 @@ the `invoicd_erp_dead_lettered_total` gauge.
 
 **`data` field:**
 
-A BO4E object, or `null` where none applies (e.g. `de.mako.contrl.received`).
+A BO4E object, or the notice's own fields where none applies (the APERAK, CONTRL and failure notices).
 
 **Event type → CloudEvents `type` mapping:**
 
 | CloudEvents `type` | Trigger | Primary BO4E payload |
 |---|---|---|
 | `de.mako.process.initiated` | New inbound UTILMD received | `Marktlokation` |
-| `de.mako.aperak.accepted` | Counterparty accepted our UTILMD | `Marktlokation` |
-| `de.mako.aperak.rejected` | Counterparty rejected our UTILMD | `Marktlokation` + rejection reason |
+| `de.mako.aperak.accepted` | A counterparty's APERAK Anerkennungsmeldung arrived — written by the ingest door for every received APERAK; an APERAK carries no Prüfidentifikator and is never routed to a workflow, `pid` 29002 here only labels the Ausprägung | `{pid, message_ref, bezug_message_ref, sender, receiver, process_resolved}`; `bezug_message_ref` (`RFF+ACE`, else `RFF+ACW`) names our message. When `RFF+ACE`, `RFF+TN` or `RFF+ACW` is a correlation key of exactly one process, the event stands under that process (`process_resolved: true`); otherwise under a process id of its own |
+| `de.mako.aperak.rejected` | A counterparty's APERAK Fehlermeldung (29001, or one naming an `ERC`) arrived | as `aperak.accepted`, plus `error_code` (the first `ERC`, also in `makoerc`) |
 | `de.mako.antwortfrist.abgelaufen` | The counterparty let the business Antwortfrist lapse | `Marktlokation` |
-| `de.mako.contrl.received` | CONTRL syntax acknowledgement | — (null data) |
-| `de.mako.process.completed` | Lieferbeginn/Lieferende confirmed | `Marktlokation` + `Vertrag` |
-| `de.mako.process.failed` | Fatal error / regulatory deadline exceeded | `Marktlokation` |
+| `de.mako.contrl.received` | A counterparty's CONTRL arrived | `{message_ref, interchange_ref, accepted, action_code, sender, receiver, process_resolved}`; `accepted` is `UCI` DE 0083 = `7` „Übertragung bestätigt", `4` is the rejection (CONTRL MIG 2.0b, UCI); attached to a process as the APERAK is, from the `UCI` interchange reference or a `UCM` message reference |
+| `de.mako.process.completed` | A process ended on an answer — Bestätigung **or** Ablehnung. Read the verdict, never the type: `data.accepted`, `data.outcome` (`"accepted"` / `"rejected"`) and the response PID in `makopid` (`check-process-verdict` refuses a consumer that reads none). `data.antwortcode` / `data.codeliste` carry the answer's code | `Marktlokation` + `Vertrag` |
+| `de.mako.process.failed` | A Marktnachricht of the process was given up — its delivery budget ran out or the failure is permanent — so the counterparty never received it | `{reason, undelivered_message_id, undelivered_message_type, recipient, pid?}`; `reason` is also `makofailreason` |
 | `de.mako.malo.identified` | MaLo-ID lookup resolved | `Marktlokation` |
 | `de.mako.abmeldeanfrage.beantwortet` | The LFA answered the NB's Anfrage zur Beendigung der Zuordnung (55010/55011/55012), or its 09:00 window lapsed — a Zustimmung per GPKE Teil 2 § 2.1.2 Nr. 4. `processd` resumes the Anmeldung decision on it | `{pid, malo_id, grid_operator, lfa_mp_id, anmeldung_process_id, zustimmung, fristablauf}` plus `antwortcode`, `grund` and `zuordnungsende` when the LFA named them |
+| `de.mako.dead-letter.recorded` | A message went to the dead-letter queue — an inbound one the door could not route or process, or an outbound one whose delivery budget ran out. Written in the same transaction as the record, so each record yields one; a notice that itself exhausts its budget is recorded without another | `{dead_letter_id, reason, detail, rejected_at}` plus `pid`, `message_ref`, `message_type`, `sender`, `receiver` where the message named them |
 | `de.vpp.dispatch.confirmed` | MSB positively confirmed a WiM Steuerungsauftrag (PID 55168) of type `Konfiguration` — triggers VPP auto-billing in `billingd` | `{tx_id, location_id, location_type, max_power_kw, execution_time_from, execution_time_until, command_type, sender_mp_id, produkt_code}` |
 | `de.gabi.alocat.missing` | The § 47 Ziffer 1 KoV XV final-allocation window (M+14 Werktage) closed with no final ALOCAT on file; open a Clearingfall with the FNB/MGV | `{gas_day, deadline_label, sender_eic, receiver_eic, pruefidentifikator}` |
 | `de.gabi.nomination.curtailed` | The FNB/MGV confirmed less than was nominated; the portfolio is short until the BKV re-nominates or buys the gap | `{gas_day, nominated_kwh, confirmed_kwh, curtailed_kwh, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
@@ -649,7 +650,11 @@ async def receive(request: Request):
         case "de.mako.antwortfrist.abgelaufen":
             await on_antwortfrist_abgelaufen(event)
         case "de.mako.process.completed":
-            await on_process_completed(event)
+            # One type for both answers: an Ablehnung carries accepted=false.
+            if event["data"].get("accepted") is False:
+                await on_process_rejected(event)
+            else:
+                await on_process_completed(event)
         case "de.mako.process.failed":
             await on_process_failed(event, reason=event.get("makofailreason"))
         case _:
@@ -692,7 +697,10 @@ app.post(
       case "de.mako.aperak.accepted":    await onAccepted(event);   break;
       case "de.mako.aperak.rejected":    await onRejected(event);   break;
       case "de.mako.antwortfrist.abgelaufen":     await onTimeout(event);    break;
-      case "de.mako.process.completed":  await onCompleted(event);  break;
+      // One type for both answers: an Ablehnung carries accepted === false.
+      case "de.mako.process.completed":
+        await (event.data?.accepted === false ? onRejectedAnswer(event) : onCompleted(event));
+        break;
       case "de.mako.process.failed":     await onFailed(event);     break;
     }
     res.json({ ok: true });

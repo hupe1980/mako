@@ -491,6 +491,7 @@ pub(crate) async fn post_direct_reads_inner(
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
             mscons_version: req.mscons_version,
+            ablesung_herkunft: None,
         })
         .collect();
 
@@ -680,6 +681,7 @@ mod ingest_contract_tests {
                     allocation_version: "INITIAL".to_owned(),
                     valid_from_tx: None,
                     mscons_version: None,
+                    ablesung_herkunft: None,
                 }
             })
             .collect()
@@ -1205,6 +1207,7 @@ pub async fn post_bulk_reads(
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
             mscons_version: req.mscons_version,
+            ablesung_herkunft: None,
         });
     }
 

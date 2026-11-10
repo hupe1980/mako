@@ -195,6 +195,11 @@ pub enum ErpEventType {
     /// `E_0623` Prüfschritte 30–50 read the answer, and a Widerspruch that is
     /// not `A30` refuses the Anmeldung with `A50`.
     AbmeldeanfrageBeantwortet,
+    /// A message was recorded in the dead-letter queue — an inbound one the
+    /// door could not route or process, or an outbound one given up after its
+    /// delivery budget. Written in the same transaction as the record
+    /// ([`crate::dead_letter::dead_letter_notice`]), so every record has one.
+    DeadLetterRecorded,
 }
 
 impl ErpEventType {
@@ -216,6 +221,7 @@ impl ErpEventType {
             Self::GabiNominationRejected => "gabi_nomination_rejected",
             Self::GabiNomresMissing => "gabi_nomres_missing",
             Self::AbmeldeanfrageBeantwortet => "abmeldeanfrage_beantwortet",
+            Self::DeadLetterRecorded => "dead_letter_recorded",
         }
     }
 
@@ -241,6 +247,7 @@ impl ErpEventType {
             Self::GabiNominationRejected => mako_events::gabi::NOMINATION_REJECTED,
             Self::GabiNomresMissing => mako_events::gabi::NOMRES_MISSING,
             Self::AbmeldeanfrageBeantwortet => mako_events::mako::ABMELDEANFRAGE_BEANTWORTET,
+            Self::DeadLetterRecorded => mako_events::mako::DEAD_LETTER_RECORDED,
         }
     }
 }

@@ -34,6 +34,18 @@
 //! [`RechnungsAntwort::ist_zustimmung`] is „no Befund at all" rather than a
 //! severity judgement.
 //!
+//! # A step nothing assessed leaves the answer open
+//!
+//! The tree has two exits: Zahlungsavis (Prüfschritt 560 „Cluster:
+//! Zustimmung") and a refusal. A Prüfschritt whose fact no record answers is
+//! neither: passing it states to the MSB that a check succeeded which did not
+//! run, refusing it states that one failed. So an unassessed step is an
+//! [`OffenerPruefschritt`] and the walk ends without an answer for a person to
+//! decide — on the Kopfebene at the first such step, because the Kopfebene
+//! sends exactly one code and an earlier open step may own it; on the
+//! Positionsebene after every position, because Prüfschritt 450 sends every
+//! position code and an open step may add one (EBD 4.3 Kap. 8.27.1, S. 623).
+//!
 //! # The answer shape decides the REMADV Prüfidentifikator
 //!
 //! REMADV AHB 1.0a § 3.1.2 carries **33003** „Abweisung Kopf und Summe" and
@@ -210,21 +222,45 @@ pub struct Befund {
     pub detail: String,
 }
 
+/// A Prüfschritt the walk reached and no record answered.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OffenerPruefschritt {
+    /// Kopf, Position or Summe — see [`Ebene`].
+    pub ebene: Ebene,
+    /// The published Prüfschritt number.
+    pub pruefschritt: u16,
+    /// The fact that is missing.
+    pub detail: String,
+}
+
 /// The result of `E_0264` or `E_0266` — a **set** of Befunde, not one code.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RechnungsAntwort {
     /// `E_0264` (first round) or `E_0266` (after a COMDIS 29001).
     pub tree: &'static str,
-    /// Every refusal, in Prüfschritt order. Empty means the Zahlungsavis.
+    /// Every refusal, in Prüfschritt order.
     pub befunde: Vec<Befund>,
+    /// Every Prüfschritt the walk reached and could not answer. Non-empty
+    /// means the tree has not decided: no REMADV is owed until a person
+    /// states the missing facts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub offen: Vec<OffenerPruefschritt>,
 }
 
 impl RechnungsAntwort {
-    /// `true` when nothing was refused — „Zahlung der Rechnung avisieren und im
-    /// Zahlungslauf berücksichtigen" (Prüfschritt 560).
+    /// `true` when every step was answered and nothing was refused —
+    /// „Zahlung der Rechnung avisieren und im Zahlungslauf berücksichtigen"
+    /// (Prüfschritt 560).
     #[must_use]
     pub fn ist_zustimmung(&self) -> bool {
-        self.befunde.is_empty()
+        self.befunde.is_empty() && self.offen.is_empty()
+    }
+
+    /// `true` when a step the walk reached is unanswered, so the tree has
+    /// reached neither the Zahlungsavis nor a complete refusal.
+    #[must_use]
+    pub fn ist_offen(&self) -> bool {
+        !self.offen.is_empty()
     }
 
     /// Every Antwortcode this answer carries, in Prüfschritt order.
@@ -239,7 +275,8 @@ impl RechnungsAntwort {
             .collect()
     }
 
-    /// The REMADV Prüfidentifikator this answer must ride.
+    /// The REMADV Prüfidentifikator this answer must ride, or `None` while
+    /// the walk is [open](Self::ist_offen).
     ///
     /// - **33001** Zahlungsavis when nothing was refused. It carries no `AJT`.
     /// - **33004** „Abweisung Position" when the refusals are position-level:
@@ -247,17 +284,19 @@ impl RechnungsAntwort {
     ///   ends the walk, so the summen level is never reached.
     /// - **33003** „Abweisung Kopf und Summe" otherwise.
     #[must_use]
-    pub fn remadv_pid(&self) -> u32 {
-        if self.befunde.is_empty() {
-            33_001
+    pub fn remadv_pid(&self) -> Option<u32> {
+        if self.ist_offen() {
+            None
+        } else if self.befunde.is_empty() {
+            Some(33_001)
         } else if self
             .befunde
             .iter()
             .all(|b| matches!(b.ebene, Ebene::Position(_)))
         {
-            33_004
+            Some(33_004)
         } else {
-            33_003
+            Some(33_003)
         }
     }
 
@@ -315,7 +354,7 @@ impl Zeitraum {
 /// One field per Prüfschritt, deliberately: the correspondence is what lets an
 /// auditor holding the EBD read this struct, and it is what keeps a wrong code
 /// from being reachable at all.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PositionsFakten {
     /// `SG26 LIN` DE 1082 — the Positionsnummer the answer has to name.
     pub positionsnummer: u16,
@@ -332,12 +371,13 @@ pub struct PositionsFakten {
     pub leistung_erbracht: Option<bool>,
     /// Prüfschritt 320 — does the price match the Angebot valid for this
     /// position's Ausführungsdatum / Abrechnungszeitraum? `None` when no
-    /// accepted Angebot is on record.
+    /// accepted Angebot is on record, which leaves the step open.
     pub preis_wie_angebot: Option<bool>,
     /// Prüfschritt 330 — is the Umsatzsteuersatz the one valid for the period?
+    /// `None` leaves the step open.
     pub steuersatz_korrekt: Option<bool>,
     /// Prüfschritte 350/360 — the position's own Leistungszeitraum bzw.
-    /// Ausführungsdatum.
+    /// Ausführungsdatum. `None` leaves both steps open.
     pub zeitraum: Option<Zeitraum>,
     /// Prüfschritt 370 — the Rechnungsnummer of an earlier, not-cancelled
     /// invoice that already billed this Artikel-ID for the same period. The
@@ -356,7 +396,7 @@ pub struct PositionsFakten {
 /// requires the answer to name „den Steuersatz (aus DE5278) und die
 /// Steuerkategorie (aus DE5305) des SG52 TAX" — so both travel with the
 /// Befund rather than being summarised away.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Steuersatzpruefung {
     /// `SG52 TAX` DE 5278 — the rate, as written on the wire (`"19.00"`).
     pub steuersatz: String,
@@ -379,12 +419,12 @@ pub struct Steuersatzpruefung {
     clippy::struct_excessive_bools,
     reason = "one field per Prüfschritt, by design"
 )]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RechnungsFakten {
     /// **`E_0266` Prüfschritt 1 only** — could the MSB's COMDIS 29001 rebut
-    /// every objection the ESA raised? `None` on the first round, where the
-    /// Prüfschritt does not exist. [`pruefe_rechnung`] ignores it;
-    /// [`pruefe_rechnung_erneut`] refuses with `A25` on `Some(false)`.
+    /// every objection the ESA raised? [`pruefe_rechnung`] ignores it — the
+    /// first round has no such Prüfschritt; [`pruefe_rechnung_erneut`]
+    /// refuses with `A25` on `Some(false)` and leaves the step open on `None`.
     pub einwaende_entkraeftet: Option<bool>,
     /// Prüfschritt 10 — does the invoice carry the § 14 Abs. 4 UStG content?
     /// `None` escalates rather than refusing a formally correct invoice on a
@@ -396,7 +436,7 @@ pub struct RechnungsFakten {
     /// not the local ingest timestamp (Prüfschritte 20, 70).
     pub eingangsdatum: Date,
     /// The head-level Leistungszeitraum bzw. Ausführungsdatum
-    /// (Prüfschritte 30, 350).
+    /// (Prüfschritte 30, 350). `None` leaves both steps open.
     pub leistungszeitraum: Option<Zeitraum>,
     /// Prüfschritt 40 — does the invoice reference an ORDERS 17007 this ESA
     /// actually placed? WiM Teil 2 UC 4.5.1: „Eine Rechnung referenziert auf
@@ -408,16 +448,15 @@ pub struct RechnungsFakten {
     /// negative: „Bei der Abrechnung des MSB kann es nicht zu einer
     /// Rückerstattung kommen."
     pub faelliger_betrag_nicht_negativ: bool,
-    /// `SG8 DTM+265` — the Zahlungsziel (Prüfschritt 70). `None` skips the
-    /// check; an invoice with no Zahlungsziel is a § 14 UStG defect, which is
-    /// Prüfschritt 10's business.
+    /// `SG8 DTM+265` — the Zahlungsziel (Prüfschritt 70). `None` leaves the
+    /// step open.
     pub zahlungsziel: Option<Date>,
     /// Prüfschritt 80 — **Preisblatt-B families only.** Does the recipient
     /// hold the Preisblatt version the invoice bills against? The sheet is
     /// „Preisblatt Technik" in the PRICAT 27002.
     ///
-    /// `None` is „not assessed" and does not refuse. Ignored entirely by the
-    /// [`ESA`] family, whose trees publish no such Prüfschritt.
+    /// `None` is „not assessed" and leaves the step open. Ignored entirely by
+    /// the [`ESA`] family, whose trees publish no such Prüfschritt.
     pub preisblatt_version_gueltig: Option<bool>,
     /// Prüfschritt 90 — **Preisblatt-B families only.** The Rechnungsnummer of
     /// an earlier accepted, not-cancelled invoice that already settled this
@@ -513,11 +552,22 @@ fn walk(
     // Prüfschritte mehr durchgeführt und ein Antwortcode wird als Ergebnis an
     // den MSB übermittelt." So the Kopfebene returns at most one code, and
     // reaching the positions at all means the head was clean.
-    if let Some(kopf) = kopfebene(familie, tree, r, cal, zweite_runde) {
-        return RechnungsAntwort {
-            tree,
-            befunde: vec![kopf],
-        };
+    match kopfebene(familie, tree, r, cal, zweite_runde) {
+        Ok(Some(kopf)) => {
+            return RechnungsAntwort {
+                tree,
+                befunde: vec![kopf],
+                offen: Vec::new(),
+            };
+        }
+        Err(offen) => {
+            return RechnungsAntwort {
+                tree,
+                befunde: Vec::new(),
+                offen: vec![offen],
+            };
+        }
+        Ok(None) => {}
     }
 
     // ── Positionsebene ───────────────────────────────────────────────────────
@@ -527,11 +577,18 @@ fn walk(
     // to the end, and every position is walked. Prüfschritt 450 then ends the
     // EBD if anything was found, so the Summenebene is only reached on clean
     // positions.
+    let mut offen = Vec::new();
     for (i, p) in r.positionen.iter().enumerate() {
-        befunde.extend(positionsebene(tree, r, p, i));
+        let (b, o) = positionsebene(tree, r, p, i);
+        befunde.extend(b);
+        offen.extend(o);
     }
-    if !befunde.is_empty() {
-        return RechnungsAntwort { tree, befunde };
+    if !befunde.is_empty() || !offen.is_empty() {
+        return RechnungsAntwort {
+            tree,
+            befunde,
+            offen,
+        };
     }
 
     // ── Summenebene ──────────────────────────────────────────────────────────
@@ -551,11 +608,16 @@ fn walk(
                     r.fehlende_artikel_ids.join(", ")
                 ),
             )],
+            offen: Vec::new(),
         };
     }
     befunde.extend(summenebene(tree, r));
 
-    RechnungsAntwort { tree, befunde }
+    RechnungsAntwort {
+        tree,
+        befunde,
+        offen: Vec::new(),
+    }
 }
 
 // Ten Prüfschritte in sequence, two of them family-gated. Splitting them across
@@ -571,38 +633,54 @@ fn kopfebene(
     r: &RechnungsFakten,
     cal: crate::HolidayCalendar,
     zweite_runde: bool,
-) -> Option<Befund> {
+) -> Result<Option<Befund>, OffenerPruefschritt> {
     let kopf = Ebene::Kopf;
+    let offen = |pruefschritt: u16, detail: &str| OffenerPruefschritt {
+        ebene: Ebene::Kopf,
+        pruefschritt,
+        detail: detail.to_owned(),
+    };
 
     // 1 — second round only: did the MSB's COMDIS rebut the objections? The
     // code is the family's, not a constant: `A25` in `E_0266` and `AC1` in
     // `E_0276`/`E_0277` for the identical question.
+    if zweite_runde && r.einwaende_entkraeftet.is_none() {
+        return Err(offen(
+            1,
+            "Ob der MSB alle Einwände entkräften konnte, ist nicht beurteilt",
+        ));
+    }
     if zweite_runde && r.einwaende_entkraeftet == Some(false) {
-        return Some(befund(
+        return Ok(Some(befund(
             tree,
             kopf,
             familie.erneut_einwand_code,
             1,
             "Der MSB konnte nicht alle Einwände des Rechnungsempfängers entkräften",
-        ));
+        )));
     }
 
-    // 10 — § 14 Abs. 4 UStG. `None` is „not assessed", which is not „nicht
-    // erfüllt": refusing an invoice because nothing checked it would be a
-    // rejection mako cannot substantiate.
-    if r.ustg_konform == Some(false) {
-        return Some(befund(
+    // 10 — § 14 Abs. 4 UStG. `None` is „not assessed": neither „ja" nor
+    // „nicht erfüllt", so the walk stops open rather than state either.
+    let Some(ustg_konform) = r.ustg_konform else {
+        return Err(offen(
+            10,
+            "Ob die Rechnung § 14 Abs. 4 UStG erfüllt, ist nicht beurteilt",
+        ));
+    };
+    if !ustg_konform {
+        return Ok(Some(befund(
             tree,
             kopf,
             "A01",
             10,
             "Die RechnungsFakten erfüllt die Anforderungen des § 14 Abs. 4 UStG nicht",
-        ));
+        )));
     }
 
     // 20 — Rechnungsdatum ≤ Eingangsdatum.
     if r.rechnungsdatum > r.eingangsdatum {
-        return Some(befund(
+        return Ok(Some(befund(
             tree,
             kopf,
             "A02",
@@ -611,15 +689,19 @@ fn kopfebene(
                 "Rechnungsdatum {} liegt nach dem Eingangsdatum {}",
                 r.rechnungsdatum, r.eingangsdatum
             ),
-        ));
+        )));
     }
 
     // 30 — Rechnungsdatum < Leistungsbeginn is a refusal: the MSB billed a
     // service before performing it.
-    if let Some(z) = r.leistungszeitraum
-        && r.rechnungsdatum < z.von
-    {
-        return Some(befund(
+    let Some(z) = r.leistungszeitraum else {
+        return Err(offen(
+            30,
+            "Die Rechnung nennt im Kopfteil kein Ausführungsdatum und keinen Leistungszeitraum",
+        ));
+    };
+    if r.rechnungsdatum < z.von {
+        return Ok(Some(befund(
             tree,
             kopf,
             "A03",
@@ -628,61 +710,62 @@ fn kopfebene(
                 "Rechnungsdatum {} liegt vor dem Ausführungsdatum/Leistungszeitraum ab {}",
                 r.rechnungsdatum, z.von
             ),
-        ));
+        )));
     }
 
     // 40 — WiM Teil 2 UC 4.5.1: „Eine Rechnung referenziert auf die
     // zugrundeliegende Bestellung."
     if !r.bestellung_bekannt {
-        return Some(befund(
+        return Ok(Some(befund(
             tree,
             kopf,
             "A04",
             40,
             "Die RechnungsFakten nennt keine Bestellung, die dieser ESA beim MSB platziert hat",
-        ));
+        )));
     }
 
     // 50 — Rechnungsnummer already used by this Rechnungssteller.
     if r.rechnungsnummer_bereits_verwendet {
-        return Some(befund(
+        return Ok(Some(befund(
             tree,
             kopf,
             "A05",
             50,
             "Die Rechnungsnummer liegt von diesem Rechnungssteller bereits vor",
-        ));
+        )));
     }
 
     // 60 — no Rückerstattung in an MSB Abrechnung. A credit belongs on a
     // Stornorechnung, which is `E_0267`'s business.
     if !r.faelliger_betrag_nicht_negativ {
-        return Some(befund(
+        return Ok(Some(befund(
             tree,
             kopf,
             "A06",
             60,
             "Der fällige Betrag ist negativ — bei der Abrechnung des MSB kann es nicht zu einer \
              Rückerstattung kommen",
-        ));
+        )));
     }
 
     // 70 — Zahlungsziel ≤ 10 WT nach dem Rechnungseingangsdatum.
-    if let Some(ziel) = r.zahlungsziel {
-        let frueheste = mako_fristen::add_werktage(r.eingangsdatum, ZAHLUNGSZIEL_MINDEST_WT, cal);
-        if ziel < frueheste {
-            return Some(befund(
-                tree,
-                kopf,
-                "A07",
-                70,
-                format!(
-                    "Zahlungsziel {ziel} unterschreitet die {ZAHLUNGSZIEL_MINDEST_WT} Werktage \
-                     nach dem Rechnungseingang {} — frühestens {frueheste}",
-                    r.eingangsdatum
-                ),
-            ));
-        }
+    let Some(ziel) = r.zahlungsziel else {
+        return Err(offen(70, "Die Rechnung nennt kein Zahlungsziel"));
+    };
+    let frueheste = mako_fristen::add_werktage(r.eingangsdatum, ZAHLUNGSZIEL_MINDEST_WT, cal);
+    if ziel < frueheste {
+        return Ok(Some(befund(
+            tree,
+            kopf,
+            "A07",
+            70,
+            format!(
+                "Zahlungsziel {ziel} unterschreitet die {ZAHLUNGSZIEL_MINDEST_WT} Werktage \
+                 nach dem Rechnungseingang {} — frühestens {frueheste}",
+                r.eingangsdatum
+            ),
+        )));
     }
 
     // 80/90 — Preisblatt-B families only. An ESA has no Preisblatt, so its
@@ -692,20 +775,26 @@ fn kopfebene(
         // 80 — „Liegt die angegebene Version des Preisblatts, auf welche sich
         // die Rechnung der bestätigten Bestellung bezieht, vor?" The sheet is
         // called „Preisblatt Technik" in the PRICAT 27002.
-        if r.preisblatt_version_gueltig == Some(false) {
-            return Some(befund(
+        let Some(preisblatt_version_gueltig) = r.preisblatt_version_gueltig else {
+            return Err(offen(
+                80,
+                "Ob die angegebene Version des Preisblatts vorliegt, ist nicht beurteilt",
+            ));
+        };
+        if !preisblatt_version_gueltig {
+            return Ok(Some(befund(
                 tree,
                 kopf,
                 "A08",
                 80,
                 "Die in der RechnungsFakten angegebene Version des Preisblatts liegt nicht vor",
-            ));
+            )));
         }
         // 90 — the Abrechnungszeitraum already settled by an accepted, not
         // cancelled invoice. The Hinweis makes naming that Rechnungsnummer part
         // of the answer.
         if let Some(nummer) = r.zeitraum_bereits_abgerechnet_in.as_deref() {
-            return Some(befund(
+            return Ok(Some(befund(
                 tree,
                 kopf,
                 "A25",
@@ -714,13 +803,13 @@ fn kopfebene(
                     "Der Abrechnungszeitraum wurde bereits mit der akzeptierten, nicht \
                      stornierten RechnungsFakten {nummer} abgerechnet"
                 ),
-            ));
+            )));
         }
     }
 
     // 90 resp. 100 — the head-level catch-all. Its Nutzungsmöglichkeit ends
     // 01.04.2027 (ESA) resp. 01.10.2027 (Preisblatt B).
-    r.sonstiger_kopffehler.as_ref().map(|detail| {
+    Ok(r.sonstiger_kopffehler.as_ref().map(|detail| {
         befund(
             tree,
             kopf,
@@ -728,7 +817,7 @@ fn kopfebene(
             familie.sonstiger_kopffehler_schritt(),
             detail.clone(),
         )
-    })
+    }))
 }
 
 // Eight Prüfschritte in sequence. Splitting them across functions would break
@@ -743,9 +832,17 @@ fn positionsebene(
     r: &RechnungsFakten,
     p: &PositionsFakten,
     index: usize,
-) -> Vec<Befund> {
+) -> (Vec<Befund>, Vec<OffenerPruefschritt>) {
     let mut out = Vec::new();
+    let mut offen = Vec::new();
     let ebene = Ebene::Position(p.positionsnummer);
+    let mut unbeantwortet = |pruefschritt: u16, detail: &str| {
+        offen.push(OffenerPruefschritt {
+            ebene,
+            pruefschritt,
+            detail: detail.to_owned(),
+        });
+    };
 
     // 300 — Artikel-ID aus der Bestellung. „nein → 440": the rest of *this*
     // position is skipped, because without the Artikel-ID there is no Angebot
@@ -768,11 +865,17 @@ fn positionsebene(
                 None => "Die PositionsFakten nennt keine Artikel-ID aus der Bestellung".to_owned(),
             },
         ));
-        return out;
+        return (out, Vec::new());
     }
 
     // 310 — was the billed service performed? `None` is „unbekannt", which is
-    // not „nicht erbracht".
+    // neither „durchgeführt" nor „nicht durchgeführt".
+    if p.leistung_erbracht.is_none() {
+        unbeantwortet(
+            310,
+            "Ob die abzurechnende Leistung vom MSB durchgeführt wurde, ist nicht erfasst",
+        );
+    }
     if p.leistung_erbracht == Some(false) {
         out.push(befund(
             tree,
@@ -787,7 +890,13 @@ fn positionsebene(
     // the QUOTES 15003 it ordered against is the whole price basis
     // (§ 35 MsbG leaves the Entgelt einer Zusatzleistung to be agreed per
     // request), so `None` here means mako holds no offer and the position is
-    // not comparable rather than wrong.
+    // not comparable rather than wrong — the step stays open.
+    if p.preis_wie_angebot.is_none() {
+        unbeantwortet(
+            320,
+            "Kein gültiges Angebot erfasst, mit dem der Preis zu vergleichen ist",
+        );
+    }
     if p.preis_wie_angebot == Some(false) {
         out.push(befund(
             tree,
@@ -800,6 +909,12 @@ fn positionsebene(
     }
 
     // 330 — Umsatzsteuersatz for the period.
+    if p.steuersatz_korrekt.is_none() {
+        unbeantwortet(
+            330,
+            "Ob der Umsatzsteuersatz für diesen Zeitraum gültig ist, ist nicht beurteilt",
+        );
+    }
     if p.steuersatz_korrekt == Some(false) {
         out.push(befund(
             tree,
@@ -811,7 +926,14 @@ fn positionsebene(
         ));
     }
 
-    // 350 — the position's period inside the head's.
+    // 350 — the position's period inside the head's. The head's period is
+    // present: Prüfschritt 30 stopped the walk open without one.
+    if p.zeitraum.is_none() {
+        unbeantwortet(
+            350,
+            "Die Rechnungsposition nennt kein Ausführungsdatum und keinen Leistungszeitraum",
+        );
+    }
     if let (Some(pos), Some(kopf)) = (p.zeitraum, r.leistungszeitraum)
         && !pos.liegt_in(kopf)
     {
@@ -831,6 +953,20 @@ fn positionsebene(
     // 360 — a second position in *this* invoice with the same Artikel-ID and an
     // identical or overlapping period. Computed here rather than asked of the
     // caller: it is a property of the position list, and the tree owns it.
+    // A position with the same Artikel-ID and no period of its own could
+    // overlap, so the step stays open.
+    if p.artikel_id.as_deref().is_some_and(|id| {
+        p.zeitraum.is_none()
+            || r.positionen.iter().enumerate().any(|(j, other)| {
+                j != index && other.artikel_id.as_deref() == Some(id) && other.zeitraum.is_none()
+            })
+    }) {
+        unbeantwortet(
+            360,
+            "Ohne Leistungszeitraum ist nicht feststellbar, ob sich Positionen derselben \
+             Artikel-ID überschneiden",
+        );
+    }
     if let (Some(id), Some(pos)) = (p.artikel_id.as_deref(), p.zeitraum)
         && r.positionen.iter().enumerate().any(|(j, other)| {
             j != index
@@ -881,7 +1017,7 @@ fn positionsebene(
         out.push(befund(tree, ebene, "A99", 430, detail.clone()));
     }
 
-    out
+    (out, offen)
 }
 
 fn summenebene(tree: &'static str, r: &RechnungsFakten) -> Vec<Befund> {
@@ -1044,6 +1180,10 @@ pub enum StornoAntwort {
         /// Why nothing is owed.
         grund: &'static str,
     },
+    /// A Prüfschritt the walk reached and no record answered. The tree runs
+    /// in sequence and stops at its first refusal, so an open step may own
+    /// the answer: none is owed until a person states the missing fact.
+    Offen(OffenerPruefschritt),
 }
 
 impl StornoAntwort {
@@ -1053,7 +1193,7 @@ impl StornoAntwort {
         match self {
             Self::Zustimmen => Some(33_001),
             Self::Ablehnen { .. } => Some(33_002),
-            Self::KeineAntwort { .. } => None,
+            Self::KeineAntwort { .. } | Self::Offen(_) => None,
         }
     }
 }
@@ -1063,14 +1203,15 @@ impl StornoAntwort {
     clippy::struct_excessive_bools,
     reason = "one field per Prüfschritt, by design"
 )]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StornoFakten {
     /// Prüfschritt 10 — is the invoice being cancelled on the ESA's books?
     pub ursprungsrechnung_bekannt: bool,
     /// Prüfschritt 15 — is the Storno's own Rechnungsnummer already on file
     /// from this Rechnungssteller?
     pub rechnungsnummer_bereits_verwendet: bool,
-    /// Prüfschritt 17 — § 14 Abs. 4 UStG. `None` is „not assessed".
+    /// Prüfschritt 17 — § 14 Abs. 4 UStG. `None` is „not assessed" and
+    /// leaves the walk [open](StornoAntwort::Offen).
     pub ustg_konform: Option<bool>,
     /// Prüfschritt 20 — was the original already cancelled?
     pub bereits_storniert: bool,
@@ -1118,7 +1259,15 @@ pub fn pruefe_stornorechnung(familie: RechnungsFamilie, s: &StornoFakten) -> Sto
             "Die Rechnungsnummer der StornoFakten liegt von diesem Rechnungssteller bereits vor",
         );
     }
-    if s.ustg_konform == Some(false) {
+    let Some(ustg_konform) = s.ustg_konform else {
+        return StornoAntwort::Offen(OffenerPruefschritt {
+            ebene: Ebene::Kopf,
+            pruefschritt: 17,
+            detail: "Ob die Stornorechnung § 14 Abs. 4 UStG erfüllt, ist nicht beurteilt"
+                .to_owned(),
+        });
+    };
+    if !ustg_konform {
         return refuse(
             "A07",
             17,
@@ -1218,7 +1367,7 @@ mod tests {
             // 01.04.2026 + 10 WT (BdewMaKo: Karfreitag 03.04. and Ostermontag
             // 06.04.2026 are Feiertage) — well inside.
             zahlungsziel: Some(date!(2026 - 05 - 15)),
-            preisblatt_version_gueltig: None,
+            preisblatt_version_gueltig: Some(true),
             zeitraum_bereits_abgerechnet_in: None,
             sonstiger_kopffehler: None,
             positionen: vec![position(1)],
@@ -1240,7 +1389,7 @@ mod tests {
     fn a_clean_invoice_is_a_zahlungsavis_with_no_code() {
         let a = pruefe_rechnung(ESA, &rechnung(), CAL);
         assert!(a.ist_zustimmung());
-        assert_eq!(a.remadv_pid(), 33_001);
+        assert_eq!(a.remadv_pid(), Some(33_001));
         assert!(a.codes().is_empty());
     }
 
@@ -1258,7 +1407,7 @@ mod tests {
         assert_eq!(a.befunde[0].ebene, Ebene::Kopf);
         assert_eq!(a.befunde[0].pruefschritt, 40);
         // Kopf und Summe ride the same Prüfidentifikator.
-        assert_eq!(a.remadv_pid(), 33_003);
+        assert_eq!(a.remadv_pid(), Some(33_003));
     }
 
     /// Prüfschritt 70's own Hinweis: „Zahlungsziel ≤ 10 WT zum
@@ -1285,7 +1434,7 @@ mod tests {
         let a = pruefe_rechnung(ESA, &r, CAL);
         assert_eq!(a.codes(), vec!["A11", "A20"]);
         assert!(a.befunde.iter().all(|b| b.ebene == Ebene::Position(1)));
-        assert_eq!(a.remadv_pid(), 33_004);
+        assert_eq!(a.remadv_pid(), Some(33_004));
     }
 
     /// Prüfschritt 300 „nein → 440": a position with no Artikel-ID from the
@@ -1340,7 +1489,7 @@ mod tests {
         let a = pruefe_rechnung(ESA, &r, CAL);
         assert_eq!(a.codes(), vec!["A21"]);
         assert!(a.befunde[0].detail.contains("9990001100003"));
-        assert_eq!(a.remadv_pid(), 33_003);
+        assert_eq!(a.remadv_pid(), Some(33_003));
     }
 
     /// 510/520 run per (Steuersatz, Steuerkategorie) and both codes' Hinweis
@@ -1619,6 +1768,82 @@ mod tests {
         );
     }
 
+    /// A step nothing assessed is neither „ja" nor „nein": the walk ends open,
+    /// with no REMADV, rather than avisieren a payment or refuse on a check
+    /// that did not run (EBD 4.3 Kap. 8.27.1, S. 624–627).
+    #[test]
+    fn an_unassessed_step_leaves_the_walk_open() {
+        for f in FAMILIEN {
+            let mut r = rechnung();
+            r.ustg_konform = None;
+            let a = pruefe_rechnung(*f, &r, CAL);
+            assert!(a.ist_offen() && !a.ist_zustimmung(), "{}", f.rechnung);
+            assert_eq!(a.offen[0].pruefschritt, 10);
+            assert_eq!(a.remadv_pid(), None, "an open walk owes no REMADV yet");
+
+            let mut r = rechnung();
+            r.positionen[0].steuersatz_korrekt = None;
+            let a = pruefe_rechnung(*f, &r, CAL);
+            assert_eq!(a.offen[0].pruefschritt, 330, "{}", f.rechnung);
+            assert_eq!(a.remadv_pid(), None);
+        }
+    }
+
+    /// The Kopfebene sends one code, from the first step that refuses. An open
+    /// step before a refusing one may own that code, so the walk stops open
+    /// there; a refusal before the open step is decided.
+    #[test]
+    fn the_kopfebene_stops_open_at_its_first_unassessed_step() {
+        let mut r = rechnung();
+        r.ustg_konform = None;
+        r.rechnungsnummer_bereits_verwendet = true;
+        let a = pruefe_rechnung(ESA, &r, CAL);
+        assert!(a.befunde.is_empty());
+        assert_eq!(a.offen[0].pruefschritt, 10);
+
+        let mut r = rechnung();
+        r.rechnungsnummer_bereits_verwendet = true;
+        r.zahlungsziel = None;
+        let a = pruefe_rechnung(ESA, &r, CAL);
+        assert_eq!(a.antwortcodes(), vec!["A05"]);
+        assert!(!a.ist_offen());
+    }
+
+    /// Prüfschritt 450 sends every position code, so an open position step
+    /// keeps a refusal elsewhere from going out as the whole answer.
+    #[test]
+    fn an_open_position_step_holds_the_position_refusals() {
+        let mut r = rechnung();
+        r.positionen = vec![position(1), position(2)];
+        r.positionen[1].artikel_id = Some("9990001100003".to_owned());
+        r.positionen[0].leistung_erbracht = None;
+        r.positionen[1].rechenfehler = true;
+        let a = pruefe_rechnung(ESA, &r, CAL);
+        assert_eq!(a.antwortcodes(), vec!["A20"]);
+        assert_eq!(a.offen[0].pruefschritt, 310);
+        assert_eq!(a.remadv_pid(), None);
+    }
+
+    /// `E_0267` runs in sequence like the Kopfebene: Prüfschritt 17 open ends
+    /// the walk open (EBD 4.3 Kap. 8.27.4, S. 640).
+    #[test]
+    fn an_unassessed_storno_step_leaves_the_walk_open() {
+        let s = StornoFakten {
+            ursprungsrechnung_bekannt: true,
+            rechnungsnummer_bereits_verwendet: false,
+            ustg_konform: None,
+            bereits_storniert: true,
+            rechnungstyp_identisch: true,
+            zeitraum_identisch: true,
+            betraege_negiert_identisch: true,
+            sonstiger_fehler: None,
+            ursprungsantwort: UrsprungsAntwort::Zugestimmt,
+        };
+        let a = pruefe_stornorechnung(ESA, &s);
+        assert!(matches!(&a, StornoAntwort::Offen(o) if o.pruefschritt == 17));
+        assert_eq!(a.remadv_pid(), None);
+    }
+
     /// `A90` moves with the family, because the two extra steps push it down.
     /// An auditor matches the Befund against the published row by this number.
     #[test]
@@ -1643,13 +1868,13 @@ mod tests {
             r.rechnungsnummer_bereits_verwendet = true;
             let a = pruefe_rechnung(*f, &r, CAL);
             assert_eq!(a.antwortcodes(), vec!["A05"], "{}", f.rechnung);
-            assert_eq!(a.remadv_pid(), 33_003);
+            assert_eq!(a.remadv_pid(), Some(33_003));
 
             let mut r = rechnung();
             r.positionen[0].rechenfehler = true;
             let a = pruefe_rechnung(*f, &r, CAL);
             assert_eq!(a.antwortcodes(), vec!["A20"], "{}", f.rechnung);
-            assert_eq!(a.remadv_pid(), 33_004, "position defects ride 33004");
+            assert_eq!(a.remadv_pid(), Some(33_004), "position defects ride 33004");
         }
     }
 

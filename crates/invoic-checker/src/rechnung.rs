@@ -16,14 +16,16 @@
 //!
 //! # What the invoice cannot answer about itself
 //!
-//! Six Prüfschritte need facts no INVOIC carries: whether the invoice
+//! Seven Prüfschritte need facts no INVOIC carries: whether the invoice
 //! references an order this ESA placed (40), whether the Rechnungsnummer is a
 //! repeat (50), whether the billed service was actually performed (310),
-//! whether the Artikel-ID was billed before (370), whether the § 14 Abs. 4 UStG
+//! whether the Umsatzsteuersatz is the one valid for the period (330), whether
+//! the Artikel-ID was billed before (370), whether the § 14 Abs. 4 UStG
 //! content is complete (10), and — on the second round — whether the MSB's
 //! COMDIS rebutted the objections (`E_0266` Prüfschritt 1). Every one of them
-//! is `Option` or explicit in [`EmpfaengerFakten`], and an unknown answer
-//! never refuses: a rejection is a binding statement to the market.
+//! is `Option` or explicit in [`EmpfaengerFakten`]. An unknown answer neither
+//! refuses nor passes: the walk ends open, and no REMADV is owed until the
+//! fact is stated.
 //!
 //! # Sources
 //!
@@ -62,8 +64,12 @@ pub struct EmpfaengerFakten {
     /// Prüfschritt 50 — has this Rechnungsnummer been seen from this MSB?
     pub rechnungsnummer_bereits_verwendet: bool,
     /// Prüfschritt 310, per Positionsnummer — was the billed service actually
-    /// performed? Absent means unknown, which never refuses.
+    /// performed? Absent means unknown, which leaves the walk open.
     pub leistung_erbracht: HashMap<u16, bool>,
+    /// Prüfschritt 330, per Positionsnummer — is the Umsatzsteuersatz the one
+    /// valid for the position's period? Absent means not assessed, which
+    /// leaves the walk open.
+    pub steuersatz_korrekt: HashMap<u16, bool>,
     /// Prüfschritt 370, per Positionsnummer — the Rechnungsnummer of an
     /// earlier, not-cancelled invoice that already billed this Artikel-ID for
     /// the same period.
@@ -246,8 +252,8 @@ fn position(
         // Prüfschritt 330 needs the rate valid for the period, which is a
         // legal fact about the Leistungszeitraum rather than a property of the
         // document. `crate::check` runs the arithmetic on it; the *validity*
-        // of the rate stays unassessed here rather than guessed.
-        steuersatz_korrekt: None,
+        // of the rate is the caller's to state, and unstated it stays open.
+        steuersatz_korrekt: fakten.steuersatz_korrekt.get(&nr).copied(),
         zeitraum: match (pos.lieferung_von_date(), pos.lieferung_bis_date()) {
             (Some(von), Some(bis)) => Some(Zeitraum { von, bis }),
             (Some(tag), None) | (None, Some(tag)) => Some(Zeitraum::tag(tag)),
@@ -567,8 +573,17 @@ mod tests {
         )]
     }
 
+    /// Every fact the invoice cannot answer about itself, stated as
+    /// assessed and clean.
     fn fakten() -> EmpfaengerFakten {
-        EmpfaengerFakten::neu(date!(2026 - 04 - 01))
+        let mut f = EmpfaengerFakten::neu(date!(2026 - 04 - 01));
+        f.ustg_konform = Some(true);
+        f.preisblatt_version_gueltig = Some(true);
+        for nr in 1..=3 {
+            f.leistung_erbracht.insert(nr, true);
+            f.steuersatz_korrekt.insert(nr, true);
+        }
+        f
     }
 
     #[test]
@@ -582,7 +597,7 @@ mod tests {
             CAL,
         );
         assert!(a.ist_zustimmung(), "{:?}", a.befunde);
-        assert_eq!(a.remadv_pid(), 33_001);
+        assert_eq!(a.remadv_pid(), Some(33_001));
     }
 
     /// The whole point of the ESA branch: the price basis is the accepted
@@ -611,7 +626,7 @@ mod tests {
             CAL,
         );
         assert_eq!(a.codes(), vec!["A11"]);
-        assert_eq!(a.remadv_pid(), 33_004);
+        assert_eq!(a.remadv_pid(), Some(33_004));
     }
 
     /// An Artikel-ID the offer never priced is a charge the ESA did not agree
@@ -633,8 +648,9 @@ mod tests {
 
     /// **Not holding the offer is a gap in mako's books, not a defect in the
     /// invoice.** With no accepted Angebot on record the price and Artikel-ID
-    /// Prüfschritte are not comparable, and refusing on them would send a
-    /// REMADV rejecting a correct invoice.
+    /// Prüfschritte are not comparable: refusing on them would send a REMADV
+    /// rejecting a correct invoice, and passing them a Zahlungsavis on a
+    /// price nobody compared — so Prüfschritt 320 stays open.
     #[test]
     fn without_an_offer_on_record_nothing_is_refused_on_price() {
         let a = antwort_auf_rechnung(
@@ -645,7 +661,12 @@ mod tests {
             &CheckConfig::default(),
             CAL,
         );
-        assert!(a.ist_zustimmung(), "{:?}", a.befunde);
+        assert!(a.befunde.is_empty(), "{:?}", a.befunde);
+        assert_eq!(
+            a.offen.iter().map(|o| o.pruefschritt).collect::<Vec<_>>(),
+            vec![320]
+        );
+        assert_eq!(a.remadv_pid(), None);
     }
 
     /// Prüfschritt 500 — the offer priced two Artikel-IDs and the invoice bills
@@ -684,7 +705,7 @@ mod tests {
             CAL,
         );
         assert_eq!(a.codes(), vec!["A07"]);
-        assert_eq!(a.remadv_pid(), 33_003);
+        assert_eq!(a.remadv_pid(), Some(33_003));
     }
 
     /// Prüfschritt 60 — an MSB Abrechnung has no Rückerstattung; a credit
@@ -756,7 +777,7 @@ mod tests {
         );
         assert_eq!(a.codes(), vec!["A04"]);
         // Kopf-level, so the walk stops there and the answer rides 33003.
-        assert_eq!(a.remadv_pid(), 33_003);
+        assert_eq!(a.remadv_pid(), Some(33_003));
     }
 
     /// Facts the invoice cannot state about itself never refuse while unknown,
@@ -829,14 +850,7 @@ mod tests {
             total_tolerance_ppm: 50_000, // 5 %
             ..CheckConfig::default()
         };
-        let antwort = antwort_auf_rechnung(
-            ESA_F,
-            &r,
-            &[],
-            &EmpfaengerFakten::neu(date!(2026 - 04 - 02)),
-            &config,
-            CAL,
-        );
+        let antwort = antwort_auf_rechnung(ESA_F, &r, &agreed(), &fakten(), &config, CAL);
         assert!(
             !antwort.antwortcodes().contains(&"A24"),
             "the walk must follow total_tolerance_ppm, got {:?}",
@@ -848,14 +862,7 @@ mod tests {
             total_tolerance_ppm: 1,
             ..CheckConfig::default()
         };
-        let antwort = antwort_auf_rechnung(
-            ESA_F,
-            &r,
-            &[],
-            &EmpfaengerFakten::neu(date!(2026 - 04 - 02)),
-            &config,
-            CAL,
-        );
+        let antwort = antwort_auf_rechnung(ESA_F, &r, &agreed(), &fakten(), &config, CAL);
         assert!(
             antwort.antwortcodes().contains(&"A24"),
             "a 1 ppm tolerance must reach Prüfschritt 540, got {:?}",

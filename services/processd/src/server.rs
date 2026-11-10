@@ -518,12 +518,20 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
     // ── Sperr-/Entsperrauftrag queue (NB role) ─────────────────────────────
     #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
     let sperr_router = {
-        let sperr_makod = Arc::new(makod.clone());
-        // A terminal order whose IFTSTA never went out leaves the Lieferant
-        // waiting indefinitely. This drains that queue.
+        // The IFTSTA 21039 an order owes is an outbox command committed with
+        // its outcome; this delivers it to makod.
+        tokio::spawn(
+            crate::sperr::iftsta_worker(
+                pool.clone(),
+                cfg.makod_url.clone(),
+                cfg.makod_api_key.clone(),
+            )
+            .run(ctx.shutdown.clone()),
+        );
+        // A dead-lettered or overdue IFTSTA leaves the Lieferant waiting; this
+        // announces it.
         tokio::spawn(crate::sperr::worker::run(
             pool.clone(),
-            Arc::clone(&sperr_makod),
             cfg.tenant.clone(),
             ctx.shutdown.clone(),
         ));
@@ -545,7 +553,6 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             );
         }
         crate::sperr::router(
-            sperr_makod,
             cfg.tenant.clone(),
             crate::sperr::Lesart(cfg.sperr_msb_vorlauf_lesart),
         )
@@ -583,7 +590,6 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             default_transaktionsgrund: cfg.eog_default_transaktionsgrund.clone(),
             warn_days_before_expiry: cfg.eog_warn_days_before_expiry,
             notify_webhook_url: cfg.eog_notify_webhook_url.clone(),
-            notify_webhook_secret: cfg.eog_notify_webhook_secret.clone(),
         }),
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         neuanlage: Arc::new(crate::neuanlage_module::NeuanlageModuleConfig {
@@ -651,12 +657,23 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             default_transaktionsgrund: cfg.eog_default_transaktionsgrund.clone(),
             warn_days_before_expiry: cfg.eog_warn_days_before_expiry,
             notify_webhook_url: cfg.eog_notify_webhook_url.clone(),
-            notify_webhook_secret: cfg.eog_notify_webhook_secret.clone(),
         };
         let timer_tenant = cfg.tenant.clone();
         let timer_shutdown = ctx.shutdown.clone();
+        if let Some(url) = cfg.eog_notify_webhook_url.clone() {
+            tokio::spawn(
+                mako_service::outbox::OutboxWorker::for_target(
+                    pool.clone(),
+                    crate::eog_module::EOG_NOTIFY_TARGET,
+                    url,
+                    cfg.eog_notify_webhook_secret
+                        .clone()
+                        .map(secrecy::SecretString::from),
+                )
+                .run(ctx.shutdown.clone()),
+            );
+        }
         tokio::spawn(async move {
-            let client = mako_service::http::default_client();
             // First sweep shortly after startup, then daily.
             let mut interval = tokio::time::interval(Duration::from_secs(86_400));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -664,7 +681,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
                 tokio::select! {
                     _ = interval.tick() => {
                         match crate::eog_module::sweep_ersatzversorgung_timer(
-                            &timer_pool, &timer_cfg, &timer_tenant, &client,
+                            &timer_pool, &timer_cfg, &timer_tenant,
                         ).await {
                             Ok((warned, expired)) if warned + expired > 0 => {
                                 tracing::warn!(
@@ -1619,9 +1636,10 @@ mod rest {
         // Earliest allowed Lieferbeginn: the calendar day after the next
         // Werktag after today (the Werktag in between is the NB's processing
         // day — its answer is due 11:00 Uhr des 1. WT nach dem ÜT).
-        let base = fristen::add_werktage(today_berlin, 1, HolidayCalendar::BdewMaKo)
-            .next_day()
-            .expect("date overflow");
+        let base = fristen::vorlauf::fruehester_termin_nach_tag_vor_dem_letzten_werktag(
+            today_berlin,
+            HolidayCalendar::BdewMaKo,
+        );
 
         if lieferbeginn < base {
             return Err(refuse_with(

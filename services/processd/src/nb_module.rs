@@ -333,6 +333,11 @@ impl AnmeldungPayload {
             // say. `NichtErforderlich` is the only value a caller that cannot
             // see the projection may use.
             abmeldeanfrage: mako_pruefung::Abmeldeanfrage::NichtErforderlich,
+            // `E_0622` Prüfschritte 18–28 ask about records no store holds —
+            // the ruhende Marktlokation's kind, the Kundenanlage, its
+            // Netzlokationen and iMS — so a ruhende Marktlokation escalates at
+            // the first of them.
+            ruhend: mako_pruefung::RuhendeAnmeldung::default(),
         }
     }
 }
@@ -1492,7 +1497,11 @@ impl MeldepflichtContext {
         let Some(gemeldet) = lfa_gemeldet else {
             return self.zuordnungsbeginn;
         };
-        let floor = mako_fristen::add_werktage(uet, 1, mako_fristen::HolidayCalendar::BdewMaKo);
+        let floor = mako_fristen::add_werktage(
+            uet,
+            mako_fristen::vorlauf::LFA_ZUORDNUNGSENDE_FALL_B_WT,
+            mako_fristen::HolidayCalendar::BdewMaKo,
+        );
         if gemeldet < self.zuordnungsbeginn && gemeldet >= floor {
             gemeldet
         } else {
@@ -2381,17 +2390,22 @@ mod tests {
             marktlokationsart: art,
             erzeugung: None,
             abmeldeanfrage: Abmeldeanfrage::NichtErforderlich,
+            ruhend: mako_pruefung::RuhendeAnmeldung::default(),
         }
     }
 
     // ── The Vorlauf is judged on the receipt day (GPKE Teil 1 Kap. 7) ───────
 
+    /// A Marktlokation unsupplied since its last Lieferende — in operation, so
+    /// `E_0622` Prüfschritt 50 (Neuanlage?) answers „nein".
     fn unbeliefert() -> mako_markt::repository::VersorgungsStatusRecord {
         mako_markt::repository::VersorgungsStatusRecord {
             malo_id: "51238696781".parse().expect("valid MaLo"),
             lieferstatus: mako_markt::repository::LieferStatus::Unbeliefert,
             zuordnungen: Vec::new(),
-            lieferende: None,
+            lieferende: Some(
+                time::Date::from_calendar_date(2026, time::Month::June, 30).expect("valid date"),
+            ),
             msb_mp_id: None,
             nb_mp_id: "9900357000004".to_owned(),
             eog_seit: None,

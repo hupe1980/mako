@@ -100,6 +100,21 @@ pub struct SurveillanceReport {
     pub suppressed: usize,
 }
 
+/// What one scan found: the findings, and every key it saw delivering.
+#[derive(Debug, Clone)]
+pub struct Assessment {
+    /// Keys in a reported state.
+    pub findings: Vec<DeliveryFinding>,
+    /// Keys the scan saw and found healthy, each with the end of its newest
+    /// interval. Only these can resolve an open incident, and only when that
+    /// end lies beyond the one the incident recorded.
+    pub delivering: Vec<(String, OffsetDateTime)>,
+    /// Keys the scan returned at all.
+    pub points_scanned: usize,
+    /// Start of the coverage window.
+    pub window_from: OffsetDateTime,
+}
+
 /// Assess delivery for every measuring point that has data in the window.
 ///
 /// One cross-MaLo aggregate over meterstore's version-resolved relation, which
@@ -118,7 +133,7 @@ pub async fn assess_delivery(
     tenant: &str,
     cfg: &SurveillanceConfig,
     now: OffsetDateTime,
-) -> anyhow::Result<(Vec<DeliveryFinding>, usize, OffsetDateTime)> {
+) -> anyhow::Result<Assessment> {
     let window_from = now - time::Duration::days(cfg.coverage_window_days);
     let store = repo.store();
 
@@ -210,6 +225,7 @@ pub async fn assess_delivery(
 
     let points_scanned = points.len();
     let mut findings = Vec::new();
+    let mut delivering = Vec::new();
 
     for (malo_id, p) in points {
         let hours_silent = (now - p.last_interval_end).whole_hours();
@@ -220,7 +236,10 @@ pub async fn assess_delivery(
         } else {
             None
         };
-        let Some(state) = state else { continue };
+        let Some(state) = state else {
+            delivering.push((malo_id, p.last_interval_end));
+            continue;
+        };
 
         findings.push(DeliveryFinding {
             malo_id,
@@ -240,7 +259,12 @@ pub async fn assess_delivery(
             .then(b.hours_silent.cmp(&a.hours_silent))
     });
 
-    Ok((findings, points_scanned, window_from))
+    Ok(Assessment {
+        findings,
+        delivering,
+        points_scanned,
+        window_from,
+    })
 }
 
 /// A DataFusion timestamp rendered into JSON, back as an instant.
@@ -274,30 +298,26 @@ fn json_number(v: &serde_json::Value) -> Option<f64> {
 
 /// Run one surveillance sweep: assess, reconcile against the register, emit on
 /// the transitions.
+///
+/// # Errors
+///
+/// A scan that cannot run, or a reconcile the register refuses. Either leaves
+/// the register as it was; an empty report in its place would read as „every
+/// point is delivering".
 pub async fn run_surveillance_sweep(
     repo: &MeterStoreTimeSeriesRepository,
     cfg: &SurveillanceConfig,
     tenant: &str,
-) -> SurveillanceReport {
+) -> anyhow::Result<SurveillanceReport> {
     let scanned_at = OffsetDateTime::now_utc();
     let pool = repo.pool();
 
-    let (findings, points_scanned, window_from) =
-        match assess_delivery(repo, tenant, cfg, scanned_at).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, tenant, "edmd: surveillance: scan failed");
-                return SurveillanceReport {
-                    scanned_at,
-                    window_from: scanned_at,
-                    points_scanned: 0,
-                    findings: Vec::new(),
-                    newly_overdue: 0,
-                    resumed: 0,
-                    suppressed: 0,
-                };
-            }
-        };
+    let Assessment {
+        findings,
+        delivering,
+        points_scanned,
+        window_from,
+    } = assess_delivery(repo, tenant, cfg, scanned_at).await?;
 
     let mut newly_overdue = 0usize;
     let mut emitted = 0usize;
@@ -393,22 +413,29 @@ pub async fn run_surveillance_sweep(
         emitted += 1;
     }
 
-    // Close what this sweep no longer finds. The scan covered every point with
-    // data in the window, so anything still open and not re-sighted is
-    // delivering again.
-    let reported: Vec<String> = findings.iter().map(|f| f.malo_id.clone()).collect();
+    // Close what this sweep saw delivering again: a point the scan returned
+    // healthy whose newest interval ends after the one the incident recorded.
+    // The scan is bounded to the window, so a point it did not return is a
+    // point it knows nothing about — a meter that stopped long enough ago has
+    // simply left the window, and resolving it would announce a dead meter as
+    // delivering.
+    let (seen, seen_until): (Vec<String>, Vec<OffsetDateTime>) = delivering.into_iter().unzip();
     let resumed_rows = sqlx::query(
-        r"UPDATE delivery_surveillance
+        r"UPDATE delivery_surveillance d
              SET resolved_at = now()
-           WHERE tenant = $1 AND stream = 'TYP1' AND resolved_at IS NULL
-             AND NOT (malo_id = ANY($2))
-       RETURNING malo_id, state, first_detected_at",
+            FROM unnest($2::text[], $3::timestamptz[]) AS seen(malo_id, last_interval_end)
+           WHERE d.tenant = $1 AND d.stream = 'TYP1' AND d.resolved_at IS NULL
+             AND d.malo_id = seen.malo_id
+             AND (d.last_interval_end IS NULL
+                  OR seen.last_interval_end > d.last_interval_end)
+       RETURNING d.malo_id, d.state, d.first_detected_at",
     )
     .bind(tenant)
-    .bind(&reported)
+    .bind(&seen)
+    .bind(&seen_until)
     .fetch_all(pool)
     .await
-    .unwrap_or_default();
+    .map_err(|e| anyhow::anyhow!("delivery surveillance reconcile: {e}"))?;
 
     for row in &resumed_rows {
         use sqlx::Row as _;
@@ -442,7 +469,7 @@ pub async fn run_surveillance_sweep(
         );
     }
 
-    SurveillanceReport {
+    Ok(SurveillanceReport {
         scanned_at,
         window_from,
         points_scanned,
@@ -450,7 +477,7 @@ pub async fn run_surveillance_sweep(
         newly_overdue,
         resumed: resumed_rows.len(),
         suppressed,
-    }
+    })
 }
 
 /// Spawn the delivery-surveillance worker. Runs until `shutdown` is cancelled.
@@ -480,14 +507,19 @@ pub fn spawn_surveillance_worker(
                     break;
                 }
             }
-            run_surveillance_sweep(&repo, &cfg, &tenant).await;
+            if let Err(e) = run_surveillance_sweep(&repo, &cfg, &tenant).await {
+                tracing::warn!(error = %e, tenant, "edmd: surveillance: sweep failed");
+            }
 
             // The ESA Typ-2 stream rides the same cadence but its own
             // thresholds and register rows — the two never mix.
             if cfg.typ2_enabled
                 && let Some(t) = typ2.as_ref()
+                && let Err(e) =
+                    run_typ2_surveillance_sweep(t, repo.pool(), &cfg, &tenant, marktd.as_ref())
+                        .await
             {
-                run_typ2_surveillance_sweep(t, repo.pool(), &cfg, &tenant, marktd.as_ref()).await;
+                tracing::warn!(error = %e, tenant, "edmd: ESA Typ-2 surveillance: sweep failed");
             }
         }
     });
@@ -691,7 +723,11 @@ pub async fn post_delivery_surveillance_scan(
         return mako_service::ApiError::forbidden(e.to_string()).into_response();
     }
 
-    let report = run_surveillance_sweep(&state.repo, &state.surveillance, &state.tenant).await;
+    let report = match run_surveillance_sweep(&state.repo, &state.surveillance, &state.tenant).await
+    {
+        Ok(r) => r,
+        Err(e) => return mako_service::ApiError::internal(e).into_response(),
+    };
 
     axum::Json(serde_json::json!({
         "scanned_at":     report.scanned_at.to_string(),
@@ -743,7 +779,7 @@ pub async fn assess_typ2_delivery(
     cfg: &SurveillanceConfig,
     now: OffsetDateTime,
     thresholds: &Typ2Thresholds,
-) -> anyhow::Result<(Vec<DeliveryFinding>, usize, OffsetDateTime)> {
+) -> anyhow::Result<Assessment> {
     let window_from = now - time::Duration::days(cfg.coverage_window_days);
     let store = typ2.store();
 
@@ -774,6 +810,7 @@ pub async fn assess_typ2_delivery(
         .map_err(|e| anyhow::anyhow!("ESA Typ-2 surveillance decode: {e}"))?;
 
     let mut findings = Vec::new();
+    let mut delivering = Vec::new();
     let scanned = rows.len();
     for row in rows {
         let malo_id = row
@@ -789,12 +826,7 @@ pub async fn assess_typ2_delivery(
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        let last_end = row
-            .get("last_interval_end")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|s| {
-                OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
-            });
+        let last_end = row.get("last_interval_end").and_then(json_timestamp);
         let hours_silent = last_end.map_or(i64::MAX, |t| (now - t).whole_hours());
         let bestellung_ref = row
             .get("bestellung_ref")
@@ -806,6 +838,9 @@ pub async fn assess_typ2_delivery(
         // several; one flat setting alerts late on the Rohdaten products, which
         // are exactly the ones an ESA's own downstream service depends on.
         if hours_silent < thresholds.for_subscription(&bestellung_ref) {
+            if let Some(end) = last_end {
+                delivering.push((format!("{malo_id}|{obis}|{bestellung_ref}"), end));
+            }
             continue;
         }
         findings.push(DeliveryFinding {
@@ -823,7 +858,12 @@ pub async fn assess_typ2_delivery(
                 .unwrap_or(0),
         });
     }
-    Ok((findings, scanned, window_from))
+    Ok(Assessment {
+        findings,
+        delivering,
+        points_scanned: scanned,
+        window_from,
+    })
 }
 
 /// Per-subscription silence thresholds, in hours.
@@ -980,17 +1020,8 @@ pub async fn run_typ2_surveillance_sweep(
     cfg: &SurveillanceConfig,
     tenant: &str,
     marktd: Option<&mako_markt::marktd_client::MarktdClient>,
-) -> SurveillanceReport {
+) -> anyhow::Result<SurveillanceReport> {
     let scanned_at = OffsetDateTime::now_utc();
-    let empty = |window_from| SurveillanceReport {
-        scanned_at,
-        window_from,
-        points_scanned: 0,
-        findings: Vec::new(),
-        newly_overdue: 0,
-        resumed: 0,
-        suppressed: 0,
-    };
 
     // Size the silence threshold per subscription before assessing: the
     // Codeliste publishes a cadence per Messprodukt, and `marktd` is what maps
@@ -999,14 +1030,12 @@ pub async fn run_typ2_surveillance_sweep(
     let refs = typ2_subscription_refs(typ2, tenant, window_start).await;
     let thresholds = resolve_typ2_thresholds(marktd, &refs, cfg.typ2_silent_after_hours).await;
 
-    let (findings, points_scanned, window_from) =
-        match assess_typ2_delivery(typ2, tenant, cfg, scanned_at, &thresholds).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, tenant, "edmd: ESA Typ-2 surveillance: scan failed");
-                return empty(scanned_at);
-            }
-        };
+    let Assessment {
+        findings,
+        delivering,
+        points_scanned,
+        window_from,
+    } = assess_typ2_delivery(typ2, tenant, cfg, scanned_at, &thresholds).await?;
 
     let mut newly_overdue = 0usize;
     let mut emitted = 0usize;
@@ -1095,26 +1124,40 @@ pub async fn run_typ2_surveillance_sweep(
         emitted += 1;
     }
 
-    // Close what this sweep no longer finds.
-    let reported: Vec<String> = findings
-        .iter()
-        .map(|f| {
-            let (m, o, b) = split_typ2_key(&f.malo_id);
-            format!("{m}\u{1}{o}\u{1}{b}")
-        })
-        .collect();
+    // Close what this sweep saw delivering again — the same rule as the Typ-1
+    // sweep: seen healthy, with a newer interval than the incident recorded.
+    let mut seen_malo = Vec::with_capacity(delivering.len());
+    let mut seen_obis = Vec::with_capacity(delivering.len());
+    let mut seen_ref = Vec::with_capacity(delivering.len());
+    let mut seen_until = Vec::with_capacity(delivering.len());
+    for (key, end) in &delivering {
+        let (m, o, b) = split_typ2_key(key);
+        seen_malo.push(m.to_owned());
+        seen_obis.push(o.to_owned());
+        seen_ref.push(b.to_owned());
+        seen_until.push(*end);
+    }
     let resumed_rows = sqlx::query(
-        r"UPDATE delivery_surveillance
+        r"UPDATE delivery_surveillance d
              SET resolved_at = now()
-           WHERE tenant = $1 AND stream = 'TYP2' AND resolved_at IS NULL
-             AND NOT (malo_id || chr(1) || obis_code || chr(1) || subscription_ref = ANY($2))
-       RETURNING malo_id, obis_code, subscription_ref, state, first_detected_at",
+            FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[])
+                 AS seen(malo_id, obis_code, subscription_ref, last_interval_end)
+           WHERE d.tenant = $1 AND d.stream = 'TYP2' AND d.resolved_at IS NULL
+             AND d.malo_id = seen.malo_id
+             AND d.obis_code = seen.obis_code
+             AND d.subscription_ref = seen.subscription_ref
+             AND (d.last_interval_end IS NULL
+                  OR seen.last_interval_end > d.last_interval_end)
+       RETURNING d.malo_id, d.obis_code, d.subscription_ref, d.state, d.first_detected_at",
     )
     .bind(tenant)
-    .bind(&reported)
+    .bind(&seen_malo)
+    .bind(&seen_obis)
+    .bind(&seen_ref)
+    .bind(&seen_until)
     .fetch_all(pool)
     .await
-    .unwrap_or_default();
+    .map_err(|e| anyhow::anyhow!("ESA Typ-2 surveillance reconcile: {e}"))?;
 
     for row in &resumed_rows {
         use sqlx::Row as _;
@@ -1145,7 +1188,7 @@ pub async fn run_typ2_surveillance_sweep(
         }
     }
 
-    SurveillanceReport {
+    Ok(SurveillanceReport {
         scanned_at,
         window_from,
         points_scanned,
@@ -1153,5 +1196,5 @@ pub async fn run_typ2_surveillance_sweep(
         newly_overdue,
         resumed: resumed_rows.len(),
         suppressed,
-    }
+    })
 }

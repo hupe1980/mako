@@ -153,6 +153,57 @@ pub use zp_lifecycle::{
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 
+/// The MaBiS Prüfidentifikatoren a Lieferant is party to, each under the
+/// workflow the whole family routes it to.
+///
+/// Read off the *Anwendungsübersicht der Prüfidentifikatoren 4.0* (sheet
+/// „Prüf-ID Prozessschritt", columns „Kommunikation von" / „an"): every row
+/// with LF on either side, and no other. The LF is prüfende Rolle for the
+/// LF-SZR (`E_0007`, `E_0041`), the LF-AASZR (`E_0093`), the
+/// Lieferantenclearinglisten (`E_0004`, `E_0014`, `E_0047`, `E_0049`) and the
+/// LF-AACL (`E_0096`, `E_0097`) and the Profile (`E_0100`).
+///
+/// | PID | Lfd. Nr. | Kommunikation |
+/// |---|---|---|
+/// | 13003 | 7080, 7160 | NB · ÜNB → LF (LF-SZR) |
+/// | 13023 | 9580 | NB (ANB) → LF (LF-AASZR) |
+/// | 21000 | 7090, 7170, 9590 | LF → NB · ÜNB (Prüfmitteilung, `E_0007` / `E_0041` / `E_0093`) |
+/// | 13010–13012 | 7000, 7010, 7015 | NB → LF (normierte Profile) |
+/// | 17211 | 7017 | LF → NB (Reklamation, `E_0100`) |
+/// | 55073 | 6960 | NB → LF (Profildefinitionen) |
+/// | 55065 / 55066 | 7110, 7190 / 7120, 7200 | NB · ÜNB → LF / LF → NB · ÜNB |
+/// | 55201 / 55202 | 9610 / 9620 | NB → LF / LF → NB |
+/// | 55062 / 55063 | 7060, 7070, 7140, 7150 | NB · ÜNB → LF (MaBiS-ZP der LF-SZR) |
+/// | 55199 / 55200 | 9560, 9570 | NB (ANB) → LF (MaBiS-ZP der LF-AASZR) |
+/// | 17201, 17202, 17210 | 6980, 7100, 7180, 9600 | LF → NB · ÜNB (Anforderungen) |
+///
+/// 55235–55237 are not here: the Zuordnung des ZP der NGZ zur NZR runs
+/// NB → NB / NB → ÜNB (lfd. Nr. 19120–19190).
+pub const LF_PIDS: &[(u32, &str)] = &[
+    (
+        bilanzkreisabrechnung::SUMMENZEITREIHE_PID,
+        bilanzkreisabrechnung::WORKFLOW_NAME,
+    ),
+    (13_023, bilanzkreisabrechnung::WORKFLOW_NAME),
+    (21_000, bilanzkreisabrechnung::WORKFLOW_NAME),
+    (13_010, profile::WORKFLOW_NAME),
+    (13_011, profile::WORKFLOW_NAME),
+    (13_012, profile::WORKFLOW_NAME),
+    (profile::REKLAMATION_PID, profile::WORKFLOW_NAME),
+    (55_073, clearingliste::WORKFLOW_NAME),
+    (55_065, listenabgleich::WORKFLOW_NAME),
+    (55_066, listenabgleich::WORKFLOW_NAME),
+    (55_201, listenabgleich::WORKFLOW_NAME),
+    (55_202, listenabgleich::WORKFLOW_NAME),
+    (55_062, zp_lifecycle::WORKFLOW_NAME),
+    (55_063, zp_lifecycle::WORKFLOW_NAME),
+    (55_199, zp_lifecycle::WORKFLOW_NAME),
+    (55_200, zp_lifecycle::WORKFLOW_NAME),
+    (17_201, anforderung::WORKFLOW_NAME),
+    (17_202, anforderung::WORKFLOW_NAME),
+    (17_210, anforderung::WORKFLOW_NAME),
+];
+
 /// Engine module for the MaBiS process family.
 ///
 /// # PID ownership
@@ -194,6 +245,33 @@ impl mako_engine::builder::EngineModule for MabisModule {
                 listenabgleich::WORKFLOW_NAME,
             ),
         ]
+    }
+
+    /// A Netzbetreiber, ÜNB, BKV or BIKO registers the whole family; a
+    /// deployment that is only a Lieferant registers [`LF_PIDS`] and nothing
+    /// else, so a MaBiS message addressed to another role is refused as an
+    /// unknown PID instead of being answered as the Netzbetreiber.
+    fn register_pids_with_roles(
+        &self,
+        router: &mut mako_engine::pid_router::PidRouter,
+        roles: &mako_engine::marktrolle::DeploymentRoles,
+    ) {
+        use mako_engine::marktrolle::Marktrolle;
+        let ganze_familie = [
+            Marktrolle::Nb,
+            Marktrolle::Uenb,
+            Marktrolle::Bkv,
+            Marktrolle::Biko,
+        ];
+        if ganze_familie.into_iter().any(|r| roles.contains(r)) {
+            self.register_pids(router);
+            return;
+        }
+        if roles.contains(Marktrolle::Lf) {
+            for &(pid, workflow) in LF_PIDS {
+                router.register(pid, workflow);
+            }
+        }
     }
 
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
@@ -345,6 +423,55 @@ impl mako_engine::builder::EngineModule for MabisModule {
 mod module_tests {
     use super::*;
     use mako_engine::builder::EngineModule;
+
+    fn routes(roles: &mako_engine::marktrolle::DeploymentRoles) -> Vec<(u32, String)> {
+        let mut router = mako_engine::pid_router::PidRouter::new();
+        MabisModule.register_pids_with_roles(&mut router, roles);
+        let mut v: Vec<(u32, String)> = router
+            .registered_pids()
+            .filter_map(|pid| router.route(pid).map(|wf| (pid, wf.to_owned())))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// A Lieferant registers exactly the MaBiS PIDs it is party to, under the
+    /// workflow the Netzbetreiber's registration names — none of the NB's.
+    #[test]
+    fn a_lieferant_registers_only_its_own_mabis_pids() {
+        use mako_engine::marktrolle::DeploymentRoles;
+        let lf = routes(&DeploymentRoles::lf());
+        let mut expected: Vec<(u32, String)> = LF_PIDS
+            .iter()
+            .map(|(pid, wf)| (*pid, (*wf).to_owned()))
+            .collect();
+        expected.sort();
+        assert_eq!(lf, expected);
+
+        let nb = routes(&DeploymentRoles::nb());
+        for entry in &lf {
+            assert!(nb.contains(entry), "{entry:?} routes elsewhere for the NB");
+        }
+        // NB → NB / NB → ÜNB / ÜNB → NB / BKV ↔ NB / BIKO → NB — never the LF's.
+        for pid in [
+            55_195, 55_196, 55_223, 55_224, 55_235, 55_236, 55_237, 55_071, 55_072, 55_067, 55_069,
+            55_070, 55_197, 55_203, 55_204, 21_002, 21_003, 21_004, 21_005, 13_020, 17_203, 17_207,
+            19_204, 55_064,
+        ] {
+            assert!(
+                !lf.iter().any(|(p, _)| *p == pid),
+                "{pid} is not addressed to a Lieferant"
+            );
+            assert!(nb.iter().any(|(p, _)| *p == pid), "{pid} is the NB's");
+        }
+    }
+
+    /// A deployment with no MaBiS role registers nothing of the family.
+    #[test]
+    fn a_msb_registers_no_mabis_pid() {
+        use mako_engine::marktrolle::DeploymentRoles;
+        assert!(routes(&DeploymentRoles::msb()).is_empty());
+    }
 
     #[test]
     fn no_two_workflows_claim_the_same_pid() {

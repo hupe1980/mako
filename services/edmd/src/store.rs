@@ -291,6 +291,46 @@ const METERSTORE_POOL_MAX: u32 = 10;
 /// exhaust PostgreSQL's connection slots (the `SqlCatalog` default is 10).
 const CATALOG_POOL_MAX: u32 = 4;
 
+/// The statement [`forget_ephemeral_catalog`] runs; `meterstore` is
+/// [`CATALOG_NAME`].
+const FORGET_EPHEMERAL_CATALOG: &str = "DO $$ BEGIN
+   IF to_regclass('iceberg_tables') IS NOT NULL THEN
+     DELETE FROM iceberg_tables
+      WHERE catalog_name = 'meterstore' AND metadata_location LIKE 'memory:%';
+   END IF;
+ END $$";
+
+/// Drop the catalog entries an in-memory warehouse left behind.
+///
+/// The `SqlCatalog` keeps its table entries in edmd's PostgreSQL database, so
+/// they outlive the process; a `memory://` warehouse does not, and an entry
+/// from the previous run names a metadata file that no longer exists. Loading
+/// it fails the start, so a hot-only deployment could not restart against its
+/// own database. Only entries whose metadata lies in a memory warehouse are
+/// dropped — those name nothing a restart can still read — and only when this
+/// start runs on one; a persistent warehouse's entries are never touched.
+///
+/// A hot-only store loses nothing by it: with `[archive]` off nothing is ever
+/// archived, so the in-memory tables were empty. An `[archive]` that is enabled
+/// on a memory warehouse is refused by the config check, because archived
+/// intervals would vanish with the process.
+///
+/// # Errors
+///
+/// Propagates the database error.
+pub async fn forget_ephemeral_catalog(pool: &PgPool, warehouse_uri: &str) -> anyhow::Result<()> {
+    if !warehouse_uri.starts_with("memory:") {
+        return Ok(());
+    }
+    // `DO`, because the catalog table is created by the catalog itself on its
+    // first start and may not exist yet.
+    sqlx::query(FORGET_EPHEMERAL_CATALOG)
+        .execute(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("dropping stale in-memory catalog entries: {e}"))?;
+    Ok(())
+}
+
 /// Build edmd's three meter-data tables over **one** shared Iceberg catalog and
 /// **one** DataFusion session.
 ///
@@ -503,6 +543,14 @@ async fn table_builder(
         config
             .attribute_column(meterstore::coded_column("source", &source_codes, true))
             .attribute_column(Field::new("allocation_version", DataType::Utf8, true))
+            // Who obtained the value (`STS+Z33`/`Z83`), beside — not inside —
+            // the quality flag: quality says how good a value is, the origin
+            // who read it. NULL is a delivery that states none.
+            .attribute_column(meterstore::coded_column(
+                "ablesung_herkunft",
+                crate::domain::AblesungHerkunft::CODES,
+                true,
+            ))
     } else {
         // The ESA Typ-2 stream carries neither — but it does carry the transport
         // it arrived on (Codeliste 1.4 Kap. 4.6: MSCONS backend vs. direct from
@@ -650,6 +698,59 @@ impl MeterStoreTimeSeriesRepository {
             .map(|(k, _)| k))
     }
 
+    /// The origin every billable reading of a period states, or `None`.
+    ///
+    /// Read per interval off the version-resolved relation, because a read
+    /// through `collect_by_channel` folds attribute columns from the newest
+    /// contributing delivery and would lend one delivery's origin to every
+    /// interval of the channel. A period answers with an origin only when each
+    /// of its billable readings states the same one: a period one reading of
+    /// which the customer took and another of which nobody named has no single
+    /// Ablesungsart, and the invoice reports it as missing.
+    async fn period_herkunft(
+        &self,
+        malo_id: &str,
+        tenant: &str,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Option<crate::domain::AblesungHerkunft>, EdmError> {
+        let billable = billable_qualities()
+            .iter()
+            .map(|q| format!("'{}'", quality_to_str(*q)))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            r#"SELECT "ablesung_herkunft" AS herkunft, COUNT(*) AS n
+                 FROM "{table}"
+                WHERE "tenant" = $1 AND "malo_id" = $2
+                  AND "from" >= $3 AND "to" <= $4
+                  AND "quality" IN ({billable})
+                GROUP BY "ablesung_herkunft""#,
+            table = self.store.resolved_table(),
+        );
+        let rows = self
+            .store
+            .query_with_params(
+                &sql,
+                vec![
+                    ScalarValue::Utf8(Some(tenant.to_owned())),
+                    ScalarValue::Utf8(Some(malo_id.to_owned())),
+                    crate::server::ts_param(from),
+                    crate::server::ts_param(to),
+                ],
+            )
+            .await
+            .and_then(|r| r.to_json())
+            .map_err(store_err)?;
+        Ok(match rows.as_slice() {
+            [only] => only
+                .get("herkunft")
+                .and_then(serde_json::Value::as_str)
+                .and_then(crate::domain::AblesungHerkunft::parse),
+            _ => None,
+        })
+    }
+
     /// Append a value **edmd itself authored**, ensuring it becomes the current one.
     ///
     /// Ordinary ingest must not do this: a delivery that arrives late is
@@ -730,7 +831,9 @@ impl MeterStoreTimeSeriesRepository {
         };
         let arbeitsmenge_ht_kwh = tariff_sum(1);
         let arbeitsmenge_nt_kwh = tariff_sum(2);
-        let sparte = reads.first().map_or(Sparte::Strom, |r| r.sparte);
+        let Some(sparte) = reads.first().map(|r| r.sparte) else {
+            return Ok(None);
+        };
         let first_interval_min = intervals
             .first()
             .map(|iv| iv.duration().whole_minutes().unsigned_abs());
@@ -764,6 +867,9 @@ impl MeterStoreTimeSeriesRepository {
             None
         };
         let worst_quality = crate::domain::worst_quality(&intervals);
+        let ablesung_herkunft = self
+            .period_herkunft(&q.malo_id, &q.tenant, from_ts, to_ts)
+            .await?;
 
         // How much of the period the billable readings actually cover, measured
         // against the requested window rather than against the extent of the
@@ -792,7 +898,7 @@ impl MeterStoreTimeSeriesRepository {
         // closing register reading. They come from the Zählerstandsgang, which
         // is why edmd stores it (BK6-24-174) — an aggregate that cannot fill
         // them builds an invoice missing a statutory line item.
-        let (zaehlerstand_anfang, zaehlerstand_ende) = self
+        let zaehlerstaende = self
             .period_zaehlerstaende(&q.malo_id, from_ts, to_ts, &q.tenant)
             .await
             .unwrap_or_else(|e| {
@@ -802,8 +908,16 @@ impl MeterStoreTimeSeriesRepository {
                     malo_id = %q.malo_id, error = %e,
                     "edmd: could not read the period's Zählerstände (§ 40 Abs. 2 Nr. 6 EnWG)"
                 );
-                (None, None)
+                crate::domain::PeriodZaehlerstaende::default()
             });
+        let (zaehlerstand_anfang, zaehlerstand_ende) = (zaehlerstaende.anfang, zaehlerstaende.ende);
+        // The Ablesungsart is that of the Zählerstände the invoice states when
+        // it states both; otherwise that of the period's values.
+        let ablesung_herkunft = if zaehlerstand_anfang.is_some() && zaehlerstand_ende.is_some() {
+            zaehlerstaende.herkunft
+        } else {
+            ablesung_herkunft
+        };
 
         let result = MeterBillingPeriod {
             malo_id: q.malo_id.clone(),
@@ -821,6 +935,7 @@ impl MeterStoreTimeSeriesRepository {
             zaehlerstand_anfang,
             zaehlerstand_ende,
             quality: worst_quality,
+            ablesung_herkunft,
             lastprofil: None,
             profil_typ: None,
         };
@@ -844,8 +959,9 @@ impl MeterStoreTimeSeriesRepository {
                   (malo_id, period_from, period_to, messtyp, sparte,
                    arbeitsmenge_kwh, spitzenleistung_kw, quality, tenant,
                    arbeitsmenge_ht_kwh, arbeitsmenge_nt_kwh,
-                   zaehlerstand_anfang, zaehlerstand_ende, coverage_pct)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                   zaehlerstand_anfang, zaehlerstand_ende, coverage_pct,
+                   ablesung_herkunft)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
               ON CONFLICT (malo_id, period_from, period_to, tenant)
               DO UPDATE SET messtyp             = EXCLUDED.messtyp,
                             sparte              = EXCLUDED.sparte,
@@ -857,6 +973,7 @@ impl MeterStoreTimeSeriesRepository {
                             zaehlerstand_anfang = EXCLUDED.zaehlerstand_anfang,
                             zaehlerstand_ende   = EXCLUDED.zaehlerstand_ende,
                             coverage_pct        = EXCLUDED.coverage_pct,
+                            ablesung_herkunft   = EXCLUDED.ablesung_herkunft,
                             computed_at         = now()",
         )
         .bind(&result.malo_id)
@@ -873,6 +990,11 @@ impl MeterStoreTimeSeriesRepository {
         .bind(result.zaehlerstand_anfang)
         .bind(result.zaehlerstand_ende)
         .bind(result.coverage_pct)
+        .bind(
+            result
+                .ablesung_herkunft
+                .map(crate::domain::AblesungHerkunft::as_str),
+        )
         .execute(&self.pool)
         .await;
         // A failed cache write is not a failed read — the aggregate is correct
@@ -1096,6 +1218,10 @@ fn read_to_stored_at(
     .with_extra(
         "allocation_version",
         ScalarValue::Utf8(Some(r.allocation_version.clone())),
+    )
+    .with_extra(
+        "ablesung_herkunft",
+        ScalarValue::Utf8(r.ablesung_herkunft.map(|h| h.as_str().to_owned())),
     ))
 }
 
@@ -1471,7 +1597,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             r"SELECT messtyp, sparte, arbeitsmenge_kwh, spitzenleistung_kw,
                      arbeitsmenge_ht_kwh, arbeitsmenge_nt_kwh,
                      brennwert_kwh_per_m3, zustandszahl,
-                     zaehlerstand_anfang, zaehlerstand_ende, quality, coverage_pct
+                     zaehlerstand_anfang, zaehlerstand_ende, quality, coverage_pct,
+                     ablesung_herkunft
               FROM meter_billing_periods
               WHERE malo_id = $1 AND period_from = $2 AND period_to = $3 AND tenant = $4",
         )
@@ -1501,9 +1628,25 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 // charges and states no consumption at all.
                 let arbeitsmenge_kwh = row.try_get::<Decimal, _>("arbeitsmenge_kwh").ok()?;
                 let coverage_pct = row.try_get::<Decimal, _>("coverage_pct").ok()?;
-                Some((sparte, quality, messtyp, arbeitsmenge_kwh, coverage_pct))
+                // NULL is a period whose readings state no origin; a label
+                // edmd does not know is a row it did not write.
+                let ablesung_herkunft =
+                    match row.try_get::<Option<String>, _>("ablesung_herkunft").ok()? {
+                        None => None,
+                        Some(h) => Some(crate::domain::AblesungHerkunft::parse(&h)?),
+                    };
+                Some((
+                    sparte,
+                    quality,
+                    messtyp,
+                    arbeitsmenge_kwh,
+                    coverage_pct,
+                    ablesung_herkunft,
+                ))
             })();
-            let Some((sparte, quality, messtyp, arbeitsmenge_kwh, coverage_pct)) = decoded else {
+            let Some((sparte, quality, messtyp, arbeitsmenge_kwh, coverage_pct, ablesung_herkunft)) =
+                decoded
+            else {
                 tracing::warn!(
                     malo_id = %q.malo_id,
                     "edmd: cached billing period holds an unreadable sparte/quality/messtyp/\
@@ -1527,6 +1670,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 zaehlerstand_anfang: dec("zaehlerstand_anfang"),
                 zaehlerstand_ende: dec("zaehlerstand_ende"),
                 quality,
+                ablesung_herkunft,
                 lastprofil: None,
                 profil_typ: None,
             }));
@@ -1692,9 +1836,14 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .collect_resolved()
                 .await
                 .map_err(store_err)?
-                .map_or((Sparte::Strom, None), |r| {
-                    (r.sparte, extra_str(&r.extra, "sender_mp_id"))
-                });
+                .map(|r| (r.sparte, extra_str(&r.extra, "sender_mp_id")))
+                .ok_or_else(|| {
+                    input_err(format!(
+                        "MaLo {}: no stored reading in [{}, {}) to correct — its Sparte and \
+                         reporting operator come from that reading",
+                        rec.malo_id, rec.dtm_from, rec.dtm_to
+                    ))
+                })?;
             let corrected = MeterRead {
                 malo_id: rec.malo_id.clone(),
                 melo_id: None,
@@ -1715,6 +1864,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 allocation_version: "CORRECTION".to_owned(),
                 valid_from_tx: Some(OffsetDateTime::now_utc()),
                 mscons_version: None,
+                ablesung_herkunft: None,
             };
             // A correction is another write to the subject store, so it carries
             // the same pseudonymous reference; `register` returns the existing one.
@@ -1792,8 +1942,10 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // Both are part of a reading's identity: a Marktlokation may be measured
         // by several Messlokationen, and two meters carry the same register at
         // the same instants.
-        let mut groups: std::collections::BTreeMap<(String, String), Vec<&MeterReading>> =
-            std::collections::BTreeMap::new();
+        let mut groups: std::collections::BTreeMap<
+            (String, String, Option<&'static str>),
+            Vec<&MeterReading>,
+        > = std::collections::BTreeMap::new();
         for r in readings {
             let melo = r.melo_id.clone().ok_or_else(|| {
                 EdmError::Internal(format!(
@@ -1805,13 +1957,18 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 ))
             })?;
             groups
-                .entry((melo, normalise_obis(r.obis_code.as_deref())))
+                .entry((
+                    melo,
+                    normalise_obis(r.obis_code.as_deref()),
+                    r.ablesung_herkunft
+                        .map(crate::domain::AblesungHerkunft::as_str),
+                ))
                 .or_default()
                 .push(r);
         }
 
         let mut written = 0_u64;
-        for ((melo, obis), rows) in groups {
+        for ((melo, obis, _herkunft), rows) in groups {
             let first = rows[0];
             let obis: ObisCode = obis.parse().map_err(|_| {
                 EdmError::Internal(format!(
@@ -1895,6 +2052,15 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             if let Some(mp) = &first.sender_mp_id {
                 stored = stored.with_extra("sender_mp_id", ScalarValue::Utf8(Some(mp.clone())));
             }
+            // One delivery carries one origin: the attribute column is per
+            // delivery, so a group whose readings state different origins is
+            // split by the caller, never folded here.
+            if let Some(h) = first.ablesung_herkunft {
+                stored = stored.with_extra(
+                    "ablesung_herkunft",
+                    ScalarValue::Utf8(Some(h.as_str().to_owned())),
+                );
+            }
 
             let outcome = self
                 .zsg
@@ -1945,6 +2111,9 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                         }),
                     sender_mp_id: extra_str(&d.extra, "sender_mp_id"),
                     push_session: None,
+                    ablesung_herkunft: extra_str(&d.extra, "ablesung_herkunft")
+                        .as_deref()
+                        .and_then(crate::domain::AblesungHerkunft::parse),
                 });
             }
         }
@@ -1987,9 +2156,9 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         from: OffsetDateTime,
         to: OffsetDateTime,
         tenant: &str,
-    ) -> Result<(Option<Decimal>, Option<Decimal>), EdmError> {
+    ) -> Result<crate::domain::PeriodZaehlerstaende, EdmError> {
         let Some((melo, register)) = self.dominant_register(malo_id, tenant).await? else {
-            return Ok((None, None));
+            return Ok(crate::domain::PeriodZaehlerstaende::default());
         };
         // "At or before", on both ends. A Zählerstand dated after the period end
         // did not hold at the period end, and reporting it as the closing
@@ -2017,7 +2186,57 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         };
         let anfang = at_or_before(from).await?;
         let ende = at_or_before(to).await?;
-        Ok((anfang, ende))
+        // Who read the two registers the invoice states. Read per reading off
+        // the resolved relation, the same „at or before" bound, because the
+        // attribute fold of a range read lends the newest delivery's origin
+        // to every reading in it.
+        let herkunft_at = async |bound: OffsetDateTime| -> Result<Option<String>, EdmError> {
+            let sql = format!(
+                r#"SELECT "ablesung_herkunft" AS herkunft
+                     FROM "{table}"
+                    WHERE "tenant" = $1 AND "malo_id" = $2 AND "melo_id" = $3
+                      AND "obis_code" = $4 AND "from" < $5
+                    ORDER BY "from" DESC
+                    LIMIT 1"#,
+                table = self.zsg.resolved_table(),
+            );
+            let rows = self
+                .zsg
+                .query_with_params(
+                    &sql,
+                    vec![
+                        ScalarValue::Utf8(Some(tenant.to_owned())),
+                        ScalarValue::Utf8(Some(malo_id.to_owned())),
+                        ScalarValue::Utf8(Some(melo.clone())),
+                        ScalarValue::Utf8(Some(register.clone())),
+                        crate::server::ts_param(inclusive_end(bound)),
+                    ],
+                )
+                .await
+                .and_then(|r| r.to_json())
+                .map_err(store_err)?;
+            Ok(rows
+                .first()
+                .and_then(|r| r.get("herkunft"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned))
+        };
+        let herkunft = match (anfang.is_some(), ende.is_some()) {
+            (true, true) => {
+                let (a, e) = (herkunft_at(from).await?, herkunft_at(to).await?);
+                // One Ablesungsart for both registers, or none stated.
+                match (a, e) {
+                    (Some(a), Some(e)) if a == e => crate::domain::AblesungHerkunft::parse(&a),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        Ok(crate::domain::PeriodZaehlerstaende {
+            anfang,
+            ende,
+            herkunft,
+        })
     }
 }
 
@@ -2258,6 +2477,9 @@ fn series_to_reads(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<M
     let sender_mp_id = extra_str(&resolved.extra, "sender_mp_id");
     let allocation_version =
         extra_str(&resolved.extra, "allocation_version").unwrap_or_else(|| "INITIAL".to_owned());
+    let ablesung_herkunft = extra_str(&resolved.extra, "ablesung_herkunft")
+        .as_deref()
+        .and_then(crate::domain::AblesungHerkunft::parse);
     series
         .intervals
         .iter()
@@ -2279,6 +2501,7 @@ fn series_to_reads(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<M
             allocation_version: allocation_version.clone(),
             valid_from_tx: None,
             mscons_version: None,
+            ablesung_herkunft,
         })
         .collect()
 }
@@ -2369,6 +2592,15 @@ fn str_to_sparte(s: &str) -> Option<Sparte> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_ephemeral_catalog_reset_names_edmds_own_catalog() {
+        assert!(
+            super::FORGET_EPHEMERAL_CATALOG
+                .contains(&format!("catalog_name = '{}'", super::CATALOG_NAME))
+        );
+    }
+
     use super::*;
     use time::macros::datetime;
 

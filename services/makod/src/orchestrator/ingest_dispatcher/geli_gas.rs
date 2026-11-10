@@ -7,6 +7,7 @@ use super::*;
 
 impl EdifactIngestDispatcher {
     /// Phase-2 dispatch arms for the GeLi Gas workflow family:
+    /// `geli-gas-sperrung-msb`
     /// `geli-gas-sperrung-nb`
     /// `geli-gas-sperrung-lf`
     /// `geli-gas-supplier-change`
@@ -29,6 +30,31 @@ impl EdifactIngestDispatcher {
         let raw: &dyn Any = msg;
 
         match workflow_name {
+            // ── Sperrung Gas — gMSB side (ORDERS 17116) ──────────────────────
+            // The GNB's Anfrage Sperrung. The gMSB's Frist is set by the BDEW
+            // AWH Sperrprozesse Gas, which is not mirrored, so no window opens;
+            // its own workflow name keeps a combined GNB/gMSB from resuming its
+            // own Sperrauftrag on the same MaLo.
+            "geli-gas-sperrung-msb" => match pid {
+                mako_geli_gas::sperrung_msb::ANFRAGE_PID => {
+                    let cmd = adapters::geli_gas_sperrung_msb_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.spawn_or_resume_guarded::<mako_geli_gas::sperrung_msb::GeliGasSperrungMsbWorkflow>(
+                        inbound,
+                        malo_id.as_str(),
+                        "geli-gas-sperrung-msb",
+                        cmd,
+                        &fv,
+                        &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "geli-gas-sperrung-msb",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
             // ── GeLi Gas Sperrung — NB side ───────────────────────────────────
             // PIDs 17115/17117: Gas-Sperrauftrag (LFG → GNB) — spawn.
             "geli-gas-sperrung-nb" => match pid {
@@ -408,6 +434,39 @@ impl EdifactIngestDispatcher {
             // 17104: the NB Strom receives the MSB Gas's Anfrage — spawn.
             // 19103/19104: LF receives ORDRSP rejection from NB — resume.
             // ERP-initiated outbound (LF sends 17103) uses geli.datenabruf.anfragen command.
+            // ── Geschäftsdatenanfrage Gas (BK7-24-01-009 Anlage Kap. 4.4) ──
+            // ORDERS 17101 / 17126 open the NB's side with its 10-WT window;
+            // the UTILMD 44035 / 44060 and the Gas ORDRSP 19101 resume the
+            // Anfragender's. Every message names the Anfrage by the ORDERS'
+            // `BGM` DE 1004, and the two sides are keyed apart
+            // (`adapters::gda_gas_process_key`).
+            "geli-gas-geschaeftsdatenanfrage" => {
+                use mako_geli_gas::geschaeftsdatenanfrage as gda;
+                let cmd =
+                    adapters::geli_gas_geschaeftsdatenanfrage_registry().dispatch(raw, &fv)?;
+                let key = adapters::gda_gas_process_key(msg);
+                if gda::ANFRAGE_PIDS.contains(&pid) {
+                    let due_at = antwort_due_at(pid, received_at);
+                    self.spawn_or_resume_guarded::<gda::GeliGasGeschaeftsdatenanfrageWorkflow>(
+                        inbound,
+                        &key,
+                        gda::WORKFLOW_NAME,
+                        cmd,
+                        &fv,
+                        &[(gda::ANTWORT_WINDOW_LABEL, due_at)],
+                        |s| !s.is_terminal(),
+                    )
+                    .await
+                } else {
+                    self.resume_by_key::<gda::GeliGasGeschaeftsdatenanfrageWorkflow>(
+                        inbound,
+                        &key,
+                        gda::WORKFLOW_NAME,
+                        cmd,
+                    )
+                    .await
+                }
+            }
             "geli-gas-datenabruf" => match pid {
                 // 17104 is keyed by the Anfrage itself: its `LOC+172` is
                 // conditional ([64], ORDERS AHB 1.1b Kap. 4.1.4, S. 20) and a
@@ -448,6 +507,35 @@ impl EdifactIngestDispatcher {
                         &fv,
                         &[(mako_geli_gas::datenabruf::ANTWORT_WINDOW_LABEL, due_at)],
                         mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                    )
+                    .await
+                }
+                // 55194 is the NB Strom's Stammdaten answering a 17104. It
+                // resumes the Anfrage it names in `SG6 RFF+AAV` and never
+                // spawns: an answer to no Anfrage has nothing to close.
+                mako_geli_gas::datenabruf::GDA_ANTWORT_PID => {
+                    let nummer = match msg {
+                        AnyMessage::Utilmd(u) => u.transactions().iter().find_map(|t| {
+                            t.references
+                                .iter()
+                                .find(|r| {
+                                    r.qualifier == edi_energy::utilmd_codes::rff::NUMMER_DER_ANFRAGE
+                                })
+                                .and_then(|r| r.reference.clone())
+                        }),
+                        _ => None,
+                    };
+                    let Some(nummer) = nummer.filter(|n| !n.is_empty()) else {
+                        return Ok(IngestOutcome::Skipped {
+                            workflow_name: "geli-gas-datenabruf",
+                            reason: "no_correlation_key",
+                        });
+                    };
+                    self.resume_by_key::<GeliGasDatenabrufWorkflow>(
+                        inbound,
+                        &mako_geli_gas::datenabruf::anfrage_key(&nummer),
+                        mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
+                        mako_geli_gas::GeliGasDatenabrufCommand::NotifyDatenGeliefert,
                     )
                     .await
                 }

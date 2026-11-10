@@ -257,6 +257,66 @@ pub fn monatliche_exposition(verstoesse: &[Pflichtverstoss], leistung_kw: Decima
         .min(leistung_kw * dec!(10))
 }
 
+/// What one month adds to the § 52 claim, and how it is met.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Sect52Monat {
+    /// The running claim the month's receipt states.
+    pub anspruch_kumuliert_eur: Decimal,
+    /// What this month adds to the last settled month's running claim. Negative
+    /// where Abs. 3 Satz 1 Nr. 1 reduces the claim „zurück bis zum Beginn": the
+    /// difference is owed back to the operator.
+    pub monat_eur: Decimal,
+    /// Set off against the month's § 19 Abs. 1 claim (Abs. 6 Satz 2).
+    pub aufgerechnet_eur: Decimal,
+    /// Owed by the operator apart from the payout, due on the 15th of the
+    /// following month (Abs. 6 Satz 1).
+    pub rest_eur: Decimal,
+}
+
+/// The month's § 52 increment and its Aufrechnung.
+///
+/// `kumuliert` is the running claim this month's receipt states; `vormonat` the
+/// one the last settled month before it stated. The stored figure is
+/// cumulative, so netting it whole would set the same months off again every
+/// month; only the increment is new. A month with no claim ends the breach, and
+/// the next one starts from zero.
+///
+/// `verguetung_eur` is the month's § 19 Abs. 1 claim, `None` where there is
+/// none to set off against (no § 19 Abs. 1 scheme, or no payment). With
+/// `aufrechnen` the increment is netted through
+/// [`eeg_billing::reductions::apply_sect52_netting`], which stops at zero and
+/// leaves the rest owed; without it the whole increment stays a separate claim.
+#[must_use]
+pub fn sect52_monat(
+    kumuliert: Decimal,
+    vormonat: Decimal,
+    verguetung_eur: Option<Decimal>,
+    aufrechnen: bool,
+) -> Sect52Monat {
+    let monat_eur = if kumuliert.is_zero() {
+        Decimal::ZERO
+    } else {
+        kumuliert - vormonat
+    };
+    let faellig = monat_eur.max(Decimal::ZERO);
+    let (aufgerechnet_eur, rest_eur) = match verguetung_eur {
+        Some(verguetung) if aufrechnen && faellig > Decimal::ZERO => {
+            let n = eeg_billing::reductions::apply_sect52_netting(verguetung, faellig);
+            (
+                faellig - n.residual_pflichtzahlung_eur,
+                n.residual_pflichtzahlung_eur,
+            )
+        }
+        _ => (Decimal::ZERO, faellig),
+    };
+    Sect52Monat {
+        anspruch_kumuliert_eur: kumuliert,
+        monat_eur,
+        aufgerechnet_eur,
+        rest_eur,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +344,59 @@ mod tests {
             .hoechstdauer_ueberschritten(),
             "a seventh month in the year breaches the second, however spread out"
         );
+    }
+
+    /// The stored claim is cumulative: a breach running three months nets each
+    /// month's increment once, and the three increments add up to the claim.
+    #[test]
+    fn a_running_breach_nets_each_month_once() {
+        let kw = dec!(100);
+        let mut vormonat = Decimal::ZERO;
+        let mut netted = Decimal::ZERO;
+        for monat in 1..=3u32 {
+            let kumuliert = kw * dec!(10) * Decimal::from(monat);
+            let m = sect52_monat(kumuliert, vormonat, Some(dec!(5000)), true);
+            assert_eq!(m.monat_eur, dec!(1000), "month {monat}");
+            assert_eq!(
+                (m.aufgerechnet_eur, m.rest_eur),
+                (dec!(1000), Decimal::ZERO)
+            );
+            netted += m.aufgerechnet_eur;
+            vormonat = kumuliert;
+        }
+        assert_eq!(netted, dec!(3000), "the sum netted is the claim");
+    }
+
+    /// Abs. 6 Satz 2 sets off only against the § 19 Abs. 1 claim: what it does
+    /// not cover stays owed, and without the election nothing is set off.
+    #[test]
+    fn the_set_off_stops_at_the_claim_and_needs_the_election() {
+        let m = sect52_monat(dec!(1000), Decimal::ZERO, Some(dec!(400)), true);
+        assert_eq!((m.aufgerechnet_eur, m.rest_eur), (dec!(400), dec!(600)));
+        let m = sect52_monat(dec!(1000), Decimal::ZERO, Some(dec!(400)), false);
+        assert_eq!(
+            (m.aufgerechnet_eur, m.rest_eur),
+            (Decimal::ZERO, dec!(1000))
+        );
+        let m = sect52_monat(dec!(1000), Decimal::ZERO, None, true);
+        assert_eq!(
+            (m.aufgerechnet_eur, m.rest_eur),
+            (Decimal::ZERO, dec!(1000))
+        );
+    }
+
+    /// A cure (Abs. 3 Satz 1 Nr. 1) lowers the running claim: the difference is
+    /// owed back, nothing is set off. A month without a claim ends the breach.
+    #[test]
+    fn a_cure_is_owed_back_and_an_ended_breach_restarts_from_zero() {
+        let m = sect52_monat(dec!(600), dec!(3000), Some(dec!(5000)), true);
+        assert_eq!(m.monat_eur, dec!(-2400));
+        assert_eq!(
+            (m.aufgerechnet_eur, m.rest_eur),
+            (Decimal::ZERO, Decimal::ZERO)
+        );
+        let m = sect52_monat(Decimal::ZERO, dec!(600), Some(dec!(5000)), true);
+        assert_eq!(m.monat_eur, Decimal::ZERO);
     }
 
     /// §52 Abs. 2 charges per calendar month in which the breach subsists at all,

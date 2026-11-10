@@ -23,7 +23,11 @@ impl Daemon for Outputd {
             .run(pool)
             .await
             .context("run outputd migrations")?;
-        Ok(())
+        // Every pushed delivery is an outbox command committed with its
+        // document.
+        mako_service::outbox::ensure_schema(pool)
+            .await
+            .context("ensure event_outbox schema")
     }
 
     fn validate(cfg: &config::OutputdConfig) -> Vec<mako_service::Befund> {
@@ -98,15 +102,10 @@ impl Daemon for Outputd {
         .await
         .context("OIDC setup")?;
 
-        // ── Document delivery worker ──────────────────────────────────────────
-        // Drains the queued deliveries with backoff and a ceiling. Replicas are
-        // safe: the claim is `FOR UPDATE SKIP LOCKED`.
-        tokio::spawn(crate::delivery::worker::run(
-            ctx.pool().clone(),
-            Arc::clone(&cfg),
-            ctx.http.clone(),
-            ctx.shutdown.clone(),
-        ));
+        // ── Document delivery ─────────────────────────────────────────────────
+        // A relay worker per configured channel drains the outbox commands
+        // `issue` committed with each document.
+        crate::delivery::worker::spawn(ctx.pool().clone(), Arc::clone(&cfg), ctx.shutdown.clone());
 
         Ok(Router::new()
             .route("/api/v1/render/{kind}", post(handlers::post_render))

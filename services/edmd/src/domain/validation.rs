@@ -472,6 +472,7 @@ mod tests {
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: None,
             mscons_version: None,
+            ablesung_herkunft: None,
         }
     }
 

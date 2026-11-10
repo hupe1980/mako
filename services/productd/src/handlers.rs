@@ -19,9 +19,9 @@ use crate::{
         CreateAngebotRequest, EnergimixUpsertRequest, EpexImportRequest, ProductListQuery,
         ProductUpsertRequest, accept_angebot, decline_angebot, delete_energiemix,
         expire_stale_angebote, fetch_angebot, fetch_energiemix, fetch_epex_day, fetch_product,
-        fetch_product_history, insert_angebot, link_angebot_rahmenvertrag, list_angebote,
-        list_products, mark_angebot_versandt, monthly_epex_average, next_angebotsnummer,
-        soft_delete_product, upsert_energiemix, upsert_epex_day, upsert_product,
+        fetch_product_history, insert_angebot, list_angebote, list_products, mark_angebot_versandt,
+        monthly_epex_average, next_angebotsnummer, soft_delete_product, upsert_energiemix,
+        upsert_epex_day, upsert_product_announced,
     },
 };
 
@@ -163,7 +163,9 @@ pub const VALID_PREISTYPEN: &[&str] = &[
     "GRUNDVERSORGUNG_ARBEITSPREIS",
     "GEMEINSCHAFT_RABATT",
     "STEUERUNGSRABATT_MODUL1",
-    "STEUERUNGSRABATT_MODUL3",
+    // A Steuerungsentschädigung pays for a dimming that happened; it is not one
+    // of the three BK8-22/010-A modules, which are all Netzentgelt reductions.
+    "STEUERUNGSENTSCHAEDIGUNG",
     // ── mako extensions: HEMS ────────────────────────────────────────────────
     "HEMS_PLATTFORMGEBUEHR",
     "HEMS_OPTIMIERUNGSEVENT",
@@ -438,59 +440,36 @@ pub async fn put_product(
     };
     let category = req.category.clone();
     let status = req.product_status.clone();
-    match upsert_product(&pool, &lf_mp_id, claims.tenant(), &product_code, req).await {
-        Ok(id) => {
-            // Notify the ERP / productd-agent so §42 Energiemix completeness
-            // and §41a EPEX checks run against the new version. This is the only
-            // emitter of the agent's `de.tarif.product.updated` trigger.
-            emit_productd_event(
-                &cfg,
-                mako_events::tarif::PRODUCT_UPDATED,
-                &product_code,
-                serde_json::json!({
-                    "lf_mp_id": lf_mp_id,
-                    "product_code": product_code,
-                    "category": category,
-                    "product_status": status,
-                }),
-            )
-            .await;
-            (StatusCode::OK, Json(serde_json::json!({ "id": id }))).into_response()
-        }
-        Err(e) => refusal(e).into_response(),
-    }
-}
-
-/// Fire-and-forget CloudEvent to the ERP webhook, HMAC-signed when a secret is
-/// configured. The signature is computed over the exact bytes sent (the body
-/// is transmitted verbatim, not re-serialised), so a verifying subscriber sees
-/// a matching digest.
-async fn emit_productd_event(
-    cfg: &ProductdConfig,
-    event_type: &str,
-    subject: &str,
-    data: serde_json::Value,
-) {
-    let Some(webhook_url) = cfg.erp_webhook_url.as_deref() else {
-        return;
-    };
-    let ce = mako_service::CloudEvent::new(
-        mako_service::source("productd", &cfg.tenant),
-        event_type,
-        subject,
-        data,
-    )
-    .extension("tenantid", cfg.tenant.clone());
-    let client = mako_service::http::default_client();
-    if let Err(e) = mako_service::post_ce_with_retry(
-        &client,
-        webhook_url,
-        &ce,
-        cfg.erp_hmac_secret.as_deref().map(str::as_bytes),
+    // Notify the ERP / productd-agent so §42 Energiemix completeness and §41a
+    // EPEX checks run against the new version. This is the only emitter of the
+    // agent's `de.tarif.product.updated` trigger, so it commits with the
+    // version it announces.
+    let announcement = cfg.erp_webhook_url.as_ref().map(|_| {
+        mako_service::CloudEvent::new(
+            mako_service::source("productd", &cfg.tenant),
+            mako_events::tarif::PRODUCT_UPDATED,
+            &product_code,
+            serde_json::json!({
+                "lf_mp_id": lf_mp_id,
+                "product_code": product_code,
+                "category": category,
+                "product_status": status,
+            }),
+        )
+        .extension("tenantid", cfg.tenant.clone())
+    });
+    match upsert_product_announced(
+        &pool,
+        &lf_mp_id,
+        claims.tenant(),
+        &product_code,
+        req,
+        announcement.as_ref(),
     )
     .await
     {
-        tracing::warn!(error = %e, event_type, "productd: ERP webhook error");
+        Ok(id) => (StatusCode::OK, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -2252,9 +2231,13 @@ pub struct AnnehmenRequest {
 /// Digitally accept an Angebot.
 ///
 /// Validates that the Angebot is still within its `gueltig_bis` window, then
-/// transitions to `ANGENOMMEN` and emits `de.tarif.angebot.angenommen` to the
-/// configured ERP webhook.  The ERP or `vertragd` creates the `Rahmenvertrag`
-/// from the CloudEvent payload.
+/// transitions to `ANGENOMMEN` and, in the same transaction, enqueues
+/// `de.tarif.angebot.angenommen` for the configured ERP webhook (`vertragd`).
+/// The outbox worker delivers it with retry; `vertragd` answers with the
+/// Rahmenvertrag it created, and the worker links it onto the Angebot in the
+/// transaction that marks the delivery done. So the answer here never carries
+/// the Rahmenvertrag: it exists once the delivery has gone through, and the
+/// Angebot names it from then on.
 pub async fn post_angebot_annehmen(
     claims: Claims,
     Extension(cedar): Authz,
@@ -2264,15 +2247,9 @@ pub async fn post_angebot_annehmen(
     Json(req): Json<AnnehmenRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&cedar, &claims, "entscheiden-angebot", &cfg.tenant)?;
-    let angebot = accept_angebot(&pool, id, &cfg.tenant, req.gewaehlte_variante)
-        .await
-        .map_err(accept_error_response)?;
-
-    // Emit de.tarif.angebot.angenommen CloudEvent.
-    let mut erp_dispatch = "not_configured";
-    let mut rahmenvertrag_id: Option<uuid::Uuid> = None;
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        let ce = mako_service::CloudEvent::new(
+    let angebot = accept_angebot(&pool, id, &cfg.tenant, req.gewaehlte_variante, |angebot| {
+        cfg.erp_webhook_url.as_ref()?;
+        Some(mako_service::CloudEvent::new(
             mako_service::source("productd", &cfg.tenant),
             mako_events::tarif::ANGEBOT_ANGENOMMEN,
             angebot.id.to_string(),
@@ -2294,90 +2271,30 @@ pub async fn post_angebot_annehmen(
                 "jahreskosten_netto_eur": angebot.jahreskosten_netto_eur,
                 "jahreskosten_brutto_eur": angebot.jahreskosten_brutto_eur,
             }),
-        );
-        let client = mako_service::http::default_client();
-        // This emit consumes the webhook response to link the created
-        // Rahmenvertrag back to the Angebot, so it POSTs directly rather than
-        // via the fire-and-forget `post_ce_with_retry`. Envelope construction
-        // and the Standard Webhooks headers still come from `mako_service`, so
-        // this path signs exactly like every other outbound.
-        let body_bytes = ce.to_bytes().unwrap_or_default();
-        let mut builder = client
-            .post(webhook_url)
-            .header("Content-Type", "application/cloudevents+json")
-            .header(mako_service::webhook::ID_HEADER, ce.id.clone());
-        if let Some(ref secret) = cfg.erp_hmac_secret {
-            for (name, value) in mako_service::webhook::headers(
-                secret.as_bytes(),
-                &ce.id,
-                time::OffsetDateTime::now_utc().unix_timestamp(),
-                &body_bytes,
-            ) {
-                builder = builder.header(name, value);
-            }
-        }
-        // What actually happened downstream, reported rather than assumed. The
-        // acceptance itself stands either way — the customer accepted — but a
-        // caller told the event was dispatched when the POST failed has no
-        // reason to look for the missing Rahmenvertrag.
-        match builder.body(body_bytes).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                erp_dispatch = "delivered";
-                match resp.json::<serde_json::Value>().await {
-                    Ok(body) => {
-                        rahmenvertrag_id = body
-                            .get("rahmenvertrag_id")
-                            .and_then(|v: &serde_json::Value| v.as_str())
-                            .and_then(|s: &str| s.parse::<uuid::Uuid>().ok());
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, angebot_id = %id,
-                            "productd: ERP accepted the Angebot event but its body was unreadable");
-                    }
-                }
-                if let Some(rid) = rahmenvertrag_id
-                    && let Err(e) = link_angebot_rahmenvertrag(&pool, id, rid).await
-                {
-                    // The Rahmenvertrag exists; only the back-reference is
-                    // missing. Saying so beats an Angebot that silently never
-                    // names the contract it became.
-                    tracing::error!(error = %e, angebot_id = %id, rahmenvertrag_id = %rid,
-                        "productd: Rahmenvertrag created but the link back to the Angebot FAILED");
-                    erp_dispatch = "delivered_but_unlinked";
-                }
-            }
-            Ok(resp) => {
-                let status = resp.status();
-                tracing::error!(angebot_id = %id, %status,
-                    "productd: ERP refused the de.tarif.angebot.angenommen event");
-                erp_dispatch = "refused";
-            }
-            Err(e) => {
-                tracing::error!(error = %e, angebot_id = %id,
-                    "productd: de.tarif.angebot.angenommen could not be delivered");
-                erp_dispatch = "undelivered";
-            }
-        }
-    }
+        ))
+    })
+    .await
+    .map_err(accept_error_response)?;
 
+    let erp_dispatch = if cfg.erp_webhook_url.is_some() {
+        "queued"
+    } else {
+        "not_configured"
+    };
     Ok(Json(serde_json::json!({
             "id": angebot.id,
             "angebotsnummer": angebot.angebotsnummer,
             "status": "ANGENOMMEN",
             "gewaehlte_variante": angebot.gewaehlte_variante,
-            // Whether the Rahmenvertrag exists yet, and if not, why not.
+            // Whether a Rahmenvertrag was requested, and if not, why not.
             "erp_dispatch": erp_dispatch,
-            "rahmenvertrag_id": rahmenvertrag_id,
             "message": match erp_dispatch {
-                "delivered" => "Angebot angenommen — de.tarif.angebot.angenommen delivered",
-                "delivered_but_unlinked" =>
-                    "Angebot angenommen and the Rahmenvertrag was created, but linking it back to \
-                     the Angebot failed — reconcile by angebotsnummer",
-                "not_configured" =>
+                "queued" =>
+                    "Angebot angenommen — de.tarif.angebot.angenommen is queued; the Angebot \
+                     names its Rahmenvertrag once vertragd has created it",
+                _ =>
                     "Angebot angenommen — no erp_webhook_url is configured, so NO Rahmenvertrag \
                      was requested",
-                _ => "Angebot angenommen, but de.tarif.angebot.angenommen was NOT delivered — \
-                      no Rahmenvertrag exists yet",
             },
     })))
 }

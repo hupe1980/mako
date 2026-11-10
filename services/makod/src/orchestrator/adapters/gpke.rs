@@ -95,15 +95,7 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 // the AHB marks it Muss: the NB says which of the offered
                 // packages it will actually implement, and unless it says
                 // otherwise that is the one it was asked for.
-                produktpaket_id: u.transactions().first().and_then(|t| {
-                    t.sequences
-                        .iter()
-                        .find(|s| {
-                            s.seq.action.as_deref()
-                                == Some(edi_energy::utilmd_codes::produkt::SEQ_PRODUKTPAKET)
-                        })
-                        .and_then(|s| s.seq.sequence_id.clone())
-                }),
+                produktpaket_id: angebotenes_produktpaket(u),
                 // `SG12 NAD+Z09` — copied verbatim onto the NB's 55010, where
                 // Bedingung [279] marks it Muss on a verbrauchende oder ruhende
                 // Marktlokation and [572] names it „Kundenname aus Anmeldung
@@ -410,63 +402,6 @@ pub fn gpke_abrechnung_comdis_registry() -> AdapterRegistry<GpkeAbrechnungWorkfl
     registry
 }
 
-// ── GPKE Konfigurationseinrichtung (PIDs 19001/19002 — ORDRSP from MSB) ───────
-
-/// Build an [`AdapterRegistry`] for [`GpkeKonfigurationWorkflow`].
-///
-/// Registers one adapter covering all known BDEW format versions.
-/// Extracts ORDRSP fields to construct a [`KonfigurationCommand::ReceiveOrdrsp`]
-/// for inbound ORDRSP 19001 (Bestätigung) and 19002 (Ablehnung der Bestellung)
-/// from the MSB in response to an outbound ORDERS 17134.
-#[must_use]
-pub fn gpke_konfiguration_registry() -> AdapterRegistry<GpkeKonfigurationWorkflow> {
-    let mut registry = AdapterRegistry::new();
-    registry.register(FnAdapter::new(
-        is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
-            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
-                EngineError::Deserialization(
-                    "expected AnyMessage for GPKE Konfiguration adapter".into(),
-                )
-            })?;
-
-            let AnyMessage::Ordrsp(o) = msg else {
-                return Err(EngineError::Deserialization(
-                    "GPKE Konfiguration adapter: expected ORDRSP message".into(),
-                ));
-            };
-
-            let pid = msg
-                .detect_pruefidentifikator()
-                .map_err(|e| {
-                    EngineError::Deserialization(format!(
-                        "GPKE Konfiguration adapter: PID detection failed: {e}"
-                    ))
-                })
-                .and_then(convert_pid)?;
-
-            // ORDRSP 19001 = Bestätigung (accept), 19002 = Ablehnung (reject).
-            let accepted = pid.as_u32() == 19001;
-
-            // For ORDRSP 19002 (Ablehnung), extract the rejection reason from
-            // the first FTX segment (DE 4440 / element 3, component 0).
-            let reason: Option<String> = if accepted {
-                None
-            } else {
-                o.ftx().first().and_then(|f| f.text.clone())
-            };
-
-            Ok(KonfigurationCommand::ReceiveOrdrsp {
-                pid,
-                accepted,
-                reason,
-                message_ref: MessageRef::new(msg.message_ref()),
-            })
-        },
-    ));
-    registry
-}
-
 // ── GPKE UTILMD Antwort (PIDs 55002/55003, 55005/55006, 55017, 55018) — LF role ──
 
 /// Build an [`AdapterRegistry`] for [`GpkeLfAnmeldungWorkflow`].
@@ -541,6 +476,59 @@ pub fn gpke_lf_anmeldung_registry() -> AdapterRegistry<GpkeLfAnmeldungWorkflow> 
                 reason,
                 response_ref: MessageRef::new(msg.message_ref()),
                 antwort,
+            })
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for the NB's answer to the Lieferant's
+/// Anmeldung neue Marktlokation (55602–55605) — a
+/// [`LfAnmeldungCommand::HandleNeuanlageAntwort`] carrying the Marktlokation
+/// the answer names in `SG5 LOC+Z16`, Muss on a Bestätigung (UTILMD AHB Strom
+/// 2.2 S. 97, 112).
+#[must_use]
+pub fn gpke_lf_neuanlage_antwort_registry() -> AdapterRegistry<GpkeLfAnmeldungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Neuanlage-Antwort adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Neuanlage-Antwort adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Neuanlage-Antwort adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let tx = u.transactions().first();
+            let marktlokation = tx
+                .and_then(|t| {
+                    t.locations.iter().find(|l| {
+                        l.qualifier == edi_energy::Lokationstyp::Marktlokation.qualifier_code()
+                    })
+                })
+                .and_then(|l| l.location_id.clone())
+                .filter(|m| !m.is_empty())
+                .map(MaLo::new);
+            Ok(LfAnmeldungCommand::HandleNeuanlageAntwort {
+                response_pid: pid,
+                reason: tx.and_then(|t| t.ftx.first()).and_then(|f| f.text.clone()),
+                response_ref: MessageRef::new(msg.message_ref()),
+                antwort: tx.and_then(|t| t.antwort()).map(|a| {
+                    mako_engine::envelope::Antwortcode::new(a.code.clone(), a.codeliste.clone())
+                }),
+                marktlokation,
             })
         },
     ));
@@ -622,10 +610,27 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                 validation_passed,
                 validation_errors,
                 vorgang: Box::new(super::lf_vorgangsdaten(u)?),
+                produktpaket_id: angebotenes_produktpaket(u),
             })
         },
     ));
     registry
+}
+
+/// `SG8 SEQ+Z79` DE 1050 — the Produktpaket-ID an Anmeldung offers. Its
+/// Bestätigung names it in `SG6 RFF+Z60` („Informativ zur Umsetzung geplantes
+/// Produktpaket"), Muss there: the NB says which of the offered packages it
+/// will implement, and unless it says otherwise that is the one it was asked
+/// for.
+fn angebotenes_produktpaket(u: &edi_energy::messages::utilmd::UtilmdMessage) -> Option<String> {
+    u.transactions().first().and_then(|t| {
+        t.sequences
+            .iter()
+            .find(|s| {
+                s.seq.action.as_deref() == Some(edi_energy::utilmd_codes::produkt::SEQ_PRODUKTPAKET)
+            })
+            .and_then(|s| s.seq.sequence_id.clone())
+    })
 }
 
 // ── GPKE Abrechnungsdaten (PIDs 55156/55220/55673) ───────────────────────────
@@ -1249,11 +1254,12 @@ pub fn gpke_messwerte_registry() -> AdapterRegistry<GpkeMesswerteLieferungWorkfl
             );
             // The readings, not just the fact that a delivery arrived.
             let (reads, undated) = super::mscons_intervals(m);
+            let (zaehlerstaende, _) = super::mscons_zaehlerstaende(m);
             if undated > 0 {
                 tracing::warn!(
                     pid = pid.as_u32(),
                     undated,
-                    "MSCONS: readings skipped — no SG10 DTM+163/164 in format 303",
+                    "MSCONS: readings skipped — neither SG10 DTM+163/164 nor DTM+7 in format 303",
                 );
             }
             Ok(MesswerteLieferungCommand::ReceiveMscons {
@@ -1263,6 +1269,7 @@ pub fn gpke_messwerte_registry() -> AdapterRegistry<GpkeMesswerteLieferungWorkfl
                 ),
                 location_id,
                 reads,
+                zaehlerstaende,
                 document_date: m
                     .dtm()
                     .iter()
@@ -1471,12 +1478,19 @@ pub fn gpke_sperrung_msb_registry() -> AdapterRegistry<GpkeSperrungMsbWorkflow> 
                 })
                 .and_then(convert_pid)?;
             let (validation_passed, validation_errors) = super::ahb_verdict(msg);
-            let (sender, lokation, _) = orders_head(o);
+            let (sender, lokation, dokumentennummer) = orders_head(o);
+            let msb = o
+                .receiver()
+                .and_then(|n| n.party_id.as_deref())
+                .unwrap_or("")
+                .to_owned();
             Ok(SperrungMsbCommand::ReceiveAnfrage {
                 pid,
                 anfrage: AnfrageSperrung {
                     netzbetreiber: mako_engine::types::MarktpartnerCode::new(sender),
+                    msb: mako_engine::types::MarktpartnerCode::new(msb),
                     malo: mako_engine::types::MaLo::new(lokation),
+                    dokumentennummer,
                     message_ref: MessageRef::new(msg.message_ref()),
                 },
                 validation_passed,
@@ -1515,13 +1529,16 @@ pub fn gpke_datenabruf_msb_registry() -> AdapterRegistry<GpkeDatenabrufMsbWorkfl
                 })
                 .and_then(convert_pid)?;
             let (validation_passed, validation_errors) = super::ahb_verdict(msg);
-            let (sender, lokation_id, dokumentennummer) = orders_head(o);
+            let kopf = super::msb_eingang::orders_kopf(o);
             Ok(DatenabrufMsbCommand::ReceiveAnfrage {
                 pid,
                 anfrage: WerteAnfrage {
-                    anfragender: mako_engine::types::MarktpartnerCode::new(sender),
-                    dokumentennummer,
-                    lokation_id,
+                    anfragender: mako_engine::types::MarktpartnerCode::new(kopf.sender),
+                    empfaenger: mako_engine::types::MarktpartnerCode::new(kopf.empfaenger),
+                    bgm: kopf.bgm,
+                    leistung: kopf.leistung,
+                    dokumentennummer: kopf.dokumentennummer,
+                    lokation_id: kopf.lokation,
                     message_ref: MessageRef::new(msg.message_ref()),
                 },
                 validation_passed,
@@ -2292,6 +2309,10 @@ pub fn gpke_eog_registry(
                         .and_then(|t| t.bilanzkreis())
                         .map(ToOwned::to_owned),
                     reason: None,
+                    // `SG4 STS+E01` — the E/G's `E_0615` code and its list.
+                    antwort: first_tx.and_then(|t| t.antwort()).map(|a| {
+                        mako_engine::envelope::Antwortcode::new(a.code.clone(), a.codeliste.clone())
+                    }),
                 }),
                 other => Err(EngineError::Deserialization(format!(
                     "GPKE EoG adapter: unexpected PID {other} (expected 55013–55015)"

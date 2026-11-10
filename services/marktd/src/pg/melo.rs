@@ -74,11 +74,30 @@ impl PgMeloRepository {
             .begin()
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?;
+        let version = self
+            .upsert_in(&mut tx, melo_id, malo_id, data, if_match, bo4e_version)
+            .await?;
+        tx.commit()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Ok(version)
+    }
 
+    /// [`Self::upsert`] **on the caller's transaction**, so the MeLo, its graph
+    /// edge and the CloudEvent announcing them commit together.
+    pub async fn upsert_in(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        melo_id: &MeloId,
+        malo_id: Option<&MaloId>,
+        data: &Messlokation,
+        if_match: Option<i64>,
+        bo4e_version: &str,
+    ) -> Result<i64, MdmError> {
         let current: Option<i64> =
             sqlx::query_scalar("SELECT version FROM melo WHERE melo_id = $1")
                 .bind(melo_id.as_ref())
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -127,7 +146,7 @@ impl PgMeloRepository {
         .bind(new_version)
         .bind(&payload)
         .bind(bo4e_version)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -153,7 +172,7 @@ impl PgMeloRepository {
         .bind(&melo_str)
         .bind(today)
         .bind(&new_parent)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -174,7 +193,7 @@ impl PgMeloRepository {
             .bind(&self.tenant)
             .bind(&melo_str)
             .bind(parent)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut *conn)
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -192,15 +211,11 @@ impl PgMeloRepository {
                 .bind(&melo_str)
                 .bind(parent)
                 .bind(today)
-                .execute(&mut *tx)
+                .execute(&mut *conn)
                 .await
                 .map_err(|e| MdmError::Internal(e.to_string()))?;
             }
         }
-
-        tx.commit()
-            .await
-            .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         Ok(new_version)
     }
@@ -243,6 +258,20 @@ impl PgMeloRepository {
         melo_id: &MeloId,
         patch: &mako_markt::repository::MeloStammdatenPatch,
     ) -> Result<bool, MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::patch_stammdaten_tx(&mut conn, melo_id, patch).await
+    }
+
+    /// [`Self::patch_stammdaten`] on the caller's transaction.
+    pub async fn patch_stammdaten_tx(
+        conn: &mut sqlx::PgConnection,
+        melo_id: &MeloId,
+        patch: &mako_markt::repository::MeloStammdatenPatch,
+    ) -> Result<bool, MdmError> {
         if patch.is_empty() {
             return Ok(false);
         }
@@ -259,7 +288,7 @@ impl PgMeloRepository {
         .bind(melo_id.as_ref())
         .bind(&patch.netzebene_messung)
         .bind(&patch.regelzone)
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?
         .rows_affected();

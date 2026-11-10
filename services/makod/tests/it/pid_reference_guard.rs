@@ -25,32 +25,15 @@ use mako_engine::pid_router::PidRouter;
 /// PIDs the reference credits to a workflow that the `PidRouter` deliberately
 /// does not register.
 ///
-/// Two distinct reasons, and the difference matters — the first group is
-/// correct as-is, the second is a real gap:
-///
-/// * **Outbound-only.** mako *generates* the PID as a response; it never arrives
-///   inbound, so there is nothing to route.
-/// * **Unwired.** The constants exist in the domain crate but no module
-///   registers them, or the PID falls outside the band its named workflow
-///   actually covers.
+/// Three reasons, each stated beside its entry: mako *generates* the PID and
+/// never receives it, the PID is withdrawn, or its process has no module in
+/// `makod`.
 const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
     // The MSBA's ORDRSP answering a Weiterverpflichtung (`E_0203`). mako holds
     // the MSBA side; the NB side — sending 17002 and awaiting the answer — is
     // not implemented, so these never arrive inbound.
     (19_003, "outbound-only: MSBA response to ORDERS 17002"),
     (19_004, "outbound-only: MSBA response to ORDERS 17002"),
-    // The NB's ORDERS opening a Konfigurationseinrichtung. mako holds the NB
-    // side and sends these (`konfiguration::ORDERS_PIDS`); what it receives is
-    // the MSB's ORDRSP 19001/19002, which `gpke-konfiguration` registers. The
-    // MSB side — receiving a 17134 — is not implemented.
-    (
-        17_134,
-        "outbound-only: NB sends, answered by ORDRSP 19001/19002",
-    ),
-    (
-        17_135,
-        "outbound-only: NB sends, answered by ORDRSP 19001/19002",
-    ),
     // **44170 does not exist under FV2026-10-01.** PID-Übersicht 4.0 publishes
     // the Gas Verpflichtungsanfrage as 44168 → 44169 and no Ablehnungs-PID; the
     // 44170 of PID 3.3 was withdrawn. `E_2006` still publishes the Ablehnungs-
@@ -60,18 +43,6 @@ const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
         44_170,
         "withdrawn with FV2026-10-01; no Ablehnungs-PID exists for 44168",
     ),
-    // ── Credited to `gpke-stammdatenaenderung`, but outside STAMMDATEN_PAIRS
-    //    (55615–55694, 55109/55110). 55194 is the Antwort auf die MSB-Gas-GDA
-    //    (17104), the others Lokationsbündel-, NeLo- and individual-order
-    //    exchanges — none of them a Stammdatenänderung pair.
-    (55_173, "outside STAMMDATEN_PAIRS"),
-    (55_175, "outside STAMMDATEN_PAIRS"),
-    (55_177, "outside STAMMDATEN_PAIRS"),
-    (55_180, "outside STAMMDATEN_PAIRS"),
-    (55_194, "outside STAMMDATEN_PAIRS"),
-    (55_225, "outside STAMMDATEN_PAIRS"),
-    (55_227, "outside STAMMDATEN_PAIRS"),
-    (55_553, "individuelle Bestellung; outside STAMMDATEN_PAIRS"),
     // The one PID the Anwendungsübersicht credits to *AWH NBW* alone. It is
     // imported, profiled and validates — and `makod` registers no NBW module
     // at all (it has no dependency on `mako-nbw`, which is a domain crate
@@ -289,9 +260,8 @@ fn the_reference_names_the_workflow_that_actually_routes_each_pid() {
 /// it is deleted from here. The guard below refuses a *new* bare `—` row, so
 /// the list can only shrink.
 const UNCLAIMED_WITHOUT_A_REASON: &[u32] = &[
-    55_008, 55_009, 55_074, 55_075, 55_076, 55_126, 55_218, 55_602, 55_603, 55_604, 55_605, 55_608,
-    55_609, 55_613, 55_614, 55_672, 55_674, 55_675, 44_035, 44_060, 44_101, 44_102, 44_103, 44_104,
-    44_105, 44_183, 17_101, 17_126, 17_301, 21_040, 13_028, 29_002,
+    55_008, 55_009, 55_074, 55_075, 55_076, 55_608, 55_609, 44_101, 44_102, 44_103, 44_104, 44_105,
+    44_183, 17_301, 21_040, 13_028, 29_002,
 ];
 
 /// A row that names no workflow must say why — or be a known one that does not.
@@ -355,5 +325,39 @@ fn an_unclaimed_row_states_its_reason() {
         now_explained.is_empty(),
         "UNCLAIMED_WITHOUT_A_REASON lists {now_explained:?}, but the table now \
          explains or routes them — delete the entries"
+    );
+}
+
+/// Every PID the router registers has a row in the reference.
+///
+/// The checks above start from the table, so a PID registered and never
+/// written into it is seen by none of them: the operator's reference then
+/// says nothing about a message the daemon handles.
+#[test]
+fn every_routed_pid_has_a_row() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../site/content/docs/regulatory/pid-reference.md"
+    );
+    let src = std::fs::read_to_string(path).expect("pid-reference.md is readable");
+    let mut rows = BTreeSet::new();
+    for line in src.lines().filter(|l| l.starts_with("| ")) {
+        if let Some(pid) = line
+            .trim_matches('|')
+            .split('|')
+            .next()
+            .and_then(|c| c.trim().parse::<u32>().ok())
+        {
+            rows.insert(pid);
+        }
+    }
+    let missing: Vec<u32> = routed_pids()
+        .into_keys()
+        .filter(|pid| !rows.contains(pid))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the router registers {missing:?}, and pid-reference.md has no row for them — \
+         add each with its Kommunikation and the workflow that routes it"
     );
 }

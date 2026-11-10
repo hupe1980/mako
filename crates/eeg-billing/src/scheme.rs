@@ -340,6 +340,29 @@ impl TariffSource {
         matches!(self, Self::Auction(m) if m.is_biogas_sect51b)
     }
 
+    /// Whether § 51b EEG 2023 applies to the settlement period `[von, bis]`: a
+    /// § 51b plant, from the approval, outside the § 100 Abs. 37 cohort
+    /// ([`crate::version::sect51b_im_zeitraum`]). `Ok(false)` for any other
+    /// plant and for an unknown period — a provision under a
+    /// Genehmigungsvorbehalt is not applied on the strength of not knowing when
+    /// the supply happened.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::version::GenehmigungImZeitraum`] for a § 51b plant's period
+    /// containing the approval day.
+    pub fn sect51b_im_zeitraum(
+        &self,
+        periode: Option<(Date, Date)>,
+    ) -> Result<bool, crate::version::GenehmigungImZeitraum> {
+        match (self, periode) {
+            (Self::Auction(m), Some((von, bis))) if m.is_biogas_sect51b => {
+                crate::version::sect51b_im_zeitraum(von, bis, m.gebotstermin)
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Returns `true` for §39n Innovationsausschreibung awards.
     ///
     /// These plants receive a **fixed** market premium (feste Marktprämie =
@@ -376,6 +399,10 @@ pub struct AusschreibungMetadata {
     pub award_ct: Option<Decimal>,
     /// Date of the BNetzA tender award notification.
     pub award_date: Option<Date>,
+    /// The Gebotstermin the award was made in — what § 100 Abs. 37 EEG 2023
+    /// keys its cohort on ([`crate::version::sect100_abs37_kohorte`]), which
+    /// the award date cannot stand in for.
+    pub gebotstermin: Option<Date>,
     /// Whether the award has erloschen — § 36e (Wind an Land), § 37e
     /// (Solaranlagen des ersten Segments) or § 39e (Biomasseanlagen) EEG 2023.
     pub award_expired: bool,

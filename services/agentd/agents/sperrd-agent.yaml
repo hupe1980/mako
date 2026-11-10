@@ -36,7 +36,7 @@ spec:
       - `de.accounting.sperrauftrag` — the LF's §41f ORDERS 17115 went out
       - `de.sperr.*` — the NB-side queue: auftrag.eingegangen, ausgefuehrt,
         fehlgeschlagen, storniert, iftsta.ausstehend
-      - `de.mako.process.completed` — the Sperrung ORDERS process closed
+      - `de.mako.process.completed` — the Sperrung ORDERS process closed. One type for both answers: `data.accepted: false` / `data.outcome: "rejected"` is the counterparty's Ablehnung — the process ended and did not happen
 
       ## PROCEDURE
 

@@ -70,6 +70,8 @@ async fn emit_obs_event(
             mako_service::CloudEvent::new(source, ce_type, String::new(), data).without_subject()
         }
     };
+    // durable: re-derived until delivered — a deadline alert is stamped only
+    // after delivery and the parity alert is recomputed every sweep.
     match mako_service::post_ce_with_retry(
         &rt.client,
         rt.outbound_url.as_str(),

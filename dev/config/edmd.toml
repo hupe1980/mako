@@ -32,10 +32,10 @@ subscriber_id = "edmd-dev"
 
 [webhook]
 
-# A filesystem warehouse for the cold tier. Its Iceberg catalog lives in the
-# edmd database, which outlives a restart, so the warehouse must too — the
-# in-memory default leaves the catalog pointing at files that are gone. The
-# URI must be absolute, so dev/env.sh sets EDMD_ARCHIVE__STORAGE_URI to
-# dev/.data/edmd-warehouse under the checkout.
+# A filesystem warehouse for the cold tier. An enabled [archive] needs one that
+# outlives a restart — archival moves settled intervals out of PostgreSQL — and
+# edmd refuses to start on an in-memory one. The URI must be absolute, so
+# dev/env.sh sets EDMD_ARCHIVE__STORAGE_URI to dev/.data/edmd-warehouse under
+# the checkout.
 [archive]
 enabled = true

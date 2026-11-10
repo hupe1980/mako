@@ -193,6 +193,31 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         ]
     }
 
+    /// A Gasnetzbetreiber, FNB/MGV-side or BKV deployment registers the whole
+    /// family. A deployment that is only a Lieferant receives one GaBi Gas
+    /// message, the marktlokationsscharfe Allokationsliste Gas MSCONS 13013
+    /// (Anwendungsübersicht der Prüfidentifikatoren 4.0, lfd. Nr. 12060,
+    /// NB an LF), and registers that alone.
+    fn register_pids_with_roles(
+        &self,
+        router: &mut mako_engine::pid_router::PidRouter,
+        roles: &mako_engine::marktrolle::DeploymentRoles,
+    ) {
+        use mako_engine::marktrolle::Marktrolle;
+        if [Marktrolle::Nb, Marktrolle::Uenb, Marktrolle::Bkv]
+            .into_iter()
+            .any(|r| roles.contains(r))
+        {
+            self.register_pids(router);
+            return;
+        }
+        if roles.contains(Marktrolle::Lf) {
+            for &pid in mmma::MMMA_MSCONS_PIDS {
+                router.register(pid, mmma::WORKFLOW_NAME);
+            }
+        }
+    }
+
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
         // INVOIC billing PIDs — independent of dvgw-edi.
         for &pid in invoic::GABI_GAS_INVOIC_PIDS {
@@ -248,5 +273,30 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         for &pid in mmma::MMMA_MSCONS_PIDS {
             router.register(pid, "gabi-gas-mmma");
         }
+    }
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+    use mako_engine::builder::EngineModule as _;
+    use mako_engine::marktrolle::DeploymentRoles;
+    use mako_engine::pid_router::PidRouter;
+
+    fn routed(roles: &DeploymentRoles) -> Vec<u32> {
+        let mut router = PidRouter::new();
+        GaBiGasModule.register_pids_with_roles(&mut router, roles);
+        let mut v: Vec<u32> = router.registered_pids().collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// A Lieferant Gas receives the MMMA list and nothing else of GaBi Gas.
+    #[test]
+    fn a_lieferant_registers_only_the_allokationsliste() {
+        assert_eq!(routed(&DeploymentRoles::lf()), vec![13_013]);
+        let nb = routed(&DeploymentRoles::nb());
+        assert!(nb.contains(&13_013) && nb.contains(&31_010), "{nb:?}");
+        assert!(routed(&DeploymentRoles::msb()).is_empty());
     }
 }

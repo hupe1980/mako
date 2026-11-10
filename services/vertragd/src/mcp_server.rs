@@ -832,19 +832,23 @@ impl VertragdMcpHandler {
         // processd at all — a different problem from one the NB has not
         // answered, and the one an operator otherwise cannot see.
         let offene_dispatches: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM outbound_tasks t
-               JOIN vertragskomponenten k ON k.id = t.komp_id
-              WHERE k.vertrag_id = $1 AND t.kind IN ('LIEFERBEGINN','LIEFERENDE')
-                AND t.completed_at IS NULL AND t.dead_lettered_at IS NULL",
+            "SELECT COUNT(*) FROM event_outbox o
+               JOIN vertragskomponenten k
+                 ON starts_with(o.event_id, k.tenant || '/' || o.ce_type || ':' || k.id::text)
+              WHERE k.vertrag_id = $1 AND o.kind = 'command'
+                AND o.ce_type IN ('LIEFERBEGINN','LIEFERENDE')
+                AND o.delivered_at IS NULL AND o.dead_lettered_at IS NULL",
         )
         .bind(id)
         .fetch_one(&self.state.pool)
         .await
         .unwrap_or(0);
         let dead_dispatches: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM outbound_tasks t
-               JOIN vertragskomponenten k ON k.id = t.komp_id
-              WHERE k.vertrag_id = $1 AND t.dead_lettered_at IS NOT NULL",
+            "SELECT COUNT(*) FROM event_outbox o
+               JOIN vertragskomponenten k
+                 ON starts_with(o.event_id, k.tenant || '/' || o.ce_type || ':' || k.id::text)
+              WHERE k.vertrag_id = $1 AND o.kind = 'command'
+                AND o.dead_lettered_at IS NOT NULL",
         )
         .bind(id)
         .fetch_one(&self.state.pool)

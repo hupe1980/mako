@@ -60,14 +60,14 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GPKE Sperrung/Entsperrung (NB)** | ⚡ | `mako-gpke` `gpke-sperrung` | ORDERS 17115/17117 → ORDRSP 19116/19117 | ORDRSP 1. WT nach dem ÜT · Ausführung 6 WT · IFTSTA 1 WT nach Abschluss | BK6-24-174 Teil 2 § 3.5 |
 | **GPKE Sperrung/Entsperrung (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDERS 17115/17117 (out) · ORDCHG 39000 (out) · ORDRSP 19116/19117 · 19128/19129 · IFTSTA 21039 | Vorlauf 6 WT (nicht termingebunden) / 12 WT (termingebunden) | BK6-24-174 Teil 2 § 3.5 |
 | **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | zum Zahlungsziel (`SG8 DTM+265`) | BK6-24-174 Teil 2 § 3.3 |
-| **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` · `gpke-datenabruf-msb` (MSB side) | ORDERS 17004/17102/17113 → ORDRSP rejection 19007/19102/19114 | **1 WT** on 17102 (GPKE Teil 4 Kap. 3.2 Nr. 4) · Ablehnung **2 WT** on 17004, **3 WT** on 17113 (WiM Teil 2 Kap. 2.6.3/2.7.3 Nr. 2) — the values themselves follow „Darstellung der zu übermittelnden Werte" | GPKE Teil 4 · WiM Teil 2 Kap. 2.6/2.7 |
+| **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` (`gpke.datenabruf.anfordern` sends 17004) · `gpke-datenabruf-msb` (MSB side, `gpke.datenabruf.ablehnen` out of `E_0442` / `E_0219`–`E_0225` / `E_0226`–`E_0230`) | ORDERS 17004/17102/17113 → ORDRSP rejection 19007/19102/19114 | **1 WT** on 17102 (GPKE Teil 4 Kap. 3.2 Nr. 4) · Ablehnung **2 WT** on 17004, **3 WT** on 17113 (WiM Teil 2 Kap. 2.6.3/2.7.3 Nr. 2) — the values themselves follow „Darstellung der zu übermittelnden Werte" | GPKE Teil 4 · WiM Teil 2 Kap. 2.6/2.7 |
 | **GPKE Geschäftsdatenanfrage** | ⚡ | `mako-gpke` `gpke-geschaeftsdatenanfrage` | ORDERS 17132 → UTILMD 55035/55095/55060 · ORDRSP 19101 | **1 WT** (NB antwortet) | BK6-22-024 Anlage 1d Teil 4 Kap. 3.2 |
 | **GPKE Anfrage Bestellung (55555)** | ⚡ | `mako-gpke` `gpke-anfrage-bestellung` | UTILMD 55555 | nicht quantifiziert | BK6-24-174 Teil 4 |
 | **GPKE Allokationsliste Strom** | ⚡ | `mako-gpke` `gpke-allokationsliste` | ORDERS 17110/17114 · ORDRSP 19110/19115 · MSCONS 13014 | nicht quantifiziert | BK6-24-174 |
 | **GPKE Messwerte (MSCONS)** | ⚡ | `mako-gpke` `gpke-messwerte` | MSCONS 13005/13006/13015–13019/13025/13027 | nicht quantifiziert | BK6-24-174 |
 | **GPKE UTILTS** | ⚡ | `mako-gpke` `gpke-utilts` | UTILTS 25001/25004–25010 | nicht quantifiziert | BK6-24-174 |
-| **GPKE Konfiguration** | ⚡ | `mako-gpke` `gpke-konfiguration` | ORDERS 17134/17135 → ORDRSP 19001/19002 | nicht quantifiziert | BK6-24-174 Teil 3 |
-| **GPKE Konfiguration Änderung** | ⚡ | `mako-gpke` `gpke-konfiguration-aenderung` | ORDERS/ORDRSP config changes | nicht quantifiziert | BK6-24-174 Teil 3 |
+| **GPKE Konfiguration** | ⚡ | `mako-gpke` `gpke-konfiguration` (NB sends) · `gpke-konfiguration-aenderung` (MSB receives) | ORDERS 17134 · 17135 | Einrichtung bis 22:00 Uhr am WT vor dem Wirkungszeitraum; 17135 binnen 1 Stunde (nicht registriert) | BK6-24-174 Teil 3 Kap. 1.3.7.2 |
+| **GPKE Konfiguration Änderung** | ⚡ | `mako-gpke` `gpke-konfiguration-aenderung` (both sides) | ORDERS 17118 · 17120–17123 · 17128–17131 · 17133 · ORDRSP 19120–19133 | **1 WT** (17120); sonst nicht quantifiziert | BK6-24-174 Teil 3 |
 | **GPKE Beendigung der Zuordnung** | ⚡ | `mako-gpke` `gpke-beendigung-zuordnung` | UTILMD 55010 → 55011/55012 | **09:00 Uhr des 1. WT** nach dem ÜT (`E_0624`) | BK6-24-174 Teil 2 |
 | **GPKE Kündigung** | ⚡ | `mako-gpke` `gpke-kuendigung` | UTILMD 55016 → 55017/55018 | Ablauf des **1. WT** nach dem ÜT | BK6-24-174 Teil 2 |
 | **GPKE Stornierung** | ⚡ | `mako-gpke` `gpke-stornierung` | UTILMD 55022 → 55023/55024 | — **keine Festlegung nennt ein Antwortfenster** | GPKE Teil 4 Kap. 5 |
@@ -76,7 +76,7 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GPKE Zuordnungs-Meldungen** | ⚡ | `mako-gpke` `gpke-zuordnungsmeldung` | UTILMD 55036/55037/55038 | — Meldepflicht, **keine Antwortnachricht** (Sendefrist in `mako_fristen::meldung`) | BK6-24-174 Teil 2 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
 | **WiM MSB-Wechsel** | ⚡ 🔥 | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 resp. 44039/44042/44051/44168 (out+in) und ihre Antworten | 3/5/7/1 WT — see below | BK6-24-174 · AWH WiM Gas 2.0 |
-| **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17009 · ORDRSP 19001/19002 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · Gerätewechseltermin frühestens am 4. WT, Antwort 2 WT davor | BK6-24-174 Kap. 3.1.2 / 3.2.2 |
+| **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` (MSBA) · `wim-geraeteubernahme-msbn` (MSBN) | ORDERS 17001 · 17009 · ORDRSP 19001/19002 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · Gerätewechseltermin frühestens am 4. WT, Antwort 2 WT davor | BK6-24-174 Kap. 3.1.2 / 3.2.2 |
 | **WiM Abrechnung** | ⚡ 🔥 | `mako-wim` `wim-invoic` | INVOIC 31009 · 31003 · 31004 · REMADV 33001–33004 · COMDIS 29001 | zum Zahlungsziel; NB bei 31009: 4. WT davor | BK6-24-174 Kap. 3.6.3.8 / 3.7 / 6 |
 | **WiM Rechnungsabwicklung MSB über LF** | ⚡ | `mako-wim` `wim-rechnungsabwicklung` | REQOTE 35002 → QUOTES 15002 · ORDERS 17005/17006 · ORDRSP 19009/19010 | 5 WT Angebot · **8 WT** Antwort/Beendigung | BK6-24-174 Kap. 3.6.3.4–3.6.3.7 |
 | **WiM Weiterverpflichtung** | ⚡🔥 | `mako-wim` `wim-weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 | **1 WT** (MSBA antwortet) | BK6-24-174 |
@@ -314,7 +314,7 @@ PIDs 17115 and 17117 are shared with the Gas Sperrung — see
 |---|---|---|---|---|---|
 | Sperrauftrag LF-initiiert (Strom) | LF → NB | ORDERS **17115** | ORDRSP 19116 | ORDRSP 19117 | `mako-gpke` ✅ |
 | Entsperrauftrag LF-initiiert (Strom) | LF → NB | ORDERS **17117** | ORDRSP 19116 | ORDRSP 19117 | `mako-gpke` ✅ |
-| Anfrage Sperrung (NB → MSB) | NB → MSB | ORDERS **17116** | ORDRSP 19118 | ORDRSP 19119 | `mako-gpke` ✅ — the MSB receives it in `gpke-sperrung-msb` (3 WT, a lapse counts as Zustimmung); its ORDRSP answer is not built |
+| Anfrage Sperrung (NB → MSB) | NB → MSB | ORDERS **17116** | ORDRSP 19118 | ORDRSP 19119 | `mako-gpke` ✅ — the MSB receives it in `gpke-sperrung-msb` (3 WT, a lapse counts as Zustimmung) and answers with `gpke.anfrage-sperrung.beantworten` out of `E_0488` |
 | Auftragsstatus Sperren | NB → LF/MSB/ÜNB | — | IFTSTA **21039** | — | `mako-gpke` ✅ |
 | Info Entsperrauftrag | NB → MSB | — | IFTSTA **21040** | — | — |
 | Stornierung Sperrauftrag | LF → NB | ORDCHG **39000** | ORDRSP 19128 | ORDRSP 19129 | `mako-gpke` ✅ |
@@ -401,32 +401,46 @@ Data requests and configuration processes under GPKE Teil 4 (BK6-22-024).
 | Anforderung Allokationsliste | LF → NB | ORDERS **17110** | ORDRSP 19110 | `mako-gpke` ✅ |
 | Anforderung bilanzierte Menge | NB/LF → ÜNB | ORDERS **17114** | ORDRSP 19115 | `mako-gpke` ✅ |
 
-#### Konfigurationseinrichtung (NB-outbound)
+#### Einrichtung der Konfigurationen aufgrund einer Zuordnung eines LF
 
-These ORDERS messages are **generated by the NB workflow** as part of its
-post-Lieferbeginn configuration obligation (GPKE Teil 4 §3). They are dispatched
-via the NB's outbox after UTILMD 55001 is accepted — they are **not** inbound
-routing PIDs. The MSB responds with ORDRSP 19001 (Bestätigung) or 19002 (Ablehnung)
-which are routed back to the `gpke-konfiguration` workflow.
+The NB orders the Einrichtung with ORDERS 17134 (ORDERS AHB 1.1b Kap. 4.17.1,
+S. 102); a MSB that does not operate every Messlokation forwards it to the
+weiterer MSB as 17135 (Kap. 4.17.2, S. 111), „spätester ÜZ ist 1 Stunde nach
+dem ÜZ von Nr. 1". Neither is answered by an ORDRSP: the MSB sets the
+Konfigurationen up — „spätestens am WT vor dem Beginn des Wirkungszeitraums bis
+22:00 Uhr" where that lies in the future — and reports through the
+Stammdatenänderung (GPKE Teil 3 Kap. 1.3.7.2 Nr. 1–3, S. 82–84). The NB sends
+from `gpke-konfiguration`; the receiving MSB runs the receiving side of
+`gpke-konfiguration-aenderung`, which registers no window for it.
 
-| Process (BDEW AHB name) | NB sends to | ORDERS PID | MSB-Antwort | Crate |
+| Process (BDEW AHB name) | Sender → Recipient | ORDERS PID | Crate |
+|---|---|---|---|
+| Einrichtung Konfiguration aufgrund Zuordnung LF (NB an MSB) | NB → MSB | **17134** | `mako-gpke` ✅ |
+| Einrichtung Konfiguration aufgrund Zuordnung LF (MSB an MSB) | MSB → weiterer MSB | **17135** | `mako-gpke` ✅ |
+
+#### Konfigurationsänderung — Bestellung, Reklamation, Beendigung
+
+One workflow, `gpke-konfiguration-aenderung`, holds both sides: the sender's
+ORDERS and the recipient's process, keyed apart (`konfiguration-auftrag:{NAD+MS}:{BGM DE 1004}`
+on the receiving side). Each role routes what it receives
+(Anwendungsübersicht 4.0 lfd. Nr. 22180–23240). The recipient answers with
+`gpke.konfiguration.beantworten`: 17130 on 19132, 17121 on 19120, 17118 on
+19127, 17129 on 19131, out of `E_0526` / `E_0527` / `E_0539` (ORDRSP AHB 1.1b
+Kap. 4.4, 4.6). The other answers' columns name trees mako does not carry
+(`E_0523`, `E_0533`, `E_0538`, `E_0540`, `E_0544`–`E_0552`) and are refused.
+
+| Process | Sender → Recipient | ORDERS PID | Antwort | Crate |
 |---|---|---|---|---|
-| Einrichtung Konfiguration aufgrund Zuordnung LF (NB an MSB) | NB → MSB | **17134** | ORDRSP 19001/19002 | `mako-gpke` ✅ |
-| Einrichtung Konfiguration aufgrund Zuordnung LF (MSB an MSB) ¹ | NB → MSB | **17135** | ORDRSP 19001/19002 | `mako-gpke` ✅ |
-
-> ¹ Despite the name "MSB an MSB", ORDERS 17135 is **sent by the NB** (via its outbox)
-> to coordinate configuration between two MSBs. The NB workflow (`gpke-konfiguration`)
-> is the owner; no MSB system invokes this directly.
-
-#### Konfigurationsänderung (LF/NB-initiated)
-
-| Process | Initiator → Responder | ORDERS PID | Antwort | Crate |
-|---|---|---|---|---|
-| Änderung Prognosegrundlage | LF → NB | **17120** | ORDRSP 19121 | `mako-gpke` ✅ |
-| Änderung Konfiguration (NB → MSB) | NB → MSB | **17121** | ORDRSP | `mako-gpke` ✅ |
-| Änderung Lastprofilzuordnung | LF/NB → NB | **17122/17123** | ORDRSP | `mako-gpke` ✅ |
-| Änderung iMS-Pflichteinbau | NB → MSB | **17128–17131** | ORDRSP | `mako-gpke` ✅ |
-| Änderung Netzengpassmanagement | LF → NB | **17133** | ORDRSP | `mako-gpke` ✅ |
+| Bestellung Änderung Prognosegrundlage | LF → NB | **17120** | ORDRSP 19121, 1 WT (GPKE Teil 3 Kap. 1.3.2.2 Nr. 2) | `mako-gpke` ✅ |
+| Bestellung Änderung | NB → MSB | **17121** | ORDRSP 19120 | `mako-gpke` ✅ |
+| Reklamation einer Definition | LF → NB · MSB → NB · NB → LF · MSB → LF | **17122** | ORDRSP 19123 | `mako-gpke` ✅ |
+| Bestellung Änderung Zählzeitdefinition | LF → NB · LF → MSB | **17123** | ORDRSP 19124 | `mako-gpke` ✅ |
+| Reklamation einer Konfiguration | NB · LF · MSB → MSB | **17128** | ORDRSP 19130 | `mako-gpke` ✅ |
+| Bestellung Beendigung einer Konfiguration | NB · LF · MSB → MSB | **17129** | ORDRSP 19131 | `mako-gpke` ✅ |
+| Bestellung einer Konfiguration | NB · LF → MSB · MSB → weiterer MSB | **17130** | ORDRSP 19132 | `mako-gpke` ✅ |
+| Bestellung Angebot einer Konfiguration | NB · LF → MSB | **17131** | — | `mako-gpke` ✅ |
+| Bestellung einer Konfigurationsänderung | MSB → weiterer MSB | **17118** | ORDRSP 19127 | `mako-gpke` ✅ |
+| Bestellung Änderung Abrechnungsdaten | LF → NB | **17133** | ORDRSP 19133 | `mako-gpke` ✅ |
 
 ---
 
@@ -570,9 +584,13 @@ name, as is one the column does not list:
 | 19015 with `ZB5` | `SG3 NAD+Z22` Lieferadresse für Altgeräte | the MSBA (`[41]`, S. 48) |
 | 19016 with `Z07` | `SG3 NAD+VY` MP-ID des Eigentümers | the MSBA (`[42]`, Hinweis `[536]`, S. 47) |
 
-mako is the MSBA here. The MSBN side — sending 17001/17009 and receiving the
-answer — is not built, so an inbound 19001/19002/19015/19016 reaches no process
-and is dead-lettered as not dispatchable.
+mako holds both sides. The MSBA answers in `wim-geraeteubernahme`; the MSBN
+sends the 17009 with `wim.geraetewechselabsicht.anzeigen` (ORDERS AHB 1.1b Kap.
+4.10, S. 78–80) and the 17001 with `wim.geraeteuebernahme.bestellen` (Kap.
+4.9.2, S. 74–77) in `wim-geraeteubernahme-msbn`, keyed on the ORDERS' `BGM`
+DE 1004; the MSBA's 19015/19016 resp. 19001/19002 names it in `SG1 RFF+ON`
+(Hinweise `[518]`, `[535]`) and ends the process Bestaetigt or Abgelehnt with
+its code and, beside `Z07`, the Eigentümer.
 
 ### WiM-Abrechnung
 
@@ -632,7 +650,7 @@ the requested date is less than 20 Werktage out.
 | Bestellung **nach Angebot** | NB → MSB | **17011** (`ZG-T24`) | ORDRSP 19005/19006 | `E_0279` | `mako-wim` ✅ |
 | Bestellung **nach Angebot** | LF → MSB | **17011** (`ZG-T24`) | ORDRSP 19005/19006 | `E_0283` | `mako-wim` ✅ |
 | Durchführung — Scheitermeldung | MSB → NB / LF | — | IFTSTA **21027** / **21025** | `E_0286` | `mako-wim` ✅ |
-| Konfigurationsänderung | MSB → MSB | **17118** | ORDRSP 19127 | — | `mako-wim` ✅ |
+| Bestellung einer Konfigurationsänderung (GPKE Teil 3) | MSB → weiterer MSB | **17118** | ORDRSP 19127 | — | `mako-gpke` `gpke-konfiguration-aenderung` |
 | Bestellung Änderung (GPKE Teil 3) | NB → MSB | **17121** | ORDRSP 19120 | `E_0526` | `mako-gpke` |
 
 > **One answer PID pair, four trees.** ORDRSP 19005/19006 carries all four
@@ -654,9 +672,14 @@ the requested date is less than 20 Werktage out.
 > belong to the ESA Wertebestellung below, **not** here.
 >
 > **Direction:** as requester mako sends the ORDERS and ingests the ORDRSP; as
-> MSB it answers the REQOTE 35005 and receives the 17011 (`ReceiveAuftrag`,
-> under the sender and the Dokumentennummer, with its own 10-WT window). mako
-> does not send the MSB's ORDRSP 19005/19006 out of the four trees above.
+> MSB it answers the REQOTE 35005, receives the 17011 (`ReceiveAuftrag`, under
+> the sender and the Dokumentennummer, with its own 10-WT window) and answers
+> it with `wim.technik-aenderung.beantworten`: the Besteller and the 17011's
+> `BGM` DE 1001 (`Z12` / `Z93`) pick the tree, the code's Cluster 19005 or
+> 19006, and the ORDRSP echoes the 17011's `BGM`, `DTM+203` and `RFF+ON`
+> (ORDRSP AHB 1.1b Kap. 4.12, S. 50–53). `A04`/`A05` of a `Z93` Bestellung are
+> refused: the Umsetzungszeitraum and the PRICAT reference they need are not
+> carried.
 
 ### ESA Wertebestellung (WiM Strom Teil 2, Kap. 4)
 
@@ -1093,7 +1116,7 @@ Entscheidungsbäume `E_1000` / `E_1004` against Strom's `E_0470` / `E_0497` —
 |---|---|---|---|---|---|
 | Sperrauftrag empfangen (GNB) | LF → GNB | ORDERS **17115** | ORDRSP 19116 | ORDRSP 19117 | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
 | Entsperrauftrag empfangen (GNB) | LF → GNB | ORDERS **17117** | ORDRSP 19116 | ORDRSP 19117 | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
-| Anfrage Sperrung an gMSB | GNB → gMSB | ORDERS **17116** | ORDRSP **19118** | ORDRSP **19119** | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
+| Anfrage Sperrung an gMSB | GNB → gMSB | ORDERS **17116** | ORDRSP **19118** | ORDRSP **19119** | `mako-geli-gas` `geli-gas-sperrung-nb` (sends) · `geli-gas-sperrung-msb` (gMSB receives, answers out of `E_1001`) ✅ |
 | Stornierung empfangen (GNB) | LF → GNB | ORDCHG **39000** | ORDRSP 19128 | ORDRSP 19129 | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
 | Weiterleitung Stornierung (GNB → gMSB) | GNB → gMSB | ORDCHG **39001** | — | — | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
 

@@ -117,11 +117,38 @@ impl EdifactIngestDispatcher {
                 }
             }
             // ── MaBiS Listenabgleich — list + Korrekturliste ──────────────────
-            // Only the list PIDs are handled. The reply codes are registered so
-            // the router resolves them and the adapter covers the list leg only,
-            // so an inbound reply has no command to apply and dead-letters.
+            // A list spawns the receiver's process. A Korrekturliste resumes
+            // the process of the list this participant distributed, found by
+            // the Listennummer the answer echoes in `SG6 RFF+TN`; it never
+            // spawns, because an answer to no list has nothing to close.
             "mabis-listenabgleich" => {
-                if mako_mabis::listenabgleich::familie_for(pid).is_some() {
+                // Only a list the Netzbetreiber distributes is answered back to
+                // it (55066 / 55202). 55196 / 55224 answer the ÜNB's lists, and
+                // their receiver is the ÜNB, which mako does not deploy.
+                let antwortet_dem_nb = mako_mabis::listenabgleich::familie_for_antwort(pid)
+                    .is_some_and(|f| f.baeume("NB").is_some());
+                if antwortet_dem_nb {
+                    let Some(referenz) = adapters::mabis_korrekturliste_referenz(msg) else {
+                        return Ok(IngestOutcome::Skipped {
+                            workflow_name: "mabis-listenabgleich",
+                            reason: "no_correlation_key",
+                        });
+                    };
+                    let cmd =
+                        adapters::mabis_listenabgleich_korrektur_registry().dispatch(raw, &fv)?;
+                    self.resume_by_key::<MabisListenabgleichWorkflow>(
+                        inbound,
+                        &mako_mabis::listenabgleich::liste_key(&referenz),
+                        "mabis-listenabgleich",
+                        cmd,
+                    )
+                    .await
+                } else if mako_mabis::listenabgleich::familie_for_antwort(pid).is_some() {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "mabis-listenabgleich",
+                        reason: "pid_not_in_listenabgleich_for_this_role",
+                    })
+                } else if mako_mabis::listenabgleich::familie_for(pid).is_some() {
                     let cmd = adapters::mabis_listenabgleich_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.spawn_or_resume_guarded::<MabisListenabgleichWorkflow>(

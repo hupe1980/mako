@@ -149,20 +149,31 @@ pub(crate) async fn build_quantities(
         }
         // §42c EnWG: a sharing participant is an ordinary supply customer whose
         // bill carries a credit for their allocated community share. Both halves
-        // are needed — the residual supply from edmd and the allocation from the
-        // caller — and the credit silently vanishing was the failure mode of
-        // routing SHARING through the electricity fallback below.
+        // come from edmd — the residual supply and the participant's sum of
+        // capped quarter-hour shares — and a period without the allocation is
+        // refused: billed without it, the invoice charges the full supply and
+        // drops the § 42c credit, and reads like an ordinary bill.
         "SHARING" => {
             q.electricity =
                 Some(resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?);
-            q.energy_share = req.energy_share.clone();
-            if q.energy_share.is_none() {
-                tracing::warn!(
-                    malo_id,
-                    "billingd SHARING: no energy_share allocation supplied — the invoice bills \
-                     the residual supply without the §42c community credit"
-                );
-            }
+            let allocation = edmd
+                .get_sharing_allocation(malo_id, period_from, period_to)
+                .await
+                .map_err(|e| BillingError::upstream("edmd", format!("sharing allocation: {e}")))?
+                .filter(|a| a.interval_count > 0)
+                .ok_or_else(|| {
+                    BillingError::unprocessable(
+                        "SHARING_ALLOCATION_MISSING",
+                        format!(
+                            "§42c EnWG: edmd holds no community allocation for MaLo {malo_id} \
+                             in {period_from}..{period_to} — no COMMUNITY_SHARE rule names \
+                             it, or the plant reported no quarter hour. Billed without it, \
+                             the invoice would charge the full supply and drop the \
+                             community credit."
+                        ),
+                    )
+                })?;
+            q.energy_share = Some(allocation.share);
         }
         other => {
             // Every `Product` variant is named above. A category that is not is
@@ -176,6 +187,106 @@ pub(crate) async fn build_quantities(
     }
     require_coverage(deps.cfg.as_ref(), &q, malo_id, period_from, period_to)?;
     Ok(q)
+}
+
+/// The § 14a EnWG reductions a controllable load is billed, selected by the
+/// module state `vertragd` records for the period.
+///
+/// BK8-22/010-A: Modul 1 (pauschale Reduzierung) and Modul 2 (prozentuale
+/// Reduzierung des Arbeitspreises) are the two forms of the base module, and
+/// Modul 3 (zeitvariable Netzentgelte) is offered beside Modul 1. The product
+/// states what each reduction is worth; the record states which the customer
+/// holds. A module the record does not name is dropped from the product, and a
+/// module it names that the product does not price is refused — billing the
+/// period without it would charge the full Netzentgelt the customer was
+/// relieved of. A combination the Festlegung does not offer is passed through,
+/// so the engine's `MODUL1_AND_MODUL2` refuses it.
+///
+/// # Errors
+///
+/// `422` — no state recorded for the whole period (`SECT14A_MODUL_UNBEKANNT`),
+/// a change of state inside it (`SECT14A_MODULWECHSEL_IM_ZEITRAUM`), a
+/// recorded module the product does not price (`SECT14A_MODUL_OHNE_PREIS`), or
+/// Modul 3, whose HT/ST/NT band rates and band quantities billingd does not
+/// yet resolve (`SECT14A_MODUL3_OHNE_BAENDER`).
+pub(crate) fn select_sect14a(
+    product: &energy_billing::ControllableLoadProduct,
+    slices: &[crate::clients::Sect14aSlice],
+    malo_id: &str,
+    period_from: time::Date,
+    period_to: time::Date,
+) -> BillingResult<energy_billing::ControllableLoadProduct> {
+    let end = period_to.next_day().unwrap_or(period_to);
+    let slice = match slices {
+        [one] if one.gueltig_von <= period_from && one.gueltig_bis.is_none_or(|b| b >= end) => one,
+        [] | [_] => {
+            return Err(BillingError::unprocessable(
+                "SECT14A_MODUL_UNBEKANNT",
+                format!(
+                    "§ 14a EnWG: vertragd records no Netzentgelt module for MaLo {malo_id} over \
+                     the whole of {period_from}..{period_to}. Which of Modul 1, 2 and 3 the \
+                     Anschlussnutzer holds decides the reduction billed — record it \
+                     (POST /api/v1/malo/{malo_id}/sect14a)."
+                ),
+            ));
+        }
+        _ => {
+            return Err(BillingError::unprocessable(
+                "SECT14A_MODULWECHSEL_IM_ZEITRAUM",
+                format!(
+                    "§ 14a EnWG: the Netzentgelt module of MaLo {malo_id} changes inside \
+                     {period_from}..{period_to} ({} recorded states); bill each part \
+                     separately.",
+                    slices.len()
+                ),
+            ));
+        }
+    };
+    let holds = |m: &str| slice.module.iter().any(|x| x == m);
+    if holds("MODUL_3") {
+        return Err(BillingError::unprocessable(
+            "SECT14A_MODUL3_OHNE_BAENDER",
+            format!(
+                "§ 14a EnWG Modul 3 (zeitvariable Netzentgelte, BK8-22/010-A) is recorded for \
+                 MaLo {malo_id}, and billingd resolves neither the HT/ST/NT band rates nor the \
+                 band quantities yet. Billing a flat Netzentgelt instead would price a tariff \
+                 the customer is not on."
+            ),
+        ));
+    }
+    let mut chosen = product.clone();
+    for (modul, priced, field) in [
+        (
+            "MODUL_1",
+            product.sect14a_modul1_pauschale_eur_per_year.is_some(),
+            &mut chosen.sect14a_modul1_pauschale_eur_per_year,
+        ),
+        (
+            "MODUL_2",
+            product.sect14a_modul2_nne_reduktion_ct_per_kwh.is_some(),
+            &mut chosen.sect14a_modul2_nne_reduktion_ct_per_kwh,
+        ),
+    ] {
+        match (holds(modul), priced) {
+            (true, false) => {
+                return Err(BillingError::unprocessable(
+                    "SECT14A_MODUL_OHNE_PREIS",
+                    format!(
+                        "§ 14a EnWG: MaLo {malo_id} holds {modul}, and its product prices no \
+                         reduction for it — the customer would be billed the Netzentgelt \
+                         the module relieves them of."
+                    ),
+                ));
+            }
+            (false, _) => *field = None,
+            (true, true) => {}
+        }
+    }
+    // The bands are Modul 3's alone.
+    chosen.sect14a_modul3_nne_ht_ct_per_kwh = None;
+    chosen.sect14a_modul3_nne_st_ct_per_kwh = None;
+    chosen.sect14a_modul3_nne_nt_ct_per_kwh = None;
+    Ok(chosen)
 }
 
 /// Refuse a period below the operator's coverage floor.
@@ -252,6 +363,27 @@ async fn dispatch_invoice(
     let cfg = deps.cfg.as_ref();
     let (edmd, marktd, vertragd) = (&deps.edmd, &deps.marktd, &deps.vertragd);
     let grid = req.grid.clone().unwrap_or_default();
+    // § 14a EnWG: the reductions a controllable load is billed are the modules
+    // the Anschlussnutzer holds, as vertragd records them — not whatever the
+    // product happens to price.
+    let selected;
+    let tariff = match tariff {
+        Product::Waermepumpe(p) | Product::Wallbox(p) => {
+            let slices = vertragd
+                .get_sect14a(malo_id, period_from, period_to)
+                .await
+                .map_err(|e| {
+                    BillingError::upstream("vertragd", format!("§ 14a module state: {e}"))
+                })?;
+            let chosen = select_sect14a(p, &slices, malo_id, period_from, period_to)?;
+            selected = match tariff {
+                Product::Waermepumpe(_) => Product::Waermepumpe(chosen),
+                _ => Product::Wallbox(chosen),
+            };
+            &selected
+        }
+        other => other,
+    };
     let quantities = build_quantities(deps, tariff, req, malo_id, period_from, period_to).await?;
 
     // §40 Abs. 1 EnWG — the contract facts the invoice must state live in
@@ -858,7 +990,6 @@ async fn bill_leg(
         hems_meter: req.hems_meter.as_ref().map(|m| m.apportioned(share)),
         emobility_meter: req.emobility_meter.as_ref().map(|m| m.apportioned(share)),
         service_meter: req.service_meter.as_ref().map(|m| m.apportioned(share)),
-        energy_share: req.energy_share.as_ref().map(|m| m.apportioned(share)),
         abschlaege: if is_last {
             req.abschlaege.clone()
         } else {
@@ -1641,6 +1772,350 @@ mod ersatzversorgung_limit_tests {
         assert!(
             body.contains("vertragsart:") && body.contains("regime()"),
             "bill_one must set BillingContext::vertragsart from the vertragd answer"
+        );
+    }
+}
+
+#[cfg(test)]
+mod sharing_allocation_tests {
+    use super::build_quantities;
+    use crate::clients::{BillingDeps, EdmdClient, OutputdClient, ProductdClient, VertragdClient};
+    use crate::handlers::CalculateRequest;
+    use energy_billing::{MeterInput, Product};
+    use rust_decimal::dec;
+    use std::sync::Arc;
+    use time::macros::date;
+
+    /// An edmd that knows the participant `51238696012` and no other MaLo.
+    async fn edmd() -> String {
+        use axum::routing::get;
+        let app = axum::Router::new().route(
+            "/api/v1/sharing/participants/{malo_id}/allocation",
+            get(
+                |axum::extract::Path(malo): axum::extract::Path<String>| async move {
+                    if malo == "51238696012" {
+                        axum::Json(serde_json::json!({
+                            "malo_id": malo,
+                            "community_id": "DE0001234567890000000000000000001",
+                            "interval_count": 2976,
+                            "allocated_kwh": "123.456789",
+                            "total_production_kwh": "900",
+                        }))
+                        .into_response()
+                    } else {
+                        axum::http::StatusCode::NOT_FOUND.into_response()
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        format!("http://{addr}")
+    }
+
+    use axum::response::IntoResponse as _;
+
+    fn deps(edmd_url: &str) -> BillingDeps {
+        let cfg: crate::config::BillingdConfig = serde_json::from_value(serde_json::json!({
+            "database": { "url": "postgres://localhost/x" },
+            "tenant": "9900357000004",
+            "productd_url": "http://127.0.0.1:9",
+            "edmd_url": edmd_url,
+            "marktd_url": "http://127.0.0.1:9"
+        }))
+        .expect("config parses");
+        BillingDeps {
+            cfg: Arc::new(cfg),
+            productd: Arc::new(ProductdClient::new("http://127.0.0.1:9", None)),
+            edmd: Arc::new(EdmdClient::new(edmd_url, None)),
+            marktd: Arc::new(mako_markt::marktd_client::MarktdClient::new(
+                "http://127.0.0.1:9",
+                secrecy::SecretString::from(String::new()),
+                reqwest::Client::new(),
+            )),
+            vertragd: Arc::new(VertragdClient::new("http://127.0.0.1:9", None)),
+            outputd: Arc::new(OutputdClient::new("http://127.0.0.1:9", None)),
+            accountingd: None,
+        }
+    }
+
+    fn sharing() -> Product {
+        serde_json::from_value(serde_json::json!({
+            "category": "SHARING",
+            "strom": { "arbeitspreis_ct_per_kwh": "30" },
+            "sharing_credit_ct_per_kwh": "12",
+        }))
+        .expect("a SHARING product")
+    }
+
+    fn req() -> CalculateRequest {
+        CalculateRequest {
+            meter: Some(MeterInput {
+                arbeitsmenge_kwh: dec!(300),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// **Invariant: the § 42c credit is edmd's allocation, never a figure the
+    /// caller hands in.** The credited kWh are the participant's sum of
+    /// capped quarter-hour shares as edmd serves them, and the community is
+    /// the one edmd names.
+    #[tokio::test]
+    async fn a_sharing_period_credits_edmds_allocation() {
+        let url = edmd().await;
+        let q = build_quantities(
+            &deps(&url),
+            &sharing(),
+            &req(),
+            "51238696012",
+            date!(2026 - 07 - 01),
+            date!(2026 - 07 - 31),
+        )
+        .await
+        .expect("billed");
+        let share = q.energy_share.expect("the allocation reaches the product");
+        assert_eq!(share.allocated_kwh, dec!(123.456789));
+        assert_eq!(
+            share.gemeinschaft_id.as_deref(),
+            Some("DE0001234567890000000000000000001")
+        );
+    }
+
+    /// **Invariant: a SHARING period without an allocation is refused.**
+    /// Billed without one, the invoice charges the full supply and drops the
+    /// § 42c credit, and reads like an ordinary bill.
+    #[tokio::test]
+    async fn a_sharing_period_without_an_allocation_is_refused() {
+        let url = edmd().await;
+        let err = build_quantities(
+            &deps(&url),
+            &sharing(),
+            &req(),
+            "51238696020",
+            date!(2026 - 07 - 01),
+            date!(2026 - 07 - 31),
+        )
+        .await
+        .expect_err("no allocation, no invoice");
+        assert_eq!(err.code(), "SHARING_ALLOCATION_MISSING");
+    }
+
+    /// **Invariant: the share edmd allocates is the credit on the invoice, and
+    /// the invoice's gross — what accountingd books — carries it.**
+    ///
+    /// The `de.billing.rechnung.erstellt` fields accountingd reads are pinned
+    /// in `tests/fixtures/sharing_rechnung_erstellt.json`; accountingd's
+    /// `sharing_booking` test books that fixture through its webhook and
+    /// asserts the receivable equals its `gesamtbrutto`. Regenerate with
+    /// `BLESS_SHARING_FIXTURE=1` and read the diff.
+    #[tokio::test]
+    async fn the_allocated_share_is_the_credit_accountingd_books() {
+        use super::{RunId, dispatch_invoice};
+        let url = edmd().await;
+        let deps = deps(&url);
+        let (from, to) = (date!(2026 - 07 - 01), date!(2026 - 07 - 31));
+        let rates = deps
+            .cfg
+            .try_regulatory_rates_for_period("SHARING", from, to, None)
+            .expect("July 2026 has one rate");
+        let invoice = dispatch_invoice(
+            &deps,
+            &sharing(),
+            &req(),
+            "51238696012",
+            "RE-2026-000042",
+            from,
+            to,
+            &rates,
+            RunId::NONE,
+        )
+        .await
+        .expect("billed")
+        .invoice;
+        let credit = invoice
+            .positions
+            .iter()
+            .find(|p| p.category == energy_billing::PositionCategory::EnergyShare)
+            .expect("the § 42c credit is on the invoice");
+        assert_eq!(
+            credit.quantity,
+            dec!(123.456789),
+            "edmd's allocation, unchanged"
+        );
+        assert_eq!(
+            credit.net_eur,
+            dec!(-14.81),
+            "123.456789 kWh × 12 ct, credited"
+        );
+
+        let ce = crate::handlers::rechnung_erstellt_ce(
+            uuid::Uuid::nil(),
+            "51238696012",
+            "9900357000004",
+            &invoice.to_rechnung_json(),
+            false,
+        );
+        let data = serde_json::to_value(&ce).expect("serialises")["data"].clone();
+        let rechnung = &data["rechnung"];
+        let contract = serde_json::json!({
+            "malo_id": data["malo_id"],
+            "lf_mp_id": data["lf_mp_id"],
+            "is_correction": data["is_correction"],
+            "rechnung": {
+                "rechnungsnummer": rechnung["rechnungsnummer"],
+                "gesamtbrutto": rechnung["gesamtbrutto"],
+                "zuZahlen": rechnung["zuZahlen"],
+            },
+        });
+        assert_eq!(
+            contract["rechnung"]["gesamtbrutto"]["wert"],
+            invoice.brutto_eur.to_string(),
+            "the event carries the invoice's gross, credit included"
+        );
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sharing_rechnung_erstellt.json");
+        let rendered = serde_json::to_string_pretty(&contract).expect("json") + "\n";
+        if std::env::var_os("BLESS_SHARING_FIXTURE").is_some() {
+            std::fs::write(&path, &rendered).expect("bless");
+        }
+        let pinned = std::fs::read_to_string(&path)
+            .expect("the fixture exists — run with BLESS_SHARING_FIXTURE=1");
+        assert_eq!(rendered, pinned, "accountingd books the pinned fixture");
+    }
+
+    /// A request body carrying its own allocation is refused at the door.
+    #[test]
+    fn a_body_naming_an_allocation_is_refused() {
+        let err = serde_json::from_value::<CalculateRequest>(serde_json::json!({
+            "period_from": "2026-07-01",
+            "period_to": "2026-07-31",
+            "energy_share": { "allocated_kwh": "500" },
+        }))
+        .expect_err("the allocation is edmd's");
+        assert!(err.to_string().contains("energy_share"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod sect14a_selection_tests {
+    use super::select_sect14a;
+    use crate::clients::Sect14aSlice;
+    use energy_billing::ControllableLoadProduct;
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    /// A product pricing both base modules — what a catalogue offering either
+    /// carries.
+    fn product() -> ControllableLoadProduct {
+        ControllableLoadProduct {
+            sect14a_modul1_pauschale_eur_per_year: Some(dec!(110)),
+            sect14a_modul2_nne_reduktion_ct_per_kwh: Some(dec!(4.5)),
+            ..Default::default()
+        }
+    }
+
+    fn slice(module: &[&str], von: time::Date, bis: Option<time::Date>) -> Sect14aSlice {
+        Sect14aSlice {
+            module: module.iter().map(|m| (*m).to_owned()).collect(),
+            gueltig_von: von,
+            gueltig_bis: bis,
+        }
+    }
+
+    fn select(slices: &[Sect14aSlice]) -> crate::error::BillingResult<ControllableLoadProduct> {
+        select_sect14a(
+            &product(),
+            slices,
+            "51238696012",
+            date!(2026 - 11 - 01),
+            date!(2026 - 11 - 30),
+        )
+    }
+
+    /// **Invariant: the reduction billed is the module the customer holds,
+    /// never every module the product prices.** A Modul 1 customer on a
+    /// product that also prices Modul 2 is billed Modul 1 alone, and the
+    /// other way round.
+    #[test]
+    fn the_recorded_module_selects_the_reduction() {
+        let m1 = select(&[slice(&["MODUL_1"], date!(2026 - 11 - 01), None)]).expect("Modul 1");
+        assert_eq!(m1.sect14a_modul1_pauschale_eur_per_year, Some(dec!(110)));
+        assert_eq!(m1.sect14a_modul2_nne_reduktion_ct_per_kwh, None);
+
+        let m2 = select(&[slice(&["MODUL_2"], date!(2026 - 10 - 01), None)]).expect("Modul 2");
+        assert_eq!(m2.sect14a_modul1_pauschale_eur_per_year, None);
+        assert_eq!(m2.sect14a_modul2_nne_reduktion_ct_per_kwh, Some(dec!(4.5)));
+    }
+
+    /// No recorded state, a state covering part of the period, and a change
+    /// inside it are each refused rather than billed on a guess.
+    #[test]
+    fn an_unknown_or_changing_state_is_refused() {
+        let code = |slices: &[Sect14aSlice]| select(slices).expect_err("refused").code();
+        assert_eq!(code(&[]), "SECT14A_MODUL_UNBEKANNT");
+        assert_eq!(
+            code(&[slice(&["MODUL_1"], date!(2026 - 11 - 10), None)]),
+            "SECT14A_MODUL_UNBEKANNT"
+        );
+        assert_eq!(
+            code(&[
+                slice(
+                    &["MODUL_1"],
+                    date!(2026 - 11 - 01),
+                    Some(date!(2026 - 11 - 15))
+                ),
+                slice(
+                    &["MODUL_2"],
+                    date!(2026 - 11 - 15),
+                    Some(date!(2026 - 12 - 01))
+                ),
+            ]),
+            "SECT14A_MODULWECHSEL_IM_ZEITRAUM"
+        );
+    }
+
+    /// A recorded module the product prices no reduction for is refused, and
+    /// Modul 3 is refused until its band rates and quantities are resolved —
+    /// a flat Netzentgelt would price a tariff the customer is not on.
+    #[test]
+    fn an_unpriced_module_and_modul_3_are_refused() {
+        let unpriced = select_sect14a(
+            &ControllableLoadProduct::default(),
+            &[slice(&["MODUL_1"], date!(2026 - 11 - 01), None)],
+            "51238696012",
+            date!(2026 - 11 - 01),
+            date!(2026 - 11 - 30),
+        )
+        .expect_err("no price for the module held");
+        assert_eq!(unpriced.code(), "SECT14A_MODUL_OHNE_PREIS");
+        assert_eq!(
+            select(&[slice(&["MODUL_1", "MODUL_3"], date!(2026 - 11 - 01), None)])
+                .expect_err("Modul 3")
+                .code(),
+            "SECT14A_MODUL3_OHNE_BAENDER"
+        );
+    }
+
+    /// An unoffered pair is passed through as recorded, so the engine's
+    /// `MODUL1_AND_MODUL2` refuses it on the billing path.
+    #[test]
+    fn an_unoffered_pair_reaches_the_engine_guard() {
+        use energy_billing::{BillingProvider as _, ControllableLoadProvider, WarningSeverity};
+        let both = select(&[slice(&["MODUL_1", "MODUL_2"], date!(2026 - 11 - 01), None)])
+            .expect("passed through");
+        let provider = ControllableLoadProvider::new(both, energy_billing::GridInput::default());
+        let ctx = energy_billing::BillingContext::default();
+        let warnings = provider.validate_warnings(&ctx, &energy_billing::Quantities::default());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "MODUL1_AND_MODUL2" && w.severity == WarningSeverity::Error),
+            "{warnings:?}"
         );
     }
 }

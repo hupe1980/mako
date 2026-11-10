@@ -93,7 +93,7 @@ pub struct ZsgPushRequest {
     /// `DIRECT_PUSH` — a Zählerstandsgang comes from a gateway.
     #[serde(default)]
     pub source: Option<String>,
-    /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`.
+    /// `STROM` · `GAS` · `WAERME` · `WASSER` — required; absent is a `422`.
     #[serde(default)]
     pub sparte: Option<String>,
     /// OBIS register the Zählerstände were read from, e.g. `1-0:1.8.0`.
@@ -177,8 +177,16 @@ pub async fn post_zaehlerstandsgang(
         .into_response();
     }
 
+    // Required: the Sparte decides the register's unit and the balancing day,
+    // and a gas register read as electricity is stored in the wrong dimension.
     let sparte = match req.sparte.as_deref() {
-        None => crate::domain::Sparte::Strom,
+        None => {
+            return ApiError::unprocessable_with(
+                "sparte is required: it decides the register's unit",
+                serde_json::json!({ "expected": crate::domain::Sparte::CODES }),
+            )
+            .into_response();
+        }
         Some(raw) => match crate::domain::parse_sparte(raw) {
             Some(s) => s,
             None => {
@@ -373,6 +381,7 @@ pub async fn post_zaehlerstandsgang(
             source: ingestion_source,
             sender_mp_id: req.sender_mp_id.clone(),
             push_session: Some(session_id.clone()),
+            ablesung_herkunft: None,
         })
         .collect();
     if let Err(e) = state.repo.store_readings(&readings).await {
@@ -461,6 +470,7 @@ pub async fn post_zaehlerstandsgang(
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
             mscons_version: req.mscons_version,
+            ablesung_herkunft: None,
         });
     }
 

@@ -34,7 +34,7 @@ spec:
       ## TRIGGERED BY
       - `de.messwert.reading.quality.warning` — quality flag on new meter readings
       - `de.messwert.reading.direct.stored` — iMSys push (verify against expected MSB)
-      - `de.mako.process.completed` — WiM MSB-change completed
+      - `de.mako.process.completed` — WiM MSB-change completed. One type for both answers: `data.accepted: false` / `data.outcome: "rejected"` is the counterparty's Ablehnung — the process ended and did not happen
       - `de.messwert.reading.order.failed` — an INSRPT reading order failed
       - `de.messwert.reading.delivery.overdue` — a reading delivery is past its window
 

@@ -77,6 +77,7 @@ pub use jahresablesung::*;
 pub(crate) use lastgang::*;
 pub use quality::*;
 pub(crate) use reading_orders::*;
+pub use sharing::community_participations;
 pub(crate) use sharing::*;
 pub use substitute::*;
 pub(crate) use virtual_meter::*;
@@ -231,6 +232,10 @@ pub fn router(state: HandlerState) -> Router {
         .route(
             "/api/v1/sharing/{community_id}/allocation",
             get(get_sharing_allocation),
+        )
+        .route(
+            "/api/v1/sharing/participants/{malo_id}/allocation",
+            get(get_participant_allocation),
         )
         // Art. 17 DSGVO right to erasure — mark a MaLo for deletion from
         // hot PostgreSQL storage. Cold Iceberg deletion is scheduled asynchronously.
@@ -533,6 +538,11 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     // (§15.3): `meter_reads` (authoritative intervals, with the GDPR subject
     // registry), `esa_typ2_reads` (non-authoritative ESA stream) and
     // `meter_readings` (the Zählerstandsgang — register values at instants).
+    //
+    // The catalog lives in this database and outlives the process; an
+    // in-memory warehouse does not. Its entries from the last run name files
+    // that are gone, so they are dropped before the tables are provisioned.
+    crate::store::forget_ephemeral_catalog(&pool, &warehouse_uri).await?;
     let (reads_store, typ2_store, zsg_store, reads_cold) = build_stores(
         &database_url,
         &warehouse_uri,
@@ -603,6 +613,11 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         tenant: cfg.tenant,
         marktd_url: cfg.marktd_url.clone(),
         marktd_api_key: cfg.marktd_api_key.clone(),
+        marktd: mako_markt::marktd_client::MarktdClient::new(
+            &cfg.marktd_url,
+            cfg.marktd_api_key.clone(),
+            mako_service::http::default_client(),
+        ),
         erp_webhook_url: cfg.erp_webhook_url,
         erp_webhook_secret: cfg
             .erp_webhook_secret
@@ -667,15 +682,16 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
                         let secret: &str = s.expose_secret();
                         secret
                     }),
-                    // Exactly the two types `handler.rs` branches on: MSCONS
-                    // completions for meter-data storage, INSRPT initiations for
-                    // reading-order auto-creation, and Lieferbeginn/Lieferende
-                    // completions for supply-handover readings. Not an operator
-                    // choice — a narrower set drops deliveries edmd needs and a
-                    // wider one registers a marktd fan-out edge it discards.
+                    // Exactly the types `handler.rs` branches on: process
+                    // completions — MSCONS deliveries for meter-data storage and
+                    // Lieferbeginn/Lieferende for supply-handover readings — and
+                    // MaLo updates, which refresh the cached Bundesland. Not an
+                    // operator choice — a narrower set drops deliveries edmd
+                    // needs and a wider one registers a marktd fan-out edge it
+                    // discards.
                     event_types: &[
                         mako_events::mako::PROCESS_COMPLETED,
-                        mako_events::mako::PROCESS_INITIATED,
+                        mako_events::markt::MALO_UPDATED,
                     ],
                     // No PID filter exists to send: `marktd`'s `subscriptions`
                     // table narrows on `roles`, `event_types` and `sparten` only.

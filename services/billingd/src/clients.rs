@@ -278,7 +278,6 @@ fn extract_tariff_from_product_data(
     let mut eeg_verguetungssatz_ct_per_kwh: Option<Decimal> = None;
     let mut eeg_marktpraemie_ct_per_kwh: Option<Decimal> = None;
     let mut eeg_managementpraemie_ct_per_kwh: Option<Decimal> = None;
-    let mut kwkg_zuschlag_ct_per_kwh: Option<Decimal> = None;
     let mut marktwert_ct_per_kwh: Option<Decimal> = None;
     let mut vermarktungsgebuehr_ct_per_kwh: Option<Decimal> = None;
     let mut hems_subscription_eur_per_month_from_code: Option<Decimal> = None;
@@ -386,11 +385,20 @@ fn extract_tariff_from_product_data(
             ("EEG_VERGUETUNG", _) => eeg_verguetungssatz_ct_per_kwh = preis,
             ("EEG_MARKTPRAEMIE", _) => eeg_marktpraemie_ct_per_kwh = preis,
             ("EEG_MANAGEMENTPRAEMIE", _) => eeg_managementpraemie_ct_per_kwh = preis,
-            ("KWKG_ZUSCHLAG", _) => kwkg_zuschlag_ct_per_kwh = preis,
+            // § 6 Abs. 1 KWKG: the Zuschlag is the KWK-Anlagenbetreiber's claim
+            // „gegenüber dem Netzbetreiber", settled by `einsd`. A Lieferant's
+            // product crediting one pays it a second time, so it is reported.
+            ("KWKG_ZUSCHLAG", _) => dropped.push(
+                "KWKG_ZUSCHLAG (§ 6 Abs. 1 KWKG is the Netzbetreiber's, settled by einsd)"
+                    .to_owned(),
+            ),
             ("MARKTWERT", _) => marktwert_ct_per_kwh = preis,
             ("VERMARKTUNGSGEBUEHR", _) => vermarktungsgebuehr_ct_per_kwh = preis,
             ("STEUERUNGSRABATT_MODUL1", _) => sect14a_modul1_pauschale_eur_per_year = preis,
-            ("STEUERUNGSRABATT_MODUL3", _) => {
+            // A Steuerungsentschädigung pays for a dimming that happened; it
+            // is not one of the three BK8-22/010-A modules, which are all
+            // Netzentgelt reductions.
+            ("STEUERUNGSENTSCHAEDIGUNG", _) => {
                 sect14a_steuerungsentschaedigung_eur_per_kw_year = preis
             }
             ("HEMS_PLATTFORMGEBUEHR", _) => hems_subscription_eur_per_month_from_code = preis,
@@ -514,7 +522,6 @@ fn extract_tariff_from_product_data(
         "eeg_verguetungssatz_ct_per_kwh": eeg_verguetungssatz_ct_per_kwh,
         "eeg_marktpraemie_ct_per_kwh": eeg_marktpraemie_ct_per_kwh,
         "eeg_managementpraemie_ct_per_kwh": eeg_managementpraemie_ct_per_kwh,
-        "kwkg_zuschlag_ct_per_kwh": kwkg_zuschlag_ct_per_kwh,
         "marktwert_ct_per_kwh": marktwert_ct_per_kwh,
         "vermarktungsgebuehr_ct_per_kwh": vermarktungsgebuehr_ct_per_kwh,
         "hems_subscription_eur_per_month": get_decimal("hems_subscription_eur_per_month")
@@ -722,7 +729,6 @@ const EEG_FIELDS: &[&str] = &[
     "eeg_verguetungssatz_ct_per_kwh",
     "eeg_marktpraemie_ct_per_kwh",
     "eeg_managementpraemie_ct_per_kwh",
-    "kwkg_zuschlag_ct_per_kwh",
     "anlage_kwp",
     "mwst_rate_override",
 ];
@@ -923,6 +929,27 @@ mod slice_tests {
 
 // ── EdmdClient ────────────────────────────────────────────────────────────────
 
+/// One slice of a MaLo's recorded § 14a EnWG module state, from `vertragd`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Sect14aSlice {
+    /// `MODUL_1`, `MODUL_2`, `MODUL_3` — as recorded, sorted.
+    pub module: Vec<String>,
+    pub gueltig_von: time::Date,
+    /// Exclusive.
+    pub gueltig_bis: Option<time::Date>,
+}
+
+/// A § 42c EnWG participant's allocation for one billing window, as edmd
+/// computed it.
+#[derive(Debug, Clone)]
+pub struct SharingAllocation {
+    /// What the invoice credits.
+    pub share: energy_billing::EnergyShareMeterInput,
+    /// Quarter hours the community's plant reported in the window; `0` means
+    /// nothing was allocated because nothing was metered.
+    pub interval_count: u64,
+}
+
 pub struct EdmdClient {
     up: Upstream,
 }
@@ -994,6 +1021,61 @@ impl EdmdClient {
             ..Default::default()
         };
         Ok(Some(meter))
+    }
+
+    /// `GET /api/v1/sharing/participants/{malo_id}/allocation?from=&to=` — the
+    /// § 42c EnWG community allocation this MaLo's participant is credited.
+    ///
+    /// The figure is edmd's sum of the participant's capped quarter-hour
+    /// shares over the Berlin days `period_from..=period_to`. `None` when no
+    /// community names the MaLo.
+    ///
+    /// # Errors
+    ///
+    /// Transport failure, or an answer without a readable `allocated_kwh`.
+    pub async fn get_sharing_allocation(
+        &self,
+        malo_id: &str,
+        period_from: time::Date,
+        period_to: time::Date,
+    ) -> Result<Option<SharingAllocation>> {
+        let (from_dt, to_dt) = lastgang_window(period_from, period_to);
+        let rfc3339 = time::format_description::well_known::Rfc3339;
+        let path = format!("/api/v1/sharing/participants/{malo_id}/allocation");
+        let request = self.up.get(&path).query(&[
+            ("from", from_dt.format(&rfc3339).context("format from")?),
+            ("to", to_dt.format(&rfc3339).context("format to")?),
+        ]);
+        let Some(body) = self
+            .up
+            .json::<serde_json::Value>(request)
+            .await
+            .context("edmd GET sharing allocation")?
+        else {
+            return Ok(None);
+        };
+        let allocated_kwh = decimal_from_json(body.get("allocated_kwh")).ok_or_else(|| {
+            anyhow::anyhow!(
+                "edmd's sharing allocation for MaLo {malo_id} states no readable allocated_kwh"
+            )
+        })?;
+        Ok(Some(SharingAllocation {
+            interval_count: body
+                .get("interval_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            share: energy_billing::EnergyShareMeterInput {
+                allocated_kwh,
+                total_plant_generation_kwh: decimal_from_json(body.get("total_production_kwh")),
+                // The per-interval cap makes the credited share no fixed
+                // fraction of the period's generation, so none is stated.
+                allocation_fraction: None,
+                gemeinschaft_id: body
+                    .get("community_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            },
+        }))
     }
 
     /// Fetch the MaLo's quarter-hour **Bezug** series for §41a dynamic billing.
@@ -1195,17 +1277,18 @@ pub struct GasBillingPeriod {
     pub coverage_pct: Option<Decimal>,
 }
 
-/// `true` when the period's collapsed quality flag means the value was not a
-/// real measurement (§40a EnWG: estimation must be labeled on the bill).
 /// The § 40 Abs. 2 Nr. 6 EnWG Ablesungsart, as far as edmd's data determines it.
 ///
-/// MSCONS quality answers *how good* a value is, not *who obtained it*, so the
-/// two questions only partly overlap:
+/// MSCONS quality answers *how good* a value is, edmd's `ablesung_herkunft`
+/// *who obtained it*:
 ///
 /// - anything that is not a real measurement is `Rechnerisch`;
 /// - a measured value on an iMSys or RLM meter is `Fernauslesung` by definition;
-/// - a measured value on an **SLP** meter could be a Messstellenbetreiber read
-///   or a customer self-read, and nothing in the payload says which.
+/// - a measured **SLP** value the delivery marks as a customer read
+///   (`STS+Z33`/`Z83`, served as `KUNDENSELBSTABLESUNG`) is
+///   `Kundenselbstablesung`;
+/// - a measured SLP value whose delivery states no origin could be a
+///   Messstellenbetreiber read or a customer self-read.
 ///
 /// The last stays `Unbekannt` rather than guessing — that is the distinction the
 /// statute cares about — and the engine's `ABLESUNGSART_FEHLT` warning reports
@@ -1217,10 +1300,15 @@ fn ablesungsart_from(body: &serde_json::Value) -> energy_billing::Ablesungsart {
     }
     match metering_mode_from_messtyp(body) {
         MeteringMode::Imsys | MeteringMode::Rlm => Ablesungsart::Fernauslesung,
-        MeteringMode::Slp => Ablesungsart::Unbekannt,
+        MeteringMode::Slp => match body.get("ablesung_herkunft").and_then(|v| v.as_str()) {
+            Some("KUNDENSELBSTABLESUNG") => Ablesungsart::Kundenselbstablesung,
+            _ => Ablesungsart::Unbekannt,
+        },
     }
 }
 
+/// `true` when the period's collapsed quality flag means the value was not a
+/// real measurement (§40a EnWG: estimation must be labeled on the bill).
 fn quality_is_estimated(body: &serde_json::Value) -> bool {
     matches!(
         body.get("quality").and_then(|v| v.as_str()),
@@ -1319,6 +1407,35 @@ impl VertragdClient {
             .await
             .context("vertragd GET malo produkte")?
             .map(|b| b.slices)
+            .unwrap_or_default())
+    }
+
+    /// `GET /api/v1/malo/{malo_id}/sect14a?from=…&to=…`
+    ///
+    /// The § 14a EnWG module state recorded for the MaLo's supply over a
+    /// billing period, as ordered slices clipped to it. Empty when none is
+    /// recorded.
+    pub async fn get_sect14a(
+        &self,
+        malo_id: &str,
+        from: time::Date,
+        to: time::Date,
+    ) -> Result<Vec<Sect14aSlice>> {
+        #[derive(serde::Deserialize)]
+        struct Answer {
+            slices: Vec<Sect14aSlice>,
+        }
+        let path = format!("/api/v1/malo/{malo_id}/sect14a");
+        let request = self
+            .up
+            .get(&path)
+            .query(&[("from", from.to_string()), ("to", to.to_string())]);
+        Ok(self
+            .up
+            .json::<Answer>(request)
+            .await
+            .context("vertragd GET malo sect14a")?
+            .map(|a| a.slices)
             .unwrap_or_default())
     }
 
@@ -1692,6 +1809,53 @@ impl OutputdClient {
         Ok(RenderedDocument { pdf, template_hash })
     }
 
+    /// `POST /api/v1/render/{kind}` for a kind rendered from its own view — a
+    /// Gebührenbescheid. Same refusal and template-hash contract as
+    /// [`Self::render_invoice`].
+    ///
+    /// # Errors
+    ///
+    /// Transport failures and outputd's own refusals.
+    pub async fn render_view(
+        &self,
+        kind: &str,
+        view: &serde_json::Value,
+        template_hash: Option<&str>,
+        date: time::Date,
+        ident: &str,
+    ) -> Result<RenderedDocument, OutputdError> {
+        let body = serde_json::json!({
+            "view": view,
+            "template_hash": template_hash,
+            "date": date.to_string(),
+            "ident": ident,
+        });
+        let resp = self
+            .up
+            .post(&format!("/api/v1/render/{kind}"))
+            .json(&body)
+            .send()
+            .await
+            .context("outputd POST render")?;
+        let status = resp.status();
+        if status.is_client_error() {
+            let message = resp.text().await.unwrap_or_default();
+            return Err(OutputdError::Refused { status, message });
+        }
+        if !status.is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("outputd render failed ({status}): {msg}").into());
+        }
+        let template_hash = resp
+            .headers()
+            .get("X-Mako-Template-Hash")
+            .and_then(|v| v.to_str().ok())
+            .map(ToOwned::to_owned)
+            .context("outputd response is missing X-Mako-Template-Hash")?;
+        let pdf = resp.bytes().await.context("outputd render body")?.to_vec();
+        Ok(RenderedDocument { pdf, template_hash })
+    }
+
     /// `POST /api/v1/documents/issue/INVOICE` — render, **record** and queue for
     /// delivery.
     ///
@@ -1722,6 +1886,51 @@ impl OutputdClient {
             .context("outputd POST document INVOICE")?
             .context("outputd answered 404 for the document endpoint — is it on this version?")
     }
+}
+
+impl OutputdClient {
+    /// `POST /api/v1/documents/issue/{kind}` for a kind rendered from its own
+    /// view — a Gebührenbescheid. The same record-and-queue endpoint, channels
+    /// and idempotency on `subject_ref` as [`Self::issue_invoice`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates transport failures and outputd's own refusals.
+    pub async fn issue_view(&self, req: &IssueViewRequest<'_>) -> Result<IssuedDocument> {
+        let body = serde_json::json!({
+            "view":          req.view,
+            "template_hash": req.template_hash,
+            "date":          req.date.to_string(),
+            "ident":         req.ident,
+            "subject_ref":   req.subject_ref,
+            "malo_id":       req.malo_id,
+            "kunden_nr":     null,
+            "recipient":     req.recipient,
+            "channels":      req.channels,
+        });
+        let path = format!("/api/v1/documents/issue/{}", req.kind);
+        self.up
+            .json(self.up.post(&path).json(&body))
+            .await
+            .with_context(|| format!("outputd POST document {}", req.kind))?
+            .context("outputd answered 404 for the document endpoint — is it on this version?")
+    }
+}
+
+/// A document rendered from its own view, to issue and deliver.
+#[derive(Debug)]
+pub struct IssueViewRequest<'a> {
+    /// The outputd kind — `GEBUEHRENBESCHEID`.
+    pub kind: &'a str,
+    pub view: &'a serde_json::Value,
+    pub template_hash: Option<&'a str>,
+    pub date: time::Date,
+    pub ident: String,
+    /// outputd's idempotency key — the Bescheid number.
+    pub subject_ref: &'a str,
+    pub malo_id: &'a str,
+    pub recipient: serde_json::Value,
+    pub channels: Vec<String>,
 }
 
 /// An invoice to issue and deliver.
@@ -1950,6 +2159,24 @@ mod vertragsart_tests {
         }])
     }
 
+    /// § 6 Abs. 1 KWKG gives the KWK-Anlagenbetreiber the Zuschlag „gegenüber
+    /// dem Netzbetreiber", which einsd settles; a Lieferant's EEG product that
+    /// carries one in its catalog does not credit it a second time.
+    #[test]
+    fn a_kwkg_zuschlag_position_is_not_credited_by_the_lieferant() {
+        let product = map(
+            serde_json::json!([
+                { "preistyp": "EEG_VERGUETUNG", "preisstaffeln": [{ "preis": "8.11" }] },
+                { "preistyp": "KWKG_ZUSCHLAG", "preisstaffeln": [{ "preis": "8.00" }] }
+            ]),
+            "EEG",
+        )
+        .expect("the Vergütung maps");
+        let json = serde_json::to_string(&product).expect("serialize");
+        assert!(!json.contains("kwkg"), "{json}");
+        assert!(json.contains("eeg_verguetungssatz_ct_per_kwh"), "{json}");
+    }
+
     /// The contract's annual consumption picks the tier.
     fn position(preistyp: &str, preis: &str) -> serde_json::Value {
         serde_json::json!({ "preistyp": preistyp, "preisstaffeln": [{ "preis": preis }] })
@@ -2174,5 +2401,38 @@ mod vertragsart_tests {
             Vertragsart::Sondervertrag,
             "an unknown regime must not be guessed into § 36 or § 38"
         );
+    }
+}
+
+#[cfg(test)]
+mod ablesungsart_tests {
+    use super::ablesungsart_from;
+    use energy_billing::Ablesungsart;
+
+    /// A measured SLP period whose readings the customer took states its
+    /// Ablesungsart; one whose delivery names no origin stays `Unbekannt`, so
+    /// the invoice reports the § 40 Abs. 2 Nr. 6 EnWG datum as missing.
+    #[test]
+    fn an_slp_self_read_is_stated_and_an_unnamed_origin_is_not_guessed() {
+        let period = |herkunft: Option<&str>| {
+            serde_json::json!({
+                "messtyp": "SLP", "quality": "MEASURED", "ablesung_herkunft": herkunft,
+            })
+        };
+        let selbst = ablesungsart_from(&period(Some("KUNDENSELBSTABLESUNG")));
+        assert_eq!(selbst, Ablesungsart::Kundenselbstablesung);
+        assert!(selbst.label().is_some(), "the invoice states it");
+        assert_eq!(ablesungsart_from(&period(None)), Ablesungsart::Unbekannt);
+    }
+
+    /// The origin does not outrank the quality: a substituted value is
+    /// rechnerisch ermittelt whoever reported the reading it replaced.
+    #[test]
+    fn an_estimate_stays_rechnerisch() {
+        let period = serde_json::json!({
+            "messtyp": "SLP", "quality": "SUBSTITUTED",
+            "ablesung_herkunft": "KUNDENSELBSTABLESUNG",
+        });
+        assert_eq!(ablesungsart_from(&period), Ablesungsart::Rechnerisch);
     }
 }

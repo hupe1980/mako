@@ -314,7 +314,180 @@ pub(super) fn render_orders(
             );
     }
 
+    builder = orders_spalte(builder, pid, p, mt)?;
+
     finish_interchange(builder.serialize(), sender, msg.recipient.as_ref(), msg)
+}
+
+/// The Sparte a process date is a day boundary of — `"strom"` / `"gas"` in the
+/// payload.
+fn payload_sparte(
+    p: &serde_json::Value,
+    mt: &'static str,
+) -> Result<mako_fristen::Sparte, RenderError> {
+    match p.get("sparte").and_then(serde_json::Value::as_str) {
+        Some("strom") => Ok(mako_fristen::Sparte::Strom),
+        Some("gas") => Ok(mako_fristen::Sparte::Gas),
+        _ => Err(RenderError::MissingField {
+            message_type: mt.into(),
+            field: "sparte".into(),
+        }),
+    }
+}
+
+/// An Ansprechpartner's name and its `COM` channels as `(address, code)`.
+type Kontakt = (String, Vec<(String, &'static str)>);
+
+/// `SG5 CTA`/`COM` channels of an `ansprechpartner` object.
+fn kommunikationswege(
+    kontakt: &serde_json::Value,
+    mt: &'static str,
+) -> Result<Kontakt, RenderError> {
+    let text = |v: &serde_json::Value, field: &'static str| {
+        v.get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| RenderError::MissingField {
+                message_type: mt.into(),
+                field: field.into(),
+            })
+    };
+    let kanaele = kontakt
+        .get("kommunikation")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|k| {
+            let code = match k.get("art").and_then(serde_json::Value::as_str) {
+                Some("email") => "EM",
+                Some("telefon") => "TE",
+                Some("telefax") => "FX",
+                Some("weiteres_telefon") => "AJ",
+                Some("handy") => "AL",
+                other => {
+                    return Err(RenderError::InsufficientPayload {
+                        message_type: mt.into(),
+                        detail: format!("ansprechpartner: unknown COM channel {other:?}").into(),
+                    });
+                }
+            };
+            Ok((text(k, "adresse")?, code))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((text(kontakt, "name")?, kanaele))
+}
+
+/// The ORDERS columns whose body is more than the head:
+///
+/// | PID | Column (ORDERS AHB 1.1b) | Payload |
+/// |---|---|---|
+/// | 17001 | Kap. 4.9.2, S. 74–77: `BGM+Z10`, `DTM+203`, `SG1 RFF+AAG`, `SG5 CTA`/`COM`, one `SG29 LIN` with `SG34 RFF+Z03` per Angebotsposition | `angebotsnummer`, `ausfuehrungsdatum`, `sparte`, `ansprechpartner`, `positionen` |
+/// | 17009 | Kap. 4.10, S. 78–80: `BGM+Z13`, `DTM+203`, `IMD++Z58`/`Z59`, `LOC+172`, one `SG29 LIN` with `SG30 CCI` and `SG34 RFF+Z09` per Gerät | `location`, `ausfuehrungsdatum`, `sparte`, `umfang`, `geraete` |
+/// | 17004 | Kap. 4.13, S. 90–92: `BGM+7`, `IMD++Z13`, `LOC+172`, `SG29 LIN+1` with `IMD++<Grund>` and `DTM+7` | `location`, `grund`, `wertzeitpunkt` |
+fn orders_spalte<S, R>(
+    mut builder: builders::OrdersBuilder<S, R>,
+    pid: Option<u32>,
+    p: &serde_json::Value,
+    mt: &'static str,
+) -> Result<builders::OrdersBuilder<S, R>, RenderError> {
+    let missing = |field: &'static str| RenderError::MissingField {
+        message_type: mt.into(),
+        field: field.into(),
+    };
+    let text = |field: &'static str| {
+        p.get(field)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| missing(field))
+    };
+    match pid {
+        Some(17_001) => {
+            let sparte = payload_sparte(p, mt)?;
+            builder = builder
+                .document_code("Z10")
+                .ausfuehrungsdatum(prozessdatum_303(
+                    mt,
+                    "ausfuehrungsdatum",
+                    text("ausfuehrungsdatum")?,
+                    sparte,
+                )?)
+                .reference("AAG", text("angebotsnummer")?);
+            let (name, kanaele) = kommunikationswege(
+                p.get("ansprechpartner")
+                    .ok_or_else(|| missing("ansprechpartner"))?,
+                mt,
+            )?;
+            builder = builder.contact(name, kanaele);
+            let positionen = p
+                .get("positionen")
+                .and_then(serde_json::Value::as_array)
+                .filter(|a| !a.is_empty())
+                .ok_or_else(|| missing("positionen"))?;
+            for position in positionen {
+                let nummer = position.as_str().ok_or_else(|| missing("positionen"))?;
+                builder = builder.position(builders::OrdersPosition {
+                    referenzen: vec![("Z03".to_owned(), nummer.to_owned())],
+                    ..Default::default()
+                });
+            }
+        }
+        Some(17_009) => {
+            let sparte = payload_sparte(p, mt)?;
+            builder = builder
+                .document_code("Z13")
+                .ausfuehrungsdatum(prozessdatum_303(
+                    mt,
+                    "ausfuehrungsdatum",
+                    text("ausfuehrungsdatum")?,
+                    sparte,
+                )?)
+                .abonnement(text("umfang")?);
+            let geraete = p
+                .get("geraete")
+                .and_then(serde_json::Value::as_array)
+                .filter(|a| !a.is_empty())
+                .ok_or_else(|| missing("geraete"))?;
+            for geraet in geraete {
+                let art = geraet
+                    .get("geraeteart")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| missing("geraete[].geraeteart"))?;
+                let nummern = geraet
+                    .get("geraetenummern")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(|n| ("Z09".to_owned(), n.to_owned()))
+                    .collect::<Vec<_>>();
+                if nummern.is_empty() {
+                    return Err(missing("geraete[].geraetenummern"));
+                }
+                builder = builder.position(builders::OrdersPosition {
+                    geraeteart: Some(art.to_owned()),
+                    referenzen: nummern,
+                    ..Default::default()
+                });
+            }
+        }
+        Some(17_004) => {
+            builder =
+                builder
+                    .document_code("7")
+                    .abonnement("Z13")
+                    .position(builders::OrdersPosition {
+                        merkmal: Some(text("grund")?.to_owned()),
+                        gueltig: Some(prozessdatum_303(
+                            mt,
+                            "wertzeitpunkt",
+                            text("wertzeitpunkt")?,
+                            mako_fristen::Sparte::Strom,
+                        )?),
+                        ..Default::default()
+                    });
+        }
+        _ => {}
+    }
+    Ok(builder)
 }
 
 // ── ORDCHG ────────────────────────────────────────────────────────────────────
@@ -349,10 +522,7 @@ pub(super) fn render_ordchg(
     let causation_ref = msg_ref_from_uuid(&msg.causation_event_id.to_string());
     let message_ref = explicit_ref.as_deref().unwrap_or(causation_ref.as_str());
 
-    // ORDCHG BDEW releases are `1.x` (no trailing letter), which parse to the
-    // `Other` track rather than `Short` — asking for `Short` here silently
-    // returned NoActiveProfile for every ORDCHG (39000/39001/39002).
-    let release = release_for(msg, MessageType::Ordchg, ReleaseTrack::Other)?;
+    let release = release_for(msg, MessageType::Ordchg, ReleaseTrack::Short)?;
 
     let mut builder = builders::OrdchgBuilder::new(release)
         .sender(sender)
@@ -493,6 +663,12 @@ pub(super) fn render_ordrsp(
         builder = builder.document_date(d);
     }
     builder = geraeteubernahme_angaben(builder, p, mt)?;
+    // `IMD` DE 7081 where the answer echoes the Anfrage's Leistung — `Z13` on
+    // the 19007, `Z11` on the 19114, the 17102's own on a 19102 under `BGM+7`
+    // (ORDRSP AHB 1.1b Kap. 4.13, 4.8, 4.1.3).
+    if let Some(leistung) = p.get("leistung").and_then(serde_json::Value::as_str) {
+        builder = builder.abonnement(leistung);
+    }
 
     // ── `SG2 AJT` — the Antwortcode, on every ORDRSP that carries a decision ──
     //
@@ -511,11 +687,14 @@ pub(super) fn render_ordrsp(
     // Which PIDs: 19001/19002 (Bestellung Geräteübernahme), 19003/19004
     // (Weiterverpflichtung), 19005/19006 (Messlokationsänderung), 19009/19010
     // (Beendigung Rechnungsabwicklung), 19011–19014 (ESA Wertebestellung),
-    // 19015/19016 (Gerätewechselabsicht) and 19101 (Ablehnung der Anfrage
-    // Stammdaten, `E_0441` / `E_0443`).
+    // 19015/19016 (Gerätewechselabsicht), 19101 (Ablehnung der Anfrage
+    // Stammdaten, `E_0441` / `E_0443`), 19118/19119 (Antwort auf die Anfrage
+    // Sperrung, `E_0488` / `E_1001`), the Datenabruf Ablehnungen 19007 / 19102
+    // / 19114 and the GPKE Teil 3 Mitteilungen 19120 / 19127 / 19131 / 19132.
     const ANTWORTCODE_PIDS: &[u32] = &[
         19_001, 19_002, 19_003, 19_004, 19_005, 19_006, 19_009, 19_010, 19_011, 19_012, 19_013,
-        19_014, 19_015, 19_016, 19_101,
+        19_014, 19_015, 19_016, 19_101, 19_118, 19_119, 19_007, 19_102, 19_114, 19_120, 19_127,
+        19_131, 19_132,
     ];
     if pid.is_some_and(|p| ANTWORTCODE_PIDS.contains(&p)) {
         // 19011–19014 additionally carry `BGM+Z57` and, on the Bestellung pair,
@@ -544,6 +723,16 @@ pub(super) fn render_ordrsp(
                 "1082",
             );
             builder = builder.adjustment(code, if lists_codeliste { codeliste } else { "" });
+            // `SG2 FTX+AAP` „Antwort (Freier Text)" — the problem the tree
+            // requires named, e.g. beside `A02`/`A03` of `E_0488`/`E_1001` on
+            // 19119 (ORDRSP AHB 1.1b Kap. 4.3.1, `[33]`/`[43]`).
+            if let Some(text) = p
+                .get("antwort_freitext")
+                .and_then(serde_json::Value::as_str)
+                .filter(|t| !t.trim().is_empty())
+            {
+                builder = builder.adjustment_text("AAP", text);
+            }
         } else {
             return Err(RenderError::MissingField {
                 message_type: mt.into(),

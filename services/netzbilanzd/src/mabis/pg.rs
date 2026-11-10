@@ -132,7 +132,17 @@ pub async fn insert_run(pool: &PgPool, p: InsertRunParams<'_>) -> Result<Uuid, s
     Ok(row)
 }
 
-/// Update run status and aggregation result after successful aggregation.
+/// Record a run's aggregation result.
+///
+/// The status stays where it is: nothing has gone to the BIKO yet, and a run
+/// that read `submitted` here would stay so through a crash or an error before
+/// the filing — with no MSCONS sent and no retry, because only a `failed` run
+/// is retried. The status moves with the filing's outcome alone
+/// ([`mark_acked`] or [`mark_failed`]).
+///
+/// # Errors
+///
+/// Propagates database errors.
 pub async fn update_run_aggregated(
     pool: &PgPool,
     id: Uuid,
@@ -143,12 +153,10 @@ pub async fn update_run_aggregated(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE submission_runs
-            SET status = 'submitted',
-                malo_count = $2,
+            SET malo_count = $2,
                 interval_count = $3,
                 total_kwh = $4,
-                has_substituted = $5,
-                submitted_at = now()
+                has_substituted = $5
           WHERE id = $1",
     )
     .bind(id)
@@ -184,7 +192,8 @@ pub async fn mark_acked(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE submission_runs
-            SET status = 'acked', acked_at = now(), message_ref = $2, process_id = $3
+            SET status = 'acked', acked_at = now(), submitted_at = now(),
+                message_ref = $2, process_id = $3
           WHERE id = $1",
     )
     .bind(id)

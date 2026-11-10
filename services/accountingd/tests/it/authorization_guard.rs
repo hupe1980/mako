@@ -413,10 +413,11 @@ fn actions_forbidden_to_an_advisory_principal() -> BTreeSet<String> {
 }
 
 /// The reads an advisory principal keeps.
-const READS: [&str; 7] = [
+const READS: [&str; 8] = [
     "read-account",
     "read-banking",
     "read-books",
+    "read-eeg-payouts",
     "read-enfg",
     "read-policy",
     "read-config",
@@ -426,7 +427,8 @@ const READS: [&str; 7] = [
 /// The actions held to the Netzbetreiber: the EEG/KWKG payments are its own
 /// (§ 19 Abs. 1 EEG 2023, § 13 Abs. 1 EnFG), so an LF or MSB key holds none of
 /// them — running a payout and recording its pain.002 status among them.
-const NB_ACTIONS: [&str; 4] = [
+const NB_ACTIONS: [&str; 5] = [
+    "read-eeg-payouts",
     "read-enfg",
     "record-aufrechnung",
     "record-rueckzahlung",
@@ -525,4 +527,46 @@ fn an_nb_only_key_runs_a_payout_and_records_its_status() {
         roles: vec!["NB".to_owned()],
     };
     assert!(enforcer.check(&nb, "run-payout", "9900357000004").is_ok());
+}
+
+/// The Netzbetreiber pays the EEG payouts (§ 19 Abs. 1 EEG 2023), so it reads
+/// them: `GET /api/v1/eeg/payouts`, `/{id}` and the MCP `list_eeg_payouts` are
+/// held to `read-eeg-payouts`, which an NB-only key holds and an LF- or
+/// MSB-only key does not — not to `read-banking`, the SEPA mandates' action.
+#[test]
+fn an_nb_only_key_reads_the_eeg_payouts_and_an_lf_key_does_not() {
+    for handler in ["get_eeg_payouts", "get_eeg_payout"] {
+        let start = HANDLERS
+            .find(&format!("\npub async fn {handler}("))
+            .unwrap_or_else(|| panic!("{handler} is in handlers.rs"));
+        let tail = &HANDLERS[start + 1..];
+        let body = &tail[..tail.find("\npub async fn ").unwrap_or(tail.len())];
+        assert!(
+            body.contains(r#"cedar.check(&claims.principal(), "read-eeg-payouts", &cfg.tenant)"#),
+            "{handler} is not held to read-eeg-payouts"
+        );
+    }
+    assert_eq!(
+        accountingd::mcp_server::tool_action("list_eeg_payouts"),
+        Some("read-eeg-payouts")
+    );
+    let enforcer = mako_service::cedar::CedarEnforcer::from_policy_str(POLICY).expect("parses");
+    let key = |role: &str| mako_service::cedar::CedarPrincipal {
+        sub: format!("{role}-operator"),
+        tenant: "9900357000004".to_owned(),
+        roles: vec![role.to_owned()],
+    };
+    assert!(
+        enforcer
+            .check(&key("NB"), "read-eeg-payouts", "9900357000004")
+            .is_ok()
+    );
+    for role in ["LF", "MSB"] {
+        assert!(
+            enforcer
+                .check(&key(role), "read-eeg-payouts", "9900357000004")
+                .is_err(),
+            "{role}"
+        );
+    }
 }

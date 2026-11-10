@@ -97,11 +97,10 @@ impl Daemon for Vertragd {
             )))
             .layer(Extension(oidc));
 
-        // ── Durable outbound calls (processd / edmd / productd / accountingd) ──
-        tokio::spawn(
-            outbound::OutboundWorker::new(pool.clone(), Arc::clone(&cfg), http.clone())
-                .run(shutdown.clone()),
-        );
+        // ── Durable outbound calls (processd / edmd / accountingd) ───────────
+        for worker in outbound::workers(&pool, &cfg) {
+            tokio::spawn(worker.run(shutdown.clone()));
+        }
 
         // ── Customer-facing CloudEvents to the ERP ───────────────────────────
         // Only spawned with a webhook configured; without one the events stay

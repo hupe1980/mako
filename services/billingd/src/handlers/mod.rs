@@ -422,6 +422,8 @@ pub(crate) mod series {
     pub(crate) const CORRECTION: &str = "ST";
     /// § 41e Gutschrift (self-billed VPP dispatch settlement).
     pub(crate) const CREDIT: &str = "VG";
+    /// Gebührenbescheid — a public-law Gebühr, no invoice.
+    pub(crate) const BESCHEID: &str = "GB";
 }
 
 /// The next Rechnungsnummer of a series, unless the caller stated one.

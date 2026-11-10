@@ -126,14 +126,15 @@ fn nb_msb_combined_receives_the_stornierungsanfrage() {
     );
 }
 
-/// Unconditional GeLi Gas PIDs (44001–44021) are always registered regardless of role.
+/// The GeLi Gas Lieferantenwechsel PIDs (44001–44021) are registered for
+/// every role that takes part in them — the GNB and the LF.
 #[test]
 fn unconditional_pids_always_registered() {
     for roles in [
         DeploymentRoles::all(),
         DeploymentRoles::nb(),
         DeploymentRoles::lf(),
-        DeploymentRoles::msb(),
+        DeploymentRoles::nb_msb(),
     ] {
         let mut router = PidRouter::new();
         GeliGasModule.register_pids_with_roles(&mut router, &roles);
@@ -269,4 +270,32 @@ fn lf_msb_combined_registers_the_lf_side_only() {
         router.route(44022).is_none(),
         "without the Nb role nothing receives an Anfrage nach Stornierung",
     );
+}
+
+/// A deployment that is only a gMSB routes the one ORDERS it owes an answer
+/// to — the GNB's Anfrage Sperrung 17116, Sparte-qualified Gas, to its own
+/// workflow — and none of the GNB's or the LF's PIDs, so a GeLi Gas message
+/// misaddressed to it is refused as unknown instead of answered in a role it
+/// does not hold. A GNB, which sends the 17116, does not route it.
+#[test]
+fn a_gmsb_only_deployment_routes_only_the_anfrage_sperrung() {
+    let mut router = PidRouter::new();
+    GeliGasModule.register_pids_with_roles(&mut router, &DeploymentRoles::msb());
+    assert_eq!(router.route(17116), Some("geli-gas-sperrung-msb"));
+    assert_eq!(
+        router.route_with_sparte(17116, mako_engine::types::Sparte::Gas),
+        Some("geli-gas-sperrung-msb")
+    );
+    for pid in [44001_u32, 44013, 17115, 17117, 19118, 31011] {
+        assert_eq!(
+            router.route(pid),
+            None,
+            "PID {pid} on a gMSB-only deployment"
+        );
+    }
+
+    let mut router = PidRouter::new();
+    GeliGasModule.register_pids_with_roles(&mut router, &DeploymentRoles::nb());
+    assert_eq!(router.route(17116), None, "the GNB sends the 17116");
+    assert_eq!(router.route(17115), Some("geli-gas-sperrung-nb"));
 }

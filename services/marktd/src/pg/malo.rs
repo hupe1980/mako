@@ -419,6 +419,20 @@ impl PgMaloRepository {
         malo_id: &mako_markt::domain::MaloId,
         patch: &mako_markt::repository::MaloStammdatenPatch,
     ) -> Result<bool, mako_markt::error::MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::patch_stammdaten_tx(&mut conn, malo_id, patch).await
+    }
+
+    /// [`Self::patch_stammdaten`] on the caller's transaction.
+    pub async fn patch_stammdaten_tx(
+        conn: &mut sqlx::PgConnection,
+        malo_id: &mako_markt::domain::MaloId,
+        patch: &mako_markt::repository::MaloStammdatenPatch,
+    ) -> Result<bool, mako_markt::error::MdmError> {
         if patch.is_empty() {
             return Ok(false);
         }
@@ -448,7 +462,7 @@ impl PgMaloRepository {
         .bind(&patch.fallgruppe)
         .bind(patch.fernsteuerbar)
         .bind(&patch.abwicklungsmodell)
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?
         .rows_affected();

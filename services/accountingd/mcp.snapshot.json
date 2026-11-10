@@ -220,6 +220,62 @@
     "outputSchema": null
   },
   {
+    "name": "list_eeg_payouts",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "year": {
+          "description": "Billing year of the receipt chain paid.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int16",
+          "minimum": -32768,
+          "maximum": 32767
+        },
+        "month": {
+          "description": "Billing month (1–12) of the receipt chain paid.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int16",
+          "minimum": -32768,
+          "maximum": 32767
+        },
+        "malo_id": {
+          "description": "Restrict to one plant's MaLo.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "pain.002 status: `PDNG` | `ACCP` | `ACSC` | `RJCT` | `CANC`, or `NULL` for\norders not yet submitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Maximum rows (default 100, capped at 1000).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
     "name": "list_ledger",
     "annotations": {
       "readOnlyHint": true,
@@ -464,7 +520,7 @@
           "type": "string"
         },
         "entry_type": {
-          "description": "Buchungsart. One of: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE,\nEEG_AUSZAHLUNG, EEG_RUECKZAHLUNG, BANKRUECKLAST, SEPA_STORNO, MAHNGEBUEHR, VERZUGSZINSEN,\nABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.",
+          "description": "Buchungsart. One of: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE,\nEEG_AUSZAHLUNG, EEG_RUECKZAHLUNG, BANKRUECKLAST, SEPA_STORNO, MAHNGEBUEHR, VERZUGSZINSEN,\nVERZUGSPAUSCHALE, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.",
           "type": "string"
         },
         "amount_ct": {

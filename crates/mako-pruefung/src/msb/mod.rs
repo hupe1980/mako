@@ -23,11 +23,10 @@
 //! They also answer in a different segment: an ORDRSP carries `SG2 AJT`
 //! (DE 4465 code, DE 1082 tree) rather than `STS+E01`.
 //!
-//! The Verpflichtungsanfrage (55168 → `E_0240`) is deliberately absent: WiM
-//! Teil 1 Kap. 2.4.2 Nr. 4 leaves the answer to the gMSB's own commercial
-//! judgement („nach eigenem Ermessen"), so there is no Prüfschritt to execute
-//! and nothing here could decide it without inventing a rule. It escalates at
-//! the caller.
+//! The Verpflichtungsanfrage (55168 → `E_0240`) is decided only on its Frist
+//! ([`pruefe_verpflichtungsanfrage_frist`]): WiM Teil 1 Kap. 2.4.2 Nr. 4 leaves
+//! the answer itself to the gMSB's own commercial judgement („nach eigenem
+//! Ermessen"), so a request in time escalates at the caller.
 //!
 //! # The directions are not uniform
 //!
@@ -69,6 +68,7 @@ pub mod ersteinbau;
 pub mod kuendigung;
 pub mod technik;
 pub mod types;
+pub mod verpflichtungsanfrage;
 pub mod weiterverpflichtung;
 
 pub use abmeldung::pruefe_abmeldung;
@@ -83,6 +83,7 @@ pub use types::{
     Abmeldegrund, AbmeldungMsb, AnmeldungMsb, Einrichtungsart, KuendigungMsb, Kuendigungstermin,
     MsbEntscheidung, RahmenvertragBefund, Vertragslage, WeiterverpflichtungAuftrag,
 };
+pub use verpflichtungsanfrage::pruefe_verpflichtungsanfrage_frist;
 pub use weiterverpflichtung::pruefe_weiterverpflichtung;
 
 // ── Sparte → Entscheidungsbaum ───────────────────────────────────────────────

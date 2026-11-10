@@ -37,7 +37,7 @@ macro_rules! code {
 /// Separate from [`LfVertragslage`] because these are questions about the
 /// *Netzgebiet* and the statute, not about a contract: the answers come from
 /// the Grundversorger registry, not from `vertragd`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct EogZustaendigkeit {
     /// „Befindet sich die Marktlokation im Grundversorgungsgebiet des
     /// Empfängers, oder besteht eine vertragliche Vereinbarung zur
@@ -104,10 +104,24 @@ pub fn pruefe_anmeldung_eog(
         Bekannt::Ja => {}
     }
 
-    // Prüfschritt 30 — Anmeldefrist.
+    // Prüfschritt 30 — „Wurden die Fristen zur Anmeldung eingehalten?" A
+    // question with an answer: „Der UseCase Beginn der Ersatz-/Grundversorgung
+    // sieht eine Frist vor, nach der Marktlokationen beim Ersatz-/Grundversorger
+    // anzumelden sind" (EBD 4.3 Änd-ID 70305, S. 828). Unassessed, the walk
+    // cannot reach 40, so it escalates like 20 and 50.
     match EogZustaendigkeit::bekannt(zustaendigkeit.frist_eingehalten) {
         Bekannt::Nein => code!(list, ebd, "A03", 30, termin),
-        Bekannt::Unbekannt | Bekannt::Ja => {}
+        Bekannt::Unbekannt => {
+            return LfEntscheidung::eskalation(
+                30,
+                format!(
+                    "MaLo {}: unbekannt, ob die Frist zur Anmeldung eingehalten wurde \
+                     (E_0615 Prüfschritt 30 → A03).",
+                    anfrage.malo_id
+                ),
+            );
+        }
+        Bekannt::Ja => {}
     }
 
     // Prüfschritt 40 — „Wurde der angefragte Geschäftsvorfall dem Anfragenden
@@ -116,9 +130,11 @@ pub fn pruefe_anmeldung_eog(
     // „Zum gleichen Zeitpunkt" is the **Zuordnungsbeginn** a 55013 carries in
     // `SG4 DTM+92` — an unrelated Zuordnungsende falling on the same day is not
     // a Doppelmeldung.
-    if let (Some(beginn), Some(t)) = (lage.bestaetigter_zuordnungsbeginn, termin)
-        && beginn == t
-    {
+    let t = match anfrage.termin_oder_eskalation(ebd, 40) {
+        Ok(t) => t,
+        Err(e) => return *e,
+    };
+    if lage.bestaetigter_zuordnungsbeginn == Some(t) {
         code!(list, ebd, "A04", 40, termin);
     }
 
@@ -187,6 +203,10 @@ pub fn pruefe_anmeldung_eog_gas(
         );
     }
 
+    // `E_3008` publishes Codelisten and no Prüfschritte (EBD 4.3 Kap. 13.7.1,
+    // S. 728 f.), and `E17` „Ablehnung wg. Fristüberschreitung" is Nutzung
+    // `O`: a refusal the E/G may raise when it holds the finding, not a
+    // question the Zustimmung waits on.
     if EogZustaendigkeit::bekannt(zustaendigkeit.frist_eingehalten) == Bekannt::Nein {
         code!(list, ebd, "E17", 30, termin);
     }
@@ -285,6 +305,27 @@ mod tests {
         };
         let d = pruefe_anmeldung_eog(&anfrage(55_013), &LfVertragslage::default(), &z);
         assert!(d.ist_eskalation(), "{d:?}");
+    }
+
+    /// Prüfschritt 30 unassessed escalates naming the step: the Zustimmung
+    /// `A09` lies behind it, and so do `A04`/`A05`.
+    #[test]
+    fn an_unknown_anmeldefrist_escalates() {
+        let z = EogZustaendigkeit {
+            frist_eingehalten: None,
+            ..alles_bekannt()
+        };
+        let d = pruefe_anmeldung_eog(&anfrage(55_013), &grundversorger(), &z);
+        assert!(
+            matches!(
+                d,
+                LfEntscheidung::Eskalation {
+                    pruefschritt: 30,
+                    ..
+                }
+            ),
+            "{d:?}"
+        );
     }
 
     /// Being flagged Grundversorger *is* positive evidence, so it resolves

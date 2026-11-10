@@ -179,6 +179,9 @@ pub enum RechnungsabwicklungEvent {
         response_pid: Pruefidentifikator,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `SG2 AJT` — the code and the Codeliste the answer names.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<Antwortcode>,
     },
     /// Process rejected.
     Rejected {
@@ -223,6 +226,7 @@ impl EventPayload for RechnungsabwicklungEvent {
             Self::AntwortErhalten {
                 response_pid,
                 message_ref,
+                ..
             } => (Richtung::Eingang, Some(response_pid), message_ref),
             Self::Rejected { .. } | Self::DeadlineExpired { .. } => return None,
         };
@@ -243,6 +247,7 @@ impl EventPayload for RechnungsabwicklungEvent {
                 ebd,
                 ..
             } => Some(Antwortcode::new(code.clone(), ebd.clone())),
+            Self::AntwortErhalten { antwort, .. } => antwort.clone(),
             _ => None,
         }
     }
@@ -425,6 +430,8 @@ pub enum RechnungsabwicklungCommand {
         pid: Pruefidentifikator,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `SG2 AJT` — the code and the Codeliste the answer names.
+        antwort: Option<Antwortcode>,
     },
     /// Deadline expired.
     TimeoutExpired {
@@ -684,7 +691,11 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                 })
             }
 
-            RechnungsabwicklungCommand::ReceiveAntwort { pid, message_ref } => {
+            RechnungsabwicklungCommand::ReceiveAntwort {
+                pid,
+                message_ref,
+                antwort,
+            } => {
                 if !RECHNUNGSABWICKLUNG_ORDRSP_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "expected ORDRSP 19009/19010, got {pid}",
@@ -699,6 +710,7 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                 Ok(vec![RechnungsabwicklungEvent::AntwortErhalten {
                     response_pid: pid,
                     message_ref,
+                    antwort,
                 }]
                 .into())
             }
@@ -863,9 +875,15 @@ mod tests {
             RechnungsabwicklungCommand::ReceiveAntwort {
                 pid: pid(19010),
                 message_ref: mref("ORDRSP-IN-1"),
+                antwort: Some(Antwortcode::new("A01", Some("E_0209"))),
             },
         )
         .unwrap();
+        // The MSB's code rides the received answer's envelope.
+        assert_eq!(
+            out.events[0].antwort().map(|a| a.code),
+            Some("A01".to_owned())
+        );
         let state = apply_all(state, &out.events);
         assert!(
             matches!(

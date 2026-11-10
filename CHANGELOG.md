@@ -9,6 +9,301 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.32.0] — 2026-11-10
+
+### Added
+
+- `gpke.neuanlage.anmelden`: the Lieferant sends the Anmeldung neue
+  Marktlokation 55600 / 55601 to the Netzbetreiber the body names (MaLo-ID only
+  where known); the NB's 55602–55605 resumes it by the `RFF+TN` Vorgangsnummer,
+  and a Bestätigung's `LOC+Z16` becomes the process's Marktlokation.
+- MaBiS on the LF side: an `lf-strom` deployment registers the MaBiS PIDs a
+  Lieferant is party to (`mako_mabis::LF_PIDS`), an `lf-gas` deployment the
+  Allokationsliste Gas 13013.
+- `mabis.liste.senden`: the NB distributes a Lieferantenclearingliste 55065 or
+  LF-AACL 55201; the LF's Korrekturliste 55066 / 55202 resumes it by the
+  `SG6 RFF+TN` Listennummer.
+- GeLi Gas Geschäftsdatenanfrage: ORDERS 17101 (LF) / 17126 (MSB), answered
+  by UTILMD 44035 / 44060 or ORDRSP 19101 within 10 WT (GeLi Gas 3.0 Kap. 4.4,
+  S. 14), on `geli-gas-geschaeftsdatenanfrage` with
+  `geli.geschaeftsdatenanfrage.anfragen` / `.beantworten` / `.ablehnen`.
+- GeLi Gas Stammdatenänderung: `geli.stammdaten-aenderung.senden` sends the
+  GNB's 44123 (`SG8` whole from marktd's Prognosegrundlage) and 44175 (every
+  Messlokation) and the LF's 44120 (`bilanzkreis`); the gMSB answers the NB's
+  44113 with a 44115; `geli.stammdaten.anfrage.beantworten` takes `melo_id`
+  for a 44140 / 44162.
+- MSB answers: `gpke.anfrage-sperrung.beantworten` (Strom, ORDRSP 19118 / 19119
+  out of `E_0488`) and `geli.anfrage-sperrung.beantworten` (Gas, out of
+  `E_1001`, `rollen = [msb-gas]`); `wim.technik-aenderung.beantworten` (17011 →
+  19005 / 19006); `gpke.datenabruf.ablehnen` (19102 / 19007 / 19114) and
+  `gpke.datenabruf.anfordern` (17004); `gpke.konfiguration.beantworten` (17130 /
+  17121 / 17118 / 17129 → 19132 / 19120 / 19127 / 19131).
+- GPKE Teil 3: the recipient of a 17118, 17120–17123, 17128–17131, 17133 or
+  17134 / 17135 opens its own `gpke-konfiguration-aenderung` process; a 17120
+  opens the NB's 1-WT window.
+- WiM Geräteübernahme, MSBN side: `wim.geraetewechselabsicht.anzeigen` (17009)
+  and `wim.geraeteuebernahme.bestellen` (17001) on
+  `wim-geraeteubernahme-msbn`, resumed by the MSBA's ORDRSP.
+- WiM Gesamtvorgang: an NB whose MSBN reports no Gesamtvorgang sends the IFTSTA
+  21013 Scheitern to the MSBN, the MSBA and the LF when the window closes (WiM
+  Teil 1 Kap. 2.3.2 Nr. 16–18), resolving the MSBA and LF from marktd and
+  escalating one it cannot name; a late 21009 / 21010 / 21013 carries
+  `fristverletzung`.
+- The LF answers the NB's Abrechnungsdaten 55126 / 55218 / 55672, 55173 /
+  55175, 55225 and 55553 in `gpke-stammdatenaenderung`; the NB Strom's 55194
+  resumes the MSB Gas's 17104.
+- Antwortcode on the completion: every `de.mako.process.completed` whose
+  answer carries a code — the GNB's 44002–44006, the NB's 55005 / 55006, the
+  55014, WiM ORDRSP refusals, the Bestätigung EoG, a disputed invoice, an
+  applied Gas Stammdatenänderung — names it in `antwortcode` / `codeliste`;
+  processd words them.
+- Notices: every received APERAK and CONTRL is emitted as `de.mako.aperak.*` /
+  `de.mako.contrl.received`, standing under the process it answers when a
+  referenced `RFF` / `UCI` / `UCM` is one of its correlation keys
+  (`process_resolved`); a Marktnachricht the engine gives up on emits
+  `de.mako.process.failed`; every dead letter emits
+  `de.mako.dead-letter.recorded`, written with the record.
+- MSCONS to edmd: a Zählerstand (13017, 13002, dated by `SG10 DTM+7`) arrives
+  as a register reading, and a delivery addressed to a Messlokation is filed
+  under the Marktlokation marktd links it to; a customer read (`STS+Z33` /
+  `Z83`) carries `herkunft` through to billingd's Ablesungsart; 13008 / 13018
+  / 13025 carry their `DTM+137` as `mscons_version`.
+- mako-pruefung: a 55168 transmitted after the 5. WT before its Zuordnungsende
+  is refused `E17` (`E_0240`), a late 44168 escalates; new trees `E_0488`,
+  `E_1001`, `E_0442`, `E_0219`–`E_0222`, `E_0225`–`E_0230`, `E_0526`,
+  `E_0527`, `E_0539`, `E_0803`.
+- edi-energy: `profile::validate::bars_sending`,
+  `EdiEnergyReport::is_sendable` / `sending_refusals`;
+  `IftstaBuilder::status_code`, `referenz_nachricht` / `referenz_vorgang`,
+  `fertigstellung`; `OrdersBuilder::contact` / `position`;
+  `OrdrespBuilder::adjustment_text`.
+- mako-fristen: `vorlauf::fruehester_termin_nach_tag_vor_dem_letzten_werktag`,
+  `LFA_ZUORDNUNGSENDE_FALL_B_WT`, `MITTEILUNG_GESAMTVORGANG_WT`,
+  `SCHEITERN_GESAMTVORGANG_WT`, `abmeldung::bkv_deaktivierung_spaetester_uet`.
+- accountingd: payment plans are matched daily against the cash booked since
+  they were made (`PAID` → `COMPLETED`), and an instalment unpaid past its due
+  date makes the plan `DEFAULTED`. A plan may name its Abwendungsvereinbarung
+  (`abwendung_lock_id`); a default lifts that lock (§ 41g Abs. 1 S. 11 EnWG)
+  and the case returns to a fresh § 41f Abs. 5 Ankündigung.
+- accountingd: the § 288 Abs. 5 BGB Pauschale — 40 EUR once per open
+  Entgeltforderung of an account with `verbraucher = false`, less the Satz-3
+  Anrechnung of the same Verzug's Mahngebühren, booked as `VERZUGSPAUSCHALE`.
+  `PUT /api/v1/accounts/{malo_id}` takes `verbraucher`.
+- accountingd: an `insolvenz` Mahnsperre (§ 87 InsO) and
+  `POST /api/v1/accounts/{malo_id}/locks`; MCP `list_eeg_payouts`; a receipt's
+  `sect52.aufgerechnet_eur` is booked as an `EEG_52_PFLICHTZAHLUNG`
+  Aufrechnung and the payout pays the rest.
+- billingd: a period with taxable supply and a public-law Gebühr is issued as
+  an invoice plus a Gebührenbescheid (`dokumentart`, `GB` series) under one
+  `billingRunId`, rendered and sent through outputd's new `GEBUEHRENBESCHEID`
+  kind (§ 157 Abs. 1 AO). Requires `[gebuehrenbescheid]` (Rechtsbehelf, Frist,
+  Behörde, `zahlungsfrist_tage`); a period with a Gebühr is refused without it.
+- billingd: `steuerzeilen` — each document's Strom- and Energiesteuer lines,
+  typed by tax, ground and Rechtsgrundlage; a Storno writes them negated.
+- edmd: `GET /api/v1/sharing/participants/{malo_id}/allocation` — one § 42c
+  participant's period allocation.
+- marktd: `GET /api/v1/malos/{id}/bundesland` from the PLZ over the GeoNames
+  postal code table (CC BY 4.0); edmd caches it on `de.markt.malo.updated` and
+  an Ersatzwert without `bundesland` uses it.
+- vertragd: the § 14a EnWG module state per component, valid-time
+  (`GET` / `POST /api/v1/malo/{malo_id}/sect14a`, Cedar
+  `write-netzentgeltmodule`).
+- einsd: `[policy] sect52_aufrechnung` (`gesondert` default, `aufrechnen`) —
+  the § 52 Abs. 6 Satz 2 EEG 2023 set-off against the § 19 Abs. 1 claim; the
+  settlement and its CloudEvent carry `sect52 { anspruch_kumuliert_eur,
+  monat_eur, aufgerechnet_eur, rest_eur }`.
+- einsd: `gebotstermin` on a plant: § 100 Abs. 37 EEG 2023 keeps a plant
+  awarded in a Gebotstermin after 31.12.2022 and before 24.02.2025 out of
+  § 51b. eeg-billing dates § 44b Abs. 1 Satz 3, § 50a and § 51b by
+  `BIOMASSEPAKET_GENEHMIGT_AB` (18.09.2025, SA.118542).
+- mako-service outbox: `enqueue_command` / `OutboxWorker::commands` for an
+  HTTP call owed to an upstream (keyed for idempotency, signed with Standard
+  Webhooks), `enqueue_to` / `for_target` for a second receiver, `on_delivered`
+  for a follow-up write in the delivering transaction, `post_ce_for_reply`,
+  and `sweep_exhausted`, which dead-letters a row whose budget is spent.
+- xtask guards: `check-event-durability` (a hand-built envelope, a publish with
+  nothing durable behind it, a marker written beside an enqueue, a private
+  retry queue) and `check-process-verdict` (a consumer of
+  `de.mako.process.completed` that reads no verdict).
+
+### Changed
+
+- **Breaking:** makod: one pre-send gate for every message type — the
+  loopback, the outbox and every command door render the message in its
+  process's format version and refuse what `is_sendable()` refuses, an AHB
+  error or a Formatbedingung finding alike.
+- **Breaking:** makod: `gpke.neuanlage.bestaetigen` / `.ablehnen` read
+  `mako_markt::commands::GpkeNeuanlageBeantworten` and refuse any other key; a
+  `ZW2` 55603 must name its Tranche (`tranche`). mako-gpke
+  `LfAnmeldungCommand`, `LfAnmeldungEvent` and `NeuanlageCommand` change shape.
+- **Breaking:** makod: a MaBiS Summenzeitreihe (13003 / 13020 / 13023) without
+  `SG6 DTM+492` is refused; an IFTSTA PID without its own renderer arm is
+  refused (21047 among them).
+- **Breaking:** mako-mabis: a Clearingliste is answered from the tree its
+  sender role *and* its Anforderungsart select (EBD 4.3);
+  `mabis.liste.korrigieren` / `.ablehnen` take `anforderungsart`
+  (`einzelanforderung` / `abonnement`).
+- **Breaking:** mako-gpke: `gpke-konfiguration` is the NB's 17134 alone — no
+  ORDRSP answers it (GPKE Teil 3 Kap. 1.3.7.2); 17118 belongs to
+  `gpke-konfiguration-aenderung`, not `wim-technik-aenderung`.
+- **Breaking:** mako-wim: 19001 / 19002 / 19015 / 19016 route to
+  `wim-geraeteubernahme-msbn` for a MSB role; `GESAMTVORGANG_AUSBLEIBEN_WT` is
+  gone and the report window closes with the 10. WT. mako-geli-gas registers
+  only the 17116 for a deployment that is neither GNB nor LF. Several
+  `*Command` / event types gain fields (`antwort`, `referenz`, `received_at`,
+  `fristverletzung`, `AuftragKopf`); mako-gpke
+  `StammdatenObjekt::loc_qualifier` returns an `Option` and
+  `sperrung_msb::AnfrageSperrung` carries the MSB and the `BGM` DE 1004.
+- **Breaking:** mako-pruefung: no walk accepts on an input it lacks. The
+  invoice walks end open on a Prüfschritt no record answers
+  (`RechnungsAntwort::offen`, `StornoAntwort::Offen`); `E_0622` walks the
+  ruhende Marktlokation and escalates a possible Neuanlage. invoic-checker
+  `EmpfaengerFakten::steuersatz_korrekt` is per Positionsnummer.
+- **Breaking:** invoicd: an invoice whose walk ends open is held as `Offen` —
+  no REMADV, no event, `dispatch-answer` refuses it. No record answers
+  Prüfschritte 10 and 330, so every walked ESA and Preisblatt-B invoice is held
+  for a person.
+- **Breaking:** edi-energy: `ReleaseKind::Short.letter` is `Option<char>`.
+- **Breaking:** mako-engine: `SlateDbStore::as_dead_letter_sink` takes the
+  tenant the dead-letter notice is written for.
+- **Breaking:** mako-service: `event_outbox` gains `kind` and `upstream`; the
+  attempt is counted at the claim; the default policy is 8 attempts, 30 s × 4ⁿ
+  capped at 2 h.
+- **Breaking:** productd: an accepted Angebot answers `erp_dispatch: queued`
+  without `rahmenvertrag_id`, which is linked once vertragd answers the
+  delivery.
+- **Breaking:** netzbilanzd: a MaBiS run stays `pending` until its filing has
+  an outcome; `submitted` is gone.
+- **Breaking:** edmd: no Strom default — a reading order, an MSCONS payload, a
+  Zählerstandsgang push or a Kafka batch without `sparte` is refused (`422`),
+  and `?sparte` on the billing period and the imbalance defaults to the
+  Sparte the MaLo is stored under (`422` when none), on REST and MCP alike;
+  `ablese_auftraege.sparte` and `meter_billing_periods.sparte` have no default.
+  An INSRPT creates no
+  reading order. An enabled `[archive]` on an empty or `memory://`
+  `storage_uri` refuses startup.
+- **Breaking:** accountingd: automatic dunning requires
+  `dunning_zahlungsfrist_stufe{1,2,3}_tage` (≥ 1) and
+  `dunning_fee_stufe{1,2,3}_ct` (≥ 0) with `dunning_auto_enabled = true`; the
+  built-in fallbacks are gone. The EEG payout reads are `read-eeg-payouts`
+  (`NB`), no longer `read-banking`.
+- **Breaking:** billingd: the § 42c Sharing credit comes from edmd's
+  participant allocation (the request's `energy_share` is gone; a period
+  without one is `SHARING_ALLOCATION_MISSING`), and the § 14a module from
+  vertragd's record (`SECT14A_MODUL_UNBEKANNT`,
+  `SECT14A_MODULWECHSEL_IM_ZEITRAUM`, `SECT14A_MODUL_OHNE_PREIS`,
+  `SECT14A_MODUL3_OHNE_BAENDER`).
+- **Breaking:** grid-billing: a Sondervertragskunde charged a
+  Konzessionsabgabe without `grenzpreis` is refused
+  (`GrenzpreisvergleichFehlt`, § 2 Abs. 4 KAV); `KA_UNTER_GRENZPREIS` is an
+  error. `Grenzpreisvergleich` is re-exported at the crate root.
+- **Breaking:** eeg-billing: `sect51b_anwendbar` is replaced by the
+  period-aware `sect51b_im_zeitraum`, `SettlementStatus` gains
+  `GenehmigungImZeitraum`; `BiomassSettlementData` carries a `Zuschlag39`
+  (§ 39i Abs. 1 Satz 1 reads the award year or the Gebotstermin per Nummer).
+- **Breaking:** einsd: a Marktwert keyed by a `SOLAR_*` Bauform is refused
+  („MW Solar" is stored under `SOLAR`); the § 53c figure is one per plant and
+  day — a retry answers `200`, a later row closes the one in force, a
+  same-day or overlapping one is `422`.
+- processd: a `de.mako.process.completed` with a negative verdict is projected
+  as `rejected`; a 55013 decides `E_0615` Prüfschritt 30 and 50 from the
+  records. agentd's specialists are told the verdict is in `data.accepted` /
+  `data.outcome`.
+- accountingd: `GET /api/v1/eeg/enfg-zahlungen` serves each Rückzahlung as a
+  negative amount (§ 13 Abs. 1 Satz 1 Nr. 1 EnFG), which einsd's EnFG ledger
+  nets.
+- vertragd: the Beginn- and Schlussablesung order carries the component's
+  Sparte.
+- makod: the § 20b Netzzugang webhook's CloudEvent has source
+  `urn:mako:makod:tenant:…` and the message id as its id.
+
+### Removed
+
+- **Breaking:** the per-service retry queues, replaced by `event_outbox`
+  commands: processd's IFTSTA 21039 (`iftsta_attempts` /
+  `iftsta_next_attempt_at` / `iftsta_last_error` gone, execute/fail answer
+  `202`, `de.sperr.iftsta.ausstehend` fires from the dead letter or the Frist),
+  outputd's pushed deliveries (`[delivery] max_attempts` and the `attempts` /
+  `next_attempt_at` columns gone; a dead-lettered one is `FAILED`), vertragd's
+  calls to processd, edmd and accountingd (`outbound_tasks` gone,
+  `/api/v1/outbound/dead` lists the outbox dead letters), invoicd's ERP event
+  (`erp_*` columns and `erp_outbox` gone; a conclusion that fails to commit
+  answers `500` so makod redelivers), marktd's ESA Abbestellung on every end
+  of a consent (`stop_deliveries` gone, new `grund` `einwilligung_ersetzt`).
+- **Breaking:** energy-billing: `EegProduct` has no
+  `kwkg_zuschlag_ct_per_kwh` — the KWKG Zuschlag is the Netzbetreiber's
+  (§ 6 Abs. 1 KWKG), which einsd settles; billingd reports a `KWKG_ZUSCHLAG`
+  catalog position instead of crediting it.
+
+### Fixed
+
+- **Breaking:** mako-pruefung `EsaBestellung` serialises `bindungsfrist` and `eingegangen_am` as RFC 3339, not as `time`'s component array.
+- invoicd: a `marktd` outage on the ESA order lookup no longer passes `E_0264` Prüfschritt 40; the receipt answers `503` and the sender redelivers.
+- makod renders IFTSTA, APERAK, MSCONS, PRICAT and PARTIN in the release in
+  force: a release without a corrigendum letter (IFTSTA 2.1, APERAK 2.2,
+  MSCONS 2.5) fell back to the previous one from 01.10.2026.
+- makod: a door's pre-send check judged an answer in today's release while the
+  outbox sends it in the process's; both use the process's format version.
+- makod: the Neuanlage Bestätigung 55602 / 55603 — processd's automatic one
+  included — passes its profile, with the Ergänzung, `RFF+Z60`, the
+  Messlokationen and their MSB from marktd; an answer that names only
+  `process_id` reaches its process.
+- makod: IFTSTA 21009–21012 render their own IFTSTA AHB 2.1 Kap. 6.2 columns
+  instead of a 21042 shape, and an inbound 21010 / 21012 / 21029 reads its date
+  from `DTM+293` / `DTM+76`.
+- makod: a second Anmeldung, Abmeldung or NB-Abmeldung on a MaLo whose earlier
+  process was answered spawns its own process instead of dead-lettering.
+- makod: an inbound APERAK was routed by its `BGM` as if it were a
+  Prüfidentifikator; APERAK and CONTRL are never routed to a workflow.
+- makod: a WiM 19005 / 19006 resumes the 17011 by its `SG1 RFF+ON`, not by a
+  Lokation the ORDRSP does not carry.
+- makod: a MaBiS Summenzeitreihe is placed in the Bilanzierungsmonat of its
+  `SG6 DTM+492`, not of its Nachrichtendatum.
+- mako-wim: an inbound 21013 ends the MSBN's process with no Gesamtvorgang
+  reported, instead of being refused.
+- mako-gpke / edmd: the LF's answer to an NB-initiated Lieferende (55007)
+  completes the process, and a Zustimmung orders the Lieferende reading for
+  the completion's `process_date`. The Beginn- / Schlussablesung order fires
+  on a confirmed 55002 / 55078 / 55005, never on an Ablehnung.
+- mako-gpke / mako-geli-gas / marktd: the LF's completion of an Anmeldung or
+  Abmeldung carries the requested date; marktd dated a 55005 / 44005
+  Lieferende the day the answer arrived, and announced the § 38 gap twice in a
+  deployment that is NB and LF at once.
+- mako-fristen: a too-late „Tag vor dem letzten WT vor …" Vorlauf named a
+  frühestmöglicher Termin one Werktag too early.
+- edi-energy: a DE 9013 takes any code of the Codeliste DE 1131 names (a 21011
+  `STS+Z10+Z13+Z66:S_0057` passes); the IFTSTA profiles admit `G_0055` and
+  `E_0286` where the AHB names them. The DE 0083 docs read `7` as a rejection;
+  `7` is „Übertragung bestätigt" and `4` the rejection (CONTRL MIG 2.0b).
+- Lost events: a state change and its event were committed separately in
+  processd (Sperrauftrag, § 38 Abs. 4 EnWG `ersatz-auslaufend`), accountingd
+  (Mahnstufe escalation), marktd (ESA Widerruf and ten other write sites),
+  vertragd (inbound marker, `ablauf` worker, notices), netzbilanzd
+  (aggregation vs. filing) and einsd (`foerderung-auslaufend`); each now
+  commits with its write. A 408 from a receiver is retried like 429 and 5xx.
+- accountingd: automatic dunning and the Sperr-Sequenz skipped no account with
+  an `ACTIVE` payment plan or a live Mahnsperre; both hold now.
+  `de.accounting.abwendung.gebrochen` carried a run of spaces in `folge`.
+- edmd: delivery surveillance (and the ESA Typ-2 sweep) resolved incidents for
+  points the window-bounded scan did not return; it resolves only a point seen
+  delivering, and a failed scan is an error.
+- edmd: a hot-only deployment could not restart against its own database; the
+  catalog entries pointing into the lost memory warehouse are dropped at start.
+- edmd: an MSCONS receipt is the delivery's last write, so a refused delivery
+  leaves none; an unknown Sparte is `422`, not `500`.
+- einsd: a Wind or Solar plant without its energieträgerspezifischer
+  Marktwert settled on `DEFAULT` or the EPEX mean; it is `price_missing`
+  (Anlage 1 Nr. 3.3 / 4.3 EEG 2023).
+- einsd: § 53c was read at the first of the month; a month in which the figure
+  starts, ends or changes is refused.
+- einsd: § 44b, § 50a and § 51b follow the Fassung of the period (§ 101
+  Abs. 2 Satz 2 EEG 2023): a § 44 Güllekleinanlage is spared the 45 %-Quote, a
+  tendered plant from 18.09.2025; a § 50a rate above 65 EUR/kW/Jahr before
+  18.09.2025 is refused; the month containing the approval is refused for a
+  plant whose rules it changes.
+- einsd: § 39i Abs. 1 read the award date as the Gebotstermin; a tendered
+  Biogasanlage needs both. Settlement refusals answer `422`, not `500`.
+
 ## [0.31.0] — 2026-11-09
 
 ### Added

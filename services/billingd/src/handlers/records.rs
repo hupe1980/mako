@@ -443,6 +443,13 @@ pub async fn get_invoice_pdf(
 ) -> BillingResult<axum::response::Response> {
     let cfg = &deps.cfg;
     authorize(&cedar, &claims, "read-billing", &cfg.tenant)?;
+    // A Gebührenbescheid is no invoice: it carries no EN 16931 model and is
+    // rendered by outputd's GEBUEHRENBESCHEID kind from its stored view.
+    if let Some(row) = fetch_billing_record(&pool, &cfg.tenant, id).await?
+        && row.dokumentart == crate::gebuehrenbescheid::GEBUEHRENBESCHEID
+    {
+        return render_bescheid(&pool, &deps, id, &row).await;
+    }
     let (row, model) = record_with_model(&pool, cfg, id).await?;
 
     // The identity of the bytes: this record, rendered by this template. Only a
@@ -509,10 +516,80 @@ pub async fn get_invoice_pdf(
     Ok((StatusCode::OK, response_headers, rendered.pdf).into_response())
 }
 
+/// Render a Gebührenbescheid record with outputd's `GEBUEHRENBESCHEID` kind,
+/// pinning the template on the first render after dispatch as an invoice is
+/// ([`crate::pg::pin_template`]).
+async fn render_bescheid(
+    pool: &PgPool,
+    deps: &Arc<BillingDeps>,
+    id: Uuid,
+    row: &crate::pg::BillingRecordRow,
+) -> BillingResult<axum::response::Response> {
+    let view = row.bescheid_json.as_ref().ok_or_else(|| {
+        BillingError::unprocessable(
+            "BESCHEID_VIEW_MISSING",
+            "the Gebührenbescheid record carries no view — re-run the billing calculation",
+        )
+    })?;
+    let date = view
+        .get("datum")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|d| {
+            time::Date::parse(d, &time::format_description::well_known::Iso8601::DATE).ok()
+        })
+        .unwrap_or(row.period_to);
+    let render = |hash: Option<String>| async move {
+        deps.outputd
+            .render_view(
+                "GEBUEHRENBESCHEID",
+                view,
+                hash.as_deref(),
+                date,
+                &id.to_string(),
+            )
+            .await
+            .map_err(|e| match e {
+                e @ crate::clients::OutputdError::Refused { .. } => {
+                    BillingError::unprocessable("RENDER_REFUSED", e.to_string())
+                }
+                e => BillingError::upstream("outputd", format!("{e:#}")),
+            })
+    };
+    let mut rendered = render(row.template_hash.clone()).await?;
+    if row.template_hash.as_deref() != Some(rendered.template_hash.as_str())
+        && let Some(pinned) = crate::pg::pin_template(pool, id, &rendered.template_hash).await?
+        && pinned != rendered.template_hash
+    {
+        rendered = render(Some(pinned)).await?;
+    }
+    let mut response_headers = axum::http::HeaderMap::new();
+    response_headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/pdf"),
+    );
+    let name: String = row
+        .rechnungsnummer
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&format!(
+        "attachment; filename=\"gebuehrenbescheid-{name}.pdf\""
+    )) {
+        response_headers.insert(axum::http::header::CONTENT_DISPOSITION, v);
+    }
+    Ok((StatusCode::OK, response_headers, rendered.pdf).into_response())
+}
+
 // ── Issuing the invoice to the customer ───────────────────────────────────────
 
-/// `POST /api/v1/billing/{id}/versenden` — issue this invoice as a document
-/// and queue it for delivery.
+/// `POST /api/v1/billing/{id}/versenden` — issue this invoice, or this
+/// Gebührenbescheid, as a document and queue it for delivery.
 ///
 /// `GET /{id}/pdf` renders on demand, which answers neither question a supplier
 /// is actually asked:
@@ -538,7 +615,121 @@ pub async fn post_invoice_versenden(
     // The act that puts a document in front of a customer, so it is gated like
     // issuing one — not like reading it.
     authorize(&cedar, &claims, "issue-billing", &cfg.tenant)?;
-    let (row, model) = record_with_model(&pool, cfg, id).await?;
+    let issued = deliver_record(&pool, &deps, id).await?;
+    Ok((StatusCode::ACCEPTED, axum::Json(issued)))
+}
+
+/// Who a record goes to and on which channels — one answer for an invoice and
+/// the Gebührenbescheid beside it, so both reach the customer the same way.
+///
+/// The stored document names the party it is *addressed* to, `vertragd` holds
+/// where they can be reached. Not fatal if that fails — the portal channel
+/// needs no address, and a document reaching the portal beats one reaching
+/// nobody because an e-mail column was empty.
+async fn zustellung(deps: &BillingDeps, malo_id: &str) -> (serde_json::Value, Vec<String>) {
+    let contact = deps
+        .vertragd
+        .get_vertrag_by_malo(malo_id)
+        .await
+        .unwrap_or_default()
+        .and_then(|v| v.rechnungsempfaenger);
+    let mut channels = vec!["PORTAL".to_owned()];
+    if contact.as_ref().and_then(|c| c.email.as_ref()).is_some() {
+        channels.push("EMAIL".to_owned());
+    }
+    // A postal address is all-or-nothing. Mapping the contact row field by
+    // field produced `{"line1":null,…}` for a customer with no address on
+    // file — which is `Some` to `outputd`, so the `POST` channel was queued
+    // against an address that does not exist instead of being suppressed with
+    // a reason. `None` is the honest answer and the one that says so.
+    let address = contact.as_ref().and_then(|c| {
+        Some(serde_json::json!({
+            "line1":     c.line1.as_deref()?,
+            "post_code": c.post_code.as_deref()?,
+            "city":      c.city.as_deref()?,
+            "country":   c.country.as_deref().unwrap_or("DE"),
+        }))
+    });
+    let recipient = serde_json::json!({
+        "name":  contact.as_ref().and_then(|c| c.name.clone()),
+        "email": contact.as_ref().and_then(|c| c.email.clone()),
+        "address": address,
+    });
+    (recipient, channels)
+}
+
+/// Issue a Gebührenbescheid record through outputd's `GEBUEHRENBESCHEID`
+/// kind, on the channels its invoice would take, and pin the template it used.
+///
+/// The Bescheid has to reach the Schuldner: its Rechtsbehelfsfrist runs from
+/// its Bekanntgabe, so one stored and never sent starts nothing.
+///
+/// # Errors
+///
+/// A record without its view, or an unreachable `outputd`.
+pub async fn issue_and_deliver_bescheid(
+    pool: &PgPool,
+    deps: &Arc<BillingDeps>,
+    id: Uuid,
+    row: &crate::pg::BillingRecordRow,
+) -> BillingResult<crate::clients::IssuedDocument> {
+    let view = row.bescheid_json.as_ref().ok_or_else(|| {
+        BillingError::unprocessable(
+            "BESCHEID_VIEW_MISSING",
+            "the Gebührenbescheid record carries no view — re-run the billing calculation",
+        )
+    })?;
+    let date = view
+        .get("datum")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|d| {
+            time::Date::parse(d, &time::format_description::well_known::Iso8601::DATE).ok()
+        })
+        .unwrap_or(row.period_to);
+    let (recipient, channels) = zustellung(deps, &row.malo_id).await;
+    let issued = deps
+        .outputd
+        .issue_view(&crate::clients::IssueViewRequest {
+            kind: crate::gebuehrenbescheid::GEBUEHRENBESCHEID,
+            view,
+            template_hash: row.template_hash.as_deref(),
+            date,
+            ident: id.to_string(),
+            subject_ref: &row.rechnungsnummer,
+            malo_id: &row.malo_id,
+            recipient,
+            channels,
+        })
+        .await
+        .map_err(|e| BillingError::upstream("outputd", format!("{e:#}")))?;
+    if row.template_hash.is_none() {
+        crate::pg::pin_template(pool, id, &issued.template_hash).await?;
+    }
+    tracing::info!(
+        record_id = %id, malo_id = %row.malo_id, bescheidnummer = %row.rechnungsnummer,
+        document_id = %issued.document_id,
+        "billingd: Gebührenbescheid issued to the Schuldner and queued for delivery"
+    );
+    Ok(issued)
+}
+
+/// Issue a record to its customer, whichever document it is: an invoice with
+/// its ZUGFeRD carrier, a Gebührenbescheid through its own kind. What
+/// `POST /{id}/versenden` and the § 40b runs send.
+///
+/// # Errors
+///
+/// An unknown record, a draft, a document that cannot be rendered, or an
+/// unreachable `outputd`.
+pub async fn deliver_record(
+    pool: &PgPool,
+    deps: &Arc<BillingDeps>,
+    id: Uuid,
+) -> BillingResult<crate::clients::IssuedDocument> {
+    let cfg = &deps.cfg;
+    let row = fetch_billing_record(pool, &cfg.tenant, id)
+        .await?
+        .ok_or_else(|| BillingError::not_found("RECORD_NOT_FOUND", "billing record not found"))?;
     if row.outcome != "dispatched" {
         return Err(BillingError::conflict(
             "NOT_YET_ISSUED",
@@ -549,8 +740,11 @@ pub async fn post_invoice_versenden(
             ),
         ));
     }
-    let issued = issue_and_deliver(&pool, &deps, id, &row, &model).await?;
-    Ok((StatusCode::ACCEPTED, axum::Json(issued)))
+    if row.dokumentart == crate::gebuehrenbescheid::GEBUEHRENBESCHEID {
+        return issue_and_deliver_bescheid(pool, deps, id, &row).await;
+    }
+    let (row, model) = record_with_model(pool, cfg, id).await?;
+    issue_and_deliver(pool, deps, id, &row, &model).await
 }
 
 /// Render a record, hand it to `outputd` as an issued document, and pin the
@@ -578,38 +772,7 @@ pub async fn issue_and_deliver(
     } = prepare_payload(row, model)?;
     let rechnungsnummer = model.number.clone().unwrap_or_else(|| id.to_string());
 
-    // Who it goes to: the stored model names the party it is *addressed* to,
-    // `vertragd` holds where they can be reached. Not fatal if that fails — the
-    // portal channel needs no address, and an invoice reaching the portal beats
-    // one reaching nobody because an e-mail column was empty.
-    let contact = deps
-        .vertragd
-        .get_vertrag_by_malo(&row.malo_id)
-        .await
-        .unwrap_or_default()
-        .and_then(|v| v.rechnungsempfaenger);
-    let mut channels = vec!["PORTAL".to_owned()];
-    if contact.as_ref().and_then(|c| c.email.as_ref()).is_some() {
-        channels.push("EMAIL".to_owned());
-    }
-    // A postal address is all-or-nothing. Mapping the contact row field by
-    // field produced `{"line1":null,…}` for a customer with no address on
-    // file — which is `Some` to `outputd`, so the `POST` channel was queued
-    // against an address that does not exist instead of being suppressed with
-    // a reason. `None` is the honest answer and the one that says so.
-    let address = contact.as_ref().and_then(|c| {
-        Some(serde_json::json!({
-            "line1":     c.line1.as_deref()?,
-            "post_code": c.post_code.as_deref()?,
-            "city":      c.city.as_deref()?,
-            "country":   c.country.as_deref().unwrap_or("DE"),
-        }))
-    });
-    let recipient = serde_json::json!({
-        "name":  contact.as_ref().and_then(|c| c.name.clone()),
-        "email": contact.as_ref().and_then(|c| c.email.clone()),
-        "address": address,
-    });
+    let (recipient, channels) = zustellung(deps, &row.malo_id).await;
 
     let issued = deps
         .outputd

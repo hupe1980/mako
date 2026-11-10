@@ -168,6 +168,32 @@ pub fn resolve_workflow<'a>(
     }
 }
 
+/// The Prüfidentifikator `msg` is routed by — `None` for a Quittung.
+///
+/// A PID is owned per message type, and the router is keyed on the PID alone,
+/// so a message type that carries none must never reach it. An APERAK carries
+/// no Prüfidentifikator: the APERAK AHB 1.1 tabulates it by Ausprägung,
+/// Fehlermeldung and Anerkennungsmeldung (Kap. 3, S. 26), and its `BGM` DE 1004
+/// is a Dokumentennummer. Read as a PID, a Dokumentennummer `29001` routed the
+/// APERAK to the owner of COMDIS 29001 „Ablehnung REMADV". A CONTRL carries
+/// none either. Both are recorded through the Quittung notices instead.
+pub(crate) fn routing_pid(msg: &AnyMessage) -> Option<mako_engine::ids::Pid> {
+    if is_quittung(msg) {
+        return None;
+    }
+    msg.detect_pruefidentifikator()
+        .ok()
+        .and_then(|p| mako_engine::ids::Pid::from_u32(p.as_u32()))
+}
+
+/// Whether `msg` is an APERAK or a CONTRL.
+fn is_quittung(msg: &AnyMessage) -> bool {
+    matches!(
+        msg.try_message_type(),
+        Some(edi_energy::MessageType::Aperak | edi_energy::MessageType::Contrl)
+    )
+}
+
 // ── Response types ────────────────────────────────────────────────────────────
 
 #[derive(Serialize, ToSchema)]
@@ -235,8 +261,8 @@ pub enum MessageStatus {
     /// Parsed successfully; PID present but not registered in PidRouter.
     UnknownPid,
     /// Parsed successfully; this message type carries no Prüfidentifikator by
-    /// design. CONTRL is the only one — it is the EDIFACT syntax
-    /// acknowledgement, and its AHB publishes no PID at all.
+    /// design — a CONTRL (the EDIFACT syntax acknowledgement) or an APERAK; the
+    /// AHB of neither publishes a PID.
     NoPid,
     /// Parsed successfully, but `NAD+MS` or `NAD+MR` is absent.
     ///
@@ -292,7 +318,7 @@ impl MessageStatus {
             return Self::MissingParty;
         }
         match (pid, workflow) {
-            (None, _) if is_contrl => Self::NoPid,
+            (None, _) if is_quittung(msg) => Self::NoPid,
             (None, _) => Self::MissingPid,
             (Some(_), Some(_)) => Self::Routed,
             (Some(_), None) => Self::UnknownPid,
@@ -1119,10 +1145,7 @@ async fn ingest_report(
         let msg = env.message;
 
         let message_type = msg.try_message_type().map(|t| t.to_string());
-        let pid = msg
-            .detect_pruefidentifikator()
-            .ok()
-            .and_then(|p| mako_engine::ids::Pid::from_u32(p.as_u32()));
+        let pid = routing_pid(&msg);
         let workflow = pid
             .and_then(|p| state.resolve_workflow(p.as_u32(), &recipient_mp_id))
             .map(str::to_owned);
@@ -1470,6 +1493,29 @@ UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+55001+9'DTM+137:202608041045?+00:303'\
                  {expected}. The single emitter is record_ahb_conformance."
             );
         }
+    }
+
+    /// An APERAK is a Quittung, not a Geschäftsvorfall: the APERAK AHB 1.1
+    /// tabulates it by Ausprägung (Fehlermeldung / Anerkennungsmeldung, Kap. 3, S. 26)
+    /// and publishes no Prüfidentifikator for it. Its `BGM` DE 1004 is a
+    /// Dokumentennummer, and one that reads as `29001` must not route it to the
+    /// COMDIS „Ablehnung REMADV" owner — it would fail there as „expected
+    /// COMDIS" and be dead-lettered.
+    #[test]
+    fn an_aperak_is_never_routed_by_its_document_number() {
+        let wire = include_bytes!(
+            "../../../../crates/edi-energy/tests/fixtures/aperak/valid/beispiel_29001_verarbeitbarkeitsfehler.edi"
+        );
+        let msg = edi_energy::parse(wire).expect("the APERAK fixture parses");
+        assert_eq!(
+            super::routing_pid(&msg),
+            None,
+            "an APERAK carries no Prüfidentifikator"
+        );
+        assert_eq!(
+            MessageStatus::classify(&msg, super::routing_pid(&msg), None),
+            MessageStatus::NoPid
+        );
     }
 
     /// CONTRL is a UN/EDIFACT service message, not an EDI@Energy business one:

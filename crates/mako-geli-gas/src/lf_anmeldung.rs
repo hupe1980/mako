@@ -588,19 +588,35 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                 } else {
                     String::new()
                 };
-                let outbox = vec![PendingOutbox::new(
-                    "ProcessCompleted",
-                    "",
-                    serde_json::json!({
-                        "pid":      response_pid.as_u32(),
-                        "malo_id":  malo_id_str,
-                        "accepted": accepted,
-                        "outcome":  if accepted { "accepted" } else { "rejected" },
-                        "reason":   reason,
-                        "antwortcode": antwort.as_ref().map(|a| a.code.as_str()),
-                        "codeliste":   antwort.as_ref().and_then(|a| a.codeliste.as_deref()),
-                    }),
-                )];
+                // The date the Anfrage asked for — the Lieferbeginn on an
+                // Anmeldung, the Lieferende on an Abmeldung — and the Lieferant
+                // it is about, this one: without them marktd dates an ending
+                // the day the answer arrived and ends every assignment of a
+                // tranchierte Marktlokation.
+                let (process_date, lieferant) = match state {
+                    GeliGasLfAnmeldungState::Pending(data) => (
+                        Some(data.process_date.clone()),
+                        Some(data.sender.as_str().to_owned()),
+                    ),
+                    _ => (None, None),
+                };
+                let lieferant_key = if matches!(response_pid.as_u32(), 44_005 | 44_006) {
+                    "old_supplier"
+                } else {
+                    "new_supplier"
+                };
+                let mut completed = serde_json::json!({
+                    "pid":      response_pid.as_u32(),
+                    "malo_id":  malo_id_str,
+                    "process_date": process_date,
+                    "accepted": accepted,
+                    "outcome":  if accepted { "accepted" } else { "rejected" },
+                    "reason":   reason,
+                    "antwortcode": antwort.as_ref().map(|a| a.code.as_str()),
+                    "codeliste":   antwort.as_ref().and_then(|a| a.codeliste.as_deref()),
+                });
+                completed[lieferant_key] = serde_json::json!(lieferant);
+                let outbox = vec![PendingOutbox::new("ProcessCompleted", "", completed)];
 
                 Ok(WorkflowOutput::with_outbox(
                     vec![GeliGasLfAnmeldungEvent::AntwortReceived {

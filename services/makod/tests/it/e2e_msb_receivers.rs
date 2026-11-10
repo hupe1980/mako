@@ -464,3 +464,167 @@ async fn an_inbound_technikaenderung_auftrag_opens_the_msbs_process_with_its_ten
         "10 WT — WiM Teil 1 Kap. 3.3.1.2 Nr. 2"
     );
 }
+
+// ── Anfrage Sperrung Gas 17116 (GNB an gMSB) ─────────────────────────────────
+
+/// A gMSB deployment routes the GNB's Anfrage Sperrung to its own workflow —
+/// Sparte-qualified Gas — and no GeLi Gas PID of the GNB or the LF; on a
+/// deployment that is GNB and gMSB at once the GNB's Sperrauftrag stays on the
+/// GNB's side.
+#[test]
+fn a_msb_gas_deployment_routes_the_anfrage_sperrung_to_the_gmsb() {
+    let gmsb = mako_geli_gas::sperrung_msb::WORKFLOW_NAME;
+    let router = router_for(&[Rolle::MsbGas], &DeploymentRoles::msb());
+    assert_eq!(router.route_with_sparte(17_116, Sparte::Gas), Some(gmsb));
+    for pid in [44_001, 44_013, 17_115, 17_117, 19_118, 31_011] {
+        let routed = router.route(pid);
+        assert!(
+            routed.is_none_or(|wf| !wf.starts_with("geli-gas-")),
+            "{pid} reaches {routed:?} on a gMSB-only deployment"
+        );
+    }
+
+    let both = router_for(&[Rolle::NbGas, Rolle::MsbGas], &DeploymentRoles::nb_msb());
+    assert_eq!(both.route_with_sparte(17_116, Sparte::Gas), Some(gmsb));
+    assert_eq!(
+        both.route_with_sparte(17_115, Sparte::Gas),
+        Some("geli-gas-sperrung-nb")
+    );
+
+    let gnb = router_for(&[Rolle::NbGas], &DeploymentRoles::nb());
+    assert_eq!(gnb.route(17_116), None, "the GNB sends the 17116");
+}
+
+/// An inbound Gas 17116 opens the gMSB's process on the Marktlokation. The
+/// gMSB's Frist is set by the AWH Sperrprozesse Gas, which is not mirrored, so
+/// no window is registered.
+#[tokio::test]
+async fn an_inbound_gas_anfrage_sperrung_opens_the_gmsbs_process() {
+    use mako_geli_gas::sperrung_msb::{
+        GeliGasSperrungMsbWorkflow, SperrungMsbGasState, WORKFLOW_NAME,
+    };
+    let (store, dispatcher) = store_and_dispatcher().await;
+    let msg = parse(&set_element(&skeleton(17_116), "LOC+172+", MALO));
+    let eingang = time::macros::datetime!(2026-10-02 09:00 UTC);
+    let outcome = dispatcher
+        .dispatch(&msg, WORKFLOW_NAME, 17_116, eingang)
+        .await
+        .expect("dispatch");
+    assert!(
+        matches!(outcome, IngestOutcome::Spawned { .. }),
+        "{outcome:?}"
+    );
+    let ids = processes_on(&store, MALO, WORKFLOW_NAME).await;
+    assert_eq!(ids.len(), 1, "one gMSB process on the MaLo");
+    let state = Process::<GeliGasSperrungMsbWorkflow, _>::from_identity(
+        Arc::new(store.clone()),
+        ids[0].clone(),
+    )
+    .state()
+    .await
+    .expect("state");
+    assert!(
+        matches!(&state, SperrungMsbGasState::Offen(a) if a.msb.as_str() == OWN_MP),
+        "{state:?}"
+    );
+}
+
+// ── GPKE Teil 3 Konfiguration ────────────────────────────────────────────────
+
+/// Each role routes the GPKE Teil 3 ORDERS it receives to the receiving side
+/// of `gpke-konfiguration-aenderung` (Anwendungsübersicht 4.0 lfd. Nr.
+/// 22180–23280): the MSB the NB's and the LF's Bestellungen, the weiterer MSB's
+/// 17118 / 17128–17130 and the Einrichtung 17134 / 17135; the NB the LF's
+/// 17120 / 17122 / 17123 / 17133; the LF the Reklamation einer Definition
+/// 17122. 17118 and the 19127 that answers it resolve to one workflow.
+#[test]
+fn each_role_routes_the_konfiguration_orders_it_receives() {
+    let wf = mako_gpke::KONFIGURATION_AENDERUNG_WORKFLOW_NAME;
+    let msb = router_for(&[Rolle::MsbStrom], &DeploymentRoles::msb());
+    for pid in [
+        17_118, 17_121, 17_123, 17_128, 17_129, 17_130, 17_131, 17_134, 17_135, 19_127,
+    ] {
+        assert_eq!(msb.route(pid), Some(wf), "{pid} on a MSB deployment");
+    }
+    assert_eq!(msb.route(17_120), None, "the LF's 17120 is the NB's");
+
+    let nb = router_for(&[Rolle::NbStrom], &DeploymentRoles::nb());
+    for pid in [17_120, 17_122, 17_123, 17_133] {
+        assert_eq!(nb.route(pid), Some(wf), "{pid} on a NB deployment");
+    }
+    for pid in [17_118, 17_121, 17_134] {
+        assert_eq!(nb.route(pid), None, "{pid} is the MSB's");
+    }
+
+    let lf = router_for(&[Rolle::LfStrom], &DeploymentRoles::lf());
+    assert_eq!(lf.route(17_122), Some(wf));
+    assert_eq!(lf.route(17_120), None);
+
+    let all = router_for(
+        &[Rolle::NbStrom, Rolle::LfStrom, Rolle::MsbStrom],
+        &DeploymentRoles::all(),
+    );
+    assert_eq!(all.route(17_118), all.route(19_127));
+    assert_eq!(all.route(17_118), Some(wf));
+}
+
+/// Every GPKE Teil 3 ORDERS opens the recipient's process under its sender
+/// and `BGM` DE 1004 instead of dead-lettering; the 17120 opens the NB's 1-WT
+/// window (GPKE Teil 3 Kap. 1.3.2.2 Nr. 2).
+#[tokio::test]
+async fn every_konfiguration_orders_opens_the_recipients_process() {
+    use mako_gpke::KonfigurationAenderungState;
+    let wf = mako_gpke::KONFIGURATION_AENDERUNG_WORKFLOW_NAME;
+    let (store, dispatcher) = store_and_dispatcher().await;
+    let eingang = time::macros::datetime!(2026-10-07 10:00 UTC);
+    for pid in [
+        17_118, 17_120, 17_121, 17_122, 17_123, 17_128, 17_129, 17_130, 17_131, 17_133, 17_134,
+        17_135,
+    ] {
+        let wire = skeleton(pid);
+        let msg = parse(&wire);
+        let outcome = dispatcher
+            .dispatch(&msg, wf, pid, eingang)
+            .await
+            .expect("dispatch");
+        assert!(
+            matches!(outcome, IngestOutcome::Spawned { .. }),
+            "{pid}: {outcome:?}"
+        );
+        let nummer = match &msg {
+            edi_energy::AnyMessage::Orders(o) => o
+                .segments()
+                .iter()
+                .find(|s| s.tag == "BGM")
+                .and_then(|s| s.component_str(1, 0))
+                .expect("BGM DE 1004")
+                .to_owned(),
+            other => panic!("{pid}: not an ORDERS: {other:?}"),
+        };
+        let key = mako_gpke::konfiguration_aenderung::auftrag_key(NB_MP, &nummer);
+        let ids = processes_on(&store, &key, wf).await;
+        assert_eq!(ids.len(), 1, "{pid}");
+        let state = Process::<mako_gpke::GpkeKonfigurationAenderungWorkflow, _>::from_identity(
+            Arc::new(store.clone()),
+            ids[0].clone(),
+        )
+        .state()
+        .await
+        .expect("state");
+        assert!(
+            matches!(&state, KonfigurationAenderungState::AuftragEingegangen { pid: p, .. } if p.as_u32() == pid),
+            "{pid}: {state:?}"
+        );
+    }
+    assert_eq!(
+        deadlines_labelled(
+            &store,
+            mako_gpke::konfiguration_aenderung::EINGANG_WINDOW_LABEL
+        )
+        .await,
+        vec![mako_fristen::end_of_day_berlin(time::macros::date!(
+            2026 - 10 - 08
+        ))],
+        "only the 17120 opens a window"
+    );
+}

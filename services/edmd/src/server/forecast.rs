@@ -104,15 +104,14 @@ pub(crate) async fn annual_forecast(
         .query(&query(from, to))
         .await
         .map_err(ApiError::internal)?;
-    if reads.is_empty() {
+    let Some(sparte) = reads.first().map(|r| r.sparte) else {
         return Err(ApiError::NotFound);
-    }
+    };
 
     // A Jahresprognose is about the consumption, so the reads go through the
     // canonical Bezug projection: projecting a series that still carried the
     // measuring point's Einspeisung, its Blindarbeit and its HT/NT split beside
     // the total forecast a year of energy the customer will never draw.
-    let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
     let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
     let series = crate::domain::vee::energy_series(sparte, &intervals).map_err(|defect| {
         ApiError::unprocessable(format!(

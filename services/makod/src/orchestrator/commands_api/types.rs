@@ -275,6 +275,7 @@ pub(crate) type DispatchFn = for<'a> fn(
 ///
 /// All three data points live together so adding a new command requires
 /// filling in all fields — no parallel data structures can silently drift apart.
+#[derive(Clone, Copy)]
 pub(crate) struct CommandDescriptor {
     /// Stable lowercase command name, e.g. `"gpke.lieferbeginn.anmelden"`.
     pub name: &'static str,
@@ -284,6 +285,13 @@ pub(crate) struct CommandDescriptor {
     /// `None` for commands that carry no single outbound PID
     /// (e.g. REST-only replay sinks or multi-PID ORDERS flows).
     pub primary_pid: Option<Pruefidentifikator>,
+    /// The workflow whose process the command spawns or moves on.
+    ///
+    /// `None` for a command that runs no process: it writes its message
+    /// straight to the outbox (the Netzzugang-Anträge, a Summenzeitreihe the
+    /// filer submits). The command-coverage guard reads this field to refuse a
+    /// routed workflow no command can move.
+    pub workflow: Option<&'static str>,
     /// Async dispatch function — called by [`dispatch_command`] after role validation.
     pub dispatch: DispatchFn,
 }

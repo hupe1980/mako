@@ -507,6 +507,107 @@ pub fn mabis_listenabgleich_registry() -> AdapterRegistry<MabisListenabgleichWor
     registry
 }
 
+/// The Listennummer a Korrekturliste / Prüfmitteilung answers: its head's
+/// `SG6 RFF+TN` („Es ist die Listennummer aus der Lieferanten- bzw.
+/// Bilanzierungsgebietsclearingliste zu verwenden", UTILMD AHB Strom 2.2
+/// Kap. 13.2, Bedingung `[631]`, S. 1112). The distributor's process runs
+/// under it ([`mako_mabis::listenabgleich::liste_key`]).
+#[must_use]
+pub fn mabis_korrekturliste_referenz(msg: &AnyMessage) -> Option<String> {
+    let AnyMessage::Utilmd(u) = msg else {
+        return None;
+    };
+    u.transactions()
+        .iter()
+        .find(|t| t.ide.qualifier == edi_energy::utilmd_codes::IDE_LISTE)?
+        .references
+        .iter()
+        .find(|r| r.qualifier == edi_energy::utilmd_codes::rff::REFERENZ_VORGANGSNUMMER)
+        .and_then(|r| r.reference.clone())
+        .filter(|r| !r.is_empty())
+}
+
+/// Build an [`AdapterRegistry`] carrying a received Korrekturliste (55066 /
+/// 55202) into [`ListenabgleichCommand::ReceiveKorrektur`].
+///
+/// The head's `STS+E01` and its `IDE+24` members are mutually exclusive
+/// (Bedingungen `[238]` / `[630]`, UTILMD AHB Strom 2.2 Kap. 13.2, S. 1110 /
+/// 1114): a head code is a whole-list refusal, members are a Korrekturliste —
+/// none at all being the empty one. Which tree the codes must come from is the
+/// workflow's decision, from the list it sent.
+#[must_use]
+pub fn mabis_listenabgleich_korrektur_registry() -> AdapterRegistry<MabisListenabgleichWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for MaBiS Korrekturliste adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "MaBiS Korrekturliste adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "MaBiS Korrekturliste adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            let transaktionen = u.transactions();
+            let kopf = transaktionen
+                .iter()
+                .find(|t| t.ide.qualifier == edi_energy::utilmd_codes::IDE_LISTE);
+            let mitglieder: Vec<_> = transaktionen
+                .iter()
+                .filter(|t| t.ide.qualifier != edi_energy::utilmd_codes::IDE_LISTE)
+                .collect();
+
+            let mut codeliste = kopf
+                .and_then(|t| t.antwort())
+                .and_then(|a| a.codeliste.clone());
+            let antwort = match kopf.and_then(|t| t.antwort()) {
+                Some(kopfstatus) if mitglieder.is_empty() => {
+                    mako_mabis::listenabgleich::EingehendeAntwort::GesamtAblehnung {
+                        antwortcode: kopfstatus.code.clone(),
+                    }
+                }
+                _ => {
+                    let mut positionen = Vec::with_capacity(mitglieder.len());
+                    for (i, t) in mitglieder.iter().enumerate() {
+                        let malo = t.marktlokation().unwrap_or_default().to_owned();
+                        let status = t.antwort().ok_or_else(|| {
+                            EngineError::Deserialization(format!(
+                                "MaBiS Korrekturliste adapter: IDE+24 #{} has no STS+E01",
+                                i + 1
+                            ))
+                        })?;
+                        if codeliste.is_none() {
+                            codeliste.clone_from(&status.codeliste);
+                        }
+                        positionen.push((malo, status.code.clone()));
+                    }
+                    mako_mabis::listenabgleich::EingehendeAntwort::Korrekturliste { positionen }
+                }
+            };
+
+            Ok(ListenabgleichCommand::ReceiveKorrektur {
+                pid,
+                message_ref: MessageRef::new(msg.message_ref()),
+                codeliste,
+                antwort,
+            })
+        },
+    ));
+    registry
+}
+
 // ── MaBiS Summenzeitreihen (MSCONS 13003 / 13020 / 13023) ────────────────────
 
 /// Build an [`AdapterRegistry`] carrying an inbound Summenzeitreihe version
@@ -600,18 +701,34 @@ pub fn mabis_summenzeitreihe_registry(
                     })
                 })?;
 
-            let document_date = m
-                .dtm()
+            // SG6 DTM+492 in `610` `CCYYMM` — the Bilanzierungsmonat the
+            // version covers, beside the Versionsangabe in the same Versions-
+            // Tupel (MSCONS AHB 3.2 Kap. 3, S. 14; Segmentliste S. 97). The
+            // Nachrichtendatum `DTM+137` is when the version was *made*: a
+            // September version sent in October belongs to September's windows.
+            let monat_raw = m
+                .segments()
                 .iter()
-                .find(|d| d.is_document_date())
-                .and_then(|d| d.value_str())
-                .unwrap_or("")
-                .to_owned();
-            let bilanzierungsmonat = billing_period_head(&document_date);
+                .filter(|s| s.tag == "DTM")
+                .find(|s| s.component_str(0, 0) == Some("492"))
+                .and_then(|s| s.component_str(0, 1))
+                .ok_or_else(|| {
+                    EngineError::Deserialization(
+                        "MaBiS Summenzeitreihe adapter: SG6 DTM+492 (Bilanzierungsmonat) is \
+                         missing — the version cannot be placed in a Clearingfenster"
+                            .into(),
+                    )
+                })?;
+            let bilanzierungsmonat = billing_period_head(monat_raw);
 
             // Which phase the arrival falls in — the calendar decides, not the
             // message (Kap. 3.10 Tabelle 2), on the day of receipt.
-            let monat = bilanzierungsmonat_aus(&document_date);
+            let monat = Some(bilanzierungsmonat_aus(monat_raw).ok_or_else(|| {
+                EngineError::Deserialization(format!(
+                    "MaBiS Summenzeitreihe adapter: DTM+492 '{monat_raw}' is no `CCYYMM` \
+                     Bilanzierungsmonat"
+                ))
+            })?);
             let im_erstaufschlag =
                 monat.is_some_and(|monat| monat.phase(zeitreihe, eingang).ist_erstaufschlag());
             let clearing_ende = monat.and_then(|monat| {
@@ -645,8 +762,7 @@ pub fn mabis_summenzeitreihe_registry(
     registry
 }
 
-/// The Fristenkalender of the Bilanzierungsmonat a `CCYYMMDD` document date
-/// falls in.
+/// The Fristenkalender of the Bilanzierungsmonat a `CCYYMM` value names.
 fn bilanzierungsmonat_aus(document_date: &str) -> Option<mako_mabis::Bilanzierungsmonat> {
     if document_date.len() < 6 {
         return None;
@@ -877,32 +993,89 @@ fn utilmd_merkmal_of_class(
 mod tests {
     use super::*;
 
-    /// A 13003 version of the Bilanzkreissummenzeitreihe for September 2026.
+    /// A 13003 version of the Bilanzkreissummenzeitreihe for September 2026,
+    /// made on `nachrichtendatum` (`CCYYMMDD`).
+    fn summenzeitreihe_vom(nachrichtendatum: &str, monat: Option<&str>) -> AnyMessage {
+        let monat = monat.map_or_else(String::new, |m| format!("DTM+492:{m}:610'"));
+        let raw = format!(
+            "UNA:+.? 'UNB+UNOC:3+9900357000004:500+9900357000011:500+261016:2130+1'\
+             UNH+1+MSCONS:D:04B:UN:2.4c'BGM+BK+DOK13003+9'\
+             DTM+137:{nachrichtendatum}1200?+00:303'RFF+Z13:13003'\
+             NAD+MS+9900357000004::293'NAD+MR+9900357000011::293'UNS+D'NAD+DP'\
+             LOC+172+DE0004030099000000000000000012345'{monat}\
+             DTM+293:20261016213000?+00:304'CCI+++ZB4'CAV+Z97'\
+             LIN+1'QTY+220:100'UNT+17+1'UNZ+1+1'"
+        );
+        edi_energy::parse(raw.as_bytes()).expect("the Summenzeitreihe parses")
+    }
+
     fn summenzeitreihe() -> AnyMessage {
-        edi_energy::parse(
-            b"UNA:+.? 'UNB+UNOC:3+9900357000004:500+9900357000011:500+261016:2130+1'\
-              UNH+1+MSCONS:D:04B:UN:2.4c'BGM+BK+DOK13003+9'\
-              DTM+137:202609301200?+00:303'RFF+Z13:13003'\
-              NAD+MS+9900357000004::293'NAD+MR+9900357000011::293'UNS+D'NAD+DP'\
-              LOC+172+DE0004030099000000000000000012345'\
-              DTM+293:20261016213000?+00:304'CCI+++ZB4'CAV+Z97'\
-              LIN+1'QTY+220:100'UNT+16+1'UNZ+1+1'",
-        )
-        .expect("the Summenzeitreihe parses")
+        summenzeitreihe_vom("20260930", Some("202609"))
+    }
+
+    fn dispatch(msg: &AnyMessage, received_at: time::OffsetDateTime) -> BillingCommand {
+        let fv = FormatVersion::parse("FV2026-04-01").expect("known");
+        let raw: &dyn Any = msg;
+        mabis_summenzeitreihe_registry(received_at)
+            .dispatch(raw, &fv)
+            .expect("dispatched")
     }
 
     fn im_erstaufschlag(received_at: time::OffsetDateTime) -> bool {
-        let fv = FormatVersion::parse("FV2026-04-01").expect("known");
-        let raw: &dyn Any = &summenzeitreihe();
-        match mabis_summenzeitreihe_registry(received_at)
-            .dispatch(raw, &fv)
-            .expect("dispatched")
-        {
+        match dispatch(&summenzeitreihe(), received_at) {
             BillingCommand::ReceiveSummenzeitreihe {
                 im_erstaufschlag, ..
             } => im_erstaufschlag,
             _ => panic!("the adapter builds ReceiveSummenzeitreihe"),
         }
+    }
+
+    /// A version is placed in the Bilanzierungsmonat of its `SG6 DTM+492`,
+    /// not of its Nachrichtendatum: a September version made on 02.10. is
+    /// judged against September's windows.
+    #[test]
+    fn a_september_version_sent_in_october_is_judged_against_september() {
+        let (zeitreihe, _) = mako_mabis::zeitreihe_aus_cav("Z97").expect("Z97");
+        let september = mako_mabis::Bilanzierungsmonat::new(time::macros::date!(2026 - 09 - 30));
+        let erwartet = september
+            .clearing_ende(zeitreihe, mako_mabis::fristen::Abrechnungslauf::Bka)
+            .expect("the BK-SZR has a BKA close");
+        let erst = september
+            .erstaufschlag(zeitreihe, mako_mabis::fristen::Abrechnungslauf::Bka)
+            .expect("the BK-SZR has an Erstaufschlag")
+            .von;
+        let received = mako_fristen::berlin_at(erst, time::macros::time!(10:00));
+        match dispatch(&summenzeitreihe_vom("20261002", Some("202609")), received) {
+            BillingCommand::ReceiveSummenzeitreihe {
+                bilanzierungsmonat,
+                clearing_ende,
+                im_erstaufschlag,
+                ..
+            } => {
+                assert_eq!(bilanzierungsmonat.as_str(), "202609");
+                assert_eq!(clearing_ende, Some(erwartet));
+                assert!(
+                    im_erstaufschlag,
+                    "received inside September's Erstaufschlag"
+                );
+            }
+            _ => panic!("the adapter builds ReceiveSummenzeitreihe"),
+        }
+    }
+
+    /// A version without its Bilanzierungsmonat is refused rather than placed
+    /// by its Nachrichtendatum.
+    #[test]
+    fn a_version_without_its_bilanzierungsmonat_is_refused() {
+        let fv = FormatVersion::parse("FV2026-04-01").expect("known");
+        let msg = summenzeitreihe_vom("20261002", None);
+        let raw: &dyn Any = &msg;
+        let Err(refused) =
+            mabis_summenzeitreihe_registry(time::OffsetDateTime::UNIX_EPOCH).dispatch(raw, &fv)
+        else {
+            panic!("a version without DTM+492 is refused");
+        };
+        assert!(refused.to_string().contains("DTM+492"), "{refused}");
     }
 
     /// The Erstaufschlag is judged on the day the version arrived, in

@@ -158,13 +158,25 @@ pub struct BiomassSettlementData {
     /// on Energiepflanzen generally.
     pub getreide_mais_anteil: Decimal,
 
-    /// The Gebotstermin at which the plant received its Zuschlag.
+    /// The plant's Zuschlag nach § 39: its Gebotstermin and the day it was
+    /// awarded.
     ///
     /// § 39i Abs. 1 conditions the claim only for a plant that holds one, and
-    /// the permitted share steps down by the Gebotstermin. `None` — a plant
-    /// whose anzulegender Wert is gesetzlich bestimmt — is outside Abs. 1
-    /// entirely and has no Getreide-und-Mais cap.
-    pub zuschlag_gebotstermin: Option<time::Date>,
+    /// the permitted share steps down by the Gebotstermin or the award year
+    /// ([`sect39i_hoechstanteil`]). `None` — a plant whose anzulegender Wert is
+    /// gesetzlich bestimmt — is outside Abs. 1 entirely and has no
+    /// Getreide-und-Mais cap.
+    pub zuschlag: Option<Zuschlag39>,
+}
+
+/// A Zuschlag nach § 39 EEG 2023, by the two dates § 39i Abs. 1 keys on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Zuschlag39 {
+    /// The Gebotstermin the bid was made for.
+    pub gebotstermin: time::Date,
+    /// The day the Zuschlag was granted.
+    pub erteilt_am: time::Date,
 }
 
 impl BiomassSettlementData {
@@ -178,7 +190,7 @@ impl BiomassSettlementData {
         guelle_anteil: Decimal,
         getreide_mais_anteil: Decimal,
         leistung_kw: Decimal,
-        zuschlag_gebotstermin: Option<time::Date>,
+        zuschlag: Option<Zuschlag39>,
     ) -> Self {
         use rust_decimal::dec;
         let ist_guellebonusanlage = hauptbrennstoff.guellebonusanlage_eligible()
@@ -189,7 +201,7 @@ impl BiomassSettlementData {
             guelle_anteil,
             ist_guellebonusanlage,
             getreide_mais_anteil,
-            zuschlag_gebotstermin,
+            zuschlag,
         }
     }
 
@@ -204,7 +216,7 @@ impl BiomassSettlementData {
         if !self.hauptbrennstoff.ist_biogas() {
             return None;
         }
-        self.zuschlag_gebotstermin.and_then(sect39i_hoechstanteil)
+        self.zuschlag.and_then(sect39i_hoechstanteil)
     }
 
     /// Whether § 39i Abs. 1 EEG 2023 leaves the § 19 Abs. 1 claim standing.
@@ -218,49 +230,87 @@ impl BiomassSettlementData {
     }
 }
 
-/// § 39i Abs. 1 EEG 2023 — the highest share of Getreidekorn und Mais a
-/// bezuschlagte Biogasanlage may use in a calendar year, by Gebotstermin.
+/// § 39i Abs. 1 Satz 1 EEG 2023 — the highest share of Getreidekorn und Mais
+/// a bezuschlagte Biogasanlage may use in a calendar year.
 ///
-/// | Gebotstermin | Höchstanteil | Nummer |
+/// The current Fassung (Arbeitsausgabe 23.12.2025, pp. 109–110) keys two
+/// Nummern on the year the Zuschlag was granted and two on the Gebotstermin:
+///
+/// | Wording | Höchstanteil | Nummer |
 /// |---|---|---|
-/// | im Jahr 2023 | 40 % | Nr. 1 |
-/// | nach dem 31.12.2023 und vor dem 25.02.2025 | 35 % | Nr. 2 |
-/// | nach dem 25.02.2025 und vor dem 01.01.2026 | 30 % | Nr. 3 |
-/// | in den Jahren 2026, 2027, 2028 | 25 % | Nr. 4 |
+/// | „im Jahr 2023 einen Zuschlag erhalten" | 40 % | Nr. 1 |
+/// | „einen Zuschlag in einem Gebotstermin nach dem Ablauf des 31. Dezember 2023 und vor dem 25. Februar 2025" | 35 % | Nr. 2 |
+/// | „einen Zuschlag in einem Gebotstermin nach dem 25. Februar 2025 und vor dem 1. Januar 2026" | 30 % | Nr. 3 |
+/// | „im Jahr 2026, 2027 oder 2028 einen Zuschlag erhalten" | 25 % | Nr. 4 |
 ///
-/// The share is a **Masseprozent** of the Getreidekorn und Mais fed to the
-/// Biogaserzeugung, not of Energiepflanzen at large, and the ladder is keyed on
-/// the Gebotstermin of the award — the plant's Inbetriebnahme and the settlement
-/// year have no bearing on it.
+/// A plant of the § 100 Abs. 37 cohort (Gebotstermin after 31.12.2022 and
+/// before 24.02.2025) takes Satz 1 „in der am 24. Februar 2025 geltenden
+/// Fassung", which keys all three Nummern on the award year (BGBl. 2024 I
+/// Nr. 327 print, p. 67): 40 % for 2023, 35 % for 2024 or 2025, 30 % for 2026
+/// to 2028.
 ///
-/// `None` for a Gebotstermin no Nummer names: before 2023, on 25 February 2025
-/// itself (Nr. 2 stops before it and Nr. 3 starts after it), or after 2028.
+/// `None` where no Nummer names the plant — a Gebotstermin on 25.02.2025
+/// itself and awarded in 2025, or an award before 2023 or after 2028. Where two
+/// Nummern name it (a Gebotstermin late in 2025 awarded in 2026) the lower
+/// share is returned and [`sect39i_mehrdeutig`] says so; einsd refuses such a
+/// plant rather than choose.
 ///
 /// ```rust
-/// use eeg_billing::biomasse::sect39i_hoechstanteil;
+/// use eeg_billing::biomasse::{Zuschlag39, sect39i_hoechstanteil};
 /// use rust_decimal::dec;
 /// use time::macros::date;
 ///
-/// assert_eq!(sect39i_hoechstanteil(date!(2023 - 04 - 01)), Some(dec!(0.40)));
-/// assert_eq!(sect39i_hoechstanteil(date!(2024 - 10 - 01)), Some(dec!(0.35)));
-/// assert_eq!(sect39i_hoechstanteil(date!(2025 - 10 - 01)), Some(dec!(0.30)));
-/// assert_eq!(sect39i_hoechstanteil(date!(2026 - 04 - 01)), Some(dec!(0.25)));
-/// assert_eq!(sect39i_hoechstanteil(date!(2022 - 04 - 01)), None);
+/// let z = |gebotstermin, erteilt_am| Zuschlag39 { gebotstermin, erteilt_am };
+/// assert_eq!(sect39i_hoechstanteil(z(date!(2023 - 04 - 01), date!(2023 - 06 - 01))), Some(dec!(0.40)));
+/// assert_eq!(sect39i_hoechstanteil(z(date!(2025 - 10 - 01), date!(2025 - 12 - 10))), Some(dec!(0.30)));
+/// assert_eq!(sect39i_hoechstanteil(z(date!(2026 - 04 - 01), date!(2026 - 06 - 01))), Some(dec!(0.25)));
+/// // A 2023 Gebotstermin awarded in 2024: the cohort's award-year rule, 35 %.
+/// assert_eq!(sect39i_hoechstanteil(z(date!(2023 - 10 - 01), date!(2024 - 01 - 15))), Some(dec!(0.35)));
 /// ```
 #[must_use]
-pub fn sect39i_hoechstanteil(gebotstermin: time::Date) -> Option<Decimal> {
+pub fn sect39i_hoechstanteil(zuschlag: Zuschlag39) -> Option<Decimal> {
+    sect39i_nummern(zuschlag).into_iter().min()
+}
+
+/// Whether more than one Nummer of § 39i Abs. 1 Satz 1 names the plant with
+/// different shares.
+#[must_use]
+pub fn sect39i_mehrdeutig(zuschlag: Zuschlag39) -> bool {
+    let n = sect39i_nummern(zuschlag);
+    n.iter().min() != n.iter().max()
+}
+
+fn sect39i_nummern(
+    Zuschlag39 {
+        gebotstermin: g,
+        erteilt_am,
+    }: Zuschlag39,
+) -> Vec<Decimal> {
     use rust_decimal::dec;
-    // Nr. 3's window opens *after* 25 February 2025 and Nr. 2's closes *before*
-    // it, so the day itself belongs to neither.
-    const NR3_STICHTAG: time::Date = time::macros::date!(2025 - 02 - 25);
-    match gebotstermin.year() {
-        2023 => Some(dec!(0.40)),
-        2024 => Some(dec!(0.35)),
-        2025 if gebotstermin < NR3_STICHTAG => Some(dec!(0.35)),
-        2025 if gebotstermin > NR3_STICHTAG => Some(dec!(0.30)),
-        2026..=2028 => Some(dec!(0.25)),
-        _ => None,
+    use time::macros::date;
+    let jahr = erteilt_am.year();
+    if crate::version::sect100_abs37_kohorte(Some(g)) {
+        return match jahr {
+            2023 => vec![dec!(0.40)],
+            2024 | 2025 => vec![dec!(0.35)],
+            2026..=2028 => vec![dec!(0.30)],
+            _ => vec![],
+        };
     }
+    let mut out = Vec::new();
+    if jahr == 2023 {
+        out.push(dec!(0.40));
+    }
+    if g > date!(2023 - 12 - 31) && g < date!(2025 - 02 - 25) {
+        out.push(dec!(0.35));
+    }
+    if g > date!(2025 - 02 - 25) && g < date!(2026 - 01 - 01) {
+        out.push(dec!(0.30));
+    }
+    if (2026..=2028).contains(&jahr) {
+        out.push(dec!(0.25));
+    }
+    out
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -327,7 +377,10 @@ mod tests {
                 dec!(0.0),
                 dec!(0.90),
                 dec!(500),
-                Some(date!(2026 - 04 - 01)),
+                Some(Zuschlag39 {
+                    gebotstermin: date!(2026 - 04 - 01),
+                    erteilt_am: date!(2026 - 06 - 01),
+                }),
             )
         };
         for ausserhalb in [B::Holzbiomasse, B::Klaergas, B::Deponiegas, B::Grubengas] {
@@ -375,21 +428,47 @@ mod tests {
     /// 2023 and 2024 awards and fails a 2026 one, which is capped at 25 %.
     #[test]
     fn sect39i_steps_down_by_gebotstermin() {
-        let at = |termin| {
+        let at = |gebotstermin, erteilt_am| {
             BiomassSettlementData::new(
                 BiomassBrennstoff::PflanzlicheBiomasse,
                 dec!(0.0),
                 dec!(0.28),
                 dec!(500),
-                Some(termin),
+                Some(Zuschlag39 {
+                    gebotstermin,
+                    erteilt_am,
+                }),
             )
         };
-        assert!(at(date!(2023 - 04 - 01)).sect39i_eingehalten());
-        assert!(at(date!(2024 - 10 - 01)).sect39i_eingehalten());
-        assert!(at(date!(2025 - 10 - 01)).sect39i_eingehalten());
+        assert!(at(date!(2023 - 04 - 01), date!(2023 - 06 - 01)).sect39i_eingehalten());
+        assert!(at(date!(2024 - 10 - 01), date!(2024 - 12 - 10)).sect39i_eingehalten());
+        assert!(at(date!(2025 - 10 - 01), date!(2025 - 12 - 10)).sect39i_eingehalten());
         assert!(
-            !at(date!(2026 - 04 - 01)).sect39i_eingehalten(),
+            !at(date!(2026 - 04 - 01), date!(2026 - 06 - 01)).sect39i_eingehalten(),
             "Nr. 4 caps a 2026 award at 25 Masseprozent"
+        );
+    }
+
+    /// Nr. 1 and Nr. 4 read the award year, Nr. 2 and Nr. 3 the Gebotstermin;
+    /// a § 100 Abs. 37 plant reads the award year throughout.
+    #[test]
+    fn sect39i_reads_the_date_each_nummer_names() {
+        let z = |gebotstermin, erteilt_am| Zuschlag39 {
+            gebotstermin,
+            erteilt_am,
+        };
+        // Gebotstermin 01.10.2025 awarded in 2026: Nr. 3 (30 %) and Nr. 4 (25 %).
+        let beide = z(date!(2025 - 10 - 01), date!(2026 - 01 - 20));
+        assert!(sect39i_mehrdeutig(beide));
+        assert_eq!(sect39i_hoechstanteil(beide), Some(dec!(0.25)));
+        // Gebotstermin 01.04.2025, after the cohort, awarded in 2025: Nr. 3.
+        let nr3 = z(date!(2025 - 04 - 01), date!(2025 - 06 - 10));
+        assert_eq!(sect39i_hoechstanteil(nr3), Some(dec!(0.30)));
+        assert!(!sect39i_mehrdeutig(nr3));
+        // The cohort: Gebotstermin 01.10.2023, awarded 2024 → 35 % (award year).
+        assert_eq!(
+            sect39i_hoechstanteil(z(date!(2023 - 10 - 01), date!(2024 - 01 - 15))),
+            Some(dec!(0.35))
         );
     }
 }

@@ -902,7 +902,10 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 let pid = antwort.as_ref().map_or(ABWEISUNG_PID, |a| a.remadv_pid);
                 let outbox = vec![
                     remadv_outbox(state, pid, &message_ref, Some(&reason), antwort.as_ref()),
-                    completion_outbox::<F>(state, "disputed", Some(&reason)),
+                    with_antwort(
+                        completion_outbox::<F>(state, "disputed", Some(&reason)),
+                        antwort.as_ref(),
+                    ),
                 ];
                 Ok(WorkflowOutput::with_outbox(
                     vec![InvoicEvent::InvoiceDisputed {
@@ -1162,6 +1165,18 @@ fn remadv_outbox(
         obj.insert("antwort_befunde".to_owned(), serde_json::json!(a.befunde));
     }
     PendingOutbox::new("REMADV", issuer, payload)
+}
+
+/// `completion` with the head code of a refusal and the tree that publishes
+/// it — so a reader of the process sees why, worded within that tree.
+fn with_antwort(mut completion: PendingOutbox, antwort: Option<&RemadvAntwort>) -> PendingOutbox {
+    if let Some(a) = antwort
+        && let Some(code) = a.erster_code()
+    {
+        completion.payload["antwortcode"] = serde_json::json!(code);
+        completion.payload["codeliste"] = serde_json::json!(a.ebd);
+    }
+    completion
 }
 
 fn completion_outbox<F: InvoicFamily>(

@@ -89,9 +89,9 @@ fn the_rendered_13027_passes_its_own_ahb_rules() {
         .validate()
         .expect("a profile is registered for 13027");
     assert!(
-        report.is_valid(),
+        report.is_sendable(),
         "mako's own 13027 must satisfy the tightened rules: {:?}",
-        report.errors()
+        report.sending_refusals().collect::<Vec<_>>()
     );
     // The segments the AHB now requires are the ones the values live in.
     assert!(wire.contains("LIN+"), "{wire}");

@@ -1691,14 +1691,39 @@ fn leading_code(
         return (None, rest_start);
     };
     let x = base + first.x;
-    if x + 1 < desc_x + 12
-        && looks_like_code(first.text)
-        && seg.is_some_and(|s| admits_code(s, de, occ, first.text))
-    {
+    if x + 1 < desc_x + 12 && looks_like_code(first.text) {
         let end = rest_start + byte_end(rest, first.x + first.text.chars().count());
-        return (Some(first.text.to_owned()), end);
+        if seg.is_some_and(|s| admits_code(s, de, occ, first.text)) {
+            return (Some(first.text.to_owned()), end);
+        }
+        if let Some(code) = seg.and_then(|s| wrapped_codeliste(s, de, occ, first.text)) {
+            return (Some(code), end);
+        }
     }
     (None, rest_start)
+}
+
+/// The Codeliste number a narrow code column wraps after its third digit —
+/// IFTSTA AHB 2.1 Kap. 6.2 prints `G_005` / `5` for `G_0055` — completed from
+/// the one MIG code of `de` it begins. Only the `X_nnn` shape of a Codeliste
+/// number is completed, and only when exactly one MIG code is that token plus
+/// one character; anything else stays unread rather than guessed.
+fn wrapped_codeliste(seg: &SegmentNode, de: &str, occ: u8, token: &str) -> Option<String> {
+    let b = token.as_bytes();
+    let shape = b.len() == 5
+        && b[0].is_ascii_uppercase()
+        && b[1] == b'_'
+        && b[2..].iter().all(u8::is_ascii_digit);
+    if !shape {
+        return None;
+    }
+    let el = element(seg, de, occ).or_else(|| element(seg, de, 0))?;
+    let mut hits = el
+        .codes
+        .iter()
+        .filter(|c| c.code.len() == token.len() + 1 && c.code.starts_with(token));
+    let hit = hits.next()?;
+    hits.next().is_none().then(|| hit.code.clone())
 }
 
 fn element<'a>(seg: &'a SegmentNode, de: &str, occ: u8) -> Option<&'a super::mig::Element> {
@@ -1917,6 +1942,40 @@ fn resolve_group_before(af: &mut Anwendungsfall) {
 mod tests {
     use super::super::mig;
     use super::*;
+
+    /// A Codeliste number the code column wraps (`G_005` / `5`) is completed
+    /// from the one MIG code it begins — and nothing else is guessed.
+    #[test]
+    fn a_wrapped_codeliste_number_is_completed_from_the_mig() {
+        let code = |c: &str| mig::Code {
+            code: c.into(),
+            name: String::new(),
+        };
+        let seg = SegmentNode {
+            nr: "00019".into(),
+            tag: "STS".into(),
+            zaehler: String::new(),
+            status: "M".into(),
+            max: 1,
+            name: String::new(),
+            elements: vec![mig::Element {
+                id: "1131".into(),
+                name: String::new(),
+                status: "D".into(),
+                format: None,
+                note: String::new(),
+                codes: vec![code("G_0055"), code("S_0057")],
+                components: Vec::new(),
+            }],
+            example: None,
+        };
+        assert_eq!(
+            wrapped_codeliste(&seg, "1131", 0, "G_005").as_deref(),
+            Some("G_0055")
+        );
+        assert_eq!(wrapped_codeliste(&seg, "1131", 0, "G_00"), None);
+        assert_eq!(wrapped_codeliste(&seg, "1131", 0, "X_005"), None);
+    }
 
     fn mig_with(nr: &str, tag: &str, des: &[(&str, &[&str])]) -> MigDoc {
         let elements = des

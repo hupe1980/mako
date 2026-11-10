@@ -39,7 +39,7 @@ mod preistyp_tests {
             "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
-            "STEUERUNGSRABATT_MODUL3",
+            "STEUERUNGSENTSCHAEDIGUNG",
             "HEMS_PLATTFORMGEBUEHR",
             "HEMS_OPTIMIERUNGSEVENT",
             "HEMS_AUSLESUNG",
@@ -81,7 +81,7 @@ mod preistyp_tests {
             "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
-            "STEUERUNGSRABATT_MODUL3",
+            "STEUERUNGSENTSCHAEDIGUNG",
             "HEMS_PLATTFORMGEBUEHR",
             "HEMS_OPTIMIERUNGSEVENT",
             "HEMS_AUSLESUNG",
@@ -565,24 +565,18 @@ mod tarifpreisblatt_tests {
         assert_eq!(positions[1]["preistyp"], "ARBEITSPREIS_EINTARIF");
     }
 
-    /// §14a Modul 1/3 Steuerungsrabatt products need dedicated preistyp entries.
+    /// No Preistyp calls a Steuerungsentschädigung a § 14a module:
+    /// BK8-22/010-A's three modules are Netzentgelt reductions, and a payment
+    /// for a dimming that happened is none of them.
     #[test]
-    fn paragraph_14a_products_need_steuerungsrabatt_preistyp() {
-        let categories_with_14a = ["WAERMEPUMPE", "WALLBOX"];
-        let steuerungsrabatt_typen = ["STEUERUNGSRABATT_MODUL1", "STEUERUNGSRABATT_MODUL3"];
-
-        for cat in categories_with_14a {
-            // Verify the whitelist covers §14a preistypen
-            for pt in steuerungsrabatt_typen {
-                // These must exist in VALID_PREISTYPEN (checked in preistyp_tests)
-                let _ = (cat, pt);
-            }
-        }
-
-        // §14a Modul 1: Unterbrechbarkeit (Abschaltung) — Rabatt in ct/kWh or €/month
-        // §14a Modul 3: Dimmen auf 4.2 kW — smaller Rabatt
-        assert!(steuerungsrabatt_typen.contains(&"STEUERUNGSRABATT_MODUL1"));
-        assert!(steuerungsrabatt_typen.contains(&"STEUERUNGSRABATT_MODUL3"));
+    fn no_preistyp_names_a_steuerungsentschaedigung_a_module() {
+        let typen = productd::handlers::VALID_PREISTYPEN;
+        assert!(typen.contains(&"STEUERUNGSRABATT_MODUL1"));
+        assert!(typen.contains(&"STEUERUNGSENTSCHAEDIGUNG"));
+        assert!(
+            !typen.contains(&"STEUERUNGSRABATT_MODUL3"),
+            "Modul 3 is zeitvariable Netzentgelte, not a Steuerungsentschädigung"
+        );
     }
 }
 
@@ -1292,7 +1286,7 @@ mod mcp_validate_tariff_tests {
             "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
-            "STEUERUNGSRABATT_MODUL3",
+            "STEUERUNGSENTSCHAEDIGUNG",
             "HEMS_PLATTFORMGEBUEHR",
             "HEMS_OPTIMIERUNGSEVENT",
             "HEMS_AUSLESUNG",
@@ -1336,7 +1330,7 @@ mod mcp_validate_tariff_tests {
             "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
-            "STEUERUNGSRABATT_MODUL3",
+            "STEUERUNGSENTSCHAEDIGUNG",
             "HEMS_PLATTFORMGEBUEHR",
             "HEMS_OPTIMIERUNGSEVENT",
             "HEMS_AUSLESUNG",
@@ -1783,7 +1777,7 @@ mod preistyp_count_tests {
             "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
-            "STEUERUNGSRABATT_MODUL3",
+            "STEUERUNGSENTSCHAEDIGUNG",
             "HEMS_PLATTFORMGEBUEHR",
             "HEMS_OPTIMIERUNGSEVENT",
             "HEMS_AUSLESUNG",

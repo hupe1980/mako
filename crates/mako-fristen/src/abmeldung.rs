@@ -45,6 +45,33 @@ pub const BKV_DEAKTIVIERUNG: &str = "ZQ7";
 /// `ZT0` — Abmeldung wegen fehlender Zuordnungsermächtigung aufgrund Änderung ZRT.
 pub const ZRT_AENDERUNG: &str = "ZT0";
 
+/// The Werktag of the month in which the Zuordnungsermächtigung ends on which a
+/// `ZQ7` Ankündigung is due at the latest: „jedoch spätester ÜT ist der 5. WT
+/// des Monats, in dem die Zuordnungsermächtigung endet" (GPKE Teil 2
+/// Kap. 2.5.2.2 Nr. 1, S. 61).
+pub const BKV_DEAKTIVIERUNG_SPAETESTER_WT_IM_MONAT: u32 = 5;
+
+/// The latest ÜT of a `ZQ7` Ankündigung whose Zuordnungsermächtigung ends in
+/// the month of `im_monat` — the
+/// [`BKV_DEAKTIVIERUNG_SPAETESTER_WT_IM_MONAT`]. Werktag of that month.
+///
+/// The 1st counts when it is itself a Werktag.
+///
+/// # Panics
+///
+/// Only if date arithmetic overflows the Gregorian calendar.
+#[must_use]
+pub fn bkv_deaktivierung_spaetester_uet(im_monat: Date, cal: HolidayCalendar) -> Date {
+    let monatserster = im_monat
+        .replace_day(1)
+        .expect("day 1 exists in every month");
+    crate::add_werktage(
+        crate::next_werktag(monatserster, cal),
+        BKV_DEAKTIVIERUNG_SPAETESTER_WT_IM_MONAT - 1,
+        cal,
+    )
+}
+
 /// Which of the four windows applies to a Vorgang.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AbmeldungVorlauf {
@@ -141,6 +168,23 @@ mod tests {
     use time::macros::date;
 
     const CAL: HolidayCalendar = HolidayCalendar::BdewMaKo;
+
+    /// The 5. WT counts the 1st when it is a Werktag, and skips a weekend
+    /// and a Feiertag at the head of the month when it is not.
+    #[test]
+    fn the_zq7_window_closes_on_the_fifth_werktag_of_the_month() {
+        // Di 01.09.2026 → Mo 07.09.
+        assert_eq!(
+            bkv_deaktivierung_spaetester_uet(date!(2026 - 09 - 30), CAL),
+            date!(2026 - 09 - 07)
+        );
+        // Fr 01.01.2027 Neujahr → Mo 04. is the 1. WT; Mi 06. Heilige Drei
+        // Könige is a Feiertag in one Bundesland, so Mo 11. is the 5.
+        assert_eq!(
+            bkv_deaktivierung_spaetester_uet(date!(2027 - 01 - 15), CAL),
+            date!(2027 - 01 - 11)
+        );
+    }
 
     /// Zuordnungsende Tuesday 2026-09-01 → last Werktag before it is Monday
     /// 2026-08-31, so the latest ÜT is Sunday 2026-08-30.

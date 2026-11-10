@@ -49,12 +49,14 @@ pub struct SubstituteRequest {
     /// interpolation is bracketed by.
     pub prior_days: Option<u32>,
     /// The Bundesland whose statutory holidays decide the day class
-    /// (`BE`, `NW`, `DE-BY`, …) — **required**.
+    /// (`BE`, `NW`, `DE-BY`, …).
     ///
     /// A holiday is compared with Sundays, and holidays differ by Land.
-    /// edmd holds no address for a Marktlokation (`marktd` does), and guessing
-    /// one would compare a Bavarian Fronleichnam with ordinary Thursdays.
-    pub bundesland: String,
+    /// Absent, the Land cached for the MaLo from `marktd` (`malo_bundesland`);
+    /// with neither the request is refused — guessing one would compare a
+    /// Bavarian Fronleichnam with ordinary Thursdays.
+    #[serde(default)]
+    pub bundesland: Option<String>,
     /// Fill gaps longer than two hours with the last measured value (`Z93`)
     /// instead of the Vergleichswert. Gas only — the MIG codes `Z93` for gas
     /// alone — and refused for any other Sparte.
@@ -199,7 +201,29 @@ pub async fn run_substitute_values(
             }
         }
     };
-    let bundesland: metering::time::holiday::Bundesland = match req.bundesland.trim().parse() {
+    // The request's Land, else the one cached from `marktd` — a local read,
+    // never a call to `marktd` on this path.
+    let land = match req.bundesland.clone() {
+        Some(land) => land,
+        None => match crate::bundesland_cache::lookup(repo.pool(), tenant, malo_id).await {
+            Ok(Some(land)) => land,
+            Ok(None) => {
+                return ApiError::unprocessable(format!(
+                    "bundesland is required: none is cached for MaLo {malo_id} — marktd \
+                     names none for its address, or has not announced it"
+                ))
+                .with_code("BUNDESLAND_UNBEKANNT")
+                .into_response();
+            }
+            Err(e) => {
+                return ApiError::internal(
+                    anyhow::Error::from(e).context(format!("cached Bundesland of {malo_id}")),
+                )
+                .into_response();
+            }
+        },
+    };
+    let bundesland: metering::time::holiday::Bundesland = match land.trim().parse() {
         Ok(land) => land,
         Err(e) => return unprocessable(format!("bundesland: {e}")),
     };
@@ -433,6 +457,7 @@ pub async fn run_substitute_values(
             valid_from_tx: None,
             // edmd's own output, not a delivery — arrival order is the order.
             mscons_version: None,
+            ablesung_herkunft: None,
         });
         audit.push((
             entry.from,

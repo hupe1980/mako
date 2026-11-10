@@ -977,11 +977,12 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
                     .unwrap_or(""),
             );
             let (reads, undated) = super::mscons_intervals(m);
+            let (zaehlerstaende, _) = super::mscons_zaehlerstaende(m);
             if undated > 0 {
                 tracing::warn!(
                     pid = pid.as_u32(),
                     undated,
-                    "Gas MSCONS: readings skipped — no SG10 DTM+163/164 in format 303",
+                    "Gas MSCONS: readings skipped — neither SG10 DTM+163/164 nor DTM+7 in format 303",
                 );
             }
 
@@ -991,12 +992,20 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
                 location_id,
                 message_ref,
                 reads,
+                zaehlerstaende,
                 validation_passed,
                 validation_errors,
                 brennwert_kwh_per_m3: extract_qty_z08(m),
                 zustandszahl: extract_qty_z10(m),
                 // The MSCONS AHB carries no gas quality type.
                 gasqualitaet: None,
+                nachrichtendatum: m
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
             })
         },
     ));
@@ -1222,6 +1231,113 @@ pub fn geli_gas_stammdaten_registry(
                 validation_errors,
                 received_at,
             })
+        },
+    ));
+    registry
+}
+
+// ── Geschäftsdatenanfrage Gas (ORDERS 17101 / 17126 → UTILMD / ORDRSP 19101) ─
+
+/// The correlation key a Gas Geschäftsdatenanfrage message reaches its process
+/// by: an inbound ORDERS 17101 / 17126 opens the NB's side under the
+/// Anfragender's `NAD+MS` with its Anfrage-Nummer; an answer resumes the
+/// Anfrage this party sent, keyed on the number alone. The number is read as
+/// on the Strom side ([`super::gda_anfrage_nummer`]): `BGM` DE 1004 of the
+/// ORDERS, `SG6 RFF+AAV` of the UTILMD, `SG1 RFF+ON` of the ORDRSP.
+#[must_use]
+pub fn gda_gas_process_key(msg: &AnyMessage) -> String {
+    use mako_geli_gas::geschaeftsdatenanfrage::{anfragender_key, netzbetreiber_key};
+    let nummer = super::gda_anfrage_nummer(msg);
+    if nummer.is_empty() {
+        return nummer;
+    }
+    match msg {
+        AnyMessage::Orders(o) => netzbetreiber_key(
+            o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+            &nummer,
+        ),
+        _ => anfragender_key(&nummer),
+    }
+}
+
+/// Build an [`AdapterRegistry`] for the Gas Geschäftsdatenanfrage.
+///
+/// - ORDERS **17101 / 17126** (at the NB) → `ReceiveAnfrage`, with the AHB
+///   verdict, `NAD+MS`/`NAD+MR` and the `SG2 LOC+172` Lokation.
+/// - UTILMD **44035 / 44060** (at the Anfragender) → `ReceiveAntwort`.
+/// - ORDRSP **19101** (at the Anfragender) → `ReceiveAblehnung`, with the
+///   `SG2 AJT` code and its DE 1082 Codeliste.
+#[must_use]
+pub fn geli_gas_geschaeftsdatenanfrage_registry()
+-> AdapterRegistry<mako_geli_gas::geschaeftsdatenanfrage::GeliGasGeschaeftsdatenanfrageWorkflow> {
+    use mako_geli_gas::geschaeftsdatenanfrage::GdaGasCommand;
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Geschäftsdatenanfrage adapter".into(),
+                )
+            })?;
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Geschäftsdatenanfrage adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let message_ref = MessageRef::new(msg.message_ref());
+            match msg {
+                AnyMessage::Orders(o) => {
+                    let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+                    let lokation_id = o
+                        .segments()
+                        .iter()
+                        .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))
+                        .and_then(|s| s.component_str(1, 0))
+                        .unwrap_or("")
+                        .to_owned();
+                    Ok(GdaGasCommand::ReceiveAnfrage {
+                        pid,
+                        anfragender: MarktpartnerCode::new(
+                            o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                        ),
+                        netzbetreiber: MarktpartnerCode::new(
+                            o.receiver()
+                                .and_then(|n| n.party_id.as_deref())
+                                .unwrap_or(""),
+                        ),
+                        lokation_id,
+                        anfrage_nummer: MessageRef::new(super::gda_anfrage_nummer(msg)),
+                        message_ref,
+                        validation_passed,
+                        validation_errors,
+                    })
+                }
+                AnyMessage::Utilmd(_) => Ok(GdaGasCommand::ReceiveAntwort {
+                    antwort_pid: pid,
+                    message_ref,
+                }),
+                AnyMessage::Ordrsp(o) => {
+                    let ajt = o.segments().iter().find(|s| s.tag == "AJT");
+                    let element = |e: usize| {
+                        ajt.and_then(|s| s.component_str(e, 0))
+                            .filter(|c| !c.is_empty())
+                            .map(str::to_owned)
+                    };
+                    Ok(GdaGasCommand::ReceiveAblehnung {
+                        antwortcode: element(0),
+                        codeliste: element(1),
+                        message_ref,
+                    })
+                }
+                _ => Err(EngineError::Deserialization(
+                    "GeLi Gas Geschäftsdatenanfrage adapter: expected ORDERS, UTILMD or ORDRSP"
+                        .into(),
+                )),
+            }
         },
     ));
     registry

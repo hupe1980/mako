@@ -63,8 +63,9 @@ tokio      = { version = "1", features = ["full"] }
 serde_json = { workspace = true }
 # The NB's answer to an Anmeldung, built by its workflow, is the event the
 # supply projection is held against.
-mako-engine = { workspace = true }
-mako-gpke   = { workspace = true }
+mako-engine   = { workspace = true }
+mako-gpke     = { workspace = true }
+mako-geli-gas = { workspace = true }
 
 [lints]
 workspace = true

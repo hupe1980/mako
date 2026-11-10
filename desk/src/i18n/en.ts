@@ -802,6 +802,7 @@ export const en: Katalog = {
       SEPA_STORNO: "SEPA reversal",
       MAHNGEBUEHR: "Dunning fee",
       VERZUGSZINSEN: "Default interest",
+      VERZUGSPAUSCHALE: "Late-payment flat fee",
       EEG_GUTSCHRIFT: "EEG credit note",
       EEG_MARKTPRAEMIE: "EEG-Marktprämie",
       EEG_AUSZAHLUNG: "EEG payout",

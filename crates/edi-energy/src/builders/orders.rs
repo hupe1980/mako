@@ -39,6 +39,29 @@ struct OrdersBuilderInner {
     /// `SG29 LIN` with `DTM+163` / `DTM+164` — the Zeitraum a Wertanfrage asks
     /// for, as two `303` instants `(beginn, ende)`.
     positionszeitraum: Option<(String, String)>,
+    /// `SG5 CTA+IC` name and its `COM`s as `(DE 3148 address, DE 3155 code)`,
+    /// in the sender's `SG2`.
+    contact: Option<(String, Vec<(String, String)>)>,
+    /// `SG29` positions, numbered from 1 in order.
+    positions: Vec<OrdersPosition>,
+}
+
+/// One `SG29` position of an ORDERS.
+///
+/// Each field writes the segment the AHB column names for it; an empty field
+/// writes nothing.
+#[derive(Debug, Clone, Default)]
+pub struct OrdersPosition {
+    /// `SG29 IMD++<7081>` — the coded Merkmal of the position (`Z46`–`Z49`
+    /// Grund der Anforderung on 17004).
+    pub merkmal: Option<String>,
+    /// `SG29 DTM+7` Gültigkeitsdatum, a `303` instant (17004).
+    pub gueltig: Option<String>,
+    /// `SG30 CCI+++<7037>` — the Geräteart (17009).
+    pub geraeteart: Option<String>,
+    /// `SG34 RFF` references as `(1153, 1154)` — `Z03` Positionsnummer des
+    /// Angebots (17001), `Z09` Gerätenummer (17009).
+    pub referenzen: Vec<(String, String)>,
 }
 
 /// Fluent builder for `ORDERS` (Purchase Order) messages.
@@ -94,6 +117,8 @@ impl OrdersBuilder<Unset, Unset> {
                 merkmal: None,
                 item_description: None,
                 positionszeitraum: None,
+                contact: None,
+                positions: Vec::new(),
             },
         }
     }
@@ -241,6 +266,55 @@ impl<S, R> OrdersBuilder<S, R> {
         self
     }
 
+    /// Set the sender's `SG5 CTA+IC` Ansprechpartner and its `COM`s, each as
+    /// `(DE 3148 address, DE 3155 code)` — Muss on 17001 (ORDERS AHB 1.1b Kap.
+    /// 4.9.2).
+    pub fn contact<I, A, C>(mut self, name: impl Into<String>, channels: I) -> Self
+    where
+        I: IntoIterator<Item = (A, C)>,
+        A: Into<String>,
+        C: Into<String>,
+    {
+        self.inner.contact = Some((
+            name.into(),
+            channels
+                .into_iter()
+                .map(|(a, c)| (a.into(), c.into()))
+                .collect(),
+        ));
+        self
+    }
+
+    /// Append an `SG29` position; positions are numbered `LIN+1`, `LIN+2`, …
+    pub fn position(mut self, position: OrdersPosition) -> Self {
+        self.inner.positions.push(position);
+        self
+    }
+
+    /// The `SG29` positions, numbered from 1.
+    fn emit_positions<W: std::io::Write>(&self, w: &mut Writer<W>) -> Result<(), Error> {
+        for (n, position) in self.inner.positions.iter().enumerate() {
+            emit_seg!(w, "LIN", &(n + 1).to_string());
+            if let Some(code) = &position.merkmal {
+                emit_comp!(w, "IMD", [""], [code]);
+            }
+            if let Some(instant) = &position.gueltig {
+                emit_comp!(
+                    w,
+                    "DTM",
+                    ["7", &super::ccyymmddhhmm_utc("7", instant)?, "303"]
+                );
+            }
+            if let Some(art) = &position.geraeteart {
+                emit_comp!(w, "CCI", [""], [""], [art]);
+            }
+            for (q, v) in &position.referenzen {
+                emit_comp!(w, "RFF", [q, v]);
+            }
+        }
+        Ok(())
+    }
+
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = self
             .inner
@@ -309,6 +383,13 @@ impl<S, R> OrdersBuilder<S, R> {
                 ["MS"],
                 [id, "", super::agency_for(self.inner.sender_agency, id)]
             );
+            // `SG5` Ansprechpartner belongs to the sender's `SG2`.
+            if let Some((name, channels)) = &self.inner.contact {
+                emit_comp!(w, "CTA", ["IC"], ["", name]);
+                for (address, code) in channels {
+                    emit_comp!(w, "COM", [address, code]);
+                }
+            }
         }
         if let Some(id) = &self.inner.receiver_id {
             emit_comp!(
@@ -338,6 +419,7 @@ impl<S, R> OrdersBuilder<S, R> {
                 ["164", &super::ccyymmddhhmm_utc("164", ende)?, "303"]
             );
         }
+        self.emit_positions(&mut w)?;
         // Section control — ORDERS requires UNS between header and summary.
         emit_seg!(w, "UNS", "S");
         w.finish_unt(&self.inner.message_ref)

@@ -185,13 +185,28 @@ pub fn pauschaloption_pruefen(anlage: &AnlageRow) -> Result<(), PauschaloptionNi
     Ok(())
 }
 
-/// Whether a settlement failure is a refusal — a Beihilfevorbehalt or
-/// Pauschaloption refusal, the plant's or the period's state rather than a
-/// server fault.
+/// A period einsd refuses to settle because an input it needs is missing or
+/// does not hold one value over the period — the plant's or the period's
+/// state, named in the message, never a substituted figure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verweigert(pub String);
+
+impl std::fmt::Display for Verweigert {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Verweigert {}
+
+/// Whether a settlement failure is a refusal — a Beihilfevorbehalt,
+/// Pauschaloption or [`Verweigert`] refusal, the plant's or the period's state
+/// rather than a server fault.
 #[must_use]
 pub fn is_refusal(e: &anyhow::Error) -> bool {
     e.downcast_ref::<BeihilfevorbehaltOffen>().is_some()
         || e.downcast_ref::<PauschaloptionNichtAnwendbar>().is_some()
+        || e.chain().any(|c| c.is::<Verweigert>())
 }
 
 /// A settlement failure as the HTTP answer: `422` naming the refusal for
@@ -342,6 +357,10 @@ pub async fn settle_plant(
             ausfallverguetung,
             beihilfe,
             beihilfegenehmigungen: cfg.beihilfevorbehalt.genehmigungen.clone(),
+            sect52_aufrechnen: matches!(
+                cfg.policy.sect52_aufrechnung.get(),
+                crate::config::Sect52Aufrechnung::Aufrechnen
+            ),
         },
     )?;
 

@@ -210,6 +210,7 @@ pub async fn preisanpassung(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Resu
                 wirksam_ab = %row.wirksam_ab, versuche = row.notif_versuche, error = %e,
                 "vertragd: die § 41 Abs. 5 Preisänderungsanzeige konnte nicht erstellt werden"
             );
+            // committed apart: records a failed attempt; the notice stays owed.
             if let Err(e) =
                 pg::produkte::record_notif_failure(pool, row.slice_id, &e.to_string()).await
             {
@@ -502,10 +503,10 @@ pub async fn auto_renewal(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result
             }),
         );
         mako_service::outbox::enqueue(&mut tx, &ce).await?;
+        // The notice is due once per term, and the flag is what keeps a daily
+        // run from re-deriving it: it commits with the notice it records.
+        pg::mark_auto_renewal_notified(&mut *tx, row.id, row.vertragsende).await?;
         tx.commit().await?;
-        // Recorded whatever the delivery does: the notice is due once per term,
-        // and the flag is what keeps a daily run from re-deriving it.
-        pg::mark_auto_renewal_notified(pool, row.id, row.vertragsende).await?;
     }
 
     // Phase 2: apply the ones whose term has run out, including any missed
@@ -539,9 +540,14 @@ pub async fn ablauf(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result<()> {
     // date — the component stays billable until it arrives, because the
     // customer is still being supplied and still owed a Schlussrechnung — so
     // this is the only place the transition happens.
-    let geschlossen = pg::close_due_supply(pool, &cfg.tenant).await?;
+    //
+    // The closures and their `de.vertrag.abgeschlossen` rows commit together:
+    // a closed contract is no longer due, so one committed without its event
+    // would never be announced. A failed enqueue rolls every closure back and
+    // the next run retries them all.
+    let mut tx = pool.begin().await?;
+    let geschlossen = pg::close_due_supply(&mut tx, &cfg.tenant).await?;
     for vertrag_id in &geschlossen {
-        let mut tx = pool.begin().await?;
         let ce = build_cloud_event(
             mako_events::vertrag::ABGESCHLOSSEN,
             *vertrag_id,
@@ -549,7 +555,9 @@ pub async fn ablauf(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result<()> {
             serde_json::json!({ "vertrag_id": vertrag_id, "status": "ABGELAUFEN" }),
         );
         mako_service::outbox::enqueue(&mut tx, &ce).await?;
-        tx.commit().await?;
+    }
+    tx.commit().await?;
+    for vertrag_id in &geschlossen {
         tracing::info!(%vertrag_id, "vertragd: Belieferung beendet — Vertrag abgelaufen");
     }
 
@@ -580,8 +588,8 @@ pub async fn ablauf(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result<()> {
             }),
         );
         mako_service::outbox::enqueue(&mut tx, &ce).await?;
+        pg::mark_ablauf_notified(&mut *tx, row.id, row.faellig_am).await?;
         tx.commit().await?;
-        pg::mark_ablauf_notified(pool, row.id, row.faellig_am).await?;
     }
     Ok(())
 }

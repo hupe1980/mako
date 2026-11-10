@@ -17,10 +17,8 @@
 //! - Emits one `de.invoic.payment.overdue` per receipt, and stamps
 //!   `overdue_notified_at` so a receipt is announced once rather than every six
 //!   hours until someone acts on it.
-//! - Delivery failure is logged and retried on the next pass. It deliberately
-//!   does **not** touch `erp_attempts`: that budget belongs to the receipt
-//!   notification path, and spending it here would dead-letter a receipt's
-//!   settlement event because a dunning reminder could not be delivered.
+//! - Delivery failure is logged and retried on the next pass: the receipt
+//!   stays selectable until `overdue_notified_at` is stamped.
 
 use secrecy::ExposeSecret as _;
 use time::format_description::well_known::Rfc3339;
@@ -120,6 +118,8 @@ async fn check_and_emit(
             }),
         );
         let bytes = secret.map(|s| s.expose_secret().as_bytes());
+        // durable: `overdue_notified_at` is stamped only after delivery, so the next
+        // pass re-selects an undelivered notice.
         match mako_service::post_ce_with_retry(http, url, &ce, bytes).await {
             Ok(()) => {
                 // Stamped only after delivery, so a failed announcement is

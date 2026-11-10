@@ -33,13 +33,12 @@
 //! | [`ingest`](crate::sperr::ingest) | inbound ORDERS 17115/17117 → work order |
 //! | [`handlers`](crate::sperr::handlers) | HTTP routes (all authenticated **and** authorized) |
 //! | [`events`](crate::sperr::events) | `de.sperr.*` CloudEvents |
-//! | [`worker`](crate::sperr::worker) | the IFTSTA 21039 retry queue |
+//! | [`worker`](crate::sperr::worker) | the IFTSTA escalation and execution-window sweep |
 //! | [`pg`](crate::sperr::pg) | persistence |
 
 use std::sync::Arc;
 
 use axum::{Extension, Router, routing::get};
-use mako_markt::makod_client::MakodClient;
 
 pub mod events;
 pub mod handlers;
@@ -48,6 +47,26 @@ pub(crate) mod mcp;
 pub mod model;
 pub mod pg;
 pub mod worker;
+
+/// The outbox worker that delivers the IFTSTA 21039 commands to makod, and
+/// stamps each order's `iftsta_dispatched_at` in the transaction that marks its
+/// command delivered.
+#[must_use]
+pub fn iftsta_worker(
+    pool: sqlx::PgPool,
+    makod_url: impl Into<String>,
+    makod_api_key: secrecy::SecretString,
+) -> mako_service::outbox::OutboxWorker {
+    mako_service::outbox::OutboxWorker::commands(
+        pool,
+        pg::IFTSTA_UPSTREAM,
+        makod_url,
+        Some(makod_api_key),
+    )
+    .on_delivered(Arc::new(|conn, delivered| {
+        Box::pin(pg::record_iftsta_delivered(conn, delivered))
+    }))
+}
 
 /// Newtype for the tenant string injected as an Axum `Extension`.
 ///
@@ -61,10 +80,10 @@ pub struct Tenant(pub String);
 #[derive(Clone, Copy, Debug)]
 pub struct Lesart(pub mako_service::policy::Policy<crate::config::MsbVorlaufLesart>);
 
-/// The Sperrauftrag routes, carrying the `makod` client, the tenant they
-/// dispatch under and the Sperrtermin reading. The caller adds the pool, OIDC
+/// The Sperrauftrag routes, carrying the tenant they work under and the
+/// Sperrtermin reading. The caller adds the pool, OIDC
 /// and Cedar layers it shares with every other processd route.
-pub fn router(makod: Arc<MakodClient>, tenant: String, lesart: Lesart) -> Router {
+pub fn router(tenant: String, lesart: Lesart) -> Router {
     Router::new()
         .route("/api/v1/sperr-orders/stats", get(handlers::get_stats))
         .route(
@@ -84,7 +103,6 @@ pub fn router(makod: Arc<MakodClient>, tenant: String, lesart: Lesart) -> Router
             "/api/v1/sperr-orders/{id}/cancel",
             axum::routing::put(handlers::cancel_order),
         )
-        .layer(Extension(makod))
         .layer(Extension(Tenant(tenant)))
         .layer(Extension(lesart))
 }

@@ -35,8 +35,10 @@ use super::{Claims, IntoMdmResponse as _, Tenant};
 
 /// Injected `Arc<PgNetzzugangRepository>`.
 pub type NetzzugangRepoExt = Arc<crate::pg::PgNetzzugangRepository>;
-async fn emit(
-    pool: &sqlx::PgPool,
+/// Enqueue `de.markt.netzzugang.antrag.updated` on the write's transaction and
+/// commit both, so the request never changes without its event.
+async fn emit_and_commit(
+    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
     tenant: &str,
     subject: String,
     data: serde_json::Value,
@@ -47,8 +49,8 @@ async fn emit(
         subject,
         data,
     );
-    crate::outbox::enqueue(pool, &evt).await?;
-    Ok(())
+    crate::outbox::enqueue(&mut *tx, &evt).await?;
+    tx.commit().await
 }
 
 fn antrag_event(rec: &NetzzugangAntrag, version: i64) -> serde_json::Value {
@@ -78,7 +80,6 @@ fn antrag_event(rec: &NetzzugangAntrag, version: i64) -> serde_json::Value {
 )]
 pub async fn upsert_antrag(
     claims: Claims,
-    Extension(repo): Extension<NetzzugangRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
@@ -92,10 +93,15 @@ pub async fn upsert_antrag(
     if rec.netzanschluss_id.trim().is_empty() || rec.nb_mp_id.trim().is_empty() {
         return ApiError::bad_request("netzanschluss_id and nb_mp_id are required").into_response();
     }
-    match repo.upsert(&rec).await {
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    match crate::pg::PgNetzzugangRepository::upsert_tx(&mut tx, &rec).await {
         Ok((id, version)) => {
             rec.id = id;
-            if let Err(e) = emit(&pool, &tenant, id.to_string(), antrag_event(&rec, version)).await
+            if let Err(e) =
+                emit_and_commit(tx, &tenant, id.to_string(), antrag_event(&rec, version)).await
             {
                 return ApiError::internal(anyhow::Error::from(e).context(format!(
                     "netzzugang: durable enqueue for Netzzugangsantrag {id}"
@@ -221,7 +227,6 @@ pub struct StatusBody {
 )]
 pub async fn set_antrag_status(
     claims: Claims,
-    Extension(repo): Extension<NetzzugangRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
@@ -232,19 +237,23 @@ pub async fn set_antrag_status(
         tracing::warn!(error = %e, "marktd: Cedar denied write-netzzugang");
         return ApiError::forbidden("write-netzzugang denied").into_response();
     }
-    match repo
-        .set_status(
-            &tenant,
-            id,
-            body.status,
-            body.platform_ref,
-            body.expected_version,
-        )
-        .await
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    match crate::pg::PgNetzzugangRepository::set_status_tx(
+        &mut tx,
+        &tenant,
+        id,
+        body.status,
+        body.platform_ref,
+        body.expected_version,
+    )
+    .await
     {
         Ok(Some(rec)) => {
-            if let Err(e) = emit(
-                &pool,
+            if let Err(e) = emit_and_commit(
+                tx,
                 &tenant,
                 id.to_string(),
                 antrag_event(&rec.antrag, rec.version),

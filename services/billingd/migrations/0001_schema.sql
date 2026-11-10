@@ -97,6 +97,15 @@ CREATE TABLE billing_records (
     -- valid e-invoice of it, and the render endpoints say so instead of
     -- telling the operator to re-run a calculation that would refuse again.
     en16931_blocked     TEXT,
+    -- What kind of document this is. A GEBUEHRENBESCHEID fixes a public-law
+    -- Gebühr (EN 16931 category `O`), issued beside the supply invoice of the
+    -- same period because BR-O-11 ff. forbid the two on one e-invoice; it is
+    -- no invoice and carries no EN 16931 model. `bescheid_json` is the view
+    -- outputd's GEBUEHRENBESCHEID kind renders, and only a Bescheid has one.
+    dokumentart         TEXT        NOT NULL DEFAULT 'RECHNUNG'
+                        CHECK (dokumentart IN ('RECHNUNG', 'GEBUEHRENBESCHEID')),
+    bescheid_json       JSONB,
+    CONSTRAINT br_bescheid_view CHECK ((dokumentart = 'GEBUEHRENBESCHEID') = (bescheid_json IS NOT NULL)),
     -- § 14 Abs. 2 Satz 2 Nr. 1 UStG: whether the Leistungsempfänger is a
     -- Unternehmer receiving for his Unternehmen, as the contract's customer
     -- segment said at billing. NULL = not recorded; the paper path refuses the
@@ -231,6 +240,39 @@ CREATE INDEX br_sammel_group  ON billing_records (sammelrechnung_id)
     WHERE sammelrechnung_id IS NOT NULL;
 -- Tenant-scoped reporting
 CREATE INDEX br_tenant_period ON billing_records (tenant, period_from DESC);
+
+-- ── Strom- and Energiesteuer lines ────────────────────────────────────────────
+
+-- One typed tax line of an issued document, written by the statement that
+-- writes its billing_records row. The Steueranmeldung (§ 8 StromStG, § 39
+-- EnergieStG) is a sum over these, grouped by ground; a Stornorechnung carries
+-- its original's lines negated, so a cancelled document nets to zero.
+CREATE TABLE steuerzeilen (
+    id                UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    billing_record_id UUID          NOT NULL REFERENCES billing_records(id) ON DELETE CASCADE,
+    -- The line's place among its document's tax lines, from 1.
+    nr                INTEGER       NOT NULL CHECK (nr > 0),
+    tenant            TEXT          NOT NULL,
+    steuer            TEXT          NOT NULL CHECK (steuer IN ('STROMSTEUER', 'ENERGIESTEUER')),
+    art               TEXT          NOT NULL CHECK (art IN ('REGELSATZ', 'ERMAESSIGUNG', 'BEFREIUNG')),
+    -- The provision the line is taxed or exempted under, as the invoice cites it.
+    rechtsgrundlage   TEXT          NOT NULL,
+    menge             NUMERIC(18, 6) NOT NULL,
+    einheit           TEXT          NOT NULL CHECK (einheit IN ('kWh', 'kWh_Hs')),
+    satz_ct           NUMERIC(12, 6) NOT NULL,
+    betrag_eur        NUMERIC(16, 5) NOT NULL,
+    period_from       DATE          NOT NULL,
+    period_to         DATE          NOT NULL,
+    created_at        TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    -- A tax-free quantity carries no tax.
+    CONSTRAINT sz_befreiung_ohne_betrag
+        CHECK (art <> 'BEFREIUNG' OR (satz_ct = 0 AND betrag_eur = 0)),
+    -- Checked at the end of the statement: the upsert replacing a draft
+    -- deletes the old lines and inserts the new in one statement.
+    CONSTRAINT sz_unique_nr UNIQUE (billing_record_id, nr) DEFERRABLE INITIALLY IMMEDIATE
+);
+
+CREATE INDEX sz_tenant_period ON steuerzeilen (tenant, steuer, period_from);
 
 -- ── Batch run log ─────────────────────────────────────────────────────────────
 

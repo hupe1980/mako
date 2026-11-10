@@ -1716,3 +1716,296 @@ async fn competing_announcements_are_not_an_over_allocation() {
     .await
     .expect("a running assignment beside two announcements is the switch itself");
 }
+
+/// The GNB's own GeLi Gas workflow, receiving the LFN's Anmeldung 44001 and
+/// answering it `accepted` with `code` — the `(type, makopid, data)` it
+/// queues for the ERP worker.
+fn gnb_answers_a_gas_anmeldung(
+    accepted: bool,
+    code: &str,
+) -> Vec<(&'static str, u32, serde_json::Value)> {
+    use mako_engine::types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow as _;
+    use mako_geli_gas::lieferbeginn::{
+        GasSupplierChangeCommand, GasSupplierChangeState, GeliGasSupplierChangeWorkflow as W,
+    };
+    let received = W::handle(
+        &GasSupplierChangeState::default(),
+        GasSupplierChangeCommand::ReceiveUtilmd {
+            pid: Pruefidentifikator::new(44_001).expect("pid"),
+            sender: MarktpartnerCode::new(GAS_LFN),
+            receiver: MarktpartnerCode::new(GAS_GNB),
+            malo_id: MaLo::new(MALO),
+            document_date: "20260920".to_owned(),
+            process_date: "20261001".to_owned(),
+            message_ref: MessageRef::new("ANM-GAS"),
+            validation_passed: true,
+            validation_errors: vec![],
+            received_at: time::OffsetDateTime::now_utc(),
+            bilanzierungsmethode: None,
+            vorgang: mako_engine::lf_vorgang::LfVorgangsdaten::default(),
+            fallgruppe: None,
+            gasqualitaet: None,
+        },
+    )
+    .expect("the 44001 is received");
+    let state = received
+        .events
+        .iter()
+        .fold(GasSupplierChangeState::default(), W::apply);
+    let answered = W::handle(
+        &state,
+        GasSupplierChangeCommand::SendAntwort {
+            accepted,
+            antwort_code: code.to_owned(),
+            antwort_ebd: Some("E_3005".to_owned()),
+            bemerkung: None,
+            obligations: vec![],
+            stammdaten: mako_engine::payload::Stammdaten::default(),
+        },
+    )
+    .expect("the answer is queued");
+    as_delivered(received.outbox.into_iter().chain(answered.outbox))
+}
+
+/// The LF side of the same deployment receiving the GNB's `response_pid` —
+/// what its own workflow queues.
+fn lf_receives_the_gas_answer(response_pid: u32) -> Vec<(&'static str, u32, serde_json::Value)> {
+    use mako_engine::types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow as _;
+    use mako_geli_gas::lf_anmeldung::{
+        GeliGasLfAnmeldungCommand, GeliGasLfAnmeldungData, GeliGasLfAnmeldungState,
+        GeliGasLfAnmeldungWorkflow as W,
+    };
+    let state = GeliGasLfAnmeldungState::Pending(GeliGasLfAnmeldungData {
+        pruefidentifikator: Pruefidentifikator::new(44_001).expect("pid"),
+        malo_id: MaLo::new(MALO),
+        sender: MarktpartnerCode::new(GAS_LFN),
+        receiver: MarktpartnerCode::new(GAS_GNB),
+        process_date: "20261001".to_owned(),
+    });
+    let out = W::handle(
+        &state,
+        GeliGasLfAnmeldungCommand::HandleAntwort {
+            response_pid: Pruefidentifikator::new(response_pid).expect("pid"),
+            accepted: true,
+            reason: None,
+            response_ref: MessageRef::new("GNB-ANTWORT"),
+            antwort: None,
+        },
+    )
+    .expect("the LF handles the answer");
+    as_delivered(out.outbox)
+}
+
+/// The ERP notifications among `outbox`, as makod's ERP worker delivers them.
+fn as_delivered(
+    outbox: impl IntoIterator<Item = mako_engine::outbox::PendingOutbox>,
+) -> Vec<(&'static str, u32, serde_json::Value)> {
+    outbox
+        .into_iter()
+        .filter_map(|o| {
+            let ce_type = match o.message_type.as_ref() {
+                "ProcessInitiated" => mako_events::mako::PROCESS_INITIATED,
+                "ProcessCompleted" => mako_events::mako::PROCESS_COMPLETED,
+                _ => return None,
+            };
+            let pid = o.payload["pid"].as_u64().map(|p| p as u32)?;
+            Some((ce_type, pid, o.payload))
+        })
+        .collect()
+}
+
+// DVGW-Codenummern.
+const GAS_GNB: &str = "9800357000005";
+const GAS_LFN: &str = "9870012345678";
+
+/// Drive `events` through the supply projection on one transaction, returning
+/// the `markt` events it derived.
+async fn project_all(
+    pool: &PgPool,
+    events: Vec<(&'static str, u32, serde_json::Value)>,
+) -> Vec<mako_markt::cloudevents::MarktEvent> {
+    use marktd::handlers::event_ingest::derive_supply_state;
+    let mut tx = pool.begin().await.expect("begin");
+    let mut derived = Vec::new();
+    for (ce_type, pid, data) in events {
+        derived.extend(
+            derive_supply_state(
+                &mut tx,
+                TENANT,
+                ce_type,
+                Some(pid),
+                &data,
+                Some(uuid::Uuid::new_v4()),
+            )
+            .await
+            .expect("derive"),
+        );
+    }
+    tx.commit().await.expect("commit");
+    derived
+}
+
+/// The GNB's own 44002 moves the supplier in its marktd — the answer queues a
+/// `ProcessCompleted` as the Strom 55002 does — and in a deployment that is
+/// GNB and LF at once the LF side's completion of the same answer moves
+/// nothing further: one transition, announced once.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_gnbs_44002_moves_the_supplier_once() {
+    let Some((pool, _pg)) = test_pool("gnb_44002").await else {
+        return;
+    };
+    let gnb = gnb_answers_a_gas_anmeldung(true, "E15");
+    assert!(
+        gnb.iter()
+            .any(|(t, pid, _)| *t == mako_events::mako::PROCESS_COMPLETED && *pid == 44_002),
+        "the 44002 queues its completion: {gnb:#?}"
+    );
+    let (announced, completions): (Vec<_>, Vec<_>) = gnb
+        .into_iter()
+        .partition(|(t, ..)| *t == mako_events::mako::PROCESS_INITIATED);
+    project_all(&pool, announced).await;
+    let derived = project_all(
+        &pool,
+        completions
+            .into_iter()
+            .chain(lf_receives_the_gas_answer(44_002))
+            .collect(),
+    )
+    .await;
+    let changed = derived
+        .iter()
+        .filter(|e| e.ce_type == mako_events::markt::VERSORGUNG_CHANGED)
+        .count();
+    assert_eq!(changed, 1, "{derived:#?}");
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    let after = vs.find(&malo(), TENANT).await.expect("find").expect("row");
+    assert_eq!(after.lf_mp_id(), Some(GAS_LFN));
+}
+
+/// A GNB's Ablehnung 44003 withdraws the announcement and carries its code.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_gnbs_44003_withdraws_the_announcement() {
+    let Some((pool, _pg)) = test_pool("gnb_44003").await else {
+        return;
+    };
+    let gnb = gnb_answers_a_gas_anmeldung(false, "E14");
+    let completed = gnb
+        .iter()
+        .find(|(t, pid, _)| *t == mako_events::mako::PROCESS_COMPLETED && *pid == 44_003)
+        .expect("the 44003 queues its completion");
+    assert_eq!(completed.2["accepted"], false);
+    assert_eq!(completed.2["antwortcode"], "E14");
+    assert_eq!(completed.2["codeliste"], "E_3005");
+    project_all(&pool, gnb).await;
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    let after = vs.find(&malo(), TENANT).await.expect("find").expect("row");
+    assert_eq!(after.lf_mp_id(), None);
+}
+
+/// The NB's 55005 ends the Abmeldender's assignment and announces the § 38 gap
+/// — once, although a deployment that is NB and LF at once delivers the
+/// confirmation from both sides' processes.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_55005_from_both_sides_announces_the_gap_once() {
+    use mako_engine::types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow as _;
+    let Some((pool, _pg)) = test_pool("nb_lf_55005").await else {
+        return;
+    };
+    // The LF is the supplier of record.
+    project_all(&pool, nb_answers_an_anmeldung(None)).await;
+
+    // The LF's Abmeldung 55004, answered by the NB's workflow.
+    let nb = {
+        use mako_gpke::{
+            GpkeSupplierChangeWorkflow as W, LfAntwort, SupplierChangeCommand, SupplierChangeState,
+        };
+        let received = W::handle(
+            &SupplierChangeState::default(),
+            SupplierChangeCommand::ReceiveUtilmd {
+                pid: Pruefidentifikator::new(55_004).expect("pid"),
+                sender: MarktpartnerCode::new("9911111111111"),
+                receiver: MarktpartnerCode::new(NB),
+                location_id: MaLo::new(MALO),
+                document_date: "20261020".to_owned(),
+                process_date: "20261130".to_owned(),
+                bilanzierungsgebiet: None,
+                bilanzierungsmethode: None,
+                fallgruppe: None,
+                transaktionsgrund: Some("Z33".to_owned()),
+                transaktionsgrund_ergaenzung: None,
+                veraeusserungsform: None,
+                tranchengroesse_prozent: None,
+                vorgangsnummer: None,
+                produktpaket_id: None,
+                kunde_name: None,
+                kunde_namensformat: None,
+                message_ref: MessageRef::new("ABM-55004"),
+                validation_passed: true,
+                validation_errors: vec![],
+            },
+        )
+        .expect("the 55004 is received");
+        let state = received
+            .events
+            .iter()
+            .fold(SupplierChangeState::default(), W::apply);
+        let answered = W::handle(
+            &state,
+            SupplierChangeCommand::SendAntwort {
+                antwort: LfAntwort::zustimmung("A01", "E_0607"),
+                obligations: vec![],
+                lfa_lieferende: None,
+            },
+        )
+        .expect("the 55005 is queued");
+        as_delivered(answered.outbox)
+    };
+    let completed = nb
+        .iter()
+        .find(|(_, pid, _)| *pid == 55_005)
+        .expect("the 55005 queues its completion");
+    assert_eq!(completed.2["old_supplier"], "9911111111111");
+
+    // The same deployment's LF side completes its Abmeldung on the 55005.
+    let lf = {
+        use mako_gpke::lf_anmeldung::{
+            GpkeLfAnmeldungWorkflow as W, LfAnmeldungCommand, LfAnmeldungEvent, LfAnmeldungState,
+        };
+        let pending = W::apply(
+            LfAnmeldungState::New,
+            &LfAnmeldungEvent::Initiated {
+                pruefidentifikator: Pruefidentifikator::new(55_004).expect("pid"),
+                location_id: MaLo::new(MALO),
+                sender: MarktpartnerCode::new("9911111111111"),
+                receiver: MarktpartnerCode::new(NB),
+                process_date: "20261130".to_owned(),
+            },
+        );
+        let out = W::handle(
+            &pending,
+            LfAnmeldungCommand::HandleAntwort {
+                response_pid: Pruefidentifikator::new(55_005).expect("pid"),
+                accepted: true,
+                reason: None,
+                response_ref: MessageRef::new("NB-55005"),
+                antwort: None,
+            },
+        )
+        .expect("the LF handles the 55005");
+        as_delivered(out.outbox)
+    };
+    assert!(lf.iter().any(|(_, pid, _)| *pid == 55_005), "{lf:#?}");
+
+    let derived = project_all(&pool, nb.into_iter().chain(lf).collect()).await;
+    let gaps = derived
+        .iter()
+        .filter(|e| e.ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED)
+        .count();
+    assert_eq!(gaps, 1, "one Lieferende, one § 38 gap: {derived:#?}");
+}

@@ -50,6 +50,12 @@ pub enum Quelle {
     Auszahlung,
     /// A claim extinguished by Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG).
     Aufrechnung,
+    /// What the operator paid back, as a negative amount. § 13 Abs. 1 Satz 1
+    /// Nr. 1 EnFG reimburses the § 19 EEG payments „abzüglich der Rückzahlungen
+    /// nach § 26 Absatz 1 Satz 3" EEG 2023 — „Zu hohe oder zu niedrige
+    /// Abschläge sind … auszugleichen oder zu erstatten" — so the month's
+    /// ledger nets them under the head they repay.
+    Rueckzahlung,
 }
 
 impl Quelle {
@@ -59,6 +65,7 @@ impl Quelle {
         match self {
             Self::Auszahlung => "AUSZAHLUNG",
             Self::Aufrechnung => "AUFRECHNUNG",
+            Self::Rueckzahlung => "RUECKZAHLUNG",
         }
     }
 }
@@ -80,10 +87,10 @@ pub enum Gegenforderung {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Zahlung {
     pub quelle: Quelle,
-    /// `payout_id` or `aufrechnung_id`.
+    /// `payout_id`, `aufrechnung_id` or `rueckzahlung_id`.
     pub id: String,
     pub tr_id: Option<String>,
-    /// Euro cent paid.
+    /// Euro cent paid; negative for a [`Quelle::Rueckzahlung`].
     pub amount_ct: i64,
     #[serde(default)]
     pub gegenforderung: Option<Gegenforderung>,
@@ -1025,6 +1032,33 @@ mod tests {
         assert_eq!(out.posten[0].posten, EnfgPosten::Eeg19Abs1);
         // The paid cents, not the receipt's 12,34444.
         assert_eq!(out.posten[0].betrag, Betrag::from_raw(1_234_000));
+    }
+
+    /// § 13 Abs. 1 Satz 1 Nr. 1 EnFG: a period paid, re-decided to zero and
+    /// repaid nets to nothing under its head — the Rückzahlung is deducted,
+    /// and the paid total reconciles to the zero receipt.
+    #[test]
+    fn a_repaid_period_nets_to_nothing() {
+        let anlagen: BTreeMap<_, _> = [anlage(
+            "TR-1",
+            Some(ZONE),
+            vec![
+                beleg("VERGUETUNG", dec!(100.00)),
+                beleg("VERGUETUNG", dec!(0)),
+            ],
+        )]
+        .into();
+        let rueck = Zahlung {
+            quelle: Quelle::Rueckzahlung,
+            id: "R-1".to_owned(),
+            tr_id: Some("TR-1".to_owned()),
+            amount_ct: -10_000,
+            gegenforderung: None,
+        };
+        let out = monatsposten(&[auszahlung("TR-1", 10_000), rueck], &anlagen).expect("ledger");
+        let summe: i64 = out.posten.iter().map(|p| p.betrag.to_raw()).sum();
+        assert_eq!(summe, 0, "{out:?}");
+        assert!(out.posten.iter().all(|p| p.posten == EnfgPosten::Eeg19Abs1));
     }
 
     /// § 14 Satz 1 Nr. 3 EnFG: the § 52 claim collected by Aufrechnung is owed to

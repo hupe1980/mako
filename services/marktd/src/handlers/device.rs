@@ -334,7 +334,6 @@ pub struct PutKonfigurationsprodukteRequest {
 ///
 /// Returns `204 No Content` on success.
 pub async fn put_konfigurationsprodukte(
-    Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
@@ -389,9 +388,19 @@ pub async fn put_konfigurationsprodukte(
     }
 
     let canonical = serde_json::Value::Array(validated);
-    match repo
-        .replace_sr_konfigurationsprodukte(&sr_id, &tenant, canonical.clone())
-        .await
+    // The list and its CloudEvent commit together: processd and the ERP learn
+    // of the change only through the event.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    match PgSteuerbareRessourceRepository::replace_sr_konfigurationsprodukte_tx(
+        &mut tx,
+        &sr_id,
+        &tenant,
+        canonical.clone(),
+    )
+    .await
     {
         Ok(true) => {
             // Emit CloudEvent so ERP subscribers and processd see the update.
@@ -404,10 +413,9 @@ pub async fn put_konfigurationsprodukte(
                     "count": canonical.as_array().map(|a| a.len()).unwrap_or(0),
                 }),
             );
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
+            if let Err(e) = enqueue_and_commit(tx, &evt).await {
                 return ApiError::internal(
-                    anyhow::Error::from(e)
-                        .context(format!("device: durable enqueue for sr_id {sr_id}")),
+                    e.context(format!("device: durable enqueue for sr_id {sr_id}")),
                 )
                 .into_response();
             }
@@ -430,7 +438,6 @@ pub async fn put_konfigurationsprodukte(
 /// Returns `204 No Content` on success (even when the `produktcode` was not
 /// in the list — idempotent), `404` when the SR is unknown.
 pub async fn delete_konfigurationsprodukt(
-    Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
@@ -446,19 +453,22 @@ pub async fn delete_konfigurationsprodukt(
         return ApiError::forbidden("access denied").into_response();
     }
 
-    let rec = match repo.find_sr(&sr_id, &tenant).await {
-        Ok(Some(r)) => r,
-        Ok(None) => {
-            return ApiError::NotFound.into_response();
-        }
+    // Read, modify and write on one locked row, and commit the event with it.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    let current = match PgSteuerbareRessourceRepository::lock_konfigurationsprodukte_tx(
+        &mut tx, &sr_id, &tenant,
+    )
+    .await
+    {
+        Ok(Some(list)) => list.and_then(|v| v.as_array().cloned()).unwrap_or_default(),
+        Ok(None) => return ApiError::NotFound.into_response(),
         Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Filter out the matching produktcode from the existing list.
-    let current = rec
-        .konfigurationsprodukte
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
     let filtered: Vec<serde_json::Value> = current
         .into_iter()
         .filter(|item| {
@@ -471,9 +481,13 @@ pub async fn delete_konfigurationsprodukt(
         .collect();
     let new_list = serde_json::Value::Array(filtered);
 
-    match repo
-        .replace_sr_konfigurationsprodukte(&sr_id, &tenant, new_list.clone())
-        .await
+    match PgSteuerbareRessourceRepository::replace_sr_konfigurationsprodukte_tx(
+        &mut tx,
+        &sr_id,
+        &tenant,
+        new_list.clone(),
+    )
+    .await
     {
         Ok(_) => {
             let evt = MarktEvent::new(
@@ -486,10 +500,9 @@ pub async fn delete_konfigurationsprodukt(
                     "count": new_list.as_array().map(|a| a.len()).unwrap_or(0),
                 }),
             );
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
+            if let Err(e) = enqueue_and_commit(tx, &evt).await {
                 return ApiError::internal(
-                    anyhow::Error::from(e)
-                        .context(format!("device: durable enqueue for sr_id {sr_id}")),
+                    e.context(format!("device: durable enqueue for sr_id {sr_id}")),
                 )
                 .into_response();
             }
@@ -871,7 +884,6 @@ pub async fn get_geraet_konfigurationen(
 /// expiry (BSI TR-03109-4 §6.3), once per tier per certificate; it does not read
 /// these entries.
 pub async fn put_geraet_konfigurationen(
-    Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
@@ -914,9 +926,17 @@ pub async fn put_geraet_konfigurationen(
         .collect();
 
     let count = konfigurationen.len();
-    match repo
-        .upsert_geraet_konfigurationen(&geraet_id, &tenant, konfigurationen)
-        .await
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    match PgDeviceRepository::upsert_geraet_konfigurationen_tx(
+        &mut tx,
+        &geraet_id,
+        &tenant,
+        konfigurationen,
+    )
+    .await
     {
         Ok(true) => {
             // Emit CloudEvent so edmd cert-expiry worker + processd §14a handler
@@ -931,10 +951,9 @@ pub async fn put_geraet_konfigurationen(
                     "count":      count,
                 }),
             );
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
+            if let Err(e) = enqueue_and_commit(tx, &evt).await {
                 return ApiError::internal(
-                    anyhow::Error::from(e)
-                        .context(format!("device: durable enqueue for geraet_id {geraet_id}")),
+                    e.context(format!("device: durable enqueue for geraet_id {geraet_id}")),
                 )
                 .into_response();
             }
@@ -1717,4 +1736,14 @@ pub async fn get_sharing_eligibility(
 /// projection, which carries switch times as strings.
 fn hhmm(t: time::Time) -> String {
     format!("{:02}:{:02}", t.hour(), t.minute())
+}
+
+/// Enqueue `evt` on the write's transaction and commit both.
+async fn enqueue_and_commit(
+    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    evt: &mako_markt::cloudevents::MarktEvent,
+) -> anyhow::Result<()> {
+    crate::outbox::enqueue(&mut *tx, evt).await?;
+    tx.commit().await?;
+    Ok(())
 }

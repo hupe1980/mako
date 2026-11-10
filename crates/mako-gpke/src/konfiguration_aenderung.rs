@@ -1,8 +1,37 @@
-//! GPKE Teil 3 Konfigurationsänderung — LF-initiated configuration change requests.
+//! GPKE Teil 3 Konfigurationsänderung — the Bestellungen, Reklamationen and
+//! Beendigungen of a Konfiguration, both sides.
 //!
-//! This module covers all LF→NB and LF→MSB ORDERS requests for modifying the
-//! existing configuration established via [`crate::konfiguration`], together
-//! with the corresponding NB/MSB→LF ORDRSP responses.
+//! This module covers the ORDERS that order, change, complain about or end a
+//! Konfiguration established via [`crate::konfiguration`], together with the
+//! ORDRSP answers. One workflow holds both sides, keyed apart: the party that
+//! sends an ORDERS runs [`KonfigurationAenderungCommand::SendAnfrage`], the
+//! party that receives one runs [`KonfigurationAenderungCommand::ReceiveAuftrag`]
+//! under [`auftrag_key`] — the sender and the ORDERS' `BGM` DE 1004, which the
+//! answer's `SG1 RFF+ON` echoes — so a deployment that is both holds its sent
+//! ORDERS and the received copy as two processes.
+//!
+//! # Who receives what
+//!
+//! Anwendungsübersicht der Prüfidentifikatoren 4.0 lfd. Nr. 22180–23240
+//! (GPKE Teil 3): the NB receives 17120, 17122, 17123 and 17133 from the LF
+//! (17122 also from the MSB); the MSB receives 17121, 17123, 17128, 17129,
+//! 17130 and 17131 from the NB or the LF, and — as the „weiterer MSB" —
+//! 17118, 17128, 17129 and 17130 from the MSB; the LF receives 17122 from the
+//! NB or the MSB. [`ORDERS_EMPFANG_NB_PIDS`], [`ORDERS_EMPFANG_MSB_PIDS`] and
+//! [`ORDERS_EMPFANG_LF_PIDS`] name each role's set. The MSB also receives the
+//! Einrichtung der Konfigurationen 17134 / 17135 ([`ORDERS_EINRICHTUNG_PIDS`]),
+//! whose sending side is [`crate::konfiguration`].
+//!
+//! # The recipient's answer
+//!
+//! [`KonfigurationAenderungCommand::SendAntwort`] answers a received ORDERS on
+//! the ORDRSP the AHB pairs with it, out of a tree its column names
+//! ([`antwort_auf`]; ORDRSP AHB 1.1b Kap. 4.4.2, 4.4.4, 4.4.5, 4.6): `SG1
+//! RFF+ON` the ORDERS' `BGM` DE 1004, `SG2 AJT` the code with „EBD Nr.", and
+//! `SG2 FTX+AAP` beside `A99` (`[28]`). Only the trees `mako_pruefung::codes`
+//! carries are offered — `E_0526`, `E_0527`, `E_0539`; an answer whose column
+//! names another (`E_0523`, `E_0533`, `E_0538`, `E_0540`, `E_0544`–`E_0552`)
+//! is refused by name.
 //!
 //! # Process families
 //!
@@ -17,11 +46,12 @@
 //! | 17130 | LF → MSB    | Bestellung einer Konfiguration (ohne Angebot) |
 //! | 17131 | LF → MSB    | Bestellung Angebot einer Konfiguration |
 //! | 17121 | NB → MSB    | Bestellung Änderung (NB forwards, MSB receives) |
+//! | 17118 | MSB → weiterer MSB | Bestellung einer Konfigurationsänderung |
 //! | 19120 | NB → LF     | Mitteilung zur Änderung |
 //! | 19121 | NB → LF     | Mitteilung Änderung Prognosegrundlage |
 //! | 19123 | NB/MSB → LF | Ablehnung der Reklamation einer Definition |
 //! | 19124 | NB/MSB → LF | Mitteilung Änderung Zählzeitdefinition |
-//! | 19127 | NB → LF     | Mitteilung zur Konfigurationsänderung |
+//! | 19127 | weiterer MSB → MSB | Mitteilung zur Konfigurationsänderung (answers 17118) |
 //! | 19133 | NB → LF     | Bearbeitungsstand Bestellung Abrechnungsdaten |
 //! | 19130 | MSB → LF    | Bearbeitungsstand Reklamation Konfiguration |
 //! | 19131 | MSB → LF    | Antwort auf Bestellung Beendigung einer Konfiguration |
@@ -74,10 +104,116 @@ pub const ORDERS_ANFRAGE_MSB_PIDS: &[u32] = &[17128, 17129, 17130, 17131];
 /// | 17121 | Bestellung Änderung (NB → MSB) |
 pub const ORDERS_NB_MSB_PIDS: &[u32] = &[17121];
 
-/// All LF-sent ORDERS PIDs (NB-directed + MSB-directed) for registration.
+/// ORDERS PID a MSB sends to the weiterer MSB.
+///
+/// | PID   | Description |
+/// |-------|-------------|
+/// | 17118 | Bestellung einer Konfigurationsänderung (Anwendungsübersicht 4.0 lfd. Nr. 22600 / 22960) |
+pub const ORDERS_MSB_MSB_PIDS: &[u32] = &[17118];
+
+/// Every ORDERS of this workflow, for registration.
 pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[
-    17120, 17121, 17122, 17123, 17128, 17129, 17130, 17131, 17133,
+    17118, 17120, 17121, 17122, 17123, 17128, 17129, 17130, 17131, 17133,
 ];
+
+/// The ORDERS a NB receives here (Anwendungsübersicht 4.0 lfd. Nr. 22180,
+/// 22210, 22420, 22430, 21320).
+pub const ORDERS_EMPFANG_NB_PIDS: &[u32] = &[17120, 17122, 17123, 17133];
+
+/// The ORDERS a MSB receives here — from the NB or the LF, or as the
+/// „weiterer MSB" from the MSB (lfd. Nr. 22540–22600, 22720–22780,
+/// 22870–22960, 23010–23160).
+pub const ORDERS_EMPFANG_MSB_PIDS: &[u32] = &[17118, 17121, 17123, 17128, 17129, 17130, 17131];
+
+/// The ORDERS a LF receives here — the Reklamation einer Definition from the
+/// NB or the MSB (lfd. Nr. 22240, 22270, 22360, 22390).
+pub const ORDERS_EMPFANG_LF_PIDS: &[u32] = &[17122];
+
+/// The ORDRSP a MSB receives here from the weiterer MSB (lfd. Nr. 22610,
+/// 22620, 22920, 22970, 22980).
+pub const ORDRSP_EMPFANG_MSB_PIDS: &[u32] = &[19127, 19130, 19131, 19132];
+
+/// The Einrichtung der Konfigurationen aufgrund einer Zuordnung eines LF —
+/// ORDERS 17134 „NB an MSB" (ORDERS AHB 1.1b Kap. 4.17.1, S. 102) and 17135
+/// „MSB an MSB" (Kap. 4.17.2, S. 111). The MSB receives both; neither is
+/// answered by an ORDRSP: the MSB sets the Konfigurationen up — „spätestens am
+/// WT vor dem Beginn des Wirkungszeitraums bis 22:00 Uhr" where that lies in
+/// the future — forwards a 17135 to each weiterer MSB „spätester ÜZ ist 1
+/// Stunde nach dem ÜZ von Nr. 1", and reports through the Stammdatenänderung
+/// (GPKE Teil 3 Kap. 1.3.7.2 Nr. 1–3, S. 82–84). The window anchors on the
+/// ORDERS' `DTM+203` and is not registered here.
+pub const ORDERS_EINRICHTUNG_PIDS: &[u32] = &[17134, 17135];
+
+/// Whether `pid` is an ORDERS this workflow receives.
+#[must_use]
+pub fn ist_auftrag(pid: u32) -> bool {
+    ORDERS_ANFRAGE_PIDS.contains(&pid) || ORDERS_EINRICHTUNG_PIDS.contains(&pid)
+}
+
+/// The ORDRSP that answers a received ORDERS, its `BGM` DE 1001 and the
+/// catalogued trees its `SG2 AJT` may name (ORDRSP AHB 1.1b Kap. 4.4.2 S. 23–24,
+/// 4.4.4 S. 27–28, 4.4.5 S. 29–30, 4.6 S. 35–36).
+///
+/// 19132 echoes the Bestellung's own `BGM` (`Z73` Bestellung einer
+/// Konfiguration, `Z74` Bestellung eines Angebots).
+#[must_use]
+pub fn antwort_auf(
+    orders_pid: u32,
+    orders_bgm: &str,
+) -> Option<(u32, &'static str, &'static [&'static str])> {
+    use mako_pruefung::codes as c;
+    match orders_pid {
+        17_130 => {
+            let bgm = match orders_bgm {
+                "Z74" => "Z74",
+                _ => "Z73",
+            };
+            Some((
+                19_132,
+                bgm,
+                &[
+                    c::EBD_KONFIGURATION_BESTELLUNG,
+                    c::EBD_KONFIGURATION_BESTELLUNG_WEITERER_MSB,
+                ],
+            ))
+        }
+        17_121 => Some((19_120, "Z68", &[c::EBD_KONFIGURATION_BESTELLUNG])),
+        17_118 => Some((
+            19_127,
+            "Z31",
+            &[
+                c::EBD_KONFIGURATION_BESTELLUNG_WEITERER_MSB,
+                c::EBD_KONFIGURATION_BEENDIGUNG_WEITERER_MSB,
+            ],
+        )),
+        17_129 => Some((
+            19_131,
+            "Z72",
+            &[c::EBD_KONFIGURATION_BEENDIGUNG_WEITERER_MSB],
+        )),
+        _ => None,
+    }
+}
+
+/// The key a received ORDERS runs under: the sender's MP-ID and its `BGM` DE
+/// 1004. The number is unique only per sender, hence the MP-ID.
+#[must_use]
+pub fn auftrag_key(sender: &str, dokumentennummer: &str) -> String {
+    format!("konfiguration-auftrag:{sender}:{dokumentennummer}")
+}
+
+/// The window a received ORDERS `pid` opens for the recipient's answer, when a
+/// Festlegung quantifies it here: only the Bestellung Änderung
+/// Prognosegrundlage 17120 („spätester ÜT ist der 1. WT nach dem ÜT von Nr.
+/// 1", GPKE Teil 3 Kap. 1.3.2.2 Nr. 2) — the same instant the sender's
+/// [`ANTWORT_WINDOW_LABEL`] expects.
+#[must_use]
+pub fn eingang_antwortfrist(
+    pid: u32,
+    eingang: time::OffsetDateTime,
+) -> Option<time::OffsetDateTime> {
+    antwortfrist(pid, eingang)
+}
 
 /// ORDRSP PIDs from NB back to LF.
 ///
@@ -87,9 +223,15 @@ pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[
 /// | 19121 | Mitteilung Änderung Prognosegrundlage |
 /// | 19123 | Ablehnung der Reklamation einer Definition |
 /// | 19124 | Mitteilung Änderung Zählzeitdefinition |
-/// | 19127 | Mitteilung zur Konfigurationsänderung |
 /// | 19133 | Bearbeitungsstand Bestellung Abrechnungsdaten |
-pub const ORDRSP_NB_LF_PIDS: &[u32] = &[19120, 19121, 19123, 19124, 19127, 19133];
+pub const ORDRSP_NB_LF_PIDS: &[u32] = &[19120, 19121, 19123, 19124, 19133];
+
+/// ORDRSP PID from the weiterer MSB back to the MSB.
+///
+/// | PID   | Description |
+/// |-------|-------------|
+/// | 19127 | Mitteilung zur Konfigurationsänderung — answers 17118 (lfd. Nr. 22620) |
+pub const ORDRSP_MSB_MSB_PIDS: &[u32] = &[19127];
 
 /// ORDRSP PIDs from MSB back to LF.
 ///
@@ -124,6 +266,10 @@ pub const IFTSTA_PIDS: &[u32] = &[21_043, 21_044];
 /// Deadline label for the NB/MSB response window on an outbound ORDERS.
 pub const ANTWORT_WINDOW_LABEL: &str = "gpke-konfiguration-aenderung-antwort";
 
+/// Deadline label for the recipient's own answer window on a received ORDERS
+/// ([`eingang_antwortfrist`]).
+pub const EINGANG_WINDOW_LABEL: &str = "gpke-konfiguration-aenderung-eingang";
+
 // ── Domain events ─────────────────────────────────────────────────────────────
 
 /// Events emitted by the GPKE Konfigurationsänderung workflow.
@@ -139,6 +285,29 @@ pub enum KonfigurationAenderungEvent {
         /// EIC/MaLo of the affected supply location.
         malo: MaLo,
         /// Message reference of the sent ORDERS.
+        message_ref: MessageRef,
+    },
+    /// Receiving side: an ORDERS arrived; the recipient owes its answer.
+    AuftragEingegangen {
+        /// ORDERS Prüfidentifikator.
+        pid: Pruefidentifikator,
+        /// The ORDERS as received.
+        auftrag: EingangAuftrag,
+    },
+    /// Receiving side: the ORDERS failed its AHB check.
+    AuftragUngueltig {
+        /// The findings.
+        reason: String,
+    },
+    /// Receiving side: the recipient answered with its ORDRSP.
+    AntwortGesendet {
+        /// The ORDRSP Prüfidentifikator.
+        ordrsp_pid: Pruefidentifikator,
+        /// The code.
+        antwortcode: String,
+        /// The tree it was read from.
+        codeliste: String,
+        /// Reference of the outbound ORDRSP.
         message_ref: MessageRef,
     },
     /// NB or MSB confirmed / acknowledged the change request (positive ORDRSP).
@@ -179,6 +348,9 @@ impl EventPayload for KonfigurationAenderungEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::AnfrageGesendet { .. } => "KonfigAenderungAnfrageGesendet",
+            Self::AuftragEingegangen { .. } => "KonfigAenderungAuftragEingegangen",
+            Self::AuftragUngueltig { .. } => "KonfigAenderungAuftragUngueltig",
+            Self::AntwortGesendet { .. } => "KonfigAenderungAntwortGesendet",
             Self::IftstaErhalten { .. } => "KonfigAenderungIftstaErhalten",
             Self::AntwortErhalten { .. } => "KonfigAenderungAntwortErhalten",
             Self::ZwischenstandErhalten { .. } => "KonfigAenderungZwischenstandErhalten",
@@ -215,7 +387,35 @@ impl EventPayload for KonfigurationAenderungEvent {
                 pid: Some(pid.as_u32()),
                 message_ref: Some(message_ref.as_str().to_owned()),
             }),
-            Self::DeadlineExpired { .. } => None,
+            Self::AuftragEingegangen { pid, auftrag } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(auftrag.message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet {
+                ordrsp_pid,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(ordrsp_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DeadlineExpired { .. } | Self::AuftragUngueltig { .. } => None,
+        }
+    }
+
+    fn antwort(&self) -> Option<mako_engine::envelope::Antwortcode> {
+        match self {
+            Self::AntwortGesendet {
+                antwortcode,
+                codeliste,
+                ..
+            } => Some(mako_engine::envelope::Antwortcode {
+                code: antwortcode.clone(),
+                codeliste: Some(codeliste.clone()),
+            }),
+            _ => None,
         }
     }
 }
@@ -235,11 +435,30 @@ pub struct AnfrageData {
     pub message_ref: MessageRef,
 }
 
+/// An ORDERS as its recipient received it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EingangAuftrag {
+    /// The sender — `NAD+MS`.
+    pub absender: MarktpartnerCode,
+    /// The recipient — `NAD+MR`.
+    pub empfaenger: MarktpartnerCode,
+    /// The Lokation — the first `LOC` DE 3225, when the ORDERS names one.
+    pub lokation: Option<String>,
+    /// `BGM` DE 1004, echoed in the answer's `SG1 RFF+ON`.
+    pub dokumentennummer: String,
+    /// `BGM` DE 1001.
+    pub bgm: String,
+    /// Interchange reference of the inbound ORDERS.
+    pub message_ref: MessageRef,
+}
+
 /// Current state of a GPKE Konfigurationsänderung process stream.
 ///
 /// ```text
 /// New → AnfrageGesendet → Beantwortet
 ///                      ↘ DeadlineExpired
+/// New → AuftragEingegangen          (receiving side; the answer is owed)
+///     ↘ Ungueltig
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
@@ -250,6 +469,29 @@ pub enum KonfigurationAenderungState {
     New,
     /// LF sent ORDERS; waiting for ORDRSP or status update.
     AnfrageGesendet(AnfrageData),
+    /// Receiving side: an ORDERS arrived and its answer is owed.
+    AuftragEingegangen {
+        /// ORDERS Prüfidentifikator.
+        pid: Pruefidentifikator,
+        /// The ORDERS as received.
+        auftrag: EingangAuftrag,
+    },
+    /// Receiving side: the ORDERS failed its AHB check.
+    Ungueltig {
+        /// The findings.
+        reason: String,
+    },
+    /// Receiving side: the recipient answered.
+    AuftragBeantwortet {
+        /// The ORDERS Prüfidentifikator.
+        pid: Pruefidentifikator,
+        /// The ORDERS as received.
+        auftrag: EingangAuftrag,
+        /// The ORDRSP Prüfidentifikator.
+        ordrsp_pid: Pruefidentifikator,
+        /// The code.
+        antwortcode: String,
+    },
     /// Final response received (ORDRSP accept or reject).
     Beantwortet {
         /// Original request data.
@@ -281,6 +523,9 @@ impl KonfigurationAenderungState {
         match self {
             Self::New => "New",
             Self::AnfrageGesendet(_) => "AnfrageGesendet",
+            Self::AuftragEingegangen { .. } => "AuftragEingegangen",
+            Self::Ungueltig { .. } => "Ungueltig",
+            Self::AuftragBeantwortet { .. } => "AuftragBeantwortet",
             Self::Beantwortet { .. } => "Beantwortet",
             Self::FristAbgelaufen { .. } => "FristAbgelaufen",
         }
@@ -297,7 +542,18 @@ impl KonfigurationAenderungState {
     /// Whether the process has reached a terminal state.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Beantwortet { .. })
+        matches!(
+            self,
+            Self::Beantwortet { .. } | Self::Ungueltig { .. } | Self::AuftragBeantwortet { .. }
+        )
+    }
+}
+
+impl mako_engine::workflow::OccupiesBusinessKey for KonfigurationAenderungState {
+    /// A received ORDERS holds its key while its answer is owed; the key names
+    /// one ORDERS, so a repeat of the same number is refused, never a new one.
+    fn occupies_business_key(&self) -> bool {
+        matches!(self.offen(), Self::AuftragEingegangen { .. })
     }
 }
 
@@ -323,6 +579,28 @@ pub enum KonfigurationAenderungCommand {
         /// When the ORDERS leaves — the Übertragungstag the counterparty's
         /// Antwortfrist counts from ([`mako_fristen::antwort::antwort_deadline`]).
         gesendet_am: time::OffsetDateTime,
+    },
+    /// Receiving side: an inbound ORDERS.
+    ReceiveAuftrag {
+        /// ORDERS Prüfidentifikator read from `SG1 RFF+Z13`.
+        pid: Pruefidentifikator,
+        /// The ORDERS as received.
+        auftrag: EingangAuftrag,
+        /// `true` when the AHB check passed.
+        validation_passed: bool,
+        /// The findings when it did not.
+        validation_errors: Vec<String>,
+    },
+    /// Receiving side: answer the received ORDERS with its ORDRSP.
+    SendAntwort {
+        /// The tree the code is read from — one [`antwort_auf`] admits.
+        codeliste: String,
+        /// The code.
+        antwortcode: String,
+        /// `SG2 FTX+AAP` — Muss beside `A99`.
+        freitext: Option<String>,
+        /// Reference of the outbound ORDRSP.
+        message_ref: MessageRef,
     },
     /// Inbound ORDRSP received from NB or MSB.
     ReceiveOrdrsp {
@@ -389,8 +667,16 @@ pub struct GpkeKonfigurationAenderungWorkflow;
 /// The answer window is open while the Anfrage waits for its ORDRSP
 /// (`AnfrageGesendet`).
 fn window_open(label: &str, state: &KonfigurationAenderungState) -> bool {
-    label == ANTWORT_WINDOW_LABEL
-        && matches!(state, KonfigurationAenderungState::AnfrageGesendet(_))
+    match label {
+        ANTWORT_WINDOW_LABEL => matches!(state, KonfigurationAenderungState::AnfrageGesendet(_)),
+        EINGANG_WINDOW_LABEL => {
+            matches!(
+                state,
+                KonfigurationAenderungState::AuftragEingegangen { .. }
+            )
+        }
+        _ => false,
+    }
 }
 
 /// Rejection ORDRSP PIDs (NB/MSB rejects LF's request).
@@ -404,7 +690,7 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
     type Event = KonfigurationAenderungEvent;
     type Command = KonfigurationAenderungCommand;
 
-    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL, EINGANG_WINDOW_LABEL];
 
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
@@ -437,6 +723,32 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                 malo: malo.clone(),
                 message_ref: message_ref.clone(),
             }),
+            KonfigurationAenderungEvent::AuftragEingegangen { pid, auftrag } => {
+                KonfigurationAenderungState::AuftragEingegangen {
+                    pid: *pid,
+                    auftrag: auftrag.clone(),
+                }
+            }
+            KonfigurationAenderungEvent::AuftragUngueltig { reason } => {
+                KonfigurationAenderungState::Ungueltig {
+                    reason: reason.clone(),
+                }
+            }
+            KonfigurationAenderungEvent::AntwortGesendet {
+                ordrsp_pid,
+                antwortcode,
+                ..
+            } => match state {
+                KonfigurationAenderungState::AuftragEingegangen { pid, auftrag } => {
+                    KonfigurationAenderungState::AuftragBeantwortet {
+                        pid,
+                        auftrag,
+                        ordrsp_pid: *ordrsp_pid,
+                        antwortcode: antwortcode.clone(),
+                    }
+                }
+                other => other,
+            },
             KonfigurationAenderungEvent::ZwischenstandErhalten { .. } => state, // no-op, informational
             KonfigurationAenderungEvent::IftstaErhalten { .. } => state, // no-op, informational
             KonfigurationAenderungEvent::AntwortErhalten {
@@ -454,7 +766,8 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                 other => other,
             },
             KonfigurationAenderungEvent::DeadlineExpired { label, .. } => match state {
-                KonfigurationAenderungState::AnfrageGesendet(_) => {
+                KonfigurationAenderungState::AnfrageGesendet(_)
+                | KonfigurationAenderungState::AuftragEingegangen { .. } => {
                     KonfigurationAenderungState::FristAbgelaufen {
                         label: label.to_string(),
                         offen: Box::new(state),
@@ -516,6 +829,99 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                     vec![event],
                     outbox,
                     frist,
+                ))
+            }
+
+            KonfigurationAenderungCommand::ReceiveAuftrag {
+                pid,
+                auftrag,
+                validation_passed,
+                validation_errors,
+            } => {
+                if !matches!(state, KonfigurationAenderungState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.label()));
+                }
+                if !ist_auftrag(pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "not an ORDERS of the GPKE Teil 3 Konfiguration: {pid}",
+                    )));
+                }
+                let mut events =
+                    vec![KonfigurationAenderungEvent::AuftragEingegangen { pid, auftrag }];
+                if !validation_passed {
+                    events.push(KonfigurationAenderungEvent::AuftragUngueltig {
+                        reason: validation_errors.join("; "),
+                    });
+                }
+                Ok(events.into())
+            }
+
+            KonfigurationAenderungCommand::SendAntwort {
+                codeliste,
+                antwortcode,
+                freitext,
+                message_ref,
+            } => {
+                let KonfigurationAenderungState::AuftragEingegangen { pid, auftrag } = state else {
+                    return Err(WorkflowError::invalid_state(
+                        "AuftragEingegangen",
+                        state.label(),
+                    ));
+                };
+                let (ordrsp, bgm, baeume) =
+                    antwort_auf(pid.as_u32(), &auftrag.bgm).ok_or_else(|| {
+                        WorkflowError::validation(format!(
+                            "no catalogued tree answers ORDERS {pid}: its ORDRSP column names a \
+                             tree mako_pruefung::codes does not carry"
+                        ))
+                    })?;
+                if !baeume.contains(&codeliste.as_str()) {
+                    return Err(WorkflowError::validation(format!(
+                        "{codeliste:?} does not answer ORDERS {pid} (admitted: {baeume:?})"
+                    )));
+                }
+                let code =
+                    mako_pruefung::codes::lookup(&codeliste, &antwortcode).ok_or_else(|| {
+                        WorkflowError::validation(format!(
+                            "{antwortcode:?} is not published in {codeliste}"
+                        ))
+                    })?;
+                if code.braucht_bemerkung && freitext.as_deref().is_none_or(|t| t.trim().is_empty())
+                {
+                    return Err(WorkflowError::validation(format!(
+                        "{antwortcode:?} of {codeliste} requires the problem named in SG2 \
+                         FTX+AAP ([28])"
+                    )));
+                }
+                let ordrsp_pid = Pruefidentifikator::new(ordrsp)
+                    .map_err(|e| WorkflowError::validation(format!("answer PID {ordrsp}: {e}")))?;
+                let outbox = vec![
+                    PendingOutbox::new(
+                        "ORDRSP",
+                        auftrag.absender.as_str(),
+                        serde_json::json!({
+                            "pid": ordrsp,
+                            "sender": auftrag.empfaenger.as_str(),
+                            "receiver": auftrag.absender.as_str(),
+                            "message_ref": message_ref.as_str(),
+                            "document_code": bgm,
+                            "document_id": message_ref.as_str(),
+                            "order_reference": auftrag.dokumentennummer,
+                            "antwort_code": antwortcode,
+                            "antwort_codeliste": codeliste,
+                            "antwort_freitext": freitext,
+                        }),
+                    )
+                    .caused_by(0),
+                ];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![KonfigurationAenderungEvent::AntwortGesendet {
+                        ordrsp_pid,
+                        antwortcode,
+                        codeliste,
+                        message_ref,
+                    }],
+                    outbox,
                 ))
             }
 
@@ -588,8 +994,10 @@ mod tests {
         Workflow as _,
     };
     use super::{
-        ORDERS_ANFRAGE_MSB_PIDS, ORDERS_ANFRAGE_NB_PIDS, ORDERS_ANFRAGE_PIDS, ORDERS_NB_MSB_PIDS,
-        ORDRSP_MSB_LF_PIDS, ORDRSP_NB_LF_PIDS, ORDRSP_PIDS,
+        ORDERS_ANFRAGE_MSB_PIDS, ORDERS_ANFRAGE_NB_PIDS, ORDERS_ANFRAGE_PIDS,
+        ORDERS_EMPFANG_LF_PIDS, ORDERS_EMPFANG_MSB_PIDS, ORDERS_EMPFANG_NB_PIDS,
+        ORDERS_MSB_MSB_PIDS, ORDERS_NB_MSB_PIDS, ORDRSP_MSB_LF_PIDS, ORDRSP_MSB_MSB_PIDS,
+        ORDRSP_NB_LF_PIDS, ORDRSP_PIDS,
     };
 
     /// A Bestellung Änderung Prognosegrundlage starts the NB's 1-WT Mitteilung
@@ -655,6 +1063,21 @@ mod tests {
                 ORDERS_ANFRAGE_NB_PIDS,
                 ORDERS_ANFRAGE_MSB_PIDS,
                 ORDERS_NB_MSB_PIDS,
+                ORDERS_MSB_MSB_PIDS,
+            ]),
+        );
+    }
+
+    /// Every ORDERS some role receives, and every role's set inside the
+    /// workflow's.
+    #[test]
+    fn the_receiving_sets_cover_every_orders() {
+        assert_eq!(
+            sorted(ORDERS_ANFRAGE_PIDS),
+            union(&[
+                ORDERS_EMPFANG_NB_PIDS,
+                ORDERS_EMPFANG_MSB_PIDS,
+                ORDERS_EMPFANG_LF_PIDS,
             ]),
         );
     }
@@ -663,7 +1086,7 @@ mod tests {
     fn the_ordrsp_registration_list_is_the_union_of_its_directions() {
         assert_eq!(
             sorted(ORDRSP_PIDS),
-            union(&[ORDRSP_NB_LF_PIDS, ORDRSP_MSB_LF_PIDS]),
+            union(&[ORDRSP_NB_LF_PIDS, ORDRSP_MSB_LF_PIDS, ORDRSP_MSB_MSB_PIDS]),
         );
     }
 
@@ -675,9 +1098,10 @@ mod tests {
                 ORDERS_ANFRAGE_NB_PIDS,
                 ORDERS_ANFRAGE_MSB_PIDS,
                 ORDERS_NB_MSB_PIDS,
+                ORDERS_MSB_MSB_PIDS,
             ]
             .as_slice(),
-            [ORDRSP_NB_LF_PIDS, ORDRSP_MSB_LF_PIDS].as_slice(),
+            [ORDRSP_NB_LF_PIDS, ORDRSP_MSB_LF_PIDS, ORDRSP_MSB_MSB_PIDS].as_slice(),
         ] {
             let flat: Vec<u32> = lists.iter().flat_map(|p| p.iter().copied()).collect();
             let mut unique = flat.clone();
@@ -734,5 +1158,122 @@ mod tests {
             label: ANTWORT_WINDOW_LABEL.into(),
         };
         assert_eq!(expired.verlauf(), None);
+    }
+
+    /// A received ORDERS opens the recipient's process: 17118 (MSB an
+    /// weiterer MSB) is one the workflow receives, and a 17120 opens the NB's
+    /// 1-WT window (GPKE Teil 3 Kap. 1.3.2.2 Nr. 2), which a lapse leaves owed.
+    #[test]
+    fn a_received_orders_opens_the_recipients_process() {
+        use super::{EINGANG_WINDOW_LABEL, EingangAuftrag, eingang_antwortfrist};
+        use mako_engine::ids::DeadlineId;
+        let eingang = time::macros::datetime!(2026-10-07 10:00 UTC);
+        assert_eq!(
+            eingang_antwortfrist(17_120, eingang),
+            Some(mako_fristen::end_of_day_berlin(time::macros::date!(
+                2026 - 10 - 08
+            )))
+        );
+        assert_eq!(eingang_antwortfrist(17_118, eingang), None);
+        for pid in [
+            17_118_u32, 17_120, 17_121, 17_122, 17_123, 17_128, 17_133, 17_134, 17_135,
+        ] {
+            let out = GpkeKonfigurationAenderungWorkflow::handle(
+                &KonfigurationAenderungState::default(),
+                KonfigurationAenderungCommand::ReceiveAuftrag {
+                    pid: Pruefidentifikator::new(pid).expect("valid PID"),
+                    auftrag: EingangAuftrag {
+                        absender: MarktpartnerCode::new("9900000000003"),
+                        empfaenger: MarktpartnerCode::new("9900555000005"),
+                        lokation: Some("DE00056266802AO6G56M11SN51G21M24S".to_owned()),
+                        dokumentennummer: "KONF-1".to_owned(),
+                        bgm: "Z73".to_owned(),
+                        message_ref: MessageRef::new("UNH-1"),
+                    },
+                    validation_passed: true,
+                    validation_errors: vec![],
+                },
+            )
+            .unwrap_or_else(|e| panic!("{pid}: {e}"));
+            let offen = out.events.iter().fold(
+                KonfigurationAenderungState::default(),
+                GpkeKonfigurationAenderungWorkflow::apply,
+            );
+            assert!(
+                matches!(
+                    offen,
+                    KonfigurationAenderungState::AuftragEingegangen { .. }
+                ),
+                "{pid}: {offen:?}"
+            );
+            let fired = GpkeKonfigurationAenderungWorkflow::handle(
+                &offen,
+                KonfigurationAenderungCommand::TimeoutExpired {
+                    deadline_id: DeadlineId::new(),
+                    label: EINGANG_WINDOW_LABEL.into(),
+                },
+            )
+            .expect("accepted");
+            let lapsed = fired
+                .events
+                .iter()
+                .fold(offen, GpkeKonfigurationAenderungWorkflow::apply);
+            assert!(
+                matches!(lapsed, KonfigurationAenderungState::FristAbgelaufen { .. }),
+                "{pid}: {lapsed:?}"
+            );
+            assert!(!lapsed.is_terminal());
+        }
+    }
+
+    /// A received 17130 is answered on 19132 out of `E_0526` / `E_0527`; a
+    /// tree the column does not name, and a PID whose column names only
+    /// uncatalogued trees, are refused.
+    #[test]
+    fn a_received_orders_is_answered_on_its_ordrsp() {
+        use super::EingangAuftrag;
+        let offen = |pid: u32| KonfigurationAenderungState::AuftragEingegangen {
+            pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            auftrag: EingangAuftrag {
+                absender: MarktpartnerCode::new("9900000000003"),
+                empfaenger: MarktpartnerCode::new("9900555000005"),
+                lokation: None,
+                dokumentennummer: "KONF-1".to_owned(),
+                bgm: "Z73".to_owned(),
+                message_ref: MessageRef::new("UNH-1"),
+            },
+        };
+        let antwort = |tree: &str, code: &str| KonfigurationAenderungCommand::SendAntwort {
+            codeliste: tree.to_owned(),
+            antwortcode: code.to_owned(),
+            freitext: None,
+            message_ref: MessageRef::new("ORDRSP-1"),
+        };
+        let out =
+            GpkeKonfigurationAenderungWorkflow::handle(&offen(17_130), antwort("E_0526", "A07"))
+                .expect("answered");
+        let p = &out.outbox[0].payload;
+        assert_eq!(p["pid"], 19_132);
+        assert_eq!(p["document_code"], "Z73");
+        assert_eq!(p["order_reference"], "KONF-1");
+        let ende = out
+            .events
+            .iter()
+            .fold(offen(17_130), GpkeKonfigurationAenderungWorkflow::apply);
+        assert!(ende.is_terminal());
+        assert!(
+            GpkeKonfigurationAenderungWorkflow::handle(&offen(17_130), antwort("E_0539", "A03"))
+                .is_err()
+        );
+        assert!(
+            GpkeKonfigurationAenderungWorkflow::handle(&offen(17_118), antwort("E_0527", "A99"))
+                .is_err(),
+            "A99 names the problem"
+        );
+        assert!(
+            GpkeKonfigurationAenderungWorkflow::handle(&offen(17_120), antwort("E_0526", "A07"))
+                .is_err(),
+            "19121's E_0523 is not catalogued"
+        );
     }
 }

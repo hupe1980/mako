@@ -33,7 +33,7 @@ Roles and identifiers are in the [domain model](@/docs/architecture/domain-model
   MaBiS Summenzeitreihe, resampled Lastgänge and § 40a Abs. 2 EnWG annual
   projections.
 - Schedules reading orders (Ablesesteuerung) for LF, MSB, NB and ESA, and
-  creates them automatically from GPKE and INSRPT events.
+  creates them automatically from GPKE Lieferbeginn/-ende completions.
 - Computes virtual meters (UTILTS Berechnungsformel, §42b EnWG GGV) and §42c
   Energy-Sharing allocation and readiness.
 - Watches for measuring points that stop delivering, and runs the SMGW §14a /
@@ -158,6 +158,7 @@ graph TB
 │  GET|DELETE /api/v1/virtual/{virtual_malo_id}              ← one config                       │
 │  GET  /api/v1/virtual/{virtual_malo_id}/lastgang           ← computed series                  │
 │  GET  /api/v1/sharing/{community_id}/allocation            ← §42c allocation                  │
+│  GET  /api/v1/sharing/participants/{malo_id}/allocation    ← one participant's allocation     │
 │  GET  /api/v1/sharing/readiness                            ← §42c delivery readiness          │
 │                                                                                               │
 │  ── SMGW session registry (§ 25 MsbG / BSI TR-03109) ──────────────────────────────────────── │
@@ -285,7 +286,7 @@ Iceberg catalog metadata pool of up to 4 — `meter_reads`, `esa_typ2_reads` and
 `meter_readings` are three tables of one `MeterCatalog`.
 
 **marktd subscription.** With `subscription.webhook_url` set, edmd registers for
-`de.mako.process.initiated` and `de.mako.process.completed` at startup. Verify:
+`de.mako.process.completed` and `de.markt.malo.updated` at startup. Verify:
 
 ```bash
 curl -s http://marktd:8180/api/v1/subscriptions/edmd -H "Authorization: Bearer <token>" | jq .
@@ -387,12 +388,37 @@ defaulted to zero.
 | `ce_type` | `makopid` | Action |
 |-----------|-----------|--------|
 | `de.mako.process.completed` | MSCONS set | Store readings |
-| `de.mako.process.completed` | 55001 | `LIEFERBEGINN` reading order (GPKE Beginn-/Schlussablesung) |
-| `de.mako.process.completed` | 55004 / 55007 | `LIEFERENDE` reading order |
-| `de.mako.process.initiated` | 23001 (INSRPT Störungsmeldung) | `INSRPT_STOERUNG` reading order |
-| `de.mako.process.initiated` | 23003 / 23004 / 23008 | `SONDERABLESUNG` reading order |
-| `de.mako.process.initiated` | 23005 / 23009 (INSRPT, Strom and Gas) | `SONDERABLESUNG` reading order |
+| `de.mako.process.completed` | 55002 / 55078, verdict accepted | `LIEFERBEGINN` reading order (GPKE Beginn-/Schlussablesung) |
+| `de.mako.process.completed` | 55005 (Abmeldung confirmed) or 55008 (the Lieferant's Zustimmung to the NB's Lieferende, GPKE Teil 2 Kap. 2.5.2.2 Nr. 2), verdict accepted | `LIEFERENDE` reading order, planned for the completion's `process_date` |
+| `de.markt.malo.updated` | — | Re-read the MaLo's Bundesland at `marktd` into `malo_bundesland` |
 | anything else | — | 204 (ignored) |
+
+An INSRPT orders no reading: the Störungsbehebung in der Messlokation (WiM
+Teil 2 Kap. 1.1, S. 5) leaves the Zählerstand as read and has the MSB transmit
+it through the Aufbereitung und Übermittlung von Werten — an MSCONS this door
+stores.
+
+An MSCONS payload names its `sparte`: without one, or with an unknown one, the
+event is refused with **422** rather than stored as Strom. The GPKE orders
+(55002/55078/55005/55008) are Strom by their PID. Every refusal is decided before
+anything is written, and the `meter_data_receipts` row is the delivery's last
+write: a refused delivery leaves no receipt, and one whose store write failed
+is answered 5xx and receipted on redelivery.
+
+`SG6 LOC+172` names a Marktlokation or a Messlokation. A delivery naming a
+Messlokation is filed under the one Marktlokation `marktd`'s Lokationszuordnung
+links it to on the values' day; none, or several, is **422**. A Zählerstand
+(`zaehlerstaende`: `at`, `value`, `quality`, `obis_code`, `melo_id`,
+`herkunft`) is filed as a register reading — `makod` dates it by its `SG10
+DTM+7` Nutzungszeitpunkt, which MSCONS MIG 2.5 (S. 35) makes the instant it is
+processed at, not the `DTM+9` Ablesedatum. A Zählerstand addressed to the
+Marktlokation is filed under the one Messlokation `marktd` links to it. Each read may carry
+`herkunft` — see [reading origin](#reading-origin) — and the payload may carry
+`mscons_version`, which `makod` states for the Lastgang PIDs 13008, 13018 and
+13025 from their `DTM+137` Nachrichtendatum: those are the PIDs whose
+Versions-Tupel ends in it (MSCONS AHB 3.2 Kap. 5.1, S. 14–15). The table there
+is closed, so a Zählerstand or an Energiemenge carries no version and resolves
+by arrival.
 
 ### MSCONS PIDs handled
 
@@ -408,7 +434,7 @@ headings (`domain::mscons_pid_description`).
 | 13013 | Marktlokationsscharfe Allokationsliste Gas (MMMA) | stored |
 | 13015 | Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn | stored |
 | 13016 | Energiemenge und Leistungsmaximum | stored |
-| 13017 | Zählerstand (Strom) | stored |
+| 13017 | Zählerstand (Strom) | register readings |
 | 13018 | Lastgang Messlokation, Netzkoppelpunkt, Netzlokation | stored |
 | 13019 | Energiemenge (Strom) | stored |
 | 13025 | Lastgang Marktlokation, Tranche | stored |
@@ -416,7 +442,8 @@ headings (`domain::mscons_pid_description`).
 | 13020 · 13023 | Ausfallarbeitsüberführungszeitreihe · Ausfallarbeitssummenzeitreihe | stored; routed by `mako-mabis` `mabis-billing` |
 | 13021 · 13022 | Meteorologische Daten · Einzelzeitreihe Ausfallarbeit | stored; routed by `mako-redispatch` `redispatch-aktivierung` |
 | 13026 | EEG-Überführungszeitreihe aufgrund Ausfallarbeit | stored; no routing family |
-| 13002, 13003, 13008–13012, 13014, 13028 | — | accepted so a delivery is never discarded |
+| 13002 | Zählerstand (Gas) | register readings |
+| 13003, 13008–13012, 13014, 13028 | — | accepted so a delivery is never discarded |
 
 On-demand gas quality data: makod `geli.datenabruf.anfragen` (ORDERS 17103; the
 GNB answers within ten Werktage, not before the 10. Werktag of the month after
@@ -546,7 +573,7 @@ One JSON document per record, the bulk-endpoint shape:
 ```
 
 - Same pipeline as every door: validation, quality grade, audited upsert.
-- An unrecognised `sparte` or `source` is refused, and the record skipped and
+- An absent or unrecognised `sparte`, or an unrecognised `source`, is refused, and the record skipped and
   logged like any poison pill.
 - With `message_hmac_secret`, every record must carry the Standard Webhooks
   headers (`webhook-id`, `webhook-timestamp`, `webhook-signature`) over
@@ -565,6 +592,13 @@ One JSON document per record, the bulk-endpoint shape:
 viertelstündig ermittelter Zählerstände von elektrischer Arbeit und stündlich
 ermittelter Zählerstände von Gasmengen", and BK6-24-174 (Datenübermittlung ZSG,
 wirksam 06.06.2025) places the differencing at the MSB — which is edmd.
+
+This door is the only one: no MSCONS PID carries a Zählerstandsgang. WiM Teil 2
+Kap. 2.5.3 (S. 29) has the MSB transmit, for the Marktlokation, the Lastgang
+of a Zählerstands-/Lastgang and the Arbeitsmenge and Maximalleistung of an iMS
+Zählerstandsgang, and neither the MSCONS AHB 3.2 nor the PID overview 4.0 names
+a Zählerstandsgang Anwendungsfall. The request names its `sparte`; without one
+it is `422`.
 
 ```http
 POST /api/v1/zaehlerstandsgang/{malo_id}
@@ -598,7 +632,7 @@ Content-Type: application/json
 
 `PUT /api/v1/reading-orders/{id}/complete` files its Zählerstand into the same
 store — for an SLP point that is the whole billing path. An order names its
-`sparte` (a value in the wrong dimension is refused), optionally its
+`sparte` — required; an order without one is `422` — optionally its
 `obis_code`, and the completion carries `abgelesen_am`. The order becomes
 `AUSGEFUEHRT` only once its Zählerstand is filed: a refused or failed reading
 write answers the error and leaves the order open.
@@ -629,7 +663,7 @@ A slot no rule can fill is **refused**, never invented, and listed in
 | `gap_from`, `gap_to` | RFC 3339; `gap_to` not in the future — an Ersatzwert stands in for a value that should already have arrived |
 | `obis_code` | The register filled; default the point's dominant energy register. Name it on a multi-register point — an unlabelled reading is the total register |
 | `reason` | **Required**: one of the 28 `STS+Z40` Gründe der Ersatzwertbildung of MSCONS MIG 2.5, by name (`NO_ACCESS`, `METERING_EQUIPMENT_FAULT`, `COMMUNICATION_FAILURE`, …) or code (`Z74`, `Z81`, `Z75`, …); otherwise `422` listing them |
-| `bundesland` | **Required** — `BE`, `NW`, `DE-BY`, …; its statutory holidays decide the day class. edmd holds no address for a Marktlokation |
+| `bundesland` | `BE`, `NW`, `DE-BY`, …; its statutory holidays decide the day class. Absent, the Land cached for the MaLo in `malo_bundesland`; with neither, `422` `BUNDESLAND_UNBEKANNT` |
 | `sparte` | Taken from the register's stored reads; the request's `STROM` · `GAS` · `WAERME` · `WASSER` is read only when there are none, and with neither the request is `422` |
 | `prior_days` | The reference window, default 7 — it has to hold three days of the gap's class |
 | `hold` | Gas only (`Z93` is coded for gas alone); refused for any other Sparte |
@@ -642,6 +676,14 @@ the batch's Sparte preset, and the substitute and its § 147 Abs. 1 AO / § 146
 Abs. 4 AO audit row commit in one transaction; `substitute_value_log.method`
 holds the method that ran and `substitute_value_log.bundesland` the Land whose
 holidays decided the day class.
+
+**The Bundesland of a MaLo.** edmd holds no address. `marktd` derives the Land
+from the PLZ of the MaLo's `lokationsadresse` (`GET
+/api/v1/malos/{id}/bundesland`) over the GeoNames postal code table for
+Germany, licensed CC BY 4.0; a PLZ whose places lie in two Länder decides none
+and is refused. edmd re-reads it whenever `marktd` announces the MaLo and keeps
+it in `malo_bundesland`, so a substitution reads a local row and never calls
+`marktd`; a refusal removes the row.
 
 The authority is **§ 60 Abs. 1 MsbG** (Aufbereitung includes Plausibilisierung
 and Ersatzwertbildung). § 60 Abs. 2 is a *Soll*-rule about *where* that runs —
@@ -849,8 +891,8 @@ endpoints take the commodity:
 
 | Endpoint | Parameter |
 |---|---|
-| `GET /api/v1/billing-period/{malo_id}` | `?sparte=strom` (default) · `gas` · `wasser` · `waerme` |
-| `GET /api/v1/imbalance/{malo_id}/{year}/{month}` | `?sparte=strom` (default) · `gas` |
+| `GET /api/v1/billing-period/{malo_id}` | `?sparte=strom` · `gas` · `wasser` · `waerme`; absent, the Sparte the MaLo's readings are stored under; none stored is `422`, and a Sparte other than the stored one is `422` |
+| `GET /api/v1/imbalance/{malo_id}/{year}/{month}` | `?sparte=strom` · `gas`, resolved the same way |
 
 Bounds resolve through `metering::DayBoundary` (`Strom`, `Gas`), so DST days are
 23 or 25 hours; the long or short Gastag is the one named after the Saturday. A
@@ -870,6 +912,21 @@ date outside the calendar's years (1900–9998) is refused.
 | `zaehlerstand_anfang` / `_ende` | `Option<Decimal>` | § 40 Abs. 2 Nr. 6 EnWG register readings |
 | `coverage_pct` | `Decimal` | Billable coverage, by duration |
 | `quality` | `QualityFlag` | Worst contributing flag |
+| `ablesung_herkunft` | `Option<AblesungHerkunft>` | `KUNDENSELBSTABLESUNG` when every billable reading states it; `null` otherwise |
+
+### Reading origin
+
+Who obtained a reading is its own axis beside `quality`. MSCONS states one
+origin: `SG10 STS+Z33` with Statusanlass `Z83` „Kundenselbstablesung" (MSCONS
+MIG 2.5, S. 38). `makod` decodes every `STS+Z33` Statusanlass of an interval and
+sends `herkunft: "KUNDENSELBSTABLESUNG"` when `Z83` is among them; edmd stores it
+in the `ablesung_herkunft` attribute column and serves it on the billing period
+when all of the period's billable readings state it — or, when the period has
+an opening and a closing Zählerstand, when both state it: the Ablesungsart is
+that of the Zählerstände the invoice prints. An unknown `herkunft` label
+refuses the batch. `billingd` reads it as the § 40 Abs. 2 Nr. 6 EnWG
+Ablesungsart of a measured SLP period; a period without one keeps the
+`ABLESUNGSART_FEHLT` warning.
 
 `netzbilanzd` uses it for the Leistungspreisanteil and gas conversion; `billingd`
 for the Zählerstände.
@@ -1003,7 +1060,7 @@ development `just infra-reset`.
 ```toml
 [archive]
 enabled              = true
-storage_uri          = "s3://my-bucket/edmd/warehouse"   # file:// memory:// s3:// minio:// r2:// gs:// abfss://
+storage_uri          = "s3://my-bucket/edmd/warehouse"   # file:// s3:// minio:// r2:// gs:// abfss://
 region               = "eu-central-1"
 # access_key_id / secret_access_key — omit to use the instance-role chain
 # endpoint_url       = "http://minio:9000"
@@ -1013,6 +1070,14 @@ cold_file_target_mib = 512
 maintenance_interval_secs = 3600   # without cycles the cold tier never fills
 ddl_lock_timeout_secs = 3     # 0 = wait indefinitely
 ```
+
+With `[archive]` off, edmd runs hot-only on an in-memory warehouse. The
+Iceberg catalog lives in edmd's database and outlives the process, so at start
+edmd drops the catalog entries that point into a memory warehouse — they name
+files the last run took with it — and restarts against its own database. An
+enabled `[archive]` on an empty or `memory://` `storage_uri` is refused at
+startup: archival would move settled intervals out of PostgreSQL into the
+process, and a restart would lose them.
 
 `ddl_lock_timeout_secs` bounds how long meterstore's DDL (partition detach on
 archival, partition creation on append) waits for its lock; a timed-out cycle
@@ -1093,7 +1158,7 @@ Bilanzkreis- or Mehr-/Mindermengenabrechnung.
 ## Reading orders (Ablesesteuerung)
 
 Orders live in `ablese_auftraege`, linked to their origin by
-`auftrag_position_id` (O2C) or `insrpt_process_id` (INSRPT).
+`auftrag_position_id` (O2C) or `insrpt_process_id` (an INSRPT the caller names).
 
 | Method | Path | Description |
 |---|---|---|
@@ -1108,13 +1173,13 @@ Orders live in `ablese_auftraege`, linked to their origin by
 
 | Anlass | Auftraggeber | Triggered by |
 |---|---|---|
-| `LIEFERBEGINN` | LF | GPKE 55001 completion, or `vertragd` |
-| `LIEFERENDE` | LF | GPKE 55004 / 55007 completion, or `vertragd` |
+| `LIEFERBEGINN` | LF | a confirmed GPKE Anmeldung (55002 / 55078), or `vertragd` |
+| `LIEFERENDE` | LF | a confirmed GPKE Abmeldung (55005), the Lieferant's Zustimmung to an NB-initiated Lieferende (55008), or `vertragd` |
 | `JAHRESABLESUNG` | LF, NB | Campaign or ERP (§40 EnWG) |
 | `ZWISCHENABLESUNG` | LF, ESA | On demand; an ESA may order value delivery (WiM Strom Teil 2 Kap. 4 / § 60 Abs. 1 MsbG) |
 | `SPERRUNG` · `ENTSPERRUNG` | NB | `processd` Sperrauftrag queue (§41f EnWG; Wiederherstellung §41f Abs. 7) |
-| `SONDERABLESUNG` | MSB | INSRPT 23003/23004/23005/23008/23009 |
-| `INSRPT_STOERUNG` | MSB | INSRPT 23001 — `geplant_am` tomorrow, `ausfuehrt_bis` +7 days, idempotent on `insrpt_process_id` |
+| `SONDERABLESUNG` | MSB | On demand |
+| `INSRPT_STOERUNG` | MSB | On demand, linked to its Störungsmeldung by `insrpt_process_id` |
 | `ISMS_AUSLESUNG` | MSB | iMSys auto-readout |
 
 `anlass` and `auftraggeber_rolle` (`LF`, `MSB`, `NB`, `ESA`) are `CHECK`
@@ -1239,8 +1304,8 @@ same MaLo, or the community is `422`. § 42b Abs. 5 caps each share at the
 tenant's own consumption: „Die einem einzelnen teilnehmenden Letztverbraucher im
 Wege der rechnerischen Aufteilung innerhalb eines 15-Minuten-Zeitintervalls
 zuteilbare Strommenge ist begrenzt auf die durch ihn in diesem Zeitintervall
-verbrauchte Strommenge." The proportional ratio is cut to six places toward
-zero, so the shares never exceed the generation.
+verbrauchte Strommenge." An equal or proportional share is `pool × wᵢ ÷ Σ w`
+cut to six places toward zero, so the shares never exceed the generation.
 
 ### §42c allocation and readiness
 
@@ -1250,7 +1315,14 @@ reports the generation, each participant's consumption, nominal share,
 allocation and net grid draw (`max(0, consumption) == allocated + net_grid_draw`),
 `capped`, and the residual that fed the grid
 (`Σ allocated + residual == generation`). A failed source read is `500` with an
-`error_id`.
+`error_id`. An equal or proportional key is divided multiply-first —
+`pool × wᵢ ÷ Σ w`, cut to six places toward zero — not by a fraction formed
+first, so a three-way split of 10 kWh credits 3.333333 kWh each, not 3.333330.
+
+`GET /api/v1/sharing/participants/{malo_id}/allocation` — one participant's
+period sum, found by the MaLo its consumption is filed under (the rule's tenant
+source, never the plant's). `404` when no community names the MaLo, `422` when
+two do. `billingd` credits this figure on a `SHARING` invoice.
 
 `GET /api/v1/sharing/readiness` answers whether the quarter-hour series §42c
 Abs. 1 EnWG requires is **arriving** (marktd
@@ -1283,6 +1355,15 @@ failure no ingest-triggered check can see.
 
 Coverage is a duration ratio over billable qualities. A point that has never
 delivered is not reported (that is `marktd`'s question).
+
+An open incident is resolved only when the sweep **sees the point delivering**:
+returned by the scan, no longer a finding, and with a newest interval later than
+the one the incident recorded. The scan is bounded to the window, so a point it
+does not return — one that has been dark longer than `coverage_window_days` — is
+not taken for one that resumed, and an empty scan resolves nothing. A failed
+scan or reconcile is an error (the REST sweep answers `500`), never an empty
+report. The Typ-2 sweep follows the same rule per (Meldepunkt, subscription,
+register).
 `max_events_per_sweep` (500) caps events; the register still records everything
 and the response carries `suppressed`.
 

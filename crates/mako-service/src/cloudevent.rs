@@ -248,6 +248,16 @@ impl PublishError {
     }
 }
 
+/// Whether a non-2xx answer leaves the delivery owed rather than refused.
+///
+/// A 408 (the receiver timed out waiting for the request), a 429 (throttled)
+/// and every 5xx say nothing about the request itself, so the same bytes may
+/// succeed later. Any other 3xx/4xx is the receiver refusing these bytes.
+#[must_use]
+pub(crate) fn is_transient_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 408 | 429) || status.is_server_error()
+}
+
 /// POST a [`CloudEvent`] to `url`, signed and retried.
 ///
 /// - **Signs** the exact serialised bytes with [Standard Webhooks] when `secret`
@@ -268,8 +278,8 @@ impl PublishError {
 ///   most needed. The tolerance window is minutes and the back-off is under a
 ///   second, so one stamp covers every attempt.
 /// - **Retries** up to 3 attempts with exponential back-off (200 ms, 400 ms) on
-///   transient failures (transport errors, HTTP 429, and 5xx). A permanent 4xx
-///   (except 429) is returned immediately without wasting retries — the receiver
+///   transient failures (transport errors, HTTP 408, 429, and 5xx). A permanent
+///   4xx (except 408 and 429) is returned immediately without wasting retries — the receiver
 ///   rejected the event and re-sending the same bytes cannot change that.
 /// - Sends `Content-Type: application/cloudevents+json`.
 ///
@@ -287,6 +297,25 @@ pub async fn post_ce_with_retry(
     event: &CloudEvent,
     secret: Option<&[u8]>,
 ) -> Result<(), PublishError> {
+    post_ce_for_reply(client, url, event, secret)
+        .await
+        .map(|_| ())
+}
+
+/// [`post_ce_with_retry`], returning the receiver's JSON answer.
+///
+/// `Ok(None)` when the receiver answered 2xx with a body that is empty or not
+/// JSON: the delivery succeeded, and only the reply is missing.
+///
+/// # Errors
+///
+/// As [`post_ce_with_retry`].
+pub async fn post_ce_for_reply(
+    client: &reqwest::Client,
+    url: &str,
+    event: &CloudEvent,
+    secret: Option<&[u8]>,
+) -> Result<Option<serde_json::Value>, PublishError> {
     let body = event
         .to_bytes()
         .map_err(|e| PublishError::Serialise(e.to_string()))?;
@@ -322,15 +351,15 @@ pub async fn post_ce_with_retry(
             None => req = req.header(crate::webhook::ID_HEADER, &event.id),
         }
         match req.send().await {
-            Ok(r) if r.status().is_success() => return Ok(()),
+            Ok(r) if r.status().is_success() => return Ok(r.json().await.ok()),
             Ok(r) => {
                 let status = r.status();
                 last = format!("HTTP {status}");
-                // Only 429 (Too Many Requests) and 5xx are transient. Everything
+                // Only 408, 429 and 5xx are transient. Everything
                 // else — 3xx (redirects are disabled, so a 3xx is a misconfigured
                 // endpoint) and 4xx — is permanent: the receiver rejected these
                 // exact bytes, so retrying the same request cannot change that.
-                let transient = status.as_u16() == 429 || status.is_server_error();
+                let transient = is_transient_status(status);
                 if !transient {
                     return Err(PublishError::Delivery {
                         attempts: attempt + 1,

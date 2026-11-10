@@ -31,33 +31,45 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.lieferbeginn.anmelden",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55001),
+        workflow: Some("gpke-lf-anmeldung"),
         dispatch: cmd_gpke_lieferbeginn_anmelden,
     },
     CommandDescriptor {
         name: "gpke.lieferbeginn.bestaetigen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55002),
+        workflow: Some("gpke-supplier-change"),
         dispatch: cmd_gpke_lieferbeginn_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.lieferbeginn.ablehnen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55003),
+        workflow: Some("gpke-supplier-change"),
         dispatch: cmd_gpke_lieferbeginn_ablehnen,
     },
     // GPKE Teil 2 § 2.2 Neuanlage. The answer window is 00:00 Uhr des 61. WT
     // nach dem ÜT — `E_0608` Prüfschritte 110/590 run a daily identification
     // Prüflauf for 60 Werktage before a refusal is admissible.
     CommandDescriptor {
+        name: "gpke.neuanlage.anmelden",
+        permitted_roles: &[Marktrolle::Lf],
+        primary_pid: pid(55600),
+        workflow: Some("gpke-lf-anmeldung"),
+        dispatch: cmd_gpke_neuanlage_anmelden,
+    },
+    CommandDescriptor {
         name: "gpke.neuanlage.bestaetigen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55602),
+        workflow: Some("gpke-neuanlage"),
         dispatch: cmd_gpke_neuanlage_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.neuanlage.ablehnen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55604),
+        workflow: Some("gpke-neuanlage"),
         dispatch: cmd_gpke_neuanlage_ablehnen,
     },
     // GPKE Teil 2 § 3.1 Bearbeitungsstand Abrechnungsdaten. One command: the
@@ -67,12 +79,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.abrechnungsdaten.bearbeitungsstand",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(21047),
+        workflow: Some("gpke-abrechnungsdaten"),
         dispatch: cmd_gpke_abrechnungsdaten_bearbeitungsstand,
     },
     CommandDescriptor {
         name: "gpke.lieferbeginn.aktivieren",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: None,
+        workflow: Some("gpke-lf-anmeldung"),
         dispatch: cmd_gpke_lieferbeginn_aktivieren,
     },
     // ── GPKE Lieferende (electricity) ─────────────────────────────────────────
@@ -84,18 +98,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         // different message in the opposite direction, and the value Cedar
         // evaluates as the command's PID attribute.
         primary_pid: pid(55004),
+        workflow: Some("gpke-lf-anmeldung"),
         dispatch: cmd_gpke_lieferende_anmelden,
     },
     CommandDescriptor {
         name: "gpke.lieferende.bestaetigen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55005),
+        workflow: Some("gpke-supplier-change"),
         dispatch: cmd_gpke_lieferende_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.lieferende.ablehnen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55006),
+        workflow: Some("gpke-supplier-change"),
         dispatch: cmd_gpke_lieferende_ablehnen,
     },
     // ── GPKE Kündigung (LFN → LFA, EBD E_0614) ───────────────────────────────
@@ -107,18 +124,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.kuendigung.anmelden",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55016),
+        workflow: Some("gpke-lf-anmeldung"),
         dispatch: cmd_gpke_kuendigung_anmelden,
     },
     CommandDescriptor {
         name: "gpke.kuendigung.bestaetigen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55017),
+        workflow: Some("gpke-kuendigung"),
         dispatch: cmd_gpke_kuendigung_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.kuendigung.ablehnen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55018),
+        workflow: Some("gpke-kuendigung"),
         dispatch: cmd_gpke_kuendigung_ablehnen,
     },
     // ── GPKE NB-seitiges Lieferende (PID 55007 NB→LF) ────────────────────────
@@ -128,12 +148,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.nb-lieferende.bestaetigen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55008),
+        workflow: Some("gpke-lf-abmeldung"),
         dispatch: cmd_gpke_nb_lieferende_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.nb-lieferende.ablehnen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55009),
+        workflow: Some("gpke-lf-abmeldung"),
         dispatch: cmd_gpke_nb_lieferende_ablehnen,
     },
     // ── GPKE Beendigung der Zuordnung (PID 55010 NB→LFA, EBD E_0624) ─────────
@@ -146,12 +168,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.beendigung-zuordnung.bestaetigen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55011),
+        workflow: Some("gpke-beendigung-zuordnung"),
         dispatch: cmd_gpke_beendigung_zuordnung_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.beendigung-zuordnung.ablehnen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55012),
+        workflow: Some("gpke-beendigung-zuordnung"),
         dispatch: cmd_gpke_beendigung_zuordnung_ablehnen,
     },
     // ── GPKE Anfrage zur Beendigung der Zuordnung (55010, NB → LFA) ───────────
@@ -162,6 +186,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.beendigung-zuordnung.anfragen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55010),
+        workflow: Some("gpke-beendigung-zuordnung"),
         dispatch: cmd_gpke_beendigung_zuordnung_anfragen,
     },
     // ── GPKE Zuordnungs-Meldungen (PIDs 55036/55037/55038) ────────────────────
@@ -174,18 +199,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.zuordnung.informieren",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55036),
+        workflow: Some("gpke-zuordnungsmeldung"),
         dispatch: cmd_gpke_zuordnung_informieren,
     },
     CommandDescriptor {
         name: "gpke.zuordnung.beenden",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55037),
+        workflow: Some("gpke-zuordnungsmeldung"),
         dispatch: cmd_gpke_zuordnung_beenden,
     },
     CommandDescriptor {
         name: "gpke.zuordnung.aufheben",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55038),
+        workflow: Some("gpke-zuordnungsmeldung"),
         dispatch: cmd_gpke_zuordnung_aufheben,
     },
     // SD **Lieferende von NB an LF** Nr. 11 / Nr. 13, not the Lieferbeginn: the
@@ -195,6 +223,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.msb-zuordnung.beenden",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55611),
+        workflow: Some("gpke-zuordnungsmeldung"),
         dispatch: cmd_gpke_msb_zuordnung_beenden,
     },
     // ── GPKE Ersatz-/Grundversorgung (§36/§38 EnWG, PIDs 55013–55015) ─────────
@@ -205,18 +234,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.eog.anmelden",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55013),
+        workflow: Some("gpke-eog"),
         dispatch: cmd_gpke_eog_anmelden,
     },
     CommandDescriptor {
         name: "gpke.eog.bestaetigen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55014),
+        workflow: Some("gpke-eog"),
         dispatch: cmd_gpke_eog_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.eog.ablehnen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55015),
+        workflow: Some("gpke-eog"),
         dispatch: cmd_gpke_eog_ablehnen,
     },
     // ── GPKE Ankündigung Zuordnung LF (PID 55607 NB→LFN) ─────────────────────
@@ -226,12 +258,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.zuordnung-lf.bestaetigen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55608),
+        workflow: Some("gpke-ankuendigung-zuordnung-lf"),
         dispatch: cmd_gpke_zuordnung_lf_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.zuordnung-lf.ablehnen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55609),
+        workflow: Some("gpke-ankuendigung-zuordnung-lf"),
         dispatch: cmd_gpke_zuordnung_lf_ablehnen,
     },
     // ── GPKE MaLo-ID continuation (ERP callback after MaloIdentified event) ───
@@ -241,6 +275,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "maloid.lieferbeginn.fortsetzen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55001),
+        workflow: Some("gpke-lf-anmeldung"),
         dispatch: cmd_maloid_lieferbeginn_fortsetzen,
     },
     // ── GPKE Sperrung / Entsperrung (ORDERS 17115/17117) ─────────────────────
@@ -262,31 +297,83 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.sperrung.beauftragen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(17115),
+        workflow: Some("gpke-sperrung-lf"),
         dispatch: cmd_gpke_sperrung_beauftragen,
     },
     CommandDescriptor {
         name: "gpke.entsperrung.beauftragen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(17117),
+        workflow: Some("gpke-sperrung-lf"),
         dispatch: cmd_gpke_entsperrung_beauftragen,
     },
     CommandDescriptor {
         name: "gpke.sperrung.stornieren",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(39000),
+        workflow: Some("gpke-sperrung-lf"),
         dispatch: cmd_gpke_sperrung_stornieren,
     },
     CommandDescriptor {
         name: "gpke.sperrung.bestaetigen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(17115),
+        workflow: Some("gpke-sperrung"),
         dispatch: cmd_gpke_sperrung_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.sperrung.fehlgeschlagen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(17115),
+        workflow: Some("gpke-sperrung"),
         dispatch: cmd_gpke_sperrung_fehlgeschlagen,
+    },
+    // MSB side (`gpke-sperrung-msb` / `geli-gas-sperrung-msb`): the MSB
+    // answers the NB's Anfrage Sperrung 17116 out of `E_0488` (Strom) resp.
+    // `E_1001` (Gas); the code's Cluster picks 19118 or 19119 (ORDRSP AHB 1.1b
+    // Kap. 4.3.1).
+    CommandDescriptor {
+        name: mako_markt::commands::GPKE_ANFRAGE_SPERRUNG_BEANTWORTEN,
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(19118),
+        workflow: Some("gpke-sperrung-msb"),
+        dispatch: cmd_gpke_anfrage_sperrung_beantworten,
+    },
+    CommandDescriptor {
+        name: mako_markt::commands::GELI_ANFRAGE_SPERRUNG_BEANTWORTEN,
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(19118),
+        workflow: Some("geli-gas-sperrung-msb"),
+        dispatch: cmd_geli_anfrage_sperrung_beantworten,
+    },
+    // MSB side of the GPKE Datenabruf: the Ablehnung of a received ORDERS
+    // 17102 / 17004 / 17113 on ORDRSP 19102 / 19007 / 19114, out of a tree its
+    // PID admits (ORDRSP AHB 1.1b Kap. 4.1.3, 4.13, 4.8).
+    CommandDescriptor {
+        name: mako_markt::commands::GPKE_DATENABRUF_ABLEHNEN,
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(19007),
+        workflow: Some("gpke-datenabruf-msb"),
+        dispatch: cmd_gpke_datenabruf_ablehnen,
+    },
+    // The requesting side of the Anforderung von Werten (ORDERS 17004, ORDERS
+    // AHB 1.1b Kap. 4.13): keyed on its BGM DE 1004, which the MSB's ORDRSP
+    // 19007 echoes in SG1 RFF+ON.
+    CommandDescriptor {
+        name: mako_markt::commands::GPKE_DATENABRUF_ANFORDERN,
+        permitted_roles: &[Marktrolle::Lf, Marktrolle::Nb, Marktrolle::Msb],
+        primary_pid: pid(17004),
+        workflow: Some("gpke-datenabruf"),
+        dispatch: cmd_gpke_datenabruf_anfordern,
+    },
+    // The recipient MSB's answer to a GPKE Teil 3 ORDERS (ORDRSP AHB 1.1b
+    // Kap. 4.4, 4.6).
+    CommandDescriptor {
+        name: mako_markt::commands::GPKE_KONFIGURATION_BEANTWORTEN,
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(19132),
+        workflow: Some("gpke-konfiguration-aenderung"),
+        dispatch: cmd_gpke_konfiguration_beantworten,
     },
     // ── GPKE Stornierung, NB side (inbound 55022 → UTILMD 55023/55024) ───────
     // The NB answers „zurück an den Absender" with a UTILMD of its own (UTILMD
@@ -297,12 +384,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.stornierung.bestaetigen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55023),
+        workflow: Some("gpke-stornierung"),
         dispatch: cmd_gpke_stornierung_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.stornierung.ablehnen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55024),
+        workflow: Some("gpke-stornierung"),
         dispatch: cmd_gpke_stornierung_ablehnen,
     },
     // ── GPKE Geschäftsdatenanfrage (ORDERS 17132 → UTILMD / ORDRSP 19101) ─────
@@ -315,19 +404,47 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.geschaeftsdatenanfrage.anfragen",
         permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
         primary_pid: pid(17132),
+        workflow: Some("gpke-geschaeftsdatenanfrage"),
         dispatch: cmd_gpke_geschaeftsdatenanfrage_anfragen,
     },
     CommandDescriptor {
         name: "gpke.geschaeftsdatenanfrage.beantworten",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55035),
+        workflow: Some("gpke-geschaeftsdatenanfrage"),
         dispatch: cmd_gpke_geschaeftsdatenanfrage_beantworten,
     },
     CommandDescriptor {
         name: "gpke.geschaeftsdatenanfrage.ablehnen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(19101),
+        workflow: Some("gpke-geschaeftsdatenanfrage"),
         dispatch: cmd_gpke_geschaeftsdatenanfrage_ablehnen,
+    },
+    // ── GeLi Gas Geschäftsdatenanfrage (BK7-24-01-009 Anlage Kap. 4.4) ────────
+    // The LF sends ORDERS 17101, the MSB 17126; the Gasnetzbetreiber answers
+    // UTILMD 44035 / 44060 within 10 WT or refuses with ORDRSP 19101 (`G_0049`
+    // to a LF, `E_3004` to a MSB — ORDRSP AHB 1.1b, S. 7).
+    CommandDescriptor {
+        name: "geli.geschaeftsdatenanfrage.anfragen",
+        permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
+        primary_pid: pid(17101),
+        workflow: Some("geli-gas-geschaeftsdatenanfrage"),
+        dispatch: cmd_geli_geschaeftsdatenanfrage_anfragen,
+    },
+    CommandDescriptor {
+        name: "geli.geschaeftsdatenanfrage.beantworten",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(44035),
+        workflow: Some("geli-gas-geschaeftsdatenanfrage"),
+        dispatch: cmd_geli_geschaeftsdatenanfrage_beantworten,
+    },
+    CommandDescriptor {
+        name: "geli.geschaeftsdatenanfrage.ablehnen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(19101),
+        workflow: Some("geli-gas-geschaeftsdatenanfrage"),
+        dispatch: cmd_geli_geschaeftsdatenanfrage_ablehnen,
     },
     // ── GPKE Netznutzungsabrechnung — LF-payer side ───────────────────────────
     // The LF receives an INVOIC from the NB and settles or disputes it.
@@ -336,12 +453,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gpke.abrechnung.annehmen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(31002),
+        workflow: Some("gpke-abrechnung"),
         dispatch: cmd_gpke_abrechnung_annehmen,
     },
     CommandDescriptor {
         name: "gpke.abrechnung.ablehnen",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(31002),
+        workflow: Some("gpke-abrechnung"),
         dispatch: cmd_gpke_abrechnung_ablehnen,
     },
     // ── netzbilanzd outbound INVOIC generation (NB role) ──────────────────────
@@ -363,6 +482,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "invoic.nne-abschlag.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
         primary_pid: pid(31001),
+        workflow: Some("gpke-abrechnung"),
         dispatch: cmd_invoic_nne_abschlag_stellen,
     },
     // PID 31002 is the NN-Rechnung in **both** Sparten (INVOIC AHB), so it is
@@ -373,6 +493,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "invoic.nne.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
         primary_pid: pid(31002),
+        workflow: Some("gpke-abrechnung"),
         dispatch: cmd_invoic_nne_stellen,
     },
     // PID 31005 is likewise Sparte-neutral: NB → LF Gas MMM shares it with
@@ -381,6 +502,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "invoic.mmm.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
         primary_pid: pid(31005),
+        workflow: Some("gpke-abrechnung"),
         dispatch: cmd_invoic_mmm_stellen,
     },
     // PID 31009 is issued **by** the Messstellenbetreiber in all seven of its
@@ -394,6 +516,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.msb-rechnung.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Msb],
         primary_pid: pid(31009),
+        workflow: Some("wim-invoic"),
         dispatch: cmd_wim_msb_rechnung_stellen,
     },
     // ── GeLi Gas Lieferbeginn (gas) — LFG side (BK7-24-01-009) ───────────────
@@ -401,6 +524,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.lieferbeginn.anmelden",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44001),
+        workflow: Some("geli-gas-lf-anmeldung"),
         dispatch: cmd_geli_lieferbeginn_anmelden,
     },
     CommandDescriptor {
@@ -408,6 +532,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         permitted_roles: &[Marktrolle::Gnb],
         // UTILMD 44002 „Bestätigung Anmeldung NN". 44003 is the *Ablehnung*.
         primary_pid: pid(44002),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_lieferbeginn_bestaetigen,
     },
     CommandDescriptor {
@@ -416,6 +541,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         // UTILMD 44003 „Ablehnung Anmeldung NN". 44004 is the *Abmeldung*, an
         // inbound message from the supplier in the opposite direction.
         primary_pid: pid(44003),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_lieferbeginn_ablehnen,
     },
     // ── GeLi Gas Lieferende (gas) ─────────────────────────────────────────────
@@ -424,6 +550,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         permitted_roles: &[Marktrolle::Lfg],
         // UTILMD 44004 „Abmeldung NN" (LF → GNB), answered 44005/44006.
         primary_pid: pid(44004),
+        workflow: Some("geli-gas-lf-anmeldung"),
         dispatch: cmd_geli_lieferende_anmelden,
     },
     // GeLi Gas 3.0 § 3.1 — the Neulieferant's Kündigung goes straight to the
@@ -433,18 +560,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.kuendigung.anmelden",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44016),
+        workflow: Some("geli-gas-lf-anmeldung"),
         dispatch: cmd_geli_kuendigung_anmelden,
     },
     CommandDescriptor {
         name: "geli.lieferende.bestaetigen",
         permitted_roles: &[Marktrolle::Gnb],
         primary_pid: pid(44005),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_lieferende_bestaetigen,
     },
     CommandDescriptor {
         name: "geli.lieferende.ablehnen",
         permitted_roles: &[Marktrolle::Gnb],
         primary_pid: pid(44006),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_lieferende_ablehnen,
     },
     // ── GeLi Gas — the answers the *supplier* owes ───────────────────────────
@@ -457,12 +587,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.nb-lieferende.bestaetigen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44008),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_abmeldung_nb_bestaetigen,
     },
     CommandDescriptor {
         name: "geli.nb-lieferende.ablehnen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44009),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_abmeldung_nb_ablehnen,
     },
     CommandDescriptor {
@@ -470,12 +602,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.beendigung-zuordnung.bestaetigen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44011),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_abmeldungsanfrage_bestaetigen,
     },
     CommandDescriptor {
         name: "geli.beendigung-zuordnung.ablehnen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44012),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_abmeldungsanfrage_ablehnen,
     },
     CommandDescriptor {
@@ -484,12 +618,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.kuendigung.bestaetigen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44017),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_kuendigung_bestaetigen,
     },
     CommandDescriptor {
         name: "geli.kuendigung.ablehnen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44018),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_kuendigung_ablehnen,
     },
     CommandDescriptor {
@@ -498,12 +634,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.eog.bestaetigen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44014),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_eog_bestaetigen,
     },
     CommandDescriptor {
         name: "geli.eog.ablehnen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44015),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_eog_ablehnen,
     },
     CommandDescriptor {
@@ -514,6 +652,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.stammdaten.anfrage.beantworten",
         permitted_roles: &[Marktrolle::Gnb, Marktrolle::Lfg],
         primary_pid: pid(44142),
+        workflow: Some("geli-gas-stammdatenaenderung"),
         dispatch: cmd_geli_stammdaten_anfrage_beantworten,
     },
     CommandDescriptor {
@@ -521,16 +660,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         // Berechtigter's 44115 to the NB's 44112, and the Antwort of every
         // other Änderung column, coded from that column's Codeliste.
         name: mako_markt::commands::GELI_STAMMDATEN_AENDERUNG_BEANTWORTEN,
-        permitted_roles: &[Marktrolle::Gnb, Marktrolle::Lfg],
+        // The gMSB answers the NB's 44113 with a 44115 (UTILMD AHB Gas 1.2
+        // Kap. 5.10.1, S. 97).
+        permitted_roles: &[Marktrolle::Gnb, Marktrolle::Lfg, Marktrolle::Msb],
         primary_pid: pid(44115),
+        workflow: Some("geli-gas-stammdatenaenderung"),
         dispatch: cmd_geli_stammdaten_aenderung_beantworten,
     },
     CommandDescriptor {
-        // Nicht bila.rel. Änderung: the NB's 44112 (Kap. 5.10.1) from marktd,
-        // the LF's 44109 (Kap. 5.11.3) from its own facts.
+        // The NB's 44112 (Kap. 5.10.1), 44123 (5.11.1) and 44175 (5.11.2) from
+        // marktd, the LF's 44109 (Kap. 5.11.3) and 44120 (5.11.4) from its own
+        // facts.
         name: mako_markt::commands::GELI_STAMMDATEN_AENDERUNG_SENDEN,
         permitted_roles: &[Marktrolle::Gnb, Marktrolle::Lfg],
         primary_pid: pid(44112),
+        workflow: Some("geli-gas-stammdatenaenderung"),
         dispatch: cmd_geli_stammdaten_aenderung_senden,
     },
     // ── GeLi Gas LF Stornierung (ERP-initiated, LF sends 44022 to GNB) ────────
@@ -540,6 +684,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.stornierung.initiieren",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44022),
+        workflow: Some("geli-gas-stornierung-lf"),
         dispatch: cmd_geli_gas_stornierung_initiieren,
     },
     // ── GeLi Gas Stornierung, GNB side (inbound 44022 → UTILMD 44023/44024) ──
@@ -551,12 +696,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.stornierung.bestaetigen",
         permitted_roles: &[Marktrolle::Gnb],
         primary_pid: pid(44023),
+        workflow: Some("geli-gas-stornierung"),
         dispatch: cmd_geli_stornierung_bestaetigen,
     },
     CommandDescriptor {
         name: "geli.stornierung.ablehnen",
         permitted_roles: &[Marktrolle::Gnb],
         primary_pid: pid(44024),
+        workflow: Some("geli-gas-stornierung"),
         dispatch: cmd_geli_stornierung_ablehnen,
     },
     // ── GeLi Gas Datenabruf (ORDERS 17103 — LF requests Brennwert/Zustandszahl) ─
@@ -567,6 +714,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.datenabruf.anfragen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(17103),
+        workflow: Some("geli-gas-datenabruf"),
         dispatch: cmd_geli_gas_datenabruf_anfragen,
     },
     // ── GeLi Gas Informationsmeldungen (PIDs 44036/44037/44038) ───────────────
@@ -578,18 +726,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.zuordnung.informieren",
         permitted_roles: &[Marktrolle::Gnb],
         primary_pid: pid(44036),
+        workflow: Some("geli-gas-zuordnungsmeldung"),
         dispatch: cmd_geli_zuordnung_informieren,
     },
     CommandDescriptor {
         name: "geli.zuordnung.beenden",
         permitted_roles: &[Marktrolle::Gnb],
         primary_pid: pid(44037),
+        workflow: Some("geli-gas-zuordnungsmeldung"),
         dispatch: cmd_geli_zuordnung_beenden,
     },
     CommandDescriptor {
         name: "geli.zuordnung.aufheben",
         permitted_roles: &[Marktrolle::Gnb],
         primary_pid: pid(44038),
+        workflow: Some("geli-gas-zuordnungsmeldung"),
         dispatch: cmd_geli_zuordnung_aufheben,
     },
     // ── GeLi Gas Ersatz-/Grundversorgung (GNB registers MaLo into E/G) ────────
@@ -600,6 +751,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "geli.eog.anmelden",
         permitted_roles: &[Marktrolle::Gnb],
         primary_pid: pid(44013),
+        workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_eog_anmelden,
     },
     // ── WiM Messstellenbetrieb ────────────────────────────────────────────────
@@ -611,6 +763,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.geraetewechsel.beauftragen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Msb],
         primary_pid: pid(55039),
+        workflow: Some("wim-device-change"),
         dispatch: cmd_wim_geraetewechsel_beauftragen,
     },
     // ── Rechnungsabwicklung MSB über LF (WiM Strom Teil 1) ────────────────────
@@ -622,18 +775,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.rechnungsabwicklung.beenden",
         permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
         primary_pid: pid(17006),
+        workflow: Some("wim-rechnungsabwicklung"),
         dispatch: cmd_wim_rechnungsabwicklung_beenden,
     },
     CommandDescriptor {
         name: "wim.rechnungsabwicklung.zustimmen",
         permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
         primary_pid: pid(19009),
+        workflow: Some("wim-rechnungsabwicklung"),
         dispatch: cmd_wim_rechnungsabwicklung_zustimmen,
     },
     CommandDescriptor {
         name: "wim.rechnungsabwicklung.ablehnen",
         permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
         primary_pid: pid(19010),
+        workflow: Some("wim-rechnungsabwicklung"),
         dispatch: cmd_wim_rechnungsabwicklung_ablehnen,
     },
     // ── ESA Wertebestellung — ESA origination side ────────────────────────────
@@ -643,24 +799,28 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "esa.werteanfrage.stellen",
         permitted_roles: &[Marktrolle::Esa],
         primary_pid: Some(mako_wim::esa_wertebestellung::ANFRAGE_PID),
+        workflow: Some("esa-wertebestellung"),
         dispatch: cmd_esa_werteanfrage_stellen,
     },
     CommandDescriptor {
         name: "esa.bestellung.beauftragen",
         permitted_roles: &[Marktrolle::Esa],
         primary_pid: Some(mako_wim::esa_wertebestellung::BESTELLUNG_PID),
+        workflow: Some("esa-wertebestellung"),
         dispatch: cmd_esa_bestellung_beauftragen,
     },
     CommandDescriptor {
         name: "esa.stornierung.beauftragen",
         permitted_roles: &[Marktrolle::Esa],
         primary_pid: Some(mako_wim::esa_wertebestellung::STORNIERUNG_PID),
+        workflow: Some("esa-wertebestellung"),
         dispatch: cmd_esa_stornierung_beauftragen,
     },
     CommandDescriptor {
         name: "esa.abbestellung.beauftragen",
         permitted_roles: &[Marktrolle::Esa],
         primary_pid: Some(mako_wim::esa_wertebestellung::ABBESTELLUNG_PID),
+        workflow: Some("esa-wertebestellung"),
         dispatch: cmd_esa_abbestellung_beauftragen,
     },
     // ── §20b EnWG Netzzugangsplattform (no PID — not an EDIFACT process) ──
@@ -671,18 +831,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "netzzugang.zaehlpunktanordnung.beauftragen",
         permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
         primary_pid: None,
+        workflow: None,
         dispatch: cmd_netzzugang_zaehlpunktanordnung,
     },
     CommandDescriptor {
         name: "netzzugang.verrechnungskonzept.beauftragen",
         permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
         primary_pid: None,
+        workflow: None,
         dispatch: cmd_netzzugang_verrechnungskonzept,
     },
     CommandDescriptor {
         name: "netzzugang.energysharing.registrieren",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: None,
+        workflow: None,
         dispatch: cmd_netzzugang_energysharing,
     },
     // MSB side: deliver Typ-2 values to the ESA (outbound MSCONS 13027, UC 4.2).
@@ -691,6 +854,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.wertebestellung.liefern",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: Some(mako_wim::wertebestellung::WERTE_UEBERMITTLUNG_PID),
+        workflow: Some("wim-wertebestellung"),
         dispatch: cmd_wim_wertebestellung_liefern,
     },
     // MSB side: answer the ESA's ordering handshake (QUOTES 15003 / ORDRSP
@@ -699,30 +863,35 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.wertebestellung.anbieten",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: Some(mako_wim::wertebestellung::ANGEBOT_PID),
+        workflow: Some("wim-wertebestellung"),
         dispatch: cmd_wim_wertebestellung_anbieten,
     },
     CommandDescriptor {
         name: "wim.wertebestellung.anfrage-ablehnen",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: Some(mako_wim::wertebestellung::ANGEBOT_PID),
+        workflow: Some("wim-wertebestellung"),
         dispatch: cmd_wim_wertebestellung_anfrage_ablehnen,
     },
     CommandDescriptor {
         name: "wim.wertebestellung.bestellung-beantworten",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: Some(mako_wim::wertebestellung::BESTAETIGUNG_PID),
+        workflow: Some("wim-wertebestellung"),
         dispatch: cmd_wim_wertebestellung_bestellung_beantworten,
     },
     CommandDescriptor {
         name: "wim.wertebestellung.stornierung-beantworten",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: Some(mako_wim::wertebestellung::STORNO_BESTAETIGUNG_PID),
+        workflow: Some("wim-wertebestellung"),
         dispatch: cmd_wim_wertebestellung_stornierung_beantworten,
     },
     CommandDescriptor {
         name: "wim.wertebestellung.abbestellung-beantworten",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: Some(mako_wim::wertebestellung::BESTAETIGUNG_PID),
+        workflow: Some("wim-wertebestellung"),
         dispatch: cmd_wim_wertebestellung_abbestellung_beantworten,
     },
     // The answering role depends on the inbound PID: 55042 (Anmeldung MSB,
@@ -732,12 +901,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.geraetewechsel.bestaetigen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Msb],
         primary_pid: pid(55039),
+        workflow: Some("wim-device-change"),
         dispatch: cmd_wim_geraetewechsel_bestaetigen,
     },
     CommandDescriptor {
         name: "wim.geraetewechsel.ablehnen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Msb],
         primary_pid: pid(55039),
+        workflow: Some("wim-device-change"),
         dispatch: cmd_wim_geraetewechsel_ablehnen,
     },
     // The **technical** acknowledgement, on its own command because it is on
@@ -747,6 +918,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.geraetewechsel.aperak",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Msb],
         primary_pid: pid(55039),
+        workflow: Some("wim-device-change"),
         dispatch: cmd_wim_geraetewechsel_aperak,
     },
     // ── WiM Mitteilung über Gesamtvorgang (IFTSTA 21009–21013) ───────────
@@ -757,18 +929,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.gesamtvorgang.melden",
         permitted_roles: &[Marktrolle::Msb, Marktrolle::Nmsb],
         primary_pid: pid(21010),
+        workflow: Some("wim-device-change"),
         dispatch: cmd_wim_gesamtvorgang_melden,
     },
     CommandDescriptor {
         name: "wim.zuordnung.bestaetigen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(21012),
+        workflow: Some("wim-device-change"),
         dispatch: cmd_wim_zuordnung_bestaetigen,
     },
     CommandDescriptor {
         name: "wim.zuordnung.ablehnen",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(21011),
+        workflow: Some("wim-device-change"),
         dispatch: cmd_wim_zuordnung_ablehnen,
     },
     // ── WiM Weiterverpflichtung (ORDERS 17002 → ORDRSP 19003/19004) ───────
@@ -777,10 +952,38 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // not a bestätigen/ablehnen pair: which of Z13 / Z14 / Z22 applies is a
     // measurement against the cap of Kap. 2.4.2 Nr. 4, and the Cluster the code
     // sits in — not the caller — picks 19003 or 19004.
+    // ── WiM Änderung der Technik (ORDERS 17011 → ORDRSP 19005/19006) ────────
+    // The MSB's answer to a received Auftrag. The Besteller's Marktrolle and the
+    // Auftrag's BGM DE 1001 pick the tree; the code's Cluster the PID.
+    CommandDescriptor {
+        name: mako_markt::commands::WIM_TECHNIK_AENDERUNG_BEANTWORTEN,
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(19005),
+        workflow: Some("wim-technik-aenderung"),
+        dispatch: cmd_wim_technik_aenderung_beantworten,
+    },
+    // ── WiM Geräteübernahme — MSBN side (ORDERS 17009 / 17001) ────────────
+    // The MSBN's ORDERS, keyed on its BGM DE 1004, which the MSBA's ORDRSP
+    // 19015/19016 resp. 19001/19002 echoes in SG1 RFF+ON.
+    CommandDescriptor {
+        name: mako_markt::commands::WIM_GERAETEWECHSELABSICHT_ANZEIGEN,
+        permitted_roles: &[Marktrolle::Msb, Marktrolle::Nmsb],
+        primary_pid: pid(17009),
+        workflow: Some("wim-geraeteubernahme-msbn"),
+        dispatch: cmd_wim_geraetewechselabsicht_anzeigen,
+    },
+    CommandDescriptor {
+        name: mako_markt::commands::WIM_GERAETEUEBERNAHME_BESTELLEN,
+        permitted_roles: &[Marktrolle::Msb, Marktrolle::Nmsb],
+        primary_pid: pid(17001),
+        workflow: Some("wim-geraeteubernahme-msbn"),
+        dispatch: cmd_wim_geraeteuebernahme_bestellen,
+    },
     CommandDescriptor {
         name: "wim.weiterverpflichtung.beantworten",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(19003),
+        workflow: Some("wim-weiterverpflichtung"),
         dispatch: cmd_wim_weiterverpflichtung_beantworten,
     },
     // ── WiM INSRPT Störungsbehebung (23001 → 23003/23004 → 23008) ─────────
@@ -794,18 +997,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.stoerung.bestaetigen",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(23004),
+        workflow: Some("wim-insrpt"),
         dispatch: cmd_wim_stoerung_bestaetigen,
     },
     CommandDescriptor {
         name: "wim.stoerung.ablehnen",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(23003),
+        workflow: Some("wim-insrpt"),
         dispatch: cmd_wim_stoerung_ablehnen,
     },
     CommandDescriptor {
         name: "wim.stoerung.ergebnis-melden",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(23008),
+        workflow: Some("wim-insrpt"),
         dispatch: cmd_wim_stoerung_ergebnis_melden,
     },
     // ── WiM Preisanfrage (REQOTE 35001/35002/35004/35005 → QUOTES 15001/15002/15004/15005) ────────────
@@ -815,6 +1021,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.preisanfrage.angebot-senden",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(15001),
+        workflow: Some("wim-preisanfrage"),
         dispatch: cmd_wim_preisanfrage_angebot_senden,
     },
     // The requester's side: MSBN (35001), LF (35002), NB or LF (35004/35005)
@@ -829,6 +1036,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Nb,
         ],
         primary_pid: pid(35001),
+        workflow: Some("wim-preisanfrage"),
         dispatch: cmd_wim_preisanfrage_anfragen,
     },
     // ── WiM Ersteinbau eines iMS (IFTSTA 21029 → 21030/21031, `E_0233`) ───────
@@ -842,12 +1050,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.ersteinbau.vorabinformation-senden",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(21029),
+        workflow: Some("wim-ersteinbau"),
         dispatch: cmd_wim_ersteinbau_vorabinformation_senden,
     },
     CommandDescriptor {
         name: "wim.ersteinbau.beantworten",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(21030),
+        workflow: Some("wim-ersteinbau"),
         dispatch: cmd_wim_ersteinbau_beantworten,
     },
     // ── WiM Steuerungsauftrag ─────────────────────────────────────────────────
@@ -855,12 +1065,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "wim.steuerungsauftrag.bestaetigen",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(55039),
+        workflow: Some("wim-steuerungsauftrag"),
         dispatch: cmd_wim_steuerungsauftrag_bestaetigen,
     },
     CommandDescriptor {
         name: "wim.steuerungsauftrag.ablehnen",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: pid(55039),
+        workflow: Some("wim-steuerungsauftrag"),
         dispatch: cmd_wim_steuerungsauftrag_ablehnen,
     },
     // ── WiM Rechnung (INVOIC 31009 MSB-Rechnung) ──────────────────────────────
@@ -902,6 +1114,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Esa,
         ],
         primary_pid: pid(31009),
+        workflow: Some("wim-invoic"),
         dispatch: cmd_wim_rechnung_annehmen,
     },
     CommandDescriptor {
@@ -915,6 +1128,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Esa,
         ],
         primary_pid: pid(31009),
+        workflow: Some("wim-invoic"),
         dispatch: cmd_wim_rechnung_ablehnen,
     },
     // The WiM MSB-Wechsel has **no Sparte-specific commands.** AWH WiM Gas 2.0
@@ -948,6 +1162,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Esa,
         ],
         primary_pid: pid(31004),
+        workflow: Some("wim-invoic"),
         dispatch: cmd_wim_rechnung_annehmen,
     },
     CommandDescriptor {
@@ -970,6 +1185,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Esa,
         ],
         primary_pid: pid(31004),
+        workflow: Some("wim-invoic"),
         dispatch: cmd_wim_rechnung_ablehnen,
     },
     // PID 31011 „Rechnung sonstige Leistung": the NB bills the LF for an
@@ -989,6 +1205,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "invoic.sonstige-leistung.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
         primary_pid: pid(31011),
+        workflow: Some("geli-gas-sperrprozesse-invoic"),
         dispatch: cmd_sonstige_leistung_rechnung_stellen,
     },
     CommandDescriptor {
@@ -1000,6 +1217,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Lfa,
         ],
         primary_pid: pid(31011),
+        workflow: Some("geli-gas-sperrprozesse-invoic"),
         dispatch: cmd_sonstige_leistung_rechnung_annehmen,
     },
     CommandDescriptor {
@@ -1011,6 +1229,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Lfa,
         ],
         primary_pid: pid(31011),
+        workflow: Some("geli-gas-sperrprozesse-invoic"),
         dispatch: cmd_sonstige_leistung_rechnung_ablehnen,
     },
     // GaBi Gas MMM-Rechnung (PIDs 31007/31008): the NB bills the MGV, which
@@ -1020,12 +1239,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gabi.rechnung.annehmen",
         permitted_roles: &[Marktrolle::Mgv],
         primary_pid: pid(31007),
+        workflow: Some("gabi-gas-invoic"),
         dispatch: cmd_gabi_gas_rechnung_annehmen,
     },
     CommandDescriptor {
         name: "gabi.rechnung.ablehnen",
         permitted_roles: &[Marktrolle::Mgv],
         primary_pid: pid(31007),
+        workflow: Some("gabi-gas-invoic"),
         dispatch: cmd_gabi_gas_rechnung_ablehnen,
     },
     // ── GaBi Gas nomination (DVGW NOMINT/NOMRES) ───────────────────────────────
@@ -1036,12 +1257,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gabi.nominierung.senden",
         permitted_roles: &[Marktrolle::Bkv],
         primary_pid: pid(70030),
+        workflow: Some("gabi-gas-nomination"),
         dispatch: cmd_gabi_nominierung_senden,
     },
     CommandDescriptor {
         name: "gabi.nominierung.beantworten",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Mgv],
         primary_pid: pid(70036),
+        workflow: Some("gabi-gas-nomination"),
         dispatch: cmd_gabi_nominierung_beantworten,
     },
     // ── GaBi Gas Mehr-/Mindermengen (DVGW SSQNOT) ──────────────────────────────
@@ -1051,6 +1274,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "gabi.mehrmindermengen.melden",
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(70095),
+        workflow: Some("gabi-gas-mehr-mindermengen"),
         dispatch: cmd_gabi_mehrmindermengen_melden,
     },
     // ── MABIS Bilanzkreisabrechnung ────────────────────────────────────────────
@@ -1058,24 +1282,28 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "mabis.abrechnung.einleiten",
         permitted_roles: &[Marktrolle::Bkv],
         primary_pid: pid(13003),
+        workflow: Some("mabis-billing"),
         dispatch: cmd_mabis_abrechnung_einleiten,
     },
     CommandDescriptor {
         name: "mabis.abrechnung.daten-einreichen",
         permitted_roles: &[Marktrolle::Bkv],
         primary_pid: pid(13003),
+        workflow: Some("mabis-billing"),
         dispatch: cmd_mabis_abrechnung_daten_einreichen,
     },
     CommandDescriptor {
         name: "mabis.summenzeitreihe.uebermitteln",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Uenb],
         primary_pid: pid(13003),
+        workflow: None,
         dispatch: cmd_mabis_summenzeitreihe_uebermitteln,
     },
     CommandDescriptor {
         name: "mabis.abrechnung.begleichen",
         permitted_roles: &[Marktrolle::Bkv, Marktrolle::Uenb],
         primary_pid: pid(13003),
+        workflow: Some("mabis-billing"),
         dispatch: cmd_mabis_abrechnung_begleichen,
     },
     // ── MaBiS Clearingverfahren — the two reply legs of a Clearingliste ───────
@@ -1087,25 +1315,38 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         name: "mabis.liste.korrigieren",
         permitted_roles: &[Marktrolle::Lfn, Marktrolle::Nb, Marktrolle::Uenb],
         primary_pid: None,
+        workflow: Some("mabis-listenabgleich"),
         dispatch: cmd_mabis_liste_korrigieren,
     },
     CommandDescriptor {
         name: "mabis.liste.ablehnen",
         permitted_roles: &[Marktrolle::Lfn, Marktrolle::Nb, Marktrolle::Uenb],
         primary_pid: None,
+        workflow: Some("mabis-listenabgleich"),
         dispatch: cmd_mabis_liste_ablehnen,
+    },
+    // The NB distributes the Lieferantenclearingliste / LF-AACL itself; the
+    // LF's Korrekturliste 55066 / 55202 resumes the process by Listennummer.
+    CommandDescriptor {
+        name: "mabis.liste.senden",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: None,
+        workflow: Some("mabis-listenabgleich"),
+        dispatch: cmd_mabis_liste_senden,
     },
     // ── IFTSTA status messages (REST replay / manual override) ────────────────
     CommandDescriptor {
         name: "gpke.vollzugsmeldung.empfangen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Lfn, Marktrolle::Lfa],
         primary_pid: None,
+        workflow: Some("gpke-supplier-change"),
         dispatch: cmd_gpke_vollzugsmeldung_empfangen,
     },
     CommandDescriptor {
         name: "wim.iftsta.empfangen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Msb],
         primary_pid: None,
+        workflow: Some("wim-device-change"),
         dispatch: cmd_wim_iftsta_empfangen,
     },
     CommandDescriptor {
@@ -1117,12 +1358,14 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Biko,
         ],
         primary_pid: None,
+        workflow: Some("mabis-billing"),
         dispatch: cmd_mabis_iftsta_empfangen,
     },
     CommandDescriptor {
         name: "mabis.datenstatus.empfangen",
         permitted_roles: &[Marktrolle::Bkv, Marktrolle::Nb, Marktrolle::Biko],
         primary_pid: None,
+        workflow: Some("mabis-billing"),
         dispatch: cmd_mabis_datenstatus_empfangen,
     },
 ];

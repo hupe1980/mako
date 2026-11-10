@@ -1529,7 +1529,8 @@ impl NiederspannungsEinstufung {
 /// Durchschnittserlös the amtliche Statistik published for the *vorletzte*
 /// Kalenderjahr, and the customer's own Durchschnittspreis is measured
 /// „unter Einschluß des Netznutzungsentgelts" over the whole supply. Both are
-/// supplied.
+/// supplied, and a Sondervertragskunde charged a Konzessionsabgabe without them
+/// is refused ([`crate::BillingError::GrenzpreisvergleichFehlt`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Grenzpreisvergleich {
@@ -1548,6 +1549,16 @@ impl Grenzpreisvergleich {
     pub fn verbietet_konzessionsabgabe(&self) -> bool {
         self.durchschnittspreis_ct_per_kwh < self.grenzpreis_ct_per_kwh
     }
+}
+
+#[cfg(test)]
+impl Grenzpreisvergleich {
+    /// A comparison that admits the Konzessionsabgabe, for tests that are not
+    /// about it.
+    pub(crate) const ZULAESSIG_IM_TEST: Self = Self {
+        durchschnittspreis_ct_per_kwh: rust_decimal::dec!(25),
+        grenzpreis_ct_per_kwh: rust_decimal::dec!(18),
+    };
 }
 
 /// § 2 Abs. 5 Nr. 1 KAV — the Gas Grenzmenge per Jahr und Abnahmefall.
@@ -1578,8 +1589,9 @@ pub struct Konzessionsabgabe {
     pub niederspannung: Option<NiederspannungsEinstufung>,
     /// § 2 Abs. 4 (Strom) / Abs. 5 Nr. 2 (Gas) KAV — the Grenzpreisvergleich.
     ///
-    /// `None` leaves it unchecked, which is what a Tarifkunde needs: both
-    /// Absätze speak only of Sondervertragskunden.
+    /// Required for a Sondervertragskunde charged a Konzessionsabgabe: `None`
+    /// there refuses the settlement. Both Absätze speak only of
+    /// Sondervertragskunden, so a Tarifkunde needs none.
     #[serde(default)]
     pub grenzpreis: Option<Grenzpreisvergleich>,
 }

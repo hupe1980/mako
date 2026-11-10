@@ -30,6 +30,95 @@ pub fn parse_sparte(raw: &str) -> Option<Sparte> {
     trimmed.parse().ok()
 }
 
+/// Who obtained a reading, when the delivery says so — a separate axis from
+/// [`QualityFlag`], which says how good a value is.
+///
+/// The one origin MSCONS states is `SG10 STS+Z33` with Statusanlass `Z83`
+/// „Kundenselbstablesung" (MSCONS MIG 2.5, S. 38); `makod` carries it as the
+/// payload key `herkunft`. A value whose delivery states none has no origin,
+/// and the invoice reports the § 40 Abs. 2 Nr. 6 EnWG Ablesungsart as missing
+/// rather than guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AblesungHerkunft {
+    /// `Z83` — „Messwert wurde durch den Kunden am Zähler abgelesen."
+    Kundenselbstablesung,
+}
+
+impl AblesungHerkunft {
+    /// Every value, in the spelling the column `CHECK` pins.
+    pub const CODES: &'static [&'static str] = &["KUNDENSELBSTABLESUNG"];
+
+    /// The stored and served spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Kundenselbstablesung => "KUNDENSELBSTABLESUNG",
+        }
+    }
+
+    /// The origin a stored or delivered label names, or `None` for a label
+    /// this release does not know.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "KUNDENSELBSTABLESUNG" => Some(Self::Kundenselbstablesung),
+            _ => None,
+        }
+    }
+}
+
+/// The Sparte a settlement read runs on: the one requested, else the one the
+/// MaLo's readings are stored under.
+///
+/// The Sparte decides the period window — a gas period is a run of 06:00
+/// Gastage, a Strom period one of calendar days — so a read that names none
+/// and finds none stored has nothing to run on, and a request naming another
+/// Sparte than the stored one asks about a commodity the MaLo does not meter.
+///
+/// # Errors
+///
+/// An unknown requested Sparte, a request contradicting the stored one, or
+/// neither present — each named.
+pub fn settlement_sparte(
+    requested: Option<&str>,
+    stored: Option<Sparte>,
+) -> Result<Sparte, String> {
+    let requested = match requested {
+        None => None,
+        Some(raw) => Some(parse_sparte(raw).ok_or_else(|| {
+            format!(
+                "unknown sparte `{raw}`; expected one of {:?}",
+                Sparte::CODES
+            )
+        })?),
+    };
+    match (requested, stored) {
+        (Some(r), Some(s)) if r != s => Err(format!(
+            "sparte {} names another commodity than the {} the MaLo's readings are stored under",
+            r.as_str(),
+            s.as_str()
+        )),
+        (Some(r), _) => Ok(r),
+        (None, Some(s)) => Ok(s),
+        (None, None) => {
+            Err("sparte is required: the MaLo has no stored reading to take it from".to_owned())
+        }
+    }
+}
+
+/// The opening and closing Zählerstand of a period (§ 40 Abs. 2 Nr. 6 EnWG),
+/// and the origin both state when they state the same one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PeriodZaehlerstaende {
+    /// The last reading at or before the period start.
+    pub anfang: Option<Decimal>,
+    /// The last reading at or before the period end.
+    pub ende: Option<Decimal>,
+    /// The origin both readings state, when it is one.
+    pub herkunft: Option<AblesungHerkunft>,
+}
+
 /// The Messwesen MSCONS PIDs `edmd` is the process home for.
 ///
 /// **Descriptive, not a filter.** Nothing branches on this set: the ingest
@@ -591,6 +680,9 @@ pub struct MeterReading {
     pub sender_mp_id: Option<String>,
     /// Idempotency key of the delivering session, when there was one.
     pub push_session: Option<String>,
+    /// Who read the register, when the delivery says so (`STS+Z33` / `Z83`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ablesung_herkunft: Option<AblesungHerkunft>,
 }
 
 /// What the Zählerstandsgang → Lastgang conversion did across one span.
@@ -774,12 +866,16 @@ pub struct MeterRead {
     /// stale value the higher version and silently supersedes the correction.
     ///
     /// `None` when the delivery carried no version, in which case `store.rs`
-    /// falls back to transaction time. Today that is every MSCONS delivery: the
-    /// `process.completed` payload does not carry the version off the wire yet,
-    /// so only callers that state one explicitly (direct push, Kafka batch) can
-    /// populate it.
+    /// falls back to transaction time. `makod` states one for the Lastgang PIDs
+    /// whose Versions-Tupel ends in the `DTM+137` Nachrichtendatum (13008,
+    /// 13018, 13025 — MSCONS AHB 3.2 Kap. 5.1); a Zählerstand or an
+    /// Energiemenge is not versioned, so those resolve by arrival.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mscons_version: Option<u128>,
+
+    /// Who obtained the value, when the delivery states it (`STS+Z33` / `Z83`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ablesung_herkunft: Option<AblesungHerkunft>,
 }
 
 impl MeterRead {
@@ -968,6 +1064,10 @@ pub struct MeterBillingPeriod {
     pub zaehlerstand_ende: Option<Decimal>,
     /// Worst quality flag across all reads contributing to this summary.
     pub quality: QualityFlag,
+    /// Who obtained the period's readings — set only when every billable
+    /// reading states the same origin, `null` otherwise. The § 40 Abs. 2 Nr. 6
+    /// EnWG Ablesungsart is read from it.
+    pub ablesung_herkunft: Option<AblesungHerkunft>,
     /// **SLP only** — standardised load profile designation.
     ///
     /// Set by the NB from the UTILMD `LIN+1` / `IMD` segment during supply-start
@@ -1248,6 +1348,43 @@ mod mscons_pid_tests {
 }
 
 #[cfg(test)]
+mod settlement_sparte_tests {
+    use super::{Sparte, settlement_sparte};
+
+    /// No Sparte is assumed: an absent one is taken from the stored readings,
+    /// and with none stored the read is refused rather than run as Strom.
+    #[test]
+    fn an_absent_sparte_is_the_stored_one_and_never_strom_by_default() {
+        assert_eq!(settlement_sparte(None, Some(Sparte::Gas)), Ok(Sparte::Gas));
+        assert!(settlement_sparte(None, None).is_err());
+        assert_eq!(settlement_sparte(Some("gas"), None), Ok(Sparte::Gas));
+        assert!(settlement_sparte(Some("STROM"), Some(Sparte::Gas)).is_err());
+        assert!(settlement_sparte(Some("KOHLE"), None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod ablesung_herkunft_tests {
+    use super::AblesungHerkunft;
+
+    /// Every code reads back as the origin that writes it, and the served JSON
+    /// spells it the same way.
+    #[test]
+    fn every_origin_round_trips_through_its_code() {
+        for code in AblesungHerkunft::CODES {
+            let h = AblesungHerkunft::parse(code).expect("a listed code parses");
+            assert_eq!(h.as_str(), *code);
+            assert_eq!(serde_json::to_value(h).expect("serialises"), *code);
+        }
+        assert_eq!(
+            AblesungHerkunft::parse("Z83"),
+            None,
+            "the wire code is makod's"
+        );
+    }
+}
+
+#[cfg(test)]
 mod messtyp_wire_tests {
     use super::{
         Messtyp, MeterBillingPeriod, QualityFlag, Sparte, messtyp_as_str, messtyp_from_str,
@@ -1309,6 +1446,7 @@ mod messtyp_wire_tests {
             zaehlerstand_anfang: None,
             zaehlerstand_ende: None,
             quality: QualityFlag::Measured,
+            ablesung_herkunft: None,
             lastprofil: None,
             profil_typ: None,
         };

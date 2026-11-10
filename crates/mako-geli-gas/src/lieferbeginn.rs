@@ -91,6 +91,15 @@ pub const ANTWORT_PIDS: &[u32] = &[
     44021, // Antwort auf Änderungsmeldung
 ];
 
+/// The GNB's answers to an Anmeldung (44002/44003) and an Abmeldung
+/// (44005/44006), each of which queues a `ProcessCompleted` beside its UTILMD
+/// — as GPKE's 55002/55005 do — so the GNB's own marktd moves the supplier:
+/// the 44002 makes the LFN the supplier of record, the 44003 withdraws the
+/// announcement, the 44005 ends the LF's assignment at the Lieferende it asked
+/// for. Each carries the Antwortcode and the Entscheidungsbaum it was decided
+/// in.
+pub const GNB_WECHSEL_ANTWORT_PIDS: &[u32] = &[44_002, 44_003, 44_005, 44_006];
+
 /// The **Antwort** PIDs a GNB *receives*: the LF's Bestätigung or Ablehnung of
 /// an Anfrage the GNB sent itself — 44007 → 44008/44009, 44010 → 44011/44012,
 /// 44013 → 44014/44015 (UTILMD AHB Gas, LF → NB). Each resumes the GNB's own
@@ -1231,6 +1240,28 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
 
                 let mut all_outbox =
                     vec![PendingOutbox::typed(data.sender.as_str(), &outbox_payload)];
+                if GNB_WECHSEL_ANTWORT_PIDS.contains(&wire_pid) {
+                    // The Lieferant that sent the Anfrage is the announced
+                    // supplier on an Anmeldung and the leaving one on an
+                    // Abmeldung; `accepted`/`outcome` are the verdict.
+                    let lieferant = if anfrage_pid == 44_001 {
+                        "new_supplier"
+                    } else {
+                        "old_supplier"
+                    };
+                    let mut completed = serde_json::json!({
+                        "pid":           wire_pid,
+                        "malo_id":       data.malo_id.as_str(),
+                        "grid_operator": data.receiver.as_str(),
+                        "process_date":  data.process_date,
+                        "accepted":      accepted,
+                        "outcome":       if accepted { "accepted" } else { "rejected" },
+                        "antwortcode":   antwort_code,
+                        "codeliste":     antwort_ebd,
+                    });
+                    completed[lieferant] = serde_json::json!(data.sender.as_str());
+                    all_outbox.push(PendingOutbox::new("ProcessCompleted", "", completed));
+                }
                 if accepted {
                     all_outbox.extend(obligations);
                 }

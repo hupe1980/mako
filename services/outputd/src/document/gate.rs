@@ -119,7 +119,86 @@ pub fn prove(kind: TemplateKind, source: &str, pdf_standard: Option<&str>) -> Re
         TemplateKind::Invoice => prove_invoice(source, pdf_standard),
         TemplateKind::Mahnung => prove_mahnung(source),
         TemplateKind::Preisanpassung => prove_preisanpassung(source),
+        TemplateKind::Gebuehrenbescheid => prove_gebuehrenbescheid(source),
     }
+}
+
+/// The proof for a **Gebührenbescheid**: render the two-Gebühren specimen,
+/// then read the page back.
+///
+/// The page must print what § 157 Abs. 1 AO attaches to a Bescheid
+/// ([`super::gebuehrenbescheid`]): the issuing body, **wer schuldet**, each
+/// Gebühr **nach Art und Betrag** — both of them, so a template printing only
+/// the first position is refused — the sum, and the Rechtsbehelfsbelehrung's
+/// Rechtsbehelf, Frist and Behörde.
+fn prove_gebuehrenbescheid(source: &str) -> Result<Proven> {
+    let view = super::gebuehrenbescheid::specimen();
+    let rendered = render(&RenderRequest {
+        template: source.to_owned(),
+        data: Some(serde_json::to_string(&view)?),
+        attachment: None,
+        standard: None,
+        date: SPECIMEN_DATE,
+        ident: "mako-publish-gate-gebuehrenbescheid".to_owned(),
+    })?;
+    if rendered.pages > 3 {
+        bail!(
+            "the specimen Gebührenbescheid came to {} pages; a Bescheid over three pages has a \
+             layout fault",
+            rendered.pages,
+        );
+    }
+    let doc = lopdf::Document::load_mem(&rendered.pdf).context("reading back the render")?;
+    let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+    let text = doc
+        .extract_text(&pages)
+        .context("a Bescheid must carry extractable text")?;
+    let flat = page_text(&text);
+
+    let name = |p: &super::view::PartyView| p.name.clone().unwrap_or_default();
+    let mut required: Vec<(&str, String)> = vec![
+        ("erlassende Stelle", name(&view.absender)),
+        ("Schuldner (§ 157 Abs. 1 Satz 2 AO)", name(&view.schuldner)),
+        ("festgesetzter Gesamtbetrag", "267,00".to_owned()),
+        (
+            "Rechtsbehelf (§ 157 Abs. 1 Satz 3 AO)",
+            view.rechtsbehelf.rechtsbehelf.clone(),
+        ),
+        (
+            "Rechtsbehelfsfrist (§ 157 Abs. 1 Satz 3 AO)",
+            view.rechtsbehelf.frist.clone(),
+        ),
+        (
+            "Rechtsbehelfsbehörde (§ 157 Abs. 1 Satz 3 AO)",
+            view.rechtsbehelf.behoerde.clone(),
+        ),
+    ];
+    // German customer-facing renderings of the two Beträge.
+    for (p, betrag) in view.positionen.iter().zip(["197,40", "69,60"]) {
+        required.push(("Art der Gebühr (§ 157 Abs. 1 Satz 2 AO)", p.art.clone()));
+        required.push((
+            "Betrag der Gebühr (§ 157 Abs. 1 Satz 2 AO)",
+            betrag.to_owned(),
+        ));
+    }
+    for (term, value) in required {
+        if value.is_empty() {
+            bail!("the Gebührenbescheid specimen carries no {term} — the check cannot run");
+        }
+        if !contains_standalone(&flat, &needle_text(&value)) {
+            bail!(
+                "the rendered Gebührenbescheid does not print the {term} (`{value}`, in its \
+                 German form) — a Bescheid that omits it does not state what § 157 Abs. 1 AO \
+                 attaches to one"
+            );
+        }
+    }
+
+    Ok(Proven {
+        proof: Proof::RenderedTextform,
+        pages: rendered.pages,
+        warnings: rendered.warnings,
+    })
 }
 
 /// The Textform proof for a **Preisanpassung**: render the mixed-change
@@ -1004,6 +1083,41 @@ mod tests {
         assert!(
             prove(TemplateKind::Preisanpassung, "#let falsch(x) = []", None).is_err(),
             "a template without the contract function is refused for every kind",
+        );
+    }
+
+    /// The reference Gebührenbescheid passes its own gate, at the Textform
+    /// proof.
+    #[test]
+    fn the_reference_gebuehrenbescheid_passes_its_own_gate() {
+        let proven = prove(
+            TemplateKind::Gebuehrenbescheid,
+            crate::document::REFERENCE_GEBUEHRENBESCHEID,
+            None,
+        )
+        .expect("the shipped Gebührenbescheid layout must pass the gate");
+        assert_eq!(proven.proof, Proof::RenderedTextform);
+    }
+
+    /// A Gebührenbescheid that renders but omits the Rechtsbehelfsbelehrung
+    /// is refused: it does not state what § 157 Abs. 1 Satz 3 AO attaches to a
+    /// Bescheid.
+    #[test]
+    fn a_gebuehrenbescheid_without_its_rechtsbehelfsbelehrung_is_refused() {
+        let source = crate::document::REFERENCE_GEBUEHRENBESCHEID
+            .replace("#bescheid.rechtsbehelf.rechtsbehelf", "");
+        assert_ne!(source, crate::document::REFERENCE_GEBUEHRENBESCHEID);
+        let err = prove(TemplateKind::Gebuehrenbescheid, &source, None)
+            .expect_err("no Rechtsbehelf on the page")
+            .to_string();
+        assert!(err.contains("Rechtsbehelf"), "{err}");
+        assert!(
+            prove(
+                TemplateKind::Gebuehrenbescheid,
+                "#let render(x) = [Bescheid]",
+                None
+            )
+            .is_err()
         );
     }
 

@@ -18,7 +18,8 @@ cargo add grid-billing rust_decimal time
 ```rust,no_run
 use grid_billing::{NneInput, Sparte, SettlementType, settle_nne};
 use grid_billing::types::{
-    ArbeitspreisModell, MengePreis, Konzessionsabgabe, KaKundengruppe, SettlementPeriod,
+    ArbeitspreisModell, Grenzpreisvergleich, MengePreis, Konzessionsabgabe, KaKundengruppe,
+    SettlementPeriod,
 };
 use grid_billing::umlagen::Letztverbrauchergruppe;
 use rust_decimal::Decimal;
@@ -47,7 +48,11 @@ let settlement = settle_nne(&NneInput {
         satz_ct_per_kwh: d("0.11"),
         klasse: KaKundengruppe::Sondervertragskunde,
         niederspannung: None,   // § 2 Abs. 7 KAV facts, when the class must be checked
-        grenzpreis: None,       // § 2 Abs. 4 KAV Grenzpreisvergleich
+        // § 2 Abs. 4 KAV Grenzpreisvergleich — required for a Sondervertragskunde
+        grenzpreis: Some(Grenzpreisvergleich {
+            durchschnittspreis_ct_per_kwh: d("24.80"),
+            grenzpreis_ct_per_kwh: d("18.20"),
+        }),
     }),
     sparte: Sparte::Strom,
     tariff_sheet_id: Some("Preisblatt-NNE-2026-Q1".into()),

@@ -1250,4 +1250,9 @@ pub enum SettlementStatus {
     /// there is no statute to read it from. Nothing is settled; the period is
     /// retried once the Fassung is tabled.
     FassungNichtTabelliert,
+    /// A state-aid approval falls inside the settlement period, so the days
+    /// before it and the days from it settle under different rules (§ 101
+    /// Abs. 2 EEG 2023 — § 51b from 18.09.2025). Nothing is settled; the caller
+    /// bills the two parts as separate periods.
+    GenehmigungImZeitraum,
 }

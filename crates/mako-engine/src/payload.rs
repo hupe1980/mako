@@ -319,6 +319,10 @@ pub struct UtilmdPayload {
     /// A Listennachricht's members; non-empty selects that message shape.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub positionen: Vec<ListenPosition>,
+    /// The members of a list this participant distributes (55065 / 55201);
+    /// non-empty selects the Listennachricht shape as well.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listenmitglieder: Vec<ListenMitglied>,
     /// `SG8 SEQ+Z22 RFF+AUU` Version der Zeitreihe, on a Liste.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zeitreihen_version: Option<String>,
@@ -491,6 +495,36 @@ pub struct ListenPosition {
     /// `SG6 RFF+TN`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub referenz_vorgangsnummer: Option<String>,
+}
+
+/// One Marktlokation (or Tranche) of a Clearingliste the Netzbetreiber
+/// distributes, with its bilanzierungsrelevante Daten carried whole.
+///
+/// UTILMD AHB Strom 2.2 Kap. 13.2 (S. 1114–1121) names, per `IDE+24`: the
+/// Bilanzierungsbeginn `DTM+158` (Muss) and -ende `DTM+159` (Soll `[14]`), the
+/// Marktlokation `SG5 LOC+Z16` and the Tranche `LOC+Z21`, and `SG8` blocks
+/// carrying the quantities, Regelzone, Bilanzkreis, Bilanzierungsgebiet and
+/// Zeitreihentyp. Those blocks are the sender's record; the AHB profile checks
+/// what renders.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListenMitglied {
+    /// `SG5 LOC+Z16` — the Marktlokation.
+    pub malo: String,
+    /// `SG5 LOC+Z21` — the Tranche, when the list names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tranche: Option<String>,
+    /// `IDE+24`; absent means minted from the list number and position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vorgangsnummer: Option<String>,
+    /// `SG4 DTM+158` Bilanzierungsbeginn, the UTC instant `CCYYMMDDHHMM`.
+    pub bilanzierungsbeginn: String,
+    /// `SG4 DTM+159` Bilanzierungsende, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bilanzierungsende: Option<String>,
+    /// The member's `SG8` blocks as the sender holds them.
+    #[serde(default, skip_serializing_if = "Stammdaten::is_empty")]
+    pub stammdaten: Stammdaten,
 }
 
 // ── MaloIdentified ────────────────────────────────────────────────────────────

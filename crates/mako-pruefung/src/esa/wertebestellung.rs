@@ -87,7 +87,7 @@ pub const fn ebd_fuer_antwort(imd_7081: &str) -> Option<&'static str> {
     clippy::struct_excessive_bools,
     reason = "each flag is an independent switch, not a state machine"
 )]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EsaAnfrage {
     /// Whether the requested Messprodukt is marked `Pflicht` in the Codeliste
     /// **at the requested period** (Prüfschritt 1). A Pflichtprodukt skips
@@ -270,11 +270,13 @@ fn angebot_erstellen() -> AntwortDetail {
     clippy::struct_excessive_bools,
     reason = "each flag is an independent switch, not a state machine"
 )]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EsaBestellung {
     /// End of the Bindungsfrist the MSB stated in its own Angebot.
+    #[serde(with = "time::serde::rfc3339")]
     pub bindungsfrist: OffsetDateTime,
     /// When the Bestellung was received (the ÜT from the AS4-Zustellquittung).
+    #[serde(with = "time::serde::rfc3339")]
     pub eingegangen_am: OffsetDateTime,
     /// Whether the MSB honours an order that arrived after its Bindungsfrist
     /// (Prüfschritt 2 — a commercial decision, not a rule).
@@ -420,7 +422,7 @@ pub fn pruefe_bestellung(b: &EsaBestellung) -> MsbEntscheidung {
 // ── E_0257 — Stornierung prüfen ───────────────────────────────────────────────
 
 /// What the MSB knows when an ESA Stornierung (ORDCHG 39002) arrives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EsaStornierung {
     /// Whether the MSB confirmed the underlying Bestellung (Prüfschritt 1).
     pub bestellung_bestaetigt: bool,
@@ -474,7 +476,7 @@ pub fn pruefe_stornierung(s: &EsaStornierung) -> MsbEntscheidung {
 // ── E_0254 — Beendigung prüfen ────────────────────────────────────────────────
 
 /// What the MSB knows when an ESA Abbestellung (ORDERS 17008) arrives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EsaBeendigung {
     /// Abo or one-shot (Prüfschritt 1).
     pub art: Bestellart,

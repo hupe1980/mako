@@ -39,6 +39,19 @@ pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[17103, 17104];
 /// | 19104 | Ablehnung Anfrage vom MSB Gas                  |
 pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19103, 19104];
 
+/// UTILMD 55194 „Antwort auf GDA (Strom an Gas)" — the NB Strom's Stammdaten
+/// answering the MSB Gas's 17104 (Anwendungsübersicht der Prüfidentifikatoren
+/// 4.0, lfd. Nr. 25620, NB (Strom) an MSB (Gas), GPKE Teil 4
+/// Geschäftsdatenanfrage). It closes the Anfrage it answers.
+pub const GDA_ANTWORT_PID: u32 = 55_194;
+
+/// The business key the MSB Gas's own 17104 runs under: the ORDERS' `BGM`
+/// DE 1004, which the answer names back in `SG6 RFF+AAV` „Nummer der Anfrage".
+#[must_use]
+pub fn anfrage_key(nummer: &str) -> String {
+    format!("geli-gas-datenabruf-anfrage:{nummer}")
+}
+
 /// Deadline label for the Gas data-request response window.
 ///
 /// On a 17103 it is due at [`mako_fristen::antwort::brennwert_zustandszahl_due`]:

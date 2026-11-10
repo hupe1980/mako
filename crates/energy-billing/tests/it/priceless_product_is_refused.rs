@@ -457,14 +457,13 @@ fn eeg_without_any_verguetungssatz_is_refused() {
     }
 }
 
-/// Any of the three Vergütungsarten satisfies the EEG guard.
+/// Either Vergütungsart satisfies the EEG guard.
 #[test]
 fn any_verguetungssatz_satisfies_the_eeg_guard() {
     let rates = RegulatoryRates::default();
     for json in [
         r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.11"}"#,
         r#"{"category":"EEG","eeg_marktpraemie_ct_per_kwh":"2.4"}"#,
-        r#"{"category":"EEG","kwkg_zuschlag_ct_per_kwh":"4.0"}"#,
         r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"0.0"}"#,
     ] {
         let product: Product = serde_json::from_str(json).unwrap();

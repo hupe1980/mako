@@ -102,10 +102,10 @@ Energiesteuer rate.
 | `WAERME` | Grundpreis (EUR/month), Leistungspreis (EUR/kW/month), Arbeitspreis (ct/kWh_th), CO₂ cost line |
 | `WASSER` | Trinkwasser 7 %, gesplittete Abwassergebühr, Absetzungen |
 | `SOLAR` | Mieterstrom / GGV supply price, contractual GGV-Preisvorteil, § 42a Abs. 4 cap |
-| `EEG` | LF-side feed-in Gutschrift (Vergütung, Marktprämie, KWKG) |
+| `EEG` | LF-side feed-in Gutschrift (Vergütung, Marktprämie) |
 | `EINSPEISUNG` | Direktvermarktung: Marktwert − Vermarktungsgebühr |
 | `HEMS` · `EMOBILITY` · `ENERGIEDIENSTLEISTUNG` | Platform/operating fees plus per-event or per-kWh charges |
-| `SHARING` | A `STROM` supply under `strom`, and the § 42c Energy-Sharing credit |
+| `SHARING` | A `STROM` supply under `strom`, and the § 42c Energy-Sharing credit on the allocation `edmd` serves for the MaLo (`/api/v1/sharing/participants/{malo_id}/allocation`); a period without one is refused `SHARING_ALLOCATION_MISSING` |
 
 `productd`'s `BUNDLE` is decomposed into its components; it never appears as a
 billed category. `Product` deserialises from productd's JSON on the
@@ -142,9 +142,19 @@ Refusals: `MODUL1_AND_MODUL2` (two forms of the base module),
 `MODUL3_OHNE_MODUL1` (BK8-22/010-A offers Modul 3 only with Modul 1) and
 `MODUL3_IMSYS_REQUIRED`.
 
+**Which module a customer holds is vertragd's record, not the product's.**
+For `WAERMEPUMPE`/`WALLBOX` billingd reads `GET /api/v1/malo/{malo_id}/sect14a`
+for the period and bills only the reductions the recorded modules name; the
+product states what each is worth. Refused: no state over the whole period
+(`SECT14A_MODUL_UNBEKANNT`), a change inside it
+(`SECT14A_MODULWECHSEL_IM_ZEITRAUM`), a recorded module the product prices no
+reduction for (`SECT14A_MODUL_OHNE_PREIS`), and Modul 3, whose band rates and
+band quantities billingd does not resolve (`SECT14A_MODUL3_OHNE_BAENDER`).
+An unoffered combination reaches the engine and its guards refuse it.
+
 A Steuerungsentschädigung (`sect14a_steuerungsentschaedigung_ct_per_kwh` /
-`_eur_per_kw_year`) pays for a dispatch that happened and carries no module
-number.
+`_eur_per_kw_year`, catalogue Preistyp `STEUERUNGSENTSCHAEDIGUNG`) pays for a
+dispatch that happened and carries no module number.
 
 ### GAS
 
@@ -330,7 +340,9 @@ surcharge.
 
 The `EEG` category bills **private** contracts where the LF is the contracting
 party — the statutory § 51 regime is `einsd`'s. A contract that mirrors § 51
-supplies `eeg_meter.kwh_during_negative_epex`; the KWKG Zuschlag is exempt.
+supplies `eeg_meter.kwh_during_negative_epex`. A `KWKG_ZUSCHLAG` catalog position
+is reported, not billed: § 6 Abs. 1 KWKG gives the KWK-Anlagenbetreiber the
+claim „gegenüber dem Netzbetreiber", which `einsd` settles.
 
 A Kleinunternehmer (§ 19 UStG) operator's Gutschrift is 0 % with
 `kleinunternehmer_19_ustg: true` — an election, not a function of plant size (§
@@ -364,6 +376,32 @@ with no way to price energy — a renamed `preistyp` maps to `None` silently and
 would bill only the Grundpreis and taxes. An operator who charges nothing states
 `0.0`. `KEIN_TRINKWASSERPREIS` does the same for water priced only on the
 Abwasser side.
+
+### A public-law Gebühr is a Bescheid, beside the invoice {#gebuehrenbescheid}
+
+A period carrying taxable supply and an öffentlich-rechtliche Abwassergebühr
+(`abwasser_regime = PUBLIC_LAW_FEE`, EN 16931 category `O`) is issued as two
+records under one `billingRunId` — on `/calculate` and in the § 40b runs: the
+supply invoice, which carries its `en16931_json`, and a **Gebührenbescheid**
+(`dokumentart = GEBUEHRENBESCHEID`, its own `GB` number, `product_code` suffixed
+`:GEBUEHR`). A Bescheid is no invoice: it has no EN 16931 model, stores the view
+outputd's `GEBUEHRENBESCHEID` kind renders (`bescheid_json`), and
+`GET /api/v1/billing/{id}/pdf` renders it through that kind. Following § 157
+Abs. 1 AO it states each Gebühr by Art and Betrag, the Schuldner, and a
+Rechtsbehelfsbelehrung naming the Rechtsbehelf, its Frist and the Behörde,
+which the operator configures:
+
+```toml
+[gebuehrenbescheid]
+rechtsbehelf       = "Widerspruch"
+frist              = "innerhalb eines Monats nach Bekanntgabe"
+behoerde           = "Stadtwerke Musterstadt AöR, Musterstraße 1, 12345 Musterstadt"
+zahlungsfrist_tage = 30
+```
+
+A period with a Gebühr is refused without it
+(`GEBUEHRENBESCHEID_OHNE_RECHTSBEHELFSBELEHRUNG`), and without a
+Rechnungsempfänger to name as Schuldner (`GEBUEHRENBESCHEID_OHNE_SCHULDNER`).
 
 ---
 
@@ -530,7 +568,8 @@ amounts, which draws the next `RE` number. A second Storno is
 `409 ALREADY_CANCELLED`; a record never issued is `409 NOT_YET_ISSUED` (no
 receivable stands behind it — re-bill or release it). The original's content is
 never modified; both documents stay for **eight years** (§ 147 Abs. 3 AO, from
-01.01.2025).
+01.01.2025). The Storno's `steuerzeilen` are the original's, negated, so a
+cancelled document's tax lines net to zero.
 
 ### Risk gate
 
@@ -638,8 +677,8 @@ model against its declared profile and logs findings.
 
 ### Paper only where § 27 Abs. 38 UStG admits it
 
-A document with no EN 16931 representation (`en16931_blocked` — a category-`O`
-Abwassergebühr beside a taxable line, BR-O-11 ff.) cannot be an E-Rechnung. The
+A document with no EN 16931 representation (`en16931_blocked`) cannot be an
+E-Rechnung; a Gebührenbescheid is none and is issued as its own record. The
 E-Rechnung is owed „für eine Leistung an einen anderen Unternehmer für dessen
 Unternehmen" (§ 14 Abs. 2 Satz 2 Nr. 1 UStG); § 27 Abs. 38 UStG grants paper
 graces keyed on when the Umsatz was **ausgeführt** (the record's last day) and
@@ -722,7 +761,10 @@ nothing.
 `POST …/{id}/versenden` issues the invoice: outputd's
 `POST /api/v1/documents/issue/INVOICE` renders inside the call that stores the bytes
 (§ 147 Abs. 1 Nr. 2–3 AO, eight years) and queues them on the customer's
-channels. Idempotent on the Rechnungsnummer; a held draft is `409`.
+channels. Idempotent on the Rechnungsnummer; a held draft is `409`. A
+Gebührenbescheid record is issued the same way through
+`POST /api/v1/documents/issue/GEBUEHRENBESCHEID`, on the channels its invoice
+takes.
 
 ### Invoice content
 
@@ -773,9 +815,11 @@ count — at most `catch_up_periods` (default 13), billing each through the
 error. Without `accountingd_url` settling cadences are skipped unless
 `jahresrechnung = true` declares that no advances are collected.
 
-**Sending.** `versand` (default **true**) issues each invoice through outputd
-outside the billing transaction; a failure is logged at `error` and retried with
-`POST …/versenden`. A held invoice is never sent.
+**Sending.** `versand` (default **true**) issues each document of a period
+through outputd outside the billing transaction — the invoice and, beside it,
+its Gebührenbescheid, on the same channels to the same recipient: a Bescheid
+never sent starts no Rechtsbehelfsfrist. A failure is logged at `error` and
+retried with `POST …/versenden`. A held period is never sent.
 
 **§ 40b Abs. 3 EnWG.** With `abrechnungsinformation` (default true) iMSys MaLos
 get the free monthly `de.billing.abrechnungsinformation.monatlich`, claimed once
@@ -978,7 +1022,8 @@ Prompts: `order-to-cash`, `preview-invoice`, `check-dynamic-tariff`,
 
 | Table | Purpose |
 |---|---|
-| `billing_records` | `id`, `malo_id`, `lf_mp_id`, `product_code`, `category`, `rechnungsnummer`, `period_from/to`, `rechnung_json` (BO4E), `en16931_json` (model), `en16931_blocked`, `empfaenger_unternehmer`, `bo4e_version`, totals, `outcome` (`generated` → `dispatched` → `paid`/`partial`/`disputed`; `cancelled`), `risk_score/band/findings`, `released_by/at`, `reviewed_by/at`, `template_hash`, `billing_run_id` |
+| `billing_records` | `id`, `malo_id`, `lf_mp_id`, `product_code`, `category`, `rechnungsnummer`, `period_from/to`, `rechnung_json` (BO4E), `en16931_json` (model), `en16931_blocked`, `dokumentart` (`RECHNUNG`/`GEBUEHRENBESCHEID`), `bescheid_json`, `empfaenger_unternehmer`, `bo4e_version`, totals, `outcome` (`generated` → `dispatched` → `paid`/`partial`/`disputed`; `cancelled`), `risk_score/band/findings`, `released_by/at`, `reviewed_by/at`, `template_hash`, `billing_run_id` |
+| `steuerzeilen` | One typed Strom-/Energiesteuer line per document: `steuer`, `art` (`REGELSATZ`/`ERMAESSIGUNG`/`BEFREIUNG`), `rechtsgrundlage`, `menge`, `einheit`, `satz_ct`, `betrag_eur`, the supply period — written by the statement that writes the `billing_records` row (a re-run draft's lines are replaced); a consolidated document carries none, its children do |
 | `invoice_number_series` | `(tenant, series, year)` → `last_value`, allocated by upsert under a row lock |
 | `vpp_dispatch_ledger` | `tx_id` (PK), `tenant`, `record_id` |
 | `billing_run_log` | Monthly sweep audit |
@@ -1052,8 +1097,9 @@ url = "postgresql://billingd:secret@db:5432/billingd"
 Further keys: `*_api_key` for each upstream, `erp_hmac_secret`,
 `min_meter_coverage_pct`, `vergleichsgruppe_kwh_pro_jahr` /
 `vergleichsgruppe_label`, `[e_rechnung]`, `[risk]`
-(`enabled`, `hold_dispatch`, `sample_at`, `review_at`, `hold_at`), `[mcp]`,
-`[oidc]`, `allow_insecure_no_auth`.
+(`enabled`, `hold_dispatch`, `sample_at`, `review_at`, `hold_at`),
+[`[gebuehrenbescheid]`](#gebuehrenbescheid),
+`[mcp]`, `[oidc]`, `allow_insecure_no_auth`.
 
 `[rates] behg_regime`, `[billing]`, `seller_address` and `seller_contact` are
 refused at startup, each naming the key that replaces it. Every setting

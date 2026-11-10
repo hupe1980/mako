@@ -345,3 +345,46 @@ async fn series_are_owned_by_their_run() {
         .expect("count");
     assert_eq!(remaining, 0);
 }
+
+/// Recording a run's aggregation does not mark it submitted. Nothing has gone
+/// to the BIKO at that point, and a crash or an error between the aggregation
+/// and the submission would otherwise leave a run that reads `submitted` while
+/// no MSCONS was ever filed — and that no retry looks at, because only a
+/// `failed` run is retried. The run's status moves only with the submission's
+/// outcome: `acked` or `failed`.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_aggregated_run_is_not_submitted_until_it_is_filed() {
+    let (pool, _pg) = pool_or_skip!();
+    let run = a_run(&pool).await;
+    netzbilanzd::mabis::pg::update_run_aggregated(
+        &pool,
+        run,
+        3,
+        2880,
+        &Decimal::new(1234, 0),
+        false,
+    )
+    .await
+    .expect("record the aggregation");
+    let (status, submitted_at): (String, Option<time::OffsetDateTime>) =
+        sqlx::query_as("SELECT status, submitted_at FROM submission_runs WHERE id = $1")
+            .bind(run)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "pending", "nothing has been filed yet");
+    assert!(submitted_at.is_none());
+
+    netzbilanzd::mabis::pg::mark_acked(&pool, run, Some("MSG-1"), None)
+        .await
+        .expect("ack");
+    let (status, submitted_at): (String, Option<time::OffsetDateTime>) =
+        sqlx::query_as("SELECT status, submitted_at FROM submission_runs WHERE id = $1")
+            .bind(run)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "acked");
+    assert!(submitted_at.is_some(), "the filing stamps when it went out");
+}

@@ -282,7 +282,11 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
           "preis_eur_per_kw": "12.50",
           "system": { "MONAT": { "monate": "1" } }
         },
-        "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde" },
+        "konzessionsabgabe": {
+          "satz_ct_per_kwh": "0.11",
+          "klasse": "Sondervertragskunde",
+          "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" }
+        },
         "netzebene": "Niederspannung",
         "jahresarbeit_kwh": "18000",
         "tariff_sheet_id": "Preisblatt-NNE-2026-Q1",
@@ -382,7 +386,8 @@ Leistung des Kunden überschreitet in mindestens zwei Monaten des Abrechnungsjah
 "konzessionsabgabe": {
   "satz_ct_per_kwh": "0.11",
   "klasse": "Sondervertragskunde",
-  "niederspannung": { "monate_ueber_leistungsgrenze": 5, "jahresverbrauch_kwh": "90000" }
+  "niederspannung": { "monate_ueber_leistungsgrenze": 5, "jahresverbrauch_kwh": "90000" },
+  "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" }
 }
 ```
 
@@ -399,7 +404,9 @@ Neither is a ceiling — a rate inside the Höchstbetrag is still unlawful:
 | `KA_GAS_UEBER_GRENZMENGE` | § 2 Abs. 5 Nr. 1 — Gas above **5 Millionen kWh** je Jahr und Abnahmefall | none — read off `jahresarbeit_kwh` |
 
 The Grenzpreis (Strom: the Durchschnittserlös of the *vorletzte* Kalenderjahr) and the
-customer's price are supplied; omitted, the comparison is not made.
+customer's price are supplied. A Sondervertragskunde charged a Konzessionsabgabe without
+`konzessionsabgabe.grenzpreis` is refused (`GrenzpreisvergleichFehlt`): the prohibition cannot
+be ruled out without it. `KA_UNTER_GRENZPREIS` is an `Error`.
 
 ### §14a EnWG
 
@@ -878,10 +885,13 @@ are to be EDIFACT, not API-Webdienste ([BNetzA](@/docs/regulatory/bnetza.md)).
 | `GET /api/v1/mabis/korrekturbedarf` | `read-mabis-run` | negative Prüfmitteilungen not yet corrected (§9.8.1) |
 
 ```
-pending ──► submitted ──► acked      (terminal — every territory filed)
-   │            │
-   └────────────┴──► failed          (retry allowed, attempt_count < 3)
+pending ──► acked      (terminal — every territory filed)
+   │
+   └──────► failed     (retry allowed, attempt_count < 3)
 ```
+
+A run stays `pending` until its filing's outcome is known; `submitted_at` is
+stamped with the `acked` transition.
 
 A retry carries the original's `corrects_run_id`. One MSCONS goes out per
 Bilanzierungsgebiet, so a run may be **partly filed**: `submission_series`

@@ -160,9 +160,9 @@ async fn loopback_round_trip_spawns_process() {
         use edi_energy::EdiEnergyMessage as _;
         let report = parsed.validate().unwrap();
         assert!(
-            report.is_valid(),
+            report.is_sendable(),
             "rendered UTILMD 55001 violates its AHB profile: {:?}",
-            report.errors()
+            report.sending_refusals().collect::<Vec<_>>()
         );
     }
     use mako_engine::builder::As4Sender as _;

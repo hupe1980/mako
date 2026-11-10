@@ -455,6 +455,7 @@ mod tests {
             allocation_version: "INITIAL".into(),
             valid_from_tx: None,
             mscons_version: None,
+            ablesung_herkunft: None,
         }
     }
 

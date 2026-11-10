@@ -347,6 +347,19 @@ impl Config {
                 .bereich(Bereich::Zugriff),
             );
         }
+        // An enabled cold tier on an in-memory warehouse archives settled
+        // intervals out of PostgreSQL into the process, and the next restart
+        // loses them.
+        let storage = self.archive.storage_uri.trim();
+        if self.archive.enabled && (storage.is_empty() || storage.starts_with("memory:")) {
+            out.push(Befund::blockiert(
+                "archive.storage_uri",
+                "[archive] enabled = true needs a persistent storage_uri (file://, s3://, \
+                 gs://, abfss://). On an in-memory warehouse archival moves settled \
+                 intervals out of PostgreSQL into the process, and a restart loses them. \
+                 Set storage_uri, or enabled = false to run hot-only.",
+            ));
+        }
         if self.policy.physische_loeschung.get() == PhysischeLoeschung::Ja {
             out.push(
                 Befund::blockiert(
@@ -801,6 +814,24 @@ mod tests {
             befunde[0].referenz.as_deref(),
             Some("@/docs/services/edmd.md#policy-physische-loeschung")
         );
+    }
+
+    /// An enabled cold tier needs a warehouse that outlives the process:
+    /// archival moves settled intervals out of PostgreSQL, and on an in-memory
+    /// warehouse a restart loses them.
+    #[test]
+    fn an_enabled_archive_on_an_in_memory_warehouse_is_refused() {
+        for uri in ["", "memory://"] {
+            let mut cfg = minimal(serde_json::json!({}));
+            cfg.archive.enabled = true;
+            cfg.archive.storage_uri = uri.to_owned();
+            let pfade: Vec<String> = cfg.validate().into_iter().map(|b| b.pfad).collect();
+            assert_eq!(pfade, ["archive.storage_uri"], "{uri:?}");
+        }
+        let mut cfg = minimal(serde_json::json!({}));
+        cfg.archive.enabled = true;
+        cfg.archive.storage_uri = "file:///var/lib/edmd/warehouse".to_owned();
+        assert!(cfg.validate().is_empty());
     }
 
     /// A config with two defects reports both, not the first.

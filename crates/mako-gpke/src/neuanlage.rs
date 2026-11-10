@@ -18,7 +18,10 @@
 //! | 55600 | Anmeldung neue verb. MaLo (LF → NB)             | LF → NB   |
 //! | 55601 | Anmeldung neue erz. MaLo (LF → NB)              | LF → NB   |
 //!
-//! ## Outbound ANTWORT — derived by this workflow, NOT routed as inbound
+//! ## Outbound ANTWORT — derived by this workflow
+//!
+//! An inbound one is the answer to the Lieferant's own Anmeldung and routes to
+//! `gpke-lf-anmeldung`.
 //!
 //! | PID   | Process name (AHB)                               | Derived from  |
 //! |-------|--------------------------------------------------|---------------|
@@ -59,8 +62,13 @@ pub const WORKFLOW_NAME: &str = "gpke-neuanlage";
 /// | 55600 | Anmeldung neue verb. MaLo (LF → NB)                | S2.1, S2.2   |
 /// | 55601 | Anmeldung neue erz. MaLo (LF → NB)                 | S2.1, S2.2   |
 ///
-/// Response PIDs (55602–55605) are derived internally and never routed.
+/// The answers 55602–55605 are derived here; inbound, they answer the
+/// Lieferant's own Anmeldung and route to `gpke-lf-anmeldung`.
 pub const NEUANLAGE_PIDS: &[u32] = &[55600, 55601];
+
+/// The Anmeldung neue **erzeugende** Marktlokation, whose Bestätigung 55603
+/// restates its Geschäftsvorfall.
+pub const NEUANLAGE_ERZEUGEND_PID: u32 = 55601;
 
 /// Deadline label for the **business** answer window — „spätester ÜZ ist 00:00
 /// Uhr des 61. WT nach dem ÜT" (GPKE Teil 2 Kap. 2.2.2), resolved by
@@ -139,6 +147,15 @@ pub enum NeuanlageEvent {
         /// restates.
         #[serde(default)]
         transaktionsgrund: Option<String>,
+        /// `SG4 STS+7` Ergänzung of the Anmeldung — on a 55601 its
+        /// Geschäftsvorfall `ZW0` / `ZW2`, which the Bestätigung 55603 restates.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transaktionsgrund_ergaenzung: Option<String>,
+        /// `SG8 SEQ+Z79` DE 1050 — the Produktpaket-ID the Anmeldung offers,
+        /// which a Bestätigung names in `SG6 RFF+Z60` unless the NB names
+        /// another.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        produktpaket_id: Option<String>,
     },
     /// EDIFACT message passed profile validation (no rule violations).
     ValidationPassed {
@@ -153,6 +170,10 @@ pub enum NeuanlageEvent {
         accepted: bool,
         /// Rejection reason (set only when `accepted = false`).
         reason: Option<String>,
+        /// The Marktlokations-ID the NB identified, where the Anmeldung named
+        /// none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        marktlokation: Option<MaLo>,
     },
     /// Neuanlage completed — MaLo is active in the grid.
     Aktiviert,
@@ -240,6 +261,13 @@ pub struct NeuanlageData {
     /// Ablehnung, the column fixes it).
     #[serde(default)]
     pub transaktionsgrund: Option<String>,
+    /// `SG4 STS+7` Ergänzung of the Anmeldung — `ZW4` on a 55600, the
+    /// Geschäftsvorfall `ZW0` / `ZW2` on a 55601.
+    #[serde(default)]
+    pub transaktionsgrund_ergaenzung: Option<String>,
+    /// `SG8 SEQ+Z79` DE 1050 — the Produktpaket-ID the Anmeldung offers.
+    #[serde(default)]
+    pub produktpaket_id: Option<String>,
 }
 
 /// State of a GPKE Neuanlage process.
@@ -369,8 +397,11 @@ pub enum NeuanlageCommand {
         validation_passed: bool,
         /// Validation error strings (for the `Rejected` event).
         validation_errors: Vec<String>,
-        /// The Anmeldung's `SG4` facts — its Vorgangsnummer and Transaktionsgrund.
+        /// The Anmeldung's `SG4` facts — its Vorgangsnummer, Transaktionsgrund
+        /// and Ergänzung.
         vorgang: Box<crate::LfVorgangsdaten>,
+        /// `SG8 SEQ+Z79` DE 1050 — the Produktpaket-ID the Anmeldung offers.
+        produktpaket_id: Option<String>,
     },
     /// Send the outbound UTILMD response to the Lieferant.
     ///
@@ -390,6 +421,17 @@ pub enum NeuanlageCommand {
         /// **Cluster** selects the response PID — `A09` / `A18` ride 55602 /
         /// 55603, every other code rides 55604 / 55605.
         antwort: crate::LfAntwort,
+        /// The Marktlokations-ID the NB identified. An Anmeldung neue
+        /// Marktlokation names it only „Wenn bekannt" (UTILMD AHB Strom 2.2
+        /// Kap. 8.4, S. 98, Bedingung `[165]`), and the Bestätigung's `SG5
+        /// LOC+Z16` is Muss — so where the Anmeldung named none, the answer
+        /// names the one the NB assigned. One that contradicts the
+        /// Anmeldung's is refused.
+        marktlokation: Option<MaLo>,
+        /// The Tranche a Bestätigung 55603 of Geschäftsvorfall 3 (`ZW2`)
+        /// names — Muss there (Bedingung `[478]`, UTILMD AHB Strom 2.2 S. 113,
+        /// 119), refused on any other answer.
+        tranche: Option<Box<NeuanlageTranche>>,
     },
     /// Mark the new Marktlokation as active in the grid.
     Aktivieren,
@@ -403,6 +445,109 @@ pub enum NeuanlageCommand {
 }
 
 impl CommandPayload for NeuanlageCommand {}
+
+/// The Tranche a Bestätigung Anmeldung neue erzeugende Marktlokation 55603
+/// names in Geschäftsvorfall 3 (UTILMD AHB Strom 2.2 Kap. 8.5): `SG5 LOC+Z21`
+/// (S. 113) and the `SG8 SEQ+Z15` „Daten der Tranche" (S. 119–120).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NeuanlageTranche {
+    /// `SG5 LOC+Z21` DE 3225 — the Tranche's ID, in the format of a
+    /// Marktlokations-ID (`[950]`).
+    pub tranche_id: MaLo,
+    /// `SG10 CCI+Z37` DE 7037 — Basis zur Bildung der Tranchengröße: `ZD1`
+    /// prozentual, `ZD2` Aufteilungsfaktor auf Basis von Referenzenträger /
+    /// installierter Leistung, `ZH1` Aufteilung auf Technische Ressourcen.
+    pub basis: String,
+    /// `SG9 QTY+11` DE 6060 — the Tranche's share in per cent, Muss beside
+    /// `ZD1` (`[384]`): > 0, < 100, at most two Nachkommastellen (`[914]`,
+    /// `[955]`, `[930]`).
+    pub prozent: Option<String>,
+}
+
+/// `p` as `[914]`, `[955]` and `[930]` admit it: a decimal number (`.` as
+/// the decimal mark) above 0 and below 100 with at most two Nachkommastellen.
+fn prozent_gueltig(p: &str) -> bool {
+    let (ganz, bruch) = p.split_once('.').unwrap_or((p, ""));
+    let ziffern = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    !ganz.is_empty()
+        && ziffern(ganz)
+        && ziffern(bruch)
+        && bruch.len() <= 2
+        && p.contains('.') != bruch.is_empty()
+        && ganz.parse::<u32>().is_ok_and(|g| g < 100)
+        && (ganz.bytes().any(|b| b != b'0') || bruch.bytes().any(|b| b != b'0'))
+}
+
+/// The Geschäftsvorfall-3 Ergänzung whose Bestätigung names a Tranche.
+const GESCHAEFTSVORFALL_3: &str = "ZW2";
+/// `SG10 CCI+Z37` `ZD1` — the Tranchengröße is a percentage.
+const BASIS_PROZENTUAL: &str = "ZD1";
+/// The bases `SG10 CCI+Z37` DE 7037 admits on a 55603 (S. 120).
+const TRANCHEN_BASEN: &[&str] = &[BASIS_PROZENTUAL, "ZD2", "ZH1"];
+
+impl NeuanlageTranche {
+    /// What keeps it from the column — empty when it can be sent.
+    fn maengel(&self) -> Vec<String> {
+        let mut m = Vec::new();
+        if self.tranche_id.as_str().trim().is_empty() {
+            m.push("tranche_id (SG5 LOC+Z21) is empty".to_owned());
+        }
+        if !TRANCHEN_BASEN.contains(&self.basis.as_str()) {
+            m.push(format!(
+                "basis {:?} (SG10 CCI+Z37): one of {}",
+                self.basis,
+                TRANCHEN_BASEN.join("/")
+            ));
+        }
+        match (self.basis == BASIS_PROZENTUAL, self.prozent.as_deref()) {
+            (true, None) => {
+                m.push("prozent (SG9 QTY+11) is Muss beside ZD1 (Bedingung [384])".to_owned());
+            }
+            (true, Some(p)) => {
+                if !prozent_gueltig(p) {
+                    m.push(format!(
+                        "prozent {p:?} (SG9 QTY+11): > 0, < 100, at most two \
+                         Nachkommastellen (Bedingungen [914], [955], [930])"
+                    ));
+                }
+            }
+            (false, Some(_)) => m.push(
+                "prozent (SG9 QTY+11) is listed beside ZD1 only (Bedingung [384])".to_owned(),
+            ),
+            (false, None) => {}
+        }
+        m
+    }
+
+    /// The `SG5` and `SG8` segments it rides as.
+    fn stammdaten(&self) -> mako_engine::payload::Stammdaten {
+        use mako_engine::payload::{
+            Stammdaten, StammdatenBlock, StammdatenLokation, StammdatenSegment,
+        };
+        let mut segmente = Vec::new();
+        if let Some(p) = &self.prozent {
+            segmente.push(StammdatenSegment {
+                tag: "QTY".to_owned(),
+                elemente: vec![vec!["11".to_owned(), p.clone(), "P1".to_owned()]],
+            });
+        }
+        segmente.push(StammdatenSegment {
+            tag: "CCI".to_owned(),
+            elemente: vec![vec!["Z37".to_owned()], vec![], vec![self.basis.clone()]],
+        });
+        Stammdaten {
+            lokationen: vec![StammdatenLokation {
+                qualifier: "Z21".to_owned(),
+                id: self.tranche_id.as_str().to_owned(),
+            }],
+            bloecke: vec![StammdatenBlock {
+                seq: "Z15".to_owned(),
+                segmente,
+            }],
+            ..Stammdaten::default()
+        }
+    }
+}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
@@ -461,6 +606,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 pruefidentifikator,
                 vorgangsnummer,
                 transaktionsgrund,
+                transaktionsgrund_ergaenzung,
+                produktpaket_id,
                 ..
             } => NeuanlageState::Eingegangen(NeuanlageData {
                 location_id: location_id.clone(),
@@ -471,6 +618,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 pruefidentifikator: *pruefidentifikator,
                 vorgangsnummer: vorgangsnummer.clone(),
                 transaktionsgrund: transaktionsgrund.clone(),
+                transaktionsgrund_ergaenzung: transaktionsgrund_ergaenzung.clone(),
+                produktpaket_id: produktpaket_id.clone(),
             }),
             NeuanlageEvent::ValidationPassed { .. } => match state {
                 NeuanlageState::Eingegangen(data) => NeuanlageState::ValidationPassed(data),
@@ -479,14 +628,20 @@ impl Workflow for GpkeNeuanlageWorkflow {
             NeuanlageEvent::AntwortGesendet {
                 accepted,
                 response_pid,
+                marktlokation,
                 ..
             } => {
                 if *accepted {
                     match state {
-                        NeuanlageState::ValidationPassed(data) => NeuanlageState::AntwortGesendet {
-                            response_pid: *response_pid,
-                            data,
-                        },
+                        NeuanlageState::ValidationPassed(mut data) => {
+                            if let Some(malo) = marktlokation {
+                                data.location_id = malo.clone();
+                            }
+                            NeuanlageState::AntwortGesendet {
+                                response_pid: *response_pid,
+                                data,
+                            }
+                        }
                         other => other,
                     }
                 } else {
@@ -534,6 +689,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 validation_passed,
                 validation_errors,
                 vorgang,
+                produktpaket_id,
             } => {
                 if !matches!(state, NeuanlageState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -557,6 +713,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     pruefidentifikator: pid,
                     vorgangsnummer: vorgang.vorgangsnummer.clone(),
                     transaktionsgrund: vorgang.transaktionsgrund.clone(),
+                    transaktionsgrund_ergaenzung: vorgang.transaktionsgrund_ergaenzung.clone(),
+                    produktpaket_id,
                 }];
                 if validation_passed {
                     events.push(NeuanlageEvent::ValidationPassed {
@@ -594,9 +752,13 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 }
             }
 
-            NeuanlageCommand::SendAntwort { antwort } => {
-                let data = match state {
-                    NeuanlageState::ValidationPassed(d) => d,
+            NeuanlageCommand::SendAntwort {
+                antwort,
+                marktlokation,
+                tranche,
+            } => {
+                let mut data = match state {
+                    NeuanlageState::ValidationPassed(d) => d.clone(),
                     _ => {
                         return Err(WorkflowError::invalid_state(
                             "ValidationPassed",
@@ -604,13 +766,64 @@ impl Workflow for GpkeNeuanlageWorkflow {
                         ));
                     }
                 };
+                let identifiziert = match marktlokation.filter(|m| !m.as_str().is_empty()) {
+                    Some(m) if data.location_id.as_str().is_empty() => {
+                        data.location_id = m.clone();
+                        Some(m)
+                    }
+                    Some(m) if m != data.location_id => {
+                        return Err(WorkflowError::rejected(format!(
+                            "the Anmeldung names Marktlokation {}, the answer {m}",
+                            data.location_id
+                        )));
+                    }
+                    _ => None,
+                };
                 let accepted = antwort.zustimmung;
                 let response_pid =
                     neuanlage_response_pid(data.pruefidentifikator.as_u32(), accepted);
+                // Geschäftsvorfall 3 builds a Tranche, and its Bestätigung
+                // names it (`SG5 LOC+Z21` and `SG8 SEQ+Z15` Muss behind `ZW2`,
+                // Bedingung `[478]`, S. 113, 119); no other answer lists either.
+                let geschaeftsvorfall_3 = accepted
+                    && data.pruefidentifikator.as_u32() == NEUANLAGE_ERZEUGEND_PID
+                    && antwort
+                        .malo_art
+                        .as_deref()
+                        .or(data.transaktionsgrund_ergaenzung.as_deref())
+                        == Some(GESCHAEFTSVORFALL_3);
+                match (&tranche, geschaeftsvorfall_3) {
+                    (None, true) => {
+                        return Err(WorkflowError::rejected(
+                            "a ZW2 Bestätigung 55603 names its Tranche: SG5 LOC+Z21 and SG8 \
+                             SEQ+Z15 are Muss (UTILMD AHB Strom 2.2 Bedingung [478], S. 113, \
+                             119) — tranche"
+                                .to_owned(),
+                        ));
+                    }
+                    (Some(_), false) => {
+                        return Err(WorkflowError::rejected(
+                            "a Tranche (SG5 LOC+Z21, SG8 SEQ+Z15) is listed on a ZW2 \
+                             Bestätigung 55603 only (Bedingung [478]) — tranche"
+                                .to_owned(),
+                        ));
+                    }
+                    (Some(t), true) => {
+                        let m = t.maengel();
+                        if !m.is_empty() {
+                            return Err(WorkflowError::rejected(format!(
+                                "tranche: {}",
+                                m.join("; ")
+                            )));
+                        }
+                    }
+                    (None, false) => {}
+                }
                 let events = vec![NeuanlageEvent::AntwortGesendet {
                     response_pid,
                     accepted,
                     reason: antwort.bemerkung.clone(),
+                    marktlokation: identifiziert,
                 }];
 
                 // The answer is a message, not just an event: an
@@ -626,26 +839,29 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     && (response_pid.map(Pruefidentifikator::as_u32) != Some(55_605)
                         || matches!(antwort.antwort_code.as_str(), "A12" | "A13"));
                 if let Some(rpid) = response_pid {
-                    outbox.push(PendingOutbox::new(
-                        "UTILMD",
-                        data.sender.as_str(),
-                        serde_json::json!({
-                            "pid":          rpid.as_u32(),
-                            "sender":       data.receiver.as_str(),
-                            "receiver":     data.sender.as_str(),
-                            "malo":         nennt_marktlokation.then(|| data.location_id.as_str()),
-                            "process_date": data.process_date,
-                            // `SG4 STS+E01++<code>:E_0608` — Muss on every
-                            // Antwortnachricht.
-                            "antwort_code": antwort.antwort_code,
-                            "antwort_codeliste":  antwort.ebd,
-                            "bemerkung":    antwort.bemerkung,
-                            // `SG4 STS+7` and `SG6 RFF+TN` — the Anmeldung's
-                            // Grund and Vorgangsnummer, Muss on every answer.
-                            "transaktionsgrund":       data.transaktionsgrund,
-                            "referenz_vorgangsnummer": data.vorgangsnummer,
-                        }),
-                    ));
+                    let mut payload = serde_json::json!({
+                        "pid":          rpid.as_u32(),
+                        "sender":       data.receiver.as_str(),
+                        "receiver":     data.sender.as_str(),
+                        "malo":         nennt_marktlokation.then(|| data.location_id.as_str()),
+                        "process_date": data.process_date,
+                        // `SG4 STS+E01++<code>:E_0608` — Muss on every
+                        // Antwortnachricht.
+                        "antwort_code": antwort.antwort_code,
+                        "antwort_codeliste":  antwort.ebd,
+                        "bemerkung":    antwort.bemerkung,
+                        // `SG4 STS+7` and `SG6 RFF+TN` — the Anmeldung's
+                        // Grund and Vorgangsnummer, Muss on every answer.
+                        "transaktionsgrund":       data.transaktionsgrund,
+                        "referenz_vorgangsnummer": data.vorgangsnummer,
+                    });
+                    if accepted {
+                        bestaetigung_lokationsdaten(&mut payload, &data, &antwort);
+                    }
+                    if let Some(t) = &tranche {
+                        payload["stammdaten"] = serde_json::json!(t.stammdaten());
+                    }
+                    outbox.push(PendingOutbox::new("UTILMD", data.sender.as_str(), payload));
                 }
                 Ok(WorkflowOutput::with_outbox(events, outbox))
             }
@@ -667,6 +883,50 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 Ok(vec![NeuanlageEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
+    }
+}
+
+/// What a Bestätigung 55602 / 55603 tells the LF of the new Marktlokation
+/// beyond the Antwortcode (UTILMD AHB Strom 2.2 Kap. 8.4 and 8.5).
+///
+/// - `SG4 STS+7` Ergänzung: on the 55602 the NB's classification, `ZW6`
+///   „Pauschale Marktlokation" or `ZW7` „Gemessene Marktlokation" (S. 97) —
+///   stated by the NB, or `ZW7` when it names Messlokationen; naming none is
+///   not a classification, so the Ergänzung stays unstated and the message
+///   does not render. On the 55603 the Anmeldung's Geschäftsvorfall `ZW0` /
+///   `ZW2` (S. 111), which the NB restates unless it states its own.
+/// - `SG6 RFF+Z60`: the Produktpaket the NB will implement (S. 100, 115) —
+///   the one the Anmeldung offered unless the NB names another.
+/// - `SG5 LOC+Z17` / `SG8 SEQ+Z98` / `SEQ+ZF3`: the Messlokationen and their
+///   Messstellenbetreiber, carried as the NB states them; the pre-send check
+///   says where the column makes them Muss.
+fn bestaetigung_lokationsdaten(
+    payload: &mut serde_json::Value,
+    data: &NeuanlageData,
+    antwort: &crate::LfAntwort,
+) {
+    let ergaenzung = antwort.malo_art.clone().or_else(|| {
+        if data.pruefidentifikator.as_u32() == NEUANLAGE_ERZEUGEND_PID {
+            data.transaktionsgrund_ergaenzung.clone()
+        } else {
+            (!antwort.messlokationen.is_empty())
+                .then(|| crate::wechselprozesse::GEMESSENE_MALO.to_owned())
+        }
+    });
+    if let Some(erg) = ergaenzung {
+        payload["transaktionsgrund_ergaenzung"] = serde_json::json!(erg);
+    }
+    payload["geplantes_produktpaket"] = serde_json::json!(
+        antwort
+            .geplantes_produktpaket
+            .clone()
+            .or_else(|| data.produktpaket_id.clone())
+    );
+    if !antwort.messlokationen.is_empty() {
+        payload["messlokationen"] = serde_json::json!(antwort.messlokationen);
+    }
+    if let Some(msb) = &antwort.malo_msb {
+        payload["malo_msb"] = serde_json::json!(msb);
     }
 }
 
@@ -707,6 +967,7 @@ mod tests {
                 vec!["missing mandatory segment".to_owned()]
             },
             vorgang: Box::default(),
+            produktpaket_id: None,
         }
     }
 
@@ -756,6 +1017,8 @@ mod tests {
             &state,
             NeuanlageCommand::SendAntwort {
                 antwort: crate::LfAntwort::zustimmung("A09", "E_0608"),
+                marktlokation: None,
+                tranche: None,
             },
         )
         .unwrap();
@@ -771,6 +1034,7 @@ mod tests {
             response_pid: None,
             accepted: true,
             reason: None,
+            marktlokation: None,
         };
         assert_eq!(unrendered.verlauf(), None, "no PID, no UTILMD rendered");
         assert_eq!(NeuanlageEvent::Aktiviert.verlauf(), None);
@@ -792,6 +1056,8 @@ mod tests {
             &state,
             NeuanlageCommand::SendAntwort {
                 antwort: crate::LfAntwort::zustimmung("A09", "E_0608"),
+                marktlokation: None,
+                tranche: None,
             },
         )
         .unwrap();
@@ -827,6 +1093,8 @@ mod tests {
             &state,
             NeuanlageCommand::SendAntwort {
                 antwort: crate::LfAntwort::ablehnung("A03", "E_0608"),
+                marktlokation: None,
+                tranche: None,
             },
         )
         .unwrap();
@@ -870,6 +1138,7 @@ mod tests {
                 validation_passed: true,
                 validation_errors: vec![],
                 vorgang: Box::default(),
+                produktpaket_id: None,
             },
         );
         assert!(result.is_err());
@@ -886,6 +1155,8 @@ mod tests {
             pruefidentifikator: pid(55600),
             vorgangsnummer: None,
             transaktionsgrund: None,
+            transaktionsgrund_ergaenzung: None,
+            produktpaket_id: None,
         });
         let dl_id = DeadlineId::new();
         let out = GpkeNeuanlageWorkflow::handle(
@@ -897,5 +1168,62 @@ mod tests {
         )
         .unwrap();
         assert!(out.events.is_empty());
+    }
+
+    /// An Anmeldung that named no Marktlokation is answered with the one the
+    /// NB identified — the Bestätigung's `SG5 LOC+Z16` is Muss — and an answer
+    /// naming another than the Anmeldung named is refused.
+    #[test]
+    fn the_answer_names_the_marktlokation_the_nb_identified() {
+        let ohne = match anmeldung_cmd(55600, true) {
+            NeuanlageCommand::ReceiveAnmeldung {
+                pid,
+                sender,
+                receiver,
+                document_date,
+                process_date,
+                message_ref,
+                validation_passed,
+                validation_errors,
+                vorgang,
+                produktpaket_id,
+                ..
+            } => NeuanlageCommand::ReceiveAnmeldung {
+                pid,
+                sender,
+                receiver,
+                location_id: malo(""),
+                document_date,
+                process_date,
+                message_ref,
+                validation_passed,
+                validation_errors,
+                vorgang,
+                produktpaket_id,
+            },
+            other => other,
+        };
+        let fold = |cmd| {
+            let out = GpkeNeuanlageWorkflow::handle(&NeuanlageState::New, cmd).unwrap();
+            out.events
+                .iter()
+                .fold(NeuanlageState::New, GpkeNeuanlageWorkflow::apply)
+        };
+        let antwort = |marktlokation| NeuanlageCommand::SendAntwort {
+            antwort: crate::LfAntwort::zustimmung("A09", "E_0608").with_klassifizierung("ZW6"),
+            marktlokation,
+            tranche: None,
+        };
+        let out =
+            GpkeNeuanlageWorkflow::handle(&fold(ohne), antwort(Some(malo("51238696012")))).unwrap();
+        assert_eq!(out.outbox[0].payload["malo"], "51238696012");
+
+        let mit = fold(anmeldung_cmd(55600, true));
+        assert!(
+            GpkeNeuanlageWorkflow::handle(&mit, antwort(Some(malo("51238696012")))).is_err(),
+            "the Anmeldung named 51238696781"
+        );
+        let out = GpkeNeuanlageWorkflow::handle(&mit, antwort(None)).unwrap();
+        assert_eq!(out.outbox[0].payload["malo"], "51238696781");
     }
 }

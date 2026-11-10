@@ -82,7 +82,11 @@ impl Daemon for Productd {
             .run(pool)
             .await
             .context("run productd migrations")?;
-        Ok(())
+        // The accepted Angebot's contract request and the product
+        // announcements commit with their business write here.
+        mako_service::outbox::ensure_schema(pool)
+            .await
+            .context("ensure event_outbox schema")
     }
 
     fn validate(cfg: &Self::Config) -> Vec<mako_service::Befund> {
@@ -265,6 +269,12 @@ impl Daemon for Productd {
 
         info!("productd starting");
 
+        // ── Background: deliver the outbox to the ERP webhook ────────────────
+        if let Some(url) = cfg.erp_webhook_url.clone() {
+            let secret = cfg.erp_hmac_secret.clone().map(secrecy::SecretString::from);
+            tokio::spawn(angebot_worker(pool.clone(), url, secret).run(ctx.shutdown.clone()));
+        }
+
         // ── Background: auto-expire stale Angebote ───────────────────────────
         // Runs daily; marks ANGELEGT/VERSANDT Angebote past gueltig_bis as
         // ABGELAUFEN. Without this, expired quotations accumulate in the
@@ -304,4 +314,43 @@ impl Daemon for Productd {
 
         Ok(app)
     }
+}
+
+/// The worker that delivers productd's `event_outbox` to the ERP webhook.
+///
+/// A delivered `de.tarif.angebot.angenommen` is answered by `vertragd` with the
+/// Rahmenvertrag it created; the worker links it onto the Angebot in the
+/// transaction that marks the delivery done, so the Angebot names its contract
+/// exactly when the contract exists.
+#[must_use]
+pub fn angebot_worker(
+    pool: sqlx::PgPool,
+    webhook_url: impl Into<String>,
+    secret: Option<secrecy::SecretString>,
+) -> mako_service::outbox::OutboxWorker {
+    mako_service::outbox::OutboxWorker::new(pool, webhook_url, secret).on_delivered(Arc::new(
+        |conn, delivered| {
+            Box::pin(async move {
+                if delivered.ce_type != mako_events::tarif::ANGEBOT_ANGENOMMEN {
+                    return Ok(());
+                }
+                let angebot = delivered
+                    .subject
+                    .as_deref()
+                    .and_then(|s| s.parse::<uuid::Uuid>().ok());
+                let rahmenvertrag = delivered
+                    .reply
+                    .as_ref()
+                    .and_then(|r| r.get("rahmenvertrag_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|s| s.parse::<uuid::Uuid>().ok());
+                let (Some(angebot), Some(rahmenvertrag)) = (angebot, rahmenvertrag) else {
+                    // A replay answer names no contract: the first delivery
+                    // already linked it.
+                    return Ok(());
+                };
+                crate::pg::link_angebot_rahmenvertrag(conn, angebot, rahmenvertrag).await
+            })
+        },
+    ))
 }

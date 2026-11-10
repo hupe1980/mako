@@ -236,7 +236,7 @@ pub(crate) fn score_batch(reads: &[MeterRead]) -> Option<BatchQuality> {
     // Sparte, and scoring a gas delivery with electricity thresholds is the
     // defect the Sparte presets of `metering::vee::validation::Rules` exist to
     // prevent.
-    let sparte = reads.first().map_or(metering::Sparte::Strom, |r| r.sparte);
+    let sparte = reads.first()?.sparte;
     // A read with no span is refused by the store and named by the validation
     // pass; it has no time to cover here.
     let samples: Vec<metering::MeterInterval> =
@@ -551,7 +551,7 @@ pub async fn post_quality_rescore(
         }
     };
 
-    if reads.is_empty() {
+    let Some(sparte) = reads.first().map(|r| r.sparte) else {
         return (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -562,7 +562,7 @@ pub async fn post_quality_rescore(
             })),
         )
             .into_response();
-    }
+    };
 
     // Re-score the window as stored. The reads go in with their own quality
     // flags: presented as `MEASURED`, `NON_BILLABLE` could never fire and a
@@ -570,7 +570,6 @@ pub async fn post_quality_rescore(
     // a rescore is usually asked to settle.
     let samples: Vec<metering::MeterInterval> =
         reads.iter().filter_map(|r| r.interval().ok()).collect();
-    let sparte = reads.first().map_or(metering::Sparte::Strom, |r| r.sparte);
 
     let mut quality = compute_quality(&samples, sparte, from_dt, to_dt);
     quality.intervals_rejected = 0;

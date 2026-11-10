@@ -280,6 +280,30 @@ pub const INVOIC_SONSTIGE_LEISTUNG_STELLEN: &str = "invoic.sonstige-leistung.ste
 /// NB / MSB: issue the MSB-Rechnung (INVOIC 31009).
 pub const WIM_MSB_RECHNUNG_STELLEN: &str = "wim.msb-rechnung.stellen";
 
+// ── The MSB's answers to the ORDERS it receives ───────────────────────────────
+
+/// MSB Strom: answer the NB's Anfrage Sperrung 17116 with ORDRSP 19118 / 19119
+/// out of `E_0488`.
+pub const GPKE_ANFRAGE_SPERRUNG_BEANTWORTEN: &str = "gpke.anfrage-sperrung.beantworten";
+/// gMSB: answer the GNB's Anfrage Sperrung 17116 with ORDRSP 19118 / 19119 out
+/// of `E_1001`.
+pub const GELI_ANFRAGE_SPERRUNG_BEANTWORTEN: &str = "geli.anfrage-sperrung.beantworten";
+/// MSB: answer a received ORDERS 17011 Änderung der Technik with ORDRSP 19005
+/// / 19006 out of `E_0249` / `E_0250` / `E_0279` / `E_0283`.
+pub const WIM_TECHNIK_AENDERUNG_BEANTWORTEN: &str = "wim.technik-aenderung.beantworten";
+/// MSB: refuse an Anfrage / Anforderung / Reklamation von Werten (ORDERS
+/// 17102 / 17004 / 17113) with ORDRSP 19102 / 19007 / 19114.
+pub const GPKE_DATENABRUF_ABLEHNEN: &str = "gpke.datenabruf.ablehnen";
+/// MSB: answer a received GPKE Teil 3 ORDERS (17130, 17121, 17118, 17129) with
+/// ORDRSP 19132 / 19120 / 19127 / 19131.
+pub const GPKE_KONFIGURATION_BEANTWORTEN: &str = "gpke.konfiguration.beantworten";
+/// LF / NB / MSB: send an Anforderung von Werten (ORDERS 17004) to the MSB.
+pub const GPKE_DATENABRUF_ANFORDERN: &str = "gpke.datenabruf.anfordern";
+/// MSBN: announce a Gerätewechselabsicht (ORDERS 17009) to the MSBA.
+pub const WIM_GERAETEWECHSELABSICHT_ANZEIGEN: &str = "wim.geraetewechselabsicht.anzeigen";
+/// MSBN: order the offered devices (ORDERS 17001) from the MSBA.
+pub const WIM_GERAETEUEBERNAHME_BESTELLEN: &str = "wim.geraeteuebernahme.bestellen";
+
 // ── MaBiS Clearingverfahren ───────────────────────────────────────────────────
 
 /// Answer a `MaBiS` Clearingliste with a **Korrekturliste** — one entry per
@@ -388,6 +412,14 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     INVOIC_MMM_STELLEN,
     INVOIC_SONSTIGE_LEISTUNG_STELLEN,
     WIM_MSB_RECHNUNG_STELLEN,
+    GPKE_ANFRAGE_SPERRUNG_BEANTWORTEN,
+    GELI_ANFRAGE_SPERRUNG_BEANTWORTEN,
+    WIM_TECHNIK_AENDERUNG_BEANTWORTEN,
+    GPKE_DATENABRUF_ABLEHNEN,
+    GPKE_KONFIGURATION_BEANTWORTEN,
+    GPKE_DATENABRUF_ANFORDERN,
+    WIM_GERAETEWECHSELABSICHT_ANZEIGEN,
+    WIM_GERAETEUEBERNAHME_BESTELLEN,
 ];
 
 /// Constants `makod` itself needs but no out-of-process caller posts, with why.
@@ -686,19 +718,22 @@ pub struct GeliStammdatenAenderungBeantworten {
 }
 
 /// The body of [`GELI_STAMMDATEN_AENDERUNG_SENDEN`] — the Verantwortlicher's
-/// nicht bilanzierungsrelevante Änderung, one Stammdatum or several.
+/// Stammdatenänderung (UTILMD AHB Gas 1.2 Kap. 5.10–5.11).
 ///
-/// Every data group of the column is Soll `[92]` „Wenn Wert innerhalb SG bzw.
-/// Segment geändert wird" (UTILMD AHB Gas 1.2 Kap. 5.10.1, S. 97–110; Kap.
-/// 5.11.3, S. 120–123), so `gruppen` names what changed. The NB's 44112 reads
-/// each group from marktd on the Änderungsdatum; the LF's 44109 carries its
-/// own facts, stated here.
+/// On a nicht bilanzierungsrelevante 44112 / 44109 every data group of the
+/// column is Soll `[92]` „Wenn Wert innerhalb SG bzw. Segment geändert wird"
+/// (Kap. 5.10.1, S. 97–110; Kap. 5.11.3, S. 120–123), so `gruppen` names what
+/// changed. The bilanzierungsrelevante 44123 and 44120 make `SG8` „Daten der
+/// Marktlokation" Muss whole (Kap. 5.11.1, S. 114–116; Kap. 5.11.4, S. 127),
+/// and the 44175 lists every Messlokation of the new structure (Kap. 5.11.2,
+/// S. 119, `[590]`). The NB's read marktd on the Änderungsdatum; the LF's
+/// carry its own facts, stated here.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeliStammdatenAenderungSenden {
     /// The Marktlokation — `SG5 LOC+172`.
     pub malo_id: String,
-    /// `44109` (LF → NB) or `44112` (NB → LF).
+    /// `44109` / `44120` (LF → NB) or `44112` / `44123` / `44175` (NB → LF).
     pub pid: u32,
     /// The Berechtigter's MP-ID — `NAD+MR` and the UNB recipient.
     pub empfaenger_mp_id: String,
@@ -712,6 +747,8 @@ pub struct GeliStammdatenAenderungSenden {
     /// `GEMEINDERABATT`, `ZUGEORDNETE_MARKTPARTNER`, `GASQUALITAET`,
     /// `MARKTLOKATIONSANSCHRIFT`; on a 44109 `ABRECHNUNGSINTERVALL_LF`,
     /// `GRUPPENZUORDNUNG`, `KUNDE_DES_LF`, `KORRESPONDENZANSCHRIFT_KUNDE_LF`.
+    /// Empty on a 44120, 44123 and 44175, which carry their data whole.
+    #[serde(default)]
     pub gruppen: Vec<String>,
     /// 44109: `SG6 DTM+Z20` Abrechnungsintervall des LF — 1, 3, 6 or 12.
     #[serde(default)]
@@ -723,6 +760,163 @@ pub struct GeliStammdatenAenderungSenden {
     /// `NAD+Z04` Korrespondenzanschrift.
     #[serde(default)]
     pub kunde: Option<crate::utilmd_stammdaten::Kunde>,
+    /// 44120: `SG8 SEQ+Z01` `SG10 CCI+Z19` Bilanzkreis, Muss.
+    #[serde(default)]
+    pub bilanzkreis: Option<String>,
+}
+
+/// The body of `gpke.neuanlage.anmelden` — the Lieferant's Anmeldung neue
+/// Marktlokation, LF → NB: **55600** verbrauchend (UTILMD AHB Strom 2.2 Kap.
+/// 8.4, S. 95–108) or **55601** erzeugend (Kap. 8.5, S. 109–124).
+///
+/// A Marktlokation not yet in the grid has no record the door could resolve
+/// its Netzbetreiber from, so the body names him; the MaLo-ID the Anmeldung
+/// carries only „Wenn bekannt" (Bedingung `[165]`).
+///
+/// | Field | Segment | AHB S. |
+/// |---|---|---|
+/// | `pid` | `SG6 RFF+Z13` — 55600 or 55601 | 99, 113 |
+/// | `nb_mp_id` | `SG2 NAD+MR` | 95, 109 |
+/// | `malo_id` | `SG5 LOC+Z16`, Soll `[165]` | 97, 112 |
+/// | `vertragsbeginn` | `SG4 DTM+92`, `YYYY-MM-DD` | 96, 110 |
+/// | `transaktionsgrund_ergaenzung` | `SG4 STS+7` beside `E02`: 55600 `ZW4` (the default), 55601 `ZW0` / `ZW2` | 96, 110 |
+/// | `bilanzkreis` | `SG8 SEQ+Z79` Produktpaket (Kap. 5.3) | 100, 114 |
+/// | `tranchengroesse` | `SG8 SEQ+Z79` Produkt `9991000002090` — Muss beside `ZW2` (Codeliste der Konfigurationen 1.4 Kap. 6.1.1) | — |
+/// | `haushaltskunde` | `SG8 SEQ+Z01` `SG10 CCI+++Z15`/`Z18` Gruppenzuordnung — 55600 only | 104 |
+/// | `kunde` | `SG12 NAD+Z09` / `NAD+Z04` — Muss on 55600, Kann on 55601 | 106–107, 122 |
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpkeNeuanlageAnmelden {
+    /// `55600` verbrauchende or `55601` erzeugende Marktlokation.
+    pub pid: u32,
+    /// The Netzbetreiber — `NAD+MR` and the UNB recipient.
+    pub nb_mp_id: String,
+    /// The Marktlokation, where already known — `SG5 LOC+Z16`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malo_id: Option<String>,
+    /// `SG4 DTM+92` Datum Vertragsbeginn, `YYYY-MM-DD`.
+    pub vertragsbeginn: String,
+    /// `SG4 STS+7` Ergänzung — the Geschäftsvorfall on a 55601.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaktionsgrund_ergaenzung: Option<String>,
+    /// `SG8 SEQ+Z79` / `SG10 CAV+ZV4` — the Bilanzkreis, an X- or Y-EIC.
+    pub bilanzkreis: String,
+    /// The Tranchengröße of Geschäftsvorfall 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tranchengroesse: Option<Tranchengroesse>,
+    /// `true` for `CCI+++Z15`, a Haushaltskunde; `false` for `Z18` — 55600.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub haushaltskunde: Option<bool>,
+    /// The Kunde des Lieferanten with his Korrespondenzanschrift.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kunde: Option<crate::utilmd_stammdaten::Kunde>,
+}
+
+/// A Tranchengröße as the Codeliste der Konfigurationen 1.4 Kap. 6.1.1 names
+/// it: the Produkteigenschaft (`prozent`, `aufteilungsfaktor`,
+/// `technische_ressourcen`) and its value.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tranchengroesse {
+    /// The Produkteigenschaft.
+    pub art: String,
+    /// Its value — on `prozent` the share in per cent.
+    pub wert: String,
+}
+
+/// The body of [`GPKE_NEUANLAGE_BESTAETIGEN`] and [`GPKE_NEUANLAGE_ABLEHNEN`] —
+/// the NB's answer to an Anmeldung neue Marktlokation 55600 / 55601 (UTILMD
+/// AHB Strom 2.2 Kap. 8.4, S. 96–109; Kap. 8.5, S. 110–124). See
+/// [`GpkeEogAnmelden`] for why it is shared.
+///
+/// The Bestätigungen 55602 / 55603 tell the LF what the NB knows of the new
+/// Marktlokation, and only the NB knows it:
+///
+/// | Field | Segment | AHB |
+/// |---|---|---|
+/// | `transaktionsgrund_ergaenzung` | `SG4 STS+7` DE 9013: 55602 `ZW6` pauschal / `ZW7` gemessen; 55603 the Anmeldung's `ZW0` / `ZW2` | S. 97, 111 |
+/// | `geplantes_produktpaket` | `SG6 RFF+Z60`, the Anmeldung's `SEQ+Z79` Produktpaket-ID by default | S. 100, 115 |
+/// | `messlokationen` | `SG5 LOC+Z17` and one `SG8 SEQ+ZF3` each — on 55602 behind `ZW7` (`[483]`), on 55603 always (`[623]`) | S. 100, 106, 114, 122 |
+/// | `malo_msb` | `SG8 SEQ+Z98` `SG10 CCI+++ZB3` — wherever Messlokationen are named | S. 105, 119 |
+/// | `tranche` | `SG5 LOC+Z21` and `SG8 SEQ+Z15` — on a 55603 behind `ZW2` (`[478]`), nowhere else | S. 113, 119–120 |
+///
+/// An Ablehnung carries none of them. Either answer names the Marktlokation by
+/// `malo_id`, or — when the NB could not identify it — the process by
+/// `process_id`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpkeNeuanlageBeantworten {
+    /// The Marktlokation — `SG5 LOC+Z16`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malo_id: Option<String>,
+    /// The Neuanlage process, for a Marktlokation the NB could not identify.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<String>,
+    /// `SG4 STS+E01` DE 9013 — the `E_0608` Antwortcode.
+    pub antwort_code: String,
+    /// `SG4 STS+E01` DE 1131 — `E_0608` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort_codeliste: Option<String>,
+    /// `SG4 FTX+ACB` — Muss beside `A99`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bemerkung: Option<String>,
+    /// `SG4 STS+7` DE 9013 Ergänzung of a Bestätigung.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaktionsgrund_ergaenzung: Option<String>,
+    /// `SG6 RFF+Z60` — the Produktpaket-ID the NB will implement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geplantes_produktpaket: Option<String>,
+    /// `SG8 SEQ+Z98` — the Messstellenbetreiber of the Marktlokation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malo_msb: Option<AntwortMsb>,
+    /// `SG5 LOC+Z17` / `SG8 SEQ+ZF3` — the Messlokationen, each with its MSB.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messlokationen: Vec<AntwortMesslokation>,
+    /// `SG5 LOC+Z21` / `SG8 SEQ+Z15` — the Tranche of Geschäftsvorfall 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tranche: Option<AntwortTranche>,
+}
+
+/// The Tranche a Bestätigung 55603 names in Geschäftsvorfall 3 (UTILMD AHB
+/// Strom 2.2 Kap. 8.5, S. 113, 119–120).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AntwortTranche {
+    /// `SG5 LOC+Z21` — the Tranche's ID, in the format of a Marktlokations-ID.
+    pub tranche_id: String,
+    /// `SG10 CCI+Z37` — `ZD1` prozentual, `ZD2` Aufteilungsfaktor, `ZH1`
+    /// Aufteilung auf Technische Ressourcen.
+    pub basis: String,
+    /// `SG9 QTY+11` — the share in per cent, beside `ZD1` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prozent: Option<String>,
+}
+
+/// A Messstellenbetreiber as a Bestätigung Anmeldung names it: `SG10
+/// CCI+++ZB3`, `CAV+Z91:<mp_id>::<rolle>:<grundlage>` and `CAV+ZF0:<gmsb_mp_id>`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AntwortMsb {
+    /// `CAV+Z91` DE 1131 — the MSB that operates the Messstelle.
+    pub mp_id: String,
+    /// `CAV+Z91` DE 7110 — `Z39` grundzuständig, `Z40` wettbewerblich, `Z41`
+    /// Auffang.
+    pub rolle: String,
+    /// `CAV+Z91` DE 7110, second occurrence — `Z19` vertragliche Grundlage,
+    /// `Z20` Weiterverpflichtung durch den gMSB.
+    pub grundlage: String,
+    /// `CAV+ZF0` DE 1131 — the grundzuständiger MSB of the Lokation.
+    pub gmsb_mp_id: String,
+}
+
+/// One Messlokation a Bestätigung names, with its Messstellenbetreiber.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AntwortMesslokation {
+    /// `SG5 LOC+Z17` / `SG8 RFF+Z19` — the Messlokations-ID, 33 characters.
+    pub melo_id: String,
+    /// The Messstellenbetreiber of this Messlokation.
+    pub msb: AntwortMsb,
 }
 
 impl GeliLieferbeginnAnmelden {

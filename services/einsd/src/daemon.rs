@@ -136,7 +136,6 @@ impl Daemon for Einsd {
         // one; a repowering clears it, because the new Förderende is a new fact.
         let alert_pool = pool.clone();
         let alert_cfg = Arc::clone(&cfg);
-        let alert_client = Arc::clone(&http_client);
         tokio::spawn(async move {
             let interval_secs = alert_cfg.alert_interval_secs.unwrap_or(21_600);
             loop {
@@ -157,28 +156,34 @@ impl Daemon for Einsd {
                                 days_remaining,
                                 "foerderung_auslaufend — emitting CloudEvent"
                             );
-                            handlers::emit_foerderung_alert_ce(
-                                &alert_cfg,
-                                &alert_client,
-                                &plant.tr_id,
-                                &plant.malo_id,
-                                foerderende,
-                                days_remaining,
-                            )
+                            // The alert and the mark that keeps it from
+                            // repeating commit together; the outbox worker
+                            // delivers it with retry.
+                            let recorded = async {
+                                let mut tx = alert_pool.begin().await?;
+                                handlers::enqueue_foerderung_alert_ce(
+                                    &mut tx,
+                                    &alert_cfg,
+                                    &plant.tr_id,
+                                    &plant.malo_id,
+                                    foerderende,
+                                    days_remaining,
+                                )
+                                .await?;
+                                pg::mark_foerderung_alert_sent(
+                                    &mut *tx,
+                                    &alert_cfg.tenant,
+                                    &plant.tr_id,
+                                )
+                                .await?;
+                                tx.commit().await?;
+                                anyhow::Ok(())
+                            }
                             .await;
-                            // Marked after a successful-or-failed delivery attempt:
-                            // the alert is advisory and `GET /foerderung-auslaufend`
-                            // still lists the plant, so a retry storm is the worse
-                            // failure of the two.
-                            if let Err(e) = pg::mark_foerderung_alert_sent(
-                                &alert_pool,
-                                &alert_cfg.tenant,
-                                &plant.tr_id,
-                            )
-                            .await
-                            {
+                            if let Err(e) = recorded {
                                 tracing::warn!(tr_id = %plant.tr_id, error = %e,
-                                    "alert worker: could not record the emission");
+                                    "alert worker: the alert was not recorded; the next \
+                                     sweep retries it");
                             }
                         }
                     }
@@ -438,7 +443,10 @@ async fn auto_settle_period(
         "auto-settle worker: settling unsettled plants"
     );
     // Signal the batch to agentd's einsd-batch-agent (§52 sweep / review).
-    handlers::emit_batch_due_ce(cfg, client, year, month, plants.len()).await;
+    if let Err(e) = handlers::enqueue_batch_due_ce(pool, cfg, year, month, plants.len()).await {
+        tracing::warn!(year, month, error = %e,
+            "auto-settle worker: the batch-due signal could not be enqueued");
+    }
 
     for anlage in &plants {
         // The same path REST, batch and MCP take: the worker overrides only the

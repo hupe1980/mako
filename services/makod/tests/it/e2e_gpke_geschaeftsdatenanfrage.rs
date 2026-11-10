@@ -116,9 +116,9 @@ async fn state_on(store: &SlateDbStore, key: &str) -> GdaState {
 
 // ── Routing ───────────────────────────────────────────────────────────────────
 
-/// On a NB, no ORDERS PID but 17132 reaches the Geschäftsdatenanfrage, and none
-/// reaches a WiM Stammdaten process: 17103 is GeLi Gas's or nobody's, 17126 is
-/// nobody's and is therefore dead-lettered as an unknown PID.
+/// On a NB, no ORDERS PID but 17132 reaches the Geschäftsdatenanfrage Strom,
+/// and none reaches a WiM Stammdaten process: 17103 and 17126 are GeLi Gas's
+/// or nobody's.
 #[test]
 fn a_nb_routes_only_17132_to_the_geschaeftsdatenanfrage() {
     let nb = DeploymentRoles::from_roles([Marktrolle::Nb]);
@@ -138,10 +138,12 @@ fn a_nb_routes_only_17132_to_the_geschaeftsdatenanfrage() {
             assert_ne!(routed, Some(GDA_WORKFLOW_NAME), "{pid} on {rollen:?}");
             assert_ne!(routed, Some("wim-stammdaten"), "{pid} on {rollen:?}");
         }
+        // 17126 Anfrage Stammdaten Messlokation (Gas) is the Gas NB's.
+        let gas_nb = rollen.contains(&Rolle::NbGas);
         assert_eq!(
             router.route(17_126),
-            None,
-            "17126 Anfrage Stammdaten Messlokation (Gas) has no owner on {rollen:?}"
+            gas_nb.then_some(mako_geli_gas::geschaeftsdatenanfrage::WORKFLOW_NAME),
+            "17126 on {rollen:?}"
         );
         let brennwert = router.route(17_103);
         assert!(

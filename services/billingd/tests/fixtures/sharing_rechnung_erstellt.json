@@ -1,0 +1,20 @@
+{
+  "malo_id": "51238696012",
+  "lf_mp_id": "9900357000004",
+  "is_correction": false,
+  "rechnung": {
+    "rechnungsnummer": "RE-2026-000042",
+    "gesamtbrutto": {
+      "_typ": "BETRAG",
+      "_version": "202607.1.0",
+      "waehrung": "EUR",
+      "wert": "96.79"
+    },
+    "zuZahlen": {
+      "_typ": "BETRAG",
+      "_version": "202607.1.0",
+      "waehrung": "EUR",
+      "wert": "96.79"
+    }
+  }
+}

@@ -597,57 +597,33 @@ CREATE INDEX kp_aktuell ON komponenten_produkte (komp_id) WHERE gueltig_bis IS N
 CREATE INDEX kp_notif   ON komponenten_produkte (tenant, gueltig_von)
     WHERE preisanpassung_notif_sent = false AND initiator = 'LIEFERANT';
 
--- ── Outbound task queue (persist-before-dispatch) ─────────────────────────────
+-- ── § 14a EnWG module state je Komponente (valid-time) ───────────────────────
 --
--- Every side effect vertragd owes another service is an obligation, not a best
--- effort: the NB is waiting for a UTILMD, the customer for a Schlussablesung,
--- billingd for the tariff the contract actually switched to. Firing those from
--- detached tasks meant a restart between the database write and the HTTP call
--- dropped them in silence, with nothing left to retry them.
---
--- The intent is therefore written in the SAME transaction as the contract
--- change, and one worker drains it with backoff and a dead-letter — the same
--- shape as the CloudEvent outbox, for the same reason.
-
-CREATE TABLE outbound_tasks (
-    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant           TEXT        NOT NULL,
-    kind             TEXT        NOT NULL CHECK (kind IN (
-                         'LIEFERBEGINN',      -- processd  UTILMD Anmeldung
-                         'LIEFERENDE',        -- processd  UTILMD Abmeldung
-                         'ABLESUNG_BEGINN',   -- edmd      GPKE Beginnablesung
-                         'ABLESUNG_ENDE',     -- edmd      GPKE Schlussablesung
-                         'ABRECHNUNGSKONTO'   -- accountingd billing account
-                     )),
-    -- The component the task belongs to; NULL for contract-level tasks.
-    komp_id          UUID        REFERENCES vertragskomponenten(id) ON DELETE CASCADE,
-    -- Everything the worker needs to perform the call, captured at enqueue time
-    -- so a retry re-sends byte-identical content and cannot pick up a later,
-    -- unrelated state.
-    payload          JSONB       NOT NULL,
-    -- Exactly-once enqueue. A repeatable action varies the key by what makes it
-    -- distinct ('ABLESUNG_BEGINN:{komp}:{datum}'); a one-shot one does not
-    -- ('LIEFERBEGINN:{komp}'), so an idempotent re-POST of the same
-    -- erp_contract_id cannot enqueue a second UTILMD.
-    dedupe_key       TEXT        NOT NULL,
-    attempts         INTEGER     NOT NULL DEFAULT 0,
-    next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    completed_at     TIMESTAMPTZ,
-    dead_lettered_at TIMESTAMPTZ,
-    last_error       TEXT,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (tenant, dedupe_key)
+-- Which BK8-22/010-A Netzentgelt modules the Anschlussnutzer holds for his
+-- steuerbare Verbrauchseinrichtung: Modul 1 (pauschal) or Modul 2 (prozentual)
+-- as the base, Modul 3 (zeitvariabel) beside Modul 1. billingd selects the
+-- reductions it bills from this, never from the product alone. Stored as
+-- recorded: a combination the Festlegung does not offer stays representable so
+-- the billing engine refuses it rather than the record dropping a module.
+-- Half-open [gueltig_von, gueltig_bis), as komponenten_produkte.
+CREATE TABLE komponenten_sect14a (
+    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant        TEXT        NOT NULL,
+    komp_id       UUID        NOT NULL REFERENCES vertragskomponenten(id) ON DELETE CASCADE,
+    module        TEXT[]      NOT NULL
+                      CHECK (cardinality(module) > 0
+                             AND module <@ ARRAY['MODUL_1', 'MODUL_2', 'MODUL_3']::TEXT[]),
+    gueltig_von   DATE        NOT NULL,
+    gueltig_bis   DATE,       -- exclusive; NULL = open-ended
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ks_range_nonempty CHECK (gueltig_bis IS NULL OR gueltig_von < gueltig_bis),
+    CONSTRAINT ks_no_overlap EXCLUDE USING gist (
+        komp_id WITH =,
+        daterange(gueltig_von, gueltig_bis, '[)') WITH &&
+    )
 );
 
-COMMENT ON TABLE outbound_tasks IS
-    'Durable queue for every outbound call vertragd owes processd / edmd / '
-    'productd / accountingd. Written in the originating transaction and drained '
-    'by one worker with exponential backoff and a dead-letter.';
-
-CREATE INDEX outbound_pending ON outbound_tasks (next_attempt_at)
-    WHERE completed_at IS NULL AND dead_lettered_at IS NULL;
-CREATE INDEX outbound_dead ON outbound_tasks (tenant, dead_lettered_at)
-    WHERE dead_lettered_at IS NOT NULL;
+CREATE INDEX ks_komp ON komponenten_sect14a (komp_id, gueltig_von DESC);
 
 -- ── CloudEvent inbox (idempotent) ─────────────────────────────────────────────
 

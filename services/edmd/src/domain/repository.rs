@@ -200,7 +200,7 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         from: time::OffsetDateTime,
         to: time::OffsetDateTime,
         tenant: &str,
-    ) -> Result<(Option<rust_decimal::Decimal>, Option<rust_decimal::Decimal>), EdmError>;
+    ) -> Result<super::PeriodZaehlerstaende, EdmError>;
 }
 
 /// Persistent store for **ESA "Werte nach Typ 2"** intervals (MSCONS PID 13027).

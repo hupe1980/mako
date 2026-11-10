@@ -335,6 +335,107 @@ async fn the_payout_run_pays_a_receipt_under_its_plant_and_month() {
     assert_eq!(zahlungen[0]["amount_ct"], 12_345, "{body}");
 }
 
+/// einsd states a § 52 Abs. 6 Satz 2 EEG 2023 set-off beside the receipt's
+/// claim; it is recorded as the Aufrechnung that pays that part (§ 13 Abs. 1
+/// Satz 2 EnFG), the payout pays the rest, and a replay records it once.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_sect52_set_off_is_recorded_and_the_rest_is_paid() {
+    let Some((app, pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    let mut ce = p.receipt("ce-s52-1", 1, Uuid::new_v4(), None, "123.45");
+    ce["data"]["sect52"] = serde_json::json!({
+        "anspruch_kumuliert_eur": "1000.00",
+        "monat_eur": "1000.00",
+        "aufgerechnet_eur": "100.00",
+        "rest_eur": "900.00",
+    });
+    deliver(&app, &ce).await;
+    deliver(&app, &ce).await;
+
+    let aufrechnungen: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT amount_ct, gegenforderung FROM eeg_aufrechnungen
+          WHERE tenant = $1 AND tr_id = $2",
+    )
+    .bind(TENANT)
+    .bind(&p.tr_id)
+    .fetch_all(&pool)
+    .await
+    .expect("read");
+    assert_eq!(
+        aufrechnungen,
+        vec![(10_000, "EEG_52_PFLICHTZAHLUNG".to_owned())],
+        "the set-off is recorded once"
+    );
+    assert_eq!(
+        p.orders(&pool).await,
+        vec![(2_345, Some(p.tr_id.clone()))],
+        "the payout pays what the set-off left of the claim"
+    );
+}
+
+/// The Netzbetreiber reads the payouts it ran — over REST and over MCP, each
+/// naming the plant and billing month it paid.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_payouts_run_are_read_over_rest_and_mcp() {
+    let Some((app, _pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    deliver(
+        &app,
+        &p.receipt("ce-read-1", 1, Uuid::new_v4(), None, "42.10"),
+    )
+    .await;
+
+    let (status, body) = call(
+        &app,
+        axum::http::Request::get(format!(
+            "/api/v1/eeg/payouts?year={}&month={}",
+            p.year, p.month
+        ))
+        .body(axum::body::Body::empty())
+        .expect("request"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    let rest = body["payouts"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|o| o["tr_id"] == p.tr_id.as_str())
+        .unwrap_or_else(|| panic!("the payout is listed: {body}"))
+        .clone();
+    assert_eq!(rest["amount_ct"], 4_210);
+
+    let mcp = mako_service::mcp::conformance::Endpoint::serve(app.clone(), "/mcp").await;
+    let answer = mcp
+        .request_2026(
+            "tools/call",
+            Some("list_eeg_payouts"),
+            serde_json::json!({
+                "name": "list_eeg_payouts",
+                "arguments": { "year": p.year, "month": p.month },
+            }),
+        )
+        .await;
+    let text = answer.message["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool result: {}", answer.body));
+    let listed: serde_json::Value = serde_json::from_str(text).expect("JSON");
+    assert!(
+        listed["payouts"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .any(|o| o["tr_id"] == p.tr_id.as_str() && o["amount_ct"] == 4_210),
+        "{listed}"
+    );
+}
+
 /// An order the bank rejected paid nothing, so the chain is outstanding again
 /// and the next run pays it.
 #[tokio::test]
@@ -657,6 +758,72 @@ async fn a_repaid_rueckforderung_leaves_the_list() {
     );
 }
 
+/// § 13 Abs. 1 Satz 1 Nr. 1 EnFG reimburses the § 19 EEG payments „abzüglich
+/// der Rückzahlungen nach § 26 Absatz 1 Satz 3" EEG 2023. A paid period
+/// re-decided to zero and repaid is served with its Rückzahlung as a negative
+/// amount, so the month's payments net to what is owed: nothing.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_rueckzahlung_is_netted_in_the_enfg_payments() {
+    let Some((app, pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    let receipt = Uuid::new_v4();
+    deliver(&app, &p.receipt("ce-enfg-rz-1", 1, receipt, None, "100.00")).await;
+    let e2e = p.end_to_end_refs(&pool).await.remove(0);
+    settle_by_pain002(&app, &e2e).await;
+    deliver(&app, &p.kein_anspruch("ce-enfg-rz-2", 2, receipt)).await;
+    let (status, body) = call(
+        &app,
+        post_json(
+            "/api/v1/eeg/rueckzahlungen",
+            &serde_json::json!({
+                "tr_id": p.tr_id,
+                "billing_year": p.year,
+                "billing_month": p.month,
+                "amount_ct": 10_000,
+                "eingegangen_am": "2026-11-06",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(
+        &app,
+        axum::http::Request::get(format!(
+            "/api/v1/eeg/enfg-zahlungen?year={}&month={}",
+            p.year, p.month
+        ))
+        .body(axum::body::Body::empty())
+        .expect("request"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    let mut zahlungen: Vec<(String, i64)> = body["zahlungen"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter(|z| z["tr_id"] == p.tr_id.as_str())
+        .map(|z| {
+            (
+                z["quelle"].as_str().unwrap_or_default().to_owned(),
+                z["amount_ct"].as_i64().unwrap_or_default(),
+            )
+        })
+        .collect();
+    zahlungen.sort();
+    assert_eq!(
+        zahlungen,
+        vec![
+            ("AUSZAHLUNG".to_owned(), 10_000),
+            ("RUECKZAHLUNG".to_owned(), -10_000)
+        ],
+        "{body}"
+    );
+}
+
 /// Two receipts of one period are applied in the order einsd wrote them
 /// (`ketten_folge`), whatever their CloudEvent times say: a replica whose
 /// clock runs behind stamps the correction earlier than the receipt it
@@ -784,9 +951,10 @@ async fn an_eeg_rueckforderung_is_never_dunned() {
     )
     .await
     .expect("ledger");
-    let run = accountingd::pg::run_auto_dunning(&ledger, &pool, TENANT, 0, 500, 1000, 1500)
-        .await
-        .expect("the dunning run completes");
+    let run =
+        accountingd::pg::run_auto_dunning(&ledger, &pool, TENANT, 0, &crate::receivables::STUFEN)
+            .await
+            .expect("the dunning run completes");
     assert_eq!(run.mahnstufe1_created, 0, "no Mahnstufe 1 on the plant");
     let cases: i64 = sqlx::query_scalar("SELECT count(*) FROM dunning_cases WHERE account_id = $1")
         .bind(account_id)

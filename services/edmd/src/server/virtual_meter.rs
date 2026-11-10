@@ -54,7 +54,13 @@ pub(crate) async fn melo_series(
         .into_iter()
         .filter(|r| r.melo_id.as_deref().is_none_or(|m| m == melo_id.as_str()))
         .collect();
-    let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
+    let Some(sparte) = reads.first().map(|r| r.sparte) else {
+        return Err(ApiError::unprocessable(format!(
+            "Messlokation {melo_id} ({} via MaLo {malo_id}) has no series in the window",
+            direction.as_str()
+        ))
+        .into_response());
+    };
     let projected = crate::domain::energy_intervals(
         &reads,
         match direction {
@@ -473,6 +479,7 @@ mod tests {
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: None,
             mscons_version: None,
+            ablesung_herkunft: None,
         }
     }
 

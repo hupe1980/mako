@@ -106,6 +106,7 @@ contra account. Money is `i64` cents throughout; no `f64` touches it.
 | `SEPA_STORNO` | Debit | Bank | a pain.007 reversal |
 | `MAHNGEBUEHR` | Debit | Mahnerlöse (SKR 4003) | dunning fee per Mahnstufe |
 | `VERZUGSZINSEN` | Debit | Zinserträge (SKR 2650) | § 288 BGB interest |
+| `VERZUGSPAUSCHALE` | by sign | Verzugspauschalen | the § 288 Abs. 5 BGB Pauschale (debit) and its Satz-3 Anrechnung (credit) |
 | `EEG_GUTSCHRIFT` | by sign | EEG-Aufwand | `de.eeg.verguetung.berechnet` — what the receipt changes its chain by |
 | `EEG_MARKTPRAEMIE` | by sign | EEG-Aufwand | `de.eeg.marktpraemie.berechnet` — the same |
 | `EEG_AUSZAHLUNG` | Debit | Bank | an EEG payout the bank settled (pain.002 `ACSC`) |
@@ -150,6 +151,8 @@ unabsorbed advances a settling invoice may deduct, oldest first, with their rate
 | CloudEvent id | every inbound event |
 | `ABSCHLAG-{malo}-{YYYY}-{MM}` | the Abschlagslauf |
 | `mahngebuehr:{case_id}:{stufe}` | the dunning fee, per case |
+| `verzugspauschale:{entry_id}` | the § 288 Abs. 5 BGB Pauschale, per Entgeltforderung |
+| `verzugspauschale-anrechnung:{case_id}` | its Satz-3 Anrechnung, per dunning step |
 | `interest:{malo}:{from}:{to}` | a § 288 BGB charge |
 | `bank:{txn}` | every bank import |
 | `jahresabschluss:{malo}:{year}` | the annual settlement |
@@ -168,7 +171,7 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/webhook` | Inbound CloudEvents (billingd, einsd, invoicd), Standard Webhooks signature |
-| `GET/PUT` | `/api/v1/accounts/{malo_id}` | Account master data (IBAN, Abschlag, `billing_day`) |
+| `GET/PUT` | `/api/v1/accounts/{malo_id}` | Account master data (IBAN, Abschlag, `billing_day`, `verbraucher`) |
 | `GET` | `/api/v1/accounts/{malo_id}/balance` | Balance in ct; `overdue` / `credit` / `settled` |
 | `GET` | `/api/v1/accounts/{malo_id}/ledger` | Movements, newest first, with `opening_ct` |
 | `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Statement for portald; `?from=&to=` returns `eroeffnungssaldo_ct` / `bewegung_ct` / `schlusssaldo_ct` |
@@ -201,6 +204,7 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `POST` | `/api/v1/dunning/{id}/resolve` | Resolve a case |
 | `POST` | `/api/v1/dunning/{id}/abwendung/angebot` | Record the Abwendungsvereinbarung offer (§ 41g Abs. 1 S. 2 EnWG) |
 | `GET/POST` | `/api/v1/dunning/{id}/locks` | Mahnsperren: history; place one |
+| `POST` | `/api/v1/accounts/{malo_id}/locks` | Place one on an account with no dunning case (e.g. `insolvenz`) |
 | `DELETE` | `/api/v1/dunning/locks/{lock_id}` | Lift one, with a reason |
 | `GET` | `/api/v1/dunning/locks/review` | Open-ended locks (`?older_than_days=`) |
 | `GET/POST` | `/api/v1/dunning/{id}/einwaende` | Forderungseinwände (§ 41f Abs. 3 S. 3–5 EnWG) |
@@ -216,12 +220,12 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `POST` | `/api/v1/sepa/camt029` | Apply the bank's answer to a recall |
 | `POST` | `/api/v1/payments/import/camt053` · `camt054` · `camt052` | Bank statements |
 | `POST` | `/api/v1/payments/import` | Flat JSON bank export |
-| `GET` | `/api/v1/eeg/payouts` · `/{payout_id}` | EEG payout orders (`?status=`); one with its pain.001 |
+| `GET` | `/api/v1/eeg/payouts` · `/{payout_id}` | EEG payout orders (`?year=&month=&malo_id=&status=`); one with its pain.001; `NB` (`read-eeg-payouts`) |
 | `POST` | `/api/v1/eeg/payouts/run` | Pay a billing month's receipt chains, Vergütung and Marktprämie, what each has outstanding (`billing_year`, `billing_month` required) |
 | `GET` | `/api/v1/eeg/rueckforderungen` | Receipt chains paid beyond their current receipt, with the amount owed back |
 | `POST` | `/api/v1/eeg/rueckzahlungen` | Record an operator's repayment of one; `409` on a second the same day |
 | `PUT` | `/api/v1/eeg/payouts/{payout_id}/status` | Decoded pain.002 status (`ACCP`/`ACSC`/`RJCT`/`CANC`) |
-| `GET` | `/api/v1/eeg/enfg-zahlungen` | EEG/KWKG payments made in a billing month (`?year=&month=`, both required): `ACSC` payouts and Aufrechnungen |
+| `GET` | `/api/v1/eeg/enfg-zahlungen` | EEG/KWKG payments made in a billing month (`?year=&month=`, both required): `ACSC` payouts, Aufrechnungen, Rückzahlungen (negative) |
 | `POST` | `/api/v1/eeg/aufrechnungen` | Record an Aufrechnung against an EEG claim; `409` on a repeat |
 | `POST` | `/api/v1/jahresabschluss/{malo_id}` | Annual settlement (`?year=`, `?dry_run=true`) |
 | `GET` | `/accountingd/metrics` | Ledger and dunning gauges |
@@ -308,9 +312,9 @@ ledger. Drift is not expected, because the cache is set absolutely.
 ```mermaid
 graph LR
     trigger["verzug_ct > 0, oldest charge older<br/>than grace_days, no open case"]
-    a1["Mahnstufe 1 + fee1 (€0)"]
-    a2["Mahnstufe 2 + fee2 (€5.00)"]
-    a3["Mahnstufe 3 + fee3 (€10.00)<br/>→ Sperr-Sequenz"]
+    a1["Mahnstufe 1 + fee1"]
+    a2["Mahnstufe 2 + fee2"]
+    a3["Mahnstufe 3 + fee3<br/>→ Sperr-Sequenz"]
     resolved["resolved"]
     trigger --> a1 -->|"due_date passed"| a2 -->|"due_date passed"| a3
     a1 & a2 & a3 -->|"paid"| resolved
@@ -323,6 +327,16 @@ first step closes every open case whose account owes nothing and clears its
 `POST /api/v1/dunning/{account_id}/escalate` is the manual override. It takes
 the Mahnstufe and the Zahlungsfrist in days as required fields — they are what
 the Mahnung tells the customer, so an omitted one is refused, not defaulted.
+The automatic run takes the Zahlungsfrist from
+`dunning_zahlungsfrist_stufe{1,2,3}_tage` (at least 1) and the Mahngebühr from
+`dunning_fee_stufe{1,2,3}_ct` (at least 0; `0` charges none); with
+`dunning_auto_enabled = true` each is required, and the daemon refuses to start
+without it.
+
+An account with a live Mahnsperre of any ground or an `ACTIVE` payment plan is
+not dunned: the run opens no Mahnstufe 1, escalates no open case and charges no
+Mahngebühr. A lifted or lapsed lock and a plan that is no longer `ACTIVE`
+re-open dunning on the next run.
 
 **An EEG plant account is never dunned.** An account an EEG receipt was booked
 to (`pg::is_eeg_anlagenkonto`, read off `eeg_belege`) is the plant operator's,
@@ -375,7 +389,7 @@ only while both hold:
   With neither on record the case is excluded.
 
 The Zahlungsverzug is `accounts.verzug_ct`: open debit residuals after clearing,
-less Verzugsschaden (Mahngebühren and Verzugszinsen), less open
+less Verzugsschaden (Mahngebühren, Verzugszinsen, Pauschale), less open
 Forderungseinwände. It is refreshed absolutely on every posting, every objection
 and at the start of each run. Fees are excluded so the dunning cannot push a
 customer over the threshold it is measured against.
@@ -405,6 +419,7 @@ validity and the operator who set it:
 | `schutzbeduerftigkeit` | § 41f Abs. 2 | Konkrete Gefahr für Leib oder Leben |
 | `zahlungsaussicht` | § 41f Abs. 1 S. 2 | Hinreichende Aussicht auf Zahlung |
 | `operator` | — | Operator decision; a note is required |
+| `insolvenz` | § 87 InsO | The debtor is in Insolvenz |
 
 Lifting with **`vereinbarung_gebrochen`** applies § 41g Abs. 1 S. 11: the
 Ankündigung state is cleared, so the sequence resumes with a fresh 8-Werktage
@@ -453,6 +468,24 @@ rates by SQL. A period without a seeded rate **refuses the request**.
 `interest_ct = principal_ct × rate × days / 36500`, integer only, booked as
 `VERZUGSZINSEN`; `rate_segments` itemises each rate in force across a Stichtag.
 
+### Pauschale (§ 288 Abs. 5 BGB)
+
+Every dunning step on an account with `verbraucher = false` (§ 13 BGB, set
+through `PUT /api/v1/accounts/{malo_id}`) claims one Pauschale of 40 EUR per
+open Entgeltforderung — a `RECHNUNG` or an `ABSCHLAG` — keyed on the receivable,
+so a second Mahnung for the same claim books none. A Verbraucher owes none, and
+an account whose status is not recorded is charged none.
+
+Satz 3 credits the Pauschale against the Mahngebühren of the same Verzug (those
+booked since the oldest open Entgeltforderung, so with several open claims the
+Mahngebühren are credited against all their Pauschalen together): each step
+books the Anrechnung
+`min(Pauschalen, Mahngebühren)` not yet credited, in the step's transaction, as
+a negative `VERZUGSPAUSCHALE`. The customer pays the larger of the two, never
+both in full, and the Pauschale never goes negative. It books to its own GL
+account, neither Energieerlöse nor Zinserträge, and is Verzugsschaden: it is
+not part of the § 41f Abs. 3 Zahlungsverzug.
+
 ### Payment plans
 
 ```bash
@@ -471,10 +504,33 @@ curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/payment-plans"
 
 The plan is created `ACTIVE` with `ceil(total_ct / installment_ct)` instalments,
 the last covering the remainder; `installment_ct ≤ 0` is refused. `DELETE
-/api/v1/payment-plans/{id}` sets `CANCELLED`. The schema admits `COMPLETED` and
-`DEFAULTED`, but no code path sets either, and an `ACTIVE` plan does not halt
-the Sperr-Sequenz: record the instalments as a `ratenzahlung_nicht_faellig`
-Einwand or place a Mahnsperre.
+/api/v1/payment-plans/{id}` sets `CANCELLED`. An `ACTIVE` plan keeps the
+account out of every phase of the Sperr-Sequenz.
+
+When the plan is the Ratenzahlung of an Abwendungsvereinbarung, name its lock
+as `abwendung_lock_id`; it must be a live `abwendungsvereinbarung` lock on the
+same account.
+
+The daily worker, before the Sperr-Sequenz, runs `pg::run_payment_plans`, one
+transaction per plan:
+
+- **Matching.** The cash booked on the account since the day the plan was made
+  (`ZAHLUNG` less `BANKRUECKLAST` and `SEPA_STORNO`) pays the instalments in
+  schedule order, recomputed each run. Every payment on the account counts,
+  a current Abschlag's included, as the FIFO Zahlungszuordnung settles the
+  oldest debt first: a covered instalment is `PAID` with the
+  completing payment's `ledger_entry_id` and booking date as `paid_at`; one a
+  Rücklast uncovers returns to `PENDING`. All `PAID` or `WAIVED` → `COMPLETED`.
+- **Default.** An instalment still unpaid after its due date (against
+  `heute()`) turns `OVERDUE` and the plan `DEFAULTED` — on the first run after
+  the due date, with no grace for a payment the bank import has not yet
+  booked. A linked
+  Abwendungsvereinbarung lock is lifted with `vereinbarung_gebrochen` in the
+  same transaction (§ 41g Abs. 1 S. 11 EnWG): the Ankündigung is cleared and
+  `de.accounting.abwendung.gebrochen` emitted, so the case resumes at a fresh
+  § 41f Abs. 5 Ankündigung with no operator call.
+
+`COMPLETED`, `CANCELLED` and `DEFAULTED` are final.
 
 ---
 
@@ -936,7 +992,15 @@ those for one billing month, and einsd builds its EnFG ledger from them:
   `PART`, `PDNG`, `RJCT`, `CANC` and no status are not a payment made;
 - every recorded Aufrechnung — „Als geleistete Zahlungen im Sinn des Satzes 1
   gelten auch Forderungen eines Anlagenbetreibers auf Zahlung, die durch
-  Aufrechnung erloschen sind" (§ 13 Abs. 1 Satz 2 EnFG).
+  Aufrechnung erloschen sind" (§ 13 Abs. 1 Satz 2 EnFG);
+- every Rückzahlung of the month (`quelle: RUECKZAHLUNG`, a negative
+  `amount_ct`): § 13 Abs. 1 Satz 1 Nr. 1 EnFG reimburses the payments
+  „abzüglich der Rückzahlungen nach § 26 Absatz 1 Satz 3" EEG 2023.
+
+A receipt whose event carries `sect52.aufgerechnet_eur` (einsd under
+`[policy] sect52_aufrechnung = "aufrechnen"`) records that much as an
+`EEG_52_PFLICHTZAHLUNG` Aufrechnung on its chain — the difference to what the
+chain already holds — so the payout pays the rest.
 
 `POST /api/v1/eeg/aufrechnungen` records one in `eeg_aufrechnungen`:
 
@@ -1040,7 +1104,8 @@ Every handler extracts `Claims` (a JWT) and checks one Cedar action from
 | Action | Covers | Roles |
 |---|---|---|
 | `read-account` | Account, balance, Kontoauszug, open items, Vorauszahlung, plans, interest, business-partner views | any caller of the tenant |
-| `read-banking` | Mandates, `Zahlungsinformation`, collection entries, EEG payouts and their XML | `LF`, `MSB` |
+| `read-banking` | Mandates, `Zahlungsinformation`, collection entries | `LF`, `MSB` |
+| `read-eeg-payouts` | EEG payout orders and their pain.001 XML, MCP `list_eeg_payouts` | **`NB`** |
 | `read-books` | Trial balance, aging, dunning list, seals, proofs | `LF`, `MSB` |
 | `write-account` | Account master data, Abschlag, Vorauszahlung, `Zahlungsinformation`, business-partner link | `LF`, `MSB` |
 | `post-entry` | Manual booking, clearing, reset, interest, reconcile | `LF`, `MSB` |
@@ -1082,11 +1147,16 @@ erp_hmac_secret       = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
 iban_hash_secret      = "env:ACCOUNTINGD_IBAN_HASH_SECRET"
 
 # Dunning
+# Mahngebühr per Mahnstufe in ct — required with dunning_auto_enabled
 dunning_fee_stufe1_ct = 0
 dunning_fee_stufe2_ct = 500
 dunning_fee_stufe3_ct = 1000
 dunning_grace_days    = 30
 dunning_auto_enabled  = true          # default false
+# Zahlungsfrist per Mahnstufe in days — required with dunning_auto_enabled
+dunning_zahlungsfrist_stufe1_tage = 14
+dunning_zahlungsfrist_stufe2_tage = 14
+dunning_zahlungsfrist_stufe3_tage = 7
 
 # Mahnung documents
 outputd_url           = "http://outputd:9880"
@@ -1168,7 +1238,7 @@ service](@/docs/architecture/_index.md#what-metrics-carries-on-every-service).
 
 ## MCP server
 
-`accountingd` exposes **17 tools** at `/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session), the
+`accountingd` exposes **18 tools** at `/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session), the
 contract pinned by `services/accountingd/mcp.snapshot.json`. Every
 tool is authorized by `mcp_server::tool_action` against the Cedar action its
 REST twin enforces; a tool without a mapping is refused. An `[mcp]` key
@@ -1188,6 +1258,7 @@ authorizes as `User::"<key name>"` with the roles its `roles` list declares.
 | `list_parked_bookings` | Bookings the ledger refused for good, with what to do — typed (`outputSchema`), read by the Desk | `read-books` |
 | `get_parked_booking` | One parked booking by its key — what the assistant's proposal on it reads | `read-books` |
 | `list_sepa_collections` | Collections and their status | `read-banking` |
+| `list_eeg_payouts` | EEG payout orders by plant and billing month (`year`, `month`, `malo_id`, `status`) | `read-eeg-payouts` |
 | `update_abschlag` | Change the monthly advance | `write-account` |
 | `import_payments` | Flat bank-export import | `import-payments` |
 | `run_sepa_collection` | Build a pain.008 for two days out without archiving it | `manage-sepa` |

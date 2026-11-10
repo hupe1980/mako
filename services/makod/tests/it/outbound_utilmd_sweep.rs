@@ -42,6 +42,24 @@ type Antwort = fn() -> PendingOutbox;
 /// The answers that pass their profile, by Prüfidentifikator.
 const SWEEP: &[(u32, Antwort)] = &[
     (55052, bestaetigung_ende_msb),
+    (55602, || {
+        neuanlage(
+            55600,
+            LfAntwort::zustimmung("A09", "E_0608").with_messlokation(MELO, msb()),
+        )
+    }),
+    (55602, || {
+        neuanlage(
+            55600,
+            LfAntwort::zustimmung("A09", "E_0608").with_klassifizierung("ZW6"),
+        )
+    }),
+    (55603, || {
+        neuanlage(
+            55601,
+            LfAntwort::zustimmung("A18", "E_0608").with_messlokation(MELO, msb()),
+        )
+    }),
     (55604, || neuanlage(55600, ablehnung("E_0608"))),
     (55605, || neuanlage(55601, ablehnung("E_0608"))),
     (55608, || {
@@ -123,6 +141,30 @@ async fn the_gas_bestaetigung_eog_passes_its_profile() {
     assert!(found.is_empty(), "44014: {found:#?}");
 }
 
+/// The Strom Anmeldung EoG opens its own process, so it goes out in the
+/// release in force on the day the door writes it and in no other: a 55013
+/// written after the 01.10.2026 cutover is never rendered in UTILMD Strom
+/// S2.1, whose column (UTILMD AHB Strom 2.1 Kap. 8.6) lists no `SG10
+/// CCI+++Z83` Messtechnische Einordnung der Marktlokation, which S2.2's makes
+/// Muss (UTILMD AHB Strom 2.2 Kap. 8.6, S. 136).
+#[tokio::test]
+async fn the_strom_anmeldung_eog_goes_out_in_the_release_of_its_day() {
+    let om = crate::e2e_nb_lf_combined_strom::rendered_55013().await;
+    let pending = PendingOutbox::new(&*om.message_type, &*om.recipient, om.payload.clone());
+    assert_eq!(pending.payload["pid"], 55013);
+    let heute = started_on(mako_fristen::heute());
+    let (_, found) = findings(&pending, &heute);
+    assert!(found.is_empty(), "55013 under {heute}: {found:#?}");
+    // Before the cutover the same Marktlokation is not the same message.
+    let (_, vorher) = findings(&pending, &started_on(STARTS[0]));
+    assert!(
+        vorher
+            .iter()
+            .any(|f| f.contains("Messtechnische Einordnung")),
+        "{vorher:#?}"
+    );
+}
+
 /// The Strom Bestätigung EoG, rendered from marktd's record and the
 /// Versorgungsart the E/G states, passes its profile.
 #[tokio::test]
@@ -200,8 +242,7 @@ fn findings(pending: &PendingOutbox, fv: &FormatVersion) -> (edi_energy::Release
     let mut found: Vec<String> = msg
         .validate_on_date(fv.date().expect("an FV<YYYY>-<MM>-<DD>"))
         .expect("the AHB validation runs")
-        .errors()
-        .iter()
+        .sending_refusals()
         .map(|e| e.message.to_string())
         .collect();
     if !found.is_empty() {
@@ -233,7 +274,14 @@ fn ablehnung(ebd: &str) -> LfAntwort {
     LfAntwort::ablehnung("A99", ebd).with_bemerkung("Sonstiges")
 }
 
-/// The NB's answer to an Anmeldung neue Marktlokation 55600 / 55601.
+/// The grundzuständige Messstellenbetreiber of the swept Lokationen.
+fn msb() -> mako_gpke::ZugeordneterMsb {
+    mako_gpke::ZugeordneterMsb::grundzustaendig(NB)
+}
+
+/// The NB's answer to an Anmeldung neue Marktlokation 55600 / 55601 — the
+/// 55600 a verbrauchende (`ZW4`), the 55601 Geschäftsvorfall 1 (`ZW0`), each
+/// offering Produktpaket 1.
 fn neuanlage(anfrage: u32, antwort: LfAntwort) -> PendingOutbox {
     let received = GpkeNeuanlageWorkflow::handle(
         &Default::default(),
@@ -249,15 +297,26 @@ fn neuanlage(anfrage: u32, antwort: LfAntwort) -> PendingOutbox {
             validation_errors: vec![],
             vorgang: Box::new(LfVorgangsdaten {
                 transaktionsgrund: Some("E02".into()),
+                transaktionsgrund_ergaenzung: Some(
+                    if anfrage == 55601 { "ZW0" } else { "ZW4" }.into(),
+                ),
                 vorgangsnummer: Some("NANLGVG1".into()),
                 ..Default::default()
             }),
+            produktpaket_id: Some("1".into()),
         },
     )
     .expect("the Anmeldung is received");
     let state = fold::<GpkeNeuanlageWorkflow>(Default::default(), &received.events);
-    let answered = GpkeNeuanlageWorkflow::handle(&state, NeuanlageCommand::SendAntwort { antwort })
-        .expect("the answer is accepted");
+    let answered = GpkeNeuanlageWorkflow::handle(
+        &state,
+        NeuanlageCommand::SendAntwort {
+            antwort,
+            marktlokation: None,
+            tranche: None,
+        },
+    )
+    .expect("the answer is accepted");
     the_utilmd(answered.outbox)
 }
 

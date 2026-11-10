@@ -470,6 +470,61 @@ impl OutboxMessage {
     }
 }
 
+// ── Process failure notice ───────────────────────────────────────────────────
+
+/// The `message_type` announcing that a process failed permanently: one of
+/// its Marktnachrichten could not be delivered, so the counterparty never
+/// received it and the process cannot proceed.
+pub const PROCESS_FAILED: &str = "ProcessFailed";
+
+/// The [`PROCESS_FAILED`] notice for `undelivered`, a Marktnachricht whose
+/// delivery was given up, with `reason` as the failure description.
+///
+/// The notice belongs to the same process, conversation and workflow as the
+/// message it reports, and carries the message's `pid` when it had one. Its
+/// id is derived from the undelivered message's, so a retry of the give-up
+/// path enqueues the same notice rather than a second one.
+#[must_use]
+pub fn process_failed_notice(undelivered: &OutboxMessage, reason: &str) -> OutboxMessage {
+    const NOTICE_NS: uuid::Uuid = uuid::Uuid::from_bytes([
+        0x5e, 0x0b, 0x7d, 0x21, 0x9c, 0x44, 0x4a, 0x1f, 0xb3, 0x62, 0x0e, 0x8d, 0x17, 0xa9, 0x4c,
+        0x30,
+    ]);
+    let mut payload = serde_json::json!({
+        "reason": reason,
+        "undelivered_message_id": undelivered.message_id.to_string(),
+        "undelivered_message_type": &*undelivered.message_type,
+        "recipient": &*undelivered.recipient,
+    });
+    if let Some(pid) = undelivered.payload.get("pid") {
+        payload["pid"] = pid.clone();
+    }
+    OutboxMessage {
+        message_id: OutboxMessageId::from_uuid(uuid::Uuid::new_v5(
+            &NOTICE_NS,
+            undelivered.message_id.as_uuid().as_bytes(),
+        )),
+        stream_id: undelivered.stream_id.clone(),
+        process_id: undelivered.process_id,
+        tenant_id: undelivered.tenant_id,
+        correlation_id: undelivered.correlation_id,
+        conversation_id: undelivered.conversation_id,
+        causation_event_id: undelivered.causation_event_id,
+        message_type: PROCESS_FAILED.into(),
+        recipient: undelivered.recipient.clone(),
+        payload,
+        payload_schema: None,
+        created_at: OffsetDateTime::now_utc(),
+        occurred_at: None,
+        deliver_after: None,
+        attempt_count: 0,
+        first_attempt_at: None,
+        workflow_name: undelivered.workflow_name.clone(),
+        format_version: undelivered.format_version.clone(),
+        trace_context: undelivered.trace_context.clone(),
+    }
+}
+
 // ── OutboxStore ───────────────────────────────────────────────────────────────
 
 /// Storage contract for outbox messages.
@@ -865,6 +920,29 @@ mod tests {
             "4012345000023",
             serde_json::json!({"positive": true}),
         )
+    }
+
+    /// The failure notice names the process of the message it reports, keeps
+    /// its `pid`, and is the same notice however often the give-up is retried.
+    #[test]
+    fn a_failure_notice_belongs_to_the_undelivered_messages_process() {
+        let mut undelivered = make_msg();
+        undelivered.payload = serde_json::json!({"pid": 55001});
+        undelivered.workflow_name = "gpke-lieferbeginn".into();
+        let notice = process_failed_notice(&undelivered, "partner unknown");
+        assert_eq!(&*notice.message_type, PROCESS_FAILED);
+        assert_eq!(notice.process_id, undelivered.process_id);
+        assert_eq!(notice.conversation_id, undelivered.conversation_id);
+        assert_eq!(notice.workflow_name, undelivered.workflow_name);
+        assert_eq!(notice.payload["pid"], 55001);
+        assert_eq!(notice.payload["reason"], "partner unknown");
+        assert_eq!(notice.payload["undelivered_message_type"], "APERAK");
+        assert_eq!(
+            notice.message_id,
+            process_failed_notice(&undelivered, "partner unknown").message_id,
+            "a retried give-up enqueues the same notice"
+        );
+        assert_ne!(notice.message_id, undelivered.message_id);
     }
 
     #[tokio::test]

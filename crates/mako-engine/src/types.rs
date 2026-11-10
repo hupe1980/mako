@@ -271,6 +271,11 @@ pub struct MeteredInterval {
     pub unit: Option<String>,
     /// `SG10 QTY` DE 6063, verbatim.
     pub qualifier: String,
+    /// `SG10 STS+Z33` Plausibilisierungshinweis — each DE 9013 Statusanlass,
+    /// verbatim and in wire order (MSCONS MIG 2.5, S. 38: up to four per
+    /// value).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plausibilisierung: Vec<String>,
 }
 
 impl MeteredInterval {
@@ -287,13 +292,162 @@ impl MeteredInterval {
     /// the safe reading for a qualifier this release does not know.
     #[must_use]
     pub fn quality(&self) -> &'static str {
-        match self.qualifier.as_str() {
-            "220" => "MEASURED",
-            "67" => "SUBSTITUTED",
-            "Z18" => "PRELIMINARY",
-            _ => "UNKNOWN",
-        }
+        quality_of(&self.qualifier)
     }
+
+    /// Who obtained the value, when the delivery says so.
+    ///
+    /// The one Plausibilisierungshinweis that names an origin is `Z83`
+    /// „Kundenselbstablesung" — „Messwert wurde durch den Kunden am Zähler
+    /// abgelesen." (MSCONS MIG 2.5, S. 38). The others (`Z84` Leerstand, `Z86`
+    /// Plausibel wg. Kontrollablesung, …) say why a value is plausible, so
+    /// they leave the origin unstated: `None`, never a guess.
+    #[must_use]
+    pub fn herkunft(&self) -> Option<&'static str> {
+        herkunft_of(&self.plausibilisierung)
+    }
+}
+
+/// One Zählerstand an MSCONS carries — a register value at an instant.
+///
+/// The instant is the `SG10 DTM+7` Nutzungszeitpunkt: „Der Nutzungszeitpunkt
+/// ist für den Zählerstand der Zeitpunkt der für die weitere Verarbeitung
+/// relevant ist." (MSCONS MIG 2.5, S. 35). The `DTM+9` Ablesedatum and the
+/// `DTM+60` Ausführungs-/Änderungszeitpunkt are not: „Für die weitere
+/// prozessuale Verarbeitung des Wertes ist ausschließlich der
+/// Nutzungszeitpunkt relevant." (S. 34, S. 36).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeteredZaehlerstand {
+    /// `SG9 PIA` DE 7140 — the OBIS register.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obis_code: Option<String>,
+    /// `SG6 LOC+172` DE 3225, when it names a Messlokation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub melo_id: Option<String>,
+    /// `SG10 DTM+7` — the Nutzungszeitpunkt, RFC 3339.
+    pub at: String,
+    /// `SG10 QTY` DE 6060 — the register value, as written on the wire.
+    pub value: String,
+    /// `SG10 QTY` DE 6411 — the unit, when stated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// `SG10 QTY` DE 6063, verbatim.
+    pub qualifier: String,
+    /// `SG10 STS+Z33` Statusanlass codes, verbatim (MSCONS MIG 2.5, S. 38).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plausibilisierung: Vec<String>,
+}
+
+impl MeteredZaehlerstand {
+    /// The DE 6063 qualifier in the shared quality vocabulary, as
+    /// [`MeteredInterval::quality`].
+    #[must_use]
+    pub fn quality(&self) -> &'static str {
+        quality_of(&self.qualifier)
+    }
+
+    /// Who read the register, as [`MeteredInterval::herkunft`].
+    #[must_use]
+    pub fn herkunft(&self) -> Option<&'static str> {
+        herkunft_of(&self.plausibilisierung)
+    }
+
+    /// One entry of the `zaehlerstaende` key of the `process.completed`
+    /// payload `edmd` stores — the quality and origin already translated.
+    #[must_use]
+    pub fn payload(&self) -> serde_json::Value {
+        serde_json::json!({
+            "at": self.at,
+            "value": self.value,
+            "quality": self.quality(),
+            "obis_code": self.obis_code,
+            "melo_id": self.melo_id,
+            "herkunft": self.herkunft(),
+        })
+    }
+}
+
+/// [`MeteredInterval::quality`] and [`MeteredZaehlerstand::quality`].
+fn quality_of(qualifier: &str) -> &'static str {
+    match qualifier {
+        "220" => "MEASURED",
+        "67" => "SUBSTITUTED",
+        "Z18" => "PRELIMINARY",
+        _ => "UNKNOWN",
+    }
+}
+
+/// [`MeteredInterval::herkunft`] and [`MeteredZaehlerstand::herkunft`].
+fn herkunft_of(plausibilisierung: &[String]) -> Option<&'static str> {
+    plausibilisierung
+        .iter()
+        .any(|c| c == "Z83")
+        .then_some("KUNDENSELBSTABLESUNG")
+}
+
+/// The Messwesen MSCONS PIDs whose Versions-Tupel ends in the `DTM+137`
+/// Nachrichtendatum: 13008 Lastgang Gas, 13018 Lastgang Messlokation and
+/// 13025 Lastgang Marktlokation (MSCONS AHB 3.2 Kap. 5.1, S. 14–15).
+///
+/// The table there is closed — „Die folgende Tabelle beschreibt abschließend,
+/// in welchem Anwendungsfall eine Versionierung der Zeitreihe stattfindet" —
+/// so a Zählerstand or an Energiemenge (13002, 13009, 13015–13017, 13019) is
+/// not versioned at all. 13027 names the Nachrichtendatum too, but its values
+/// are never reconciled, so nothing orders them.
+pub const NACHRICHTENDATUM_VERSIONIERT: &[u32] = &[13_008, 13_018, 13_025];
+
+/// The version a Messwesen MSCONS delivery carries, as the ≥ 14-digit label
+/// `edmd` resolves deliveries by.
+///
+/// For a PID in [`NACHRICHTENDATUM_VERSIONIERT`] that is the `DTM+137`
+/// Nachrichtendatum, read as `CCYYMMDDHHMMZZZ` (format 303) and rendered in
+/// UTC as `YYYYMMDDHHMMSS`, so a later Nachrichtendatum is a larger number.
+/// `None` for every other PID and for a value that is not format 303 — the
+/// delivery then resolves by arrival.
+#[must_use]
+pub fn messwesen_version(pid: u32, nachrichtendatum: &str) -> Option<String> {
+    if !NACHRICHTENDATUM_VERSIONIERT.contains(&pid) {
+        return None;
+    }
+    let v = nachrichtendatum.trim();
+    let (local, zone) = (v.get(..12)?, v.get(12..)?);
+    if !local.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let (sign, hours) = (zone.get(..1)?, zone.get(1..)?);
+    if hours.len() != 2 || !hours.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| local.get(r)?.parse::<u8>().ok();
+    let date = time::Date::from_calendar_date(
+        local.get(..4)?.parse().ok()?,
+        time::Month::try_from(num(4..6)?).ok()?,
+        num(6..8)?,
+    )
+    .ok()?;
+    let at = time::PrimitiveDateTime::new(
+        date,
+        time::Time::from_hms(num(8..10)?, num(10..12)?, 0).ok()?,
+    );
+    let offset_hours: i8 = hours.parse().ok()?;
+    let offset = match sign {
+        "+" => offset_hours,
+        "-" => -offset_hours,
+        _ => return None,
+    };
+    let utc = at
+        .assume_offset(time::UtcOffset::from_hms(offset, 0, 0).ok()?)
+        .to_offset(time::UtcOffset::UTC);
+    Some(format!(
+        "{:04}{:02}{:02}{:02}{:02}{:02}",
+        utc.year(),
+        u8::from(utc.month()),
+        utc.day(),
+        utc.hour(),
+        utc.minute(),
+        utc.second()
+    ))
 }
 
 // ── Pruefidentifikator ────────────────────────────────────────────────────────
@@ -430,6 +584,32 @@ impl std::str::FromStr for Pruefidentifikator {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_versioned_messwesen_pid_carries_its_nachrichtendatum_as_version() {
+        assert_eq!(
+            messwesen_version(13_025, "202607020800+00").as_deref(),
+            Some("20260702080000")
+        );
+        assert_eq!(
+            messwesen_version(13_018, "202607021000+02").as_deref(),
+            Some("20260702080000"),
+            "rendered in UTC"
+        );
+        assert!(
+            messwesen_version(13_025, "202607020900+00")
+                > messwesen_version(13_025, "202607020800+00"),
+            "a later Nachrichtendatum is the later version"
+        );
+    }
+
+    #[test]
+    fn an_unversioned_pid_or_a_malformed_date_carries_none() {
+        assert_eq!(messwesen_version(13_017, "202607020800+00"), None);
+        assert_eq!(messwesen_version(13_016, "202607020800+00"), None);
+        assert_eq!(messwesen_version(13_025, "20260702"), None);
+        assert_eq!(messwesen_version(13_025, "2026070208XX+00"), None);
+    }
 
     #[test]
     fn malo_roundtrip_display_and_serde() {

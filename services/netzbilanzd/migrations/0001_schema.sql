@@ -455,10 +455,11 @@ CREATE TABLE submission_runs (
     -- NUMERIC(18,5) serialized as TEXT for lossless audit trail
     total_kwh               TEXT,
     has_substituted         BOOLEAN     NOT NULL DEFAULT false,
-    -- Only the four states the service actually writes: a state with no
-    -- producer is one a reader filters on and that can never occur.
+    -- Only the three states the service actually writes: a state with no
+    -- producer is one a reader filters on and that can never occur. A run is
+    -- 'pending' until its filing's outcome is known.
     status                  TEXT        NOT NULL DEFAULT 'pending'
-                            CHECK (status IN ('pending','submitted','acked','failed')),
+                            CHECK (status IN ('pending','acked','failed')),
     triggered_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     submitted_at            TIMESTAMPTZ,
     acked_at                TIMESTAMPTZ,

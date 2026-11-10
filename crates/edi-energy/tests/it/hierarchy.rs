@@ -40,13 +40,13 @@ fn contrl_message_response_parsed() {
         panic!("expected CONTRL")
     };
 
-    // UCI must be set and indicate rejection (code 7).
+    // UCI must be set; code 7 is „Übertragung bestätigt" (CONTRL MIG 2.0b, UCI).
     let uci = c.uci().expect("UCI must be present");
     assert_eq!(uci.interchange_ref, "INTERCHANGE01");
     assert_eq!(
         uci.action_code.as_deref(),
         Some("7"),
-        "interchange rejected"
+        "interchange acknowledged"
     );
 
     // Exactly one SG1 group.
@@ -54,7 +54,7 @@ fn contrl_message_response_parsed() {
     let resp = &c.message_responses()[0];
     assert_eq!(resp.ucm.message_ref, "MSG999");
     assert_eq!(resp.ucm.message_type, "UTILMD");
-    assert_eq!(resp.ucm.action_code, "7", "message rejected");
+    assert_eq!(resp.ucm.action_code, "7", "UCM action code as written");
     assert_eq!(resp.ucm.syntax_error.as_deref(), Some("12"));
 
     // One SG2 (UCS) segment error.
@@ -117,7 +117,7 @@ UNT+4+MSG001'";
     assert_eq!(
         c.message_responses()[1].ucm.action_code,
         "4",
-        "second MSG accepted"
+        "second MSG rejected"
     );
 }
 

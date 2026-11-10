@@ -811,6 +811,32 @@ pub const GELI_GAS: &[AntwortObligation] = &[
         source: "GeLi Gas 3.0 Kap. 3.1 — „spätestens jedoch bis zum Ablauf des 3. Werktages \
                  nach Eingang der Kündigung\"",
     },
+    AntwortObligation {
+        trigger_pid: 17_101,
+        name: "Geschäftsdatenanfrage Gas vom LF (Anfrage Stammdaten Marktlokation)",
+        answered_by: "NB",
+        // UTILMD 44035 or the ORDRSP 19101 — Anwendungsübersicht 4.0 lfd. Nr.
+        // 38500 / 38510.
+        antwort_pids: (44_035, 19_101),
+        ebd: None,
+        frist: FristShape::EndOfWerktag(GESCHAEFTSDATENANFRAGE_GAS_WERKTAGE),
+        family: Family::GeliGas,
+        source: "GeLi Gas 3.0 Kap. 4.4 (S. 14) — „spätestens bis zum Ablauf des 10. Werktags \
+                 nach Eingang der Geschäftsdatenanfrage\"",
+    },
+    AntwortObligation {
+        trigger_pid: 17_126,
+        name: "Geschäftsdatenanfrage Gas vom MSB (Anfrage Stammdaten Messlokation)",
+        answered_by: "NB",
+        // UTILMD 44060 or the ORDRSP 19101 — Anwendungsübersicht 4.0 lfd. Nr.
+        // 38580 / 38570.
+        antwort_pids: (44_060, 19_101),
+        ebd: None,
+        frist: FristShape::EndOfWerktag(GESCHAEFTSDATENANFRAGE_GAS_WERKTAGE),
+        family: Family::GeliGas,
+        source: "GeLi Gas 3.0 Kap. 4.4 (S. 14) — „spätestens bis zum Ablauf des 10. Werktags \
+                 nach Eingang der Geschäftsdatenanfrage\"",
+    },
 ];
 
 /// The Gas Lieferbeginn answer window that runs from the **LFA's answer**, not
@@ -1250,6 +1276,12 @@ pub const TECHNIKAENDERUNG_WERKTAGE: u32 = 10;
 /// One window for both legs: the Stammdaten anfrage an den NB and the Werte
 /// anfrage an den MSB are stated identically.
 pub const GESCHAEFTSDATENANFRAGE_WERKTAGE: u32 = 1;
+
+/// Answer window on a Geschäftsdatenanfrage Gas (ORDERS 17101 / 17126), in
+/// Werktage: „unverzüglich, jedoch spätestens bis zum Ablauf des 10. Werktags
+/// nach Eingang der Geschäftsdatenanfrage" (BK7-24-01-009 Anlage Kap. 4.4,
+/// S. 14).
+pub const GESCHAEFTSDATENANFRAGE_GAS_WERKTAGE: u32 = 10;
 
 /// Werktage the MSB has to **refuse** an Anforderung von Werten (ORDERS 17004)
 /// — the Bearbeitungsstand bei Beendigung des Prozesses (ORDRSP 19007) of WiM

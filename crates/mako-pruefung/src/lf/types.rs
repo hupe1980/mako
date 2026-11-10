@@ -134,6 +134,45 @@ impl LfAnfrage {
     /// with its code, its BDEW wording and the dates the answer states, so it
     /// is far larger than the `Ok` side and would make every caller's `Result`
     /// the size of an answer.
+    /// The Termin a Prüfschritt is asked about, or an escalation naming that
+    /// step: a question „zum Folgetag des … genannten Termins" has no answer
+    /// without the Termin.
+    pub(crate) fn termin_oder_eskalation(
+        &self,
+        ebd: &str,
+        pruefschritt: u16,
+    ) -> Result<Date, Box<LfEntscheidung>> {
+        self.termin.ok_or_else(|| {
+            Box::new(LfEntscheidung::eskalation(
+                pruefschritt,
+                format!(
+                    "MaLo {}: die Nachricht nennt keinen Termin, und {ebd} Prüfschritt \
+                     {pruefschritt} fragt nach ihm.",
+                    self.malo_id
+                ),
+            ))
+        })
+    }
+
+    /// The Transaktionsgrund a Prüfschritt branches on, or an escalation
+    /// naming that step: an absent `SG4 STS+7` is not „kein Umzug".
+    pub(crate) fn transaktionsgrund_oder_eskalation(
+        &self,
+        ebd: &str,
+        pruefschritt: u16,
+    ) -> Result<&str, Box<LfEntscheidung>> {
+        self.transaktionsgrund.as_deref().ok_or_else(|| {
+            Box::new(LfEntscheidung::eskalation(
+                pruefschritt,
+                format!(
+                    "MaLo {}: die Nachricht nennt keinen Transaktionsgrund (SG4 STS+7), und \
+                     {ebd} Prüfschritt {pruefschritt} verzweigt auf ihm.",
+                    self.malo_id
+                ),
+            ))
+        })
+    }
+
     pub(crate) fn lokationsart_oder_eskalation(
         &self,
         ebd: &str,

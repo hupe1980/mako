@@ -1,11 +1,8 @@
-//! Tests for `GpkeKonfigurationWorkflow` (ORDERS 17134/17135 — GPKE Teil 4).
+//! Tests for `GpkeKonfigurationWorkflow` (ORDERS 17134 — GPKE Teil 3).
 //!
 //! Covers:
 //! - `NbSendsBeauftragung` → `BeauftragungGesendet` event + ORDERS outbox entry
-//! - `ReceiveOrdrsp { accepted: true }` → `BestaetigungErhalten` event
-//! - `ReceiveOrdrsp { accepted: false }` → `AblehungErhalten` event
-//! - Wrong PID guard and wrong-state guards
-//! - `TimeoutExpired` in terminal state → no-op
+//! - Wrong PID guard
 //! - `SendAntwort { accepted:true, pid:55001, obligations }` → MSCONS 13015 outbox
 //! - `SendAntwort { accepted:true, pid:55001, msb obligations }` → +ORDERS 17134 outbox
 //! - `SendAntwort { accepted:true, pid:55004 }` → no cross-domain outbox (Abmeldung 55004, not Anmeldung 55001)
@@ -13,30 +10,13 @@
 //! obligations are computed by `post_acceptance::lieferbeginn_obligations`
 //! and passed to `SendAntwort`; the workflow itself carries no cross-domain PID knowledge.
 
-use mako_engine::process::RunOptions;
-use std::sync::Arc;
-
 use mako_engine::{
-    builder::EngineBuilder,
-    event_store::InMemoryEventStore,
-    ids::{DeadlineId, TenantId},
     types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
-    version::WorkflowId,
     workflow::Workflow,
 };
 use mako_gpke::{
     GpkeKonfigurationWorkflow, KonfigurationCommand, KonfigurationEvent, KonfigurationState,
 };
-
-fn spawn_process()
--> mako_engine::process::Process<GpkeKonfigurationWorkflow, Arc<InMemoryEventStore>> {
-    let ctx = EngineBuilder::new()
-        .with_event_store(InMemoryEventStore::new())
-        .build();
-    let tenant_id = TenantId::new();
-    let workflow_id = WorkflowId::new("gpke-konfiguration", "FV2025-10-01");
-    ctx.spawn::<GpkeKonfigurationWorkflow>(tenant_id, workflow_id)
-}
 
 fn beauftragung_cmd() -> KonfigurationCommand {
     KonfigurationCommand::NbSendsBeauftragung {
@@ -78,14 +58,14 @@ fn nb_sends_beauftragung_emits_event_and_outbox() {
     assert_eq!(payload["malo"].as_str().unwrap(), "51238696781");
 }
 
-/// Wrong ORDERS PID (not 17134 or 17135) must be rejected.
+/// An ORDERS other than the NB's 17134 is rejected.
 #[test]
 fn wrong_orders_pid_returns_error() {
     let state = KonfigurationState::New;
     let result = GpkeKonfigurationWorkflow::handle(
         &state,
         KonfigurationCommand::NbSendsBeauftragung {
-            orders_pid: Pruefidentifikator::new(17001).unwrap(), // GeLi Gas PID — wrong
+            orders_pid: Pruefidentifikator::new(17001).unwrap(), // WiM Geräteübernahme — wrong
             msb_mp_id: MarktpartnerCode::new("9904357000003"),
             malo: MaLo::new("51238696781"),
             new_supplier: MarktpartnerCode::new("4012345000023"),
@@ -95,146 +75,6 @@ fn wrong_orders_pid_returns_error() {
     assert!(
         result.is_err(),
         "wrong PID must produce WorkflowError::Rejected"
-    );
-}
-
-// ── ORDRSP 19001 acceptance → Bestaetigt ─────────────────────────────────────
-
-/// After `BeauftragungGesendet`, receiving ORDRSP 19001 transitions to `Bestaetigt`.
-#[tokio::test]
-async fn receive_ordrsp_acceptance_transitions_to_bestaetigt() {
-    let process = spawn_process();
-
-    process
-        .run(beauftragung_cmd(), RunOptions::new())
-        .await
-        .expect("setup must succeed");
-
-    let envelopes = process
-        .run(
-            KonfigurationCommand::ReceiveOrdrsp {
-                pid: Pruefidentifikator::new(19001).unwrap(),
-                accepted: true,
-                reason: None,
-                message_ref: MessageRef::new("ORDRSP-2025-001"),
-            },
-            RunOptions::new(),
-        )
-        .await
-        .expect("ORDRSP acceptance must succeed");
-
-    assert_eq!(envelopes.len(), 1);
-    assert_eq!(
-        envelopes[0].event_type.as_ref(),
-        "KonfigurationBestaetigungErhalten",
-    );
-
-    let state = process.state().await.expect("state must rebuild");
-    assert!(
-        matches!(state, KonfigurationState::Bestaetigt { .. }),
-        "state must be Bestaetigt after 19001; got {:?}",
-        state.label()
-    );
-}
-
-// ── ORDRSP 19002 rejection → Abgelehnt ───────────────────────────────────────
-
-/// After `BeauftragungGesendet`, receiving ORDRSP 19002 transitions to `Abgelehnt`.
-#[tokio::test]
-async fn receive_ordrsp_rejection_transitions_to_abgelehnt() {
-    let process = spawn_process();
-
-    process
-        .run(beauftragung_cmd(), RunOptions::new())
-        .await
-        .expect("setup must succeed");
-
-    let envelopes = process
-        .run(
-            KonfigurationCommand::ReceiveOrdrsp {
-                pid: Pruefidentifikator::new(19002).unwrap(),
-                accepted: false,
-                reason: Some("Messpunkt nicht bekannt".to_owned()),
-                message_ref: MessageRef::new("ORDRSP-2025-002"),
-            },
-            RunOptions::new(),
-        )
-        .await
-        .expect("ORDRSP rejection must succeed");
-
-    assert_eq!(envelopes.len(), 1);
-    assert_eq!(
-        envelopes[0].event_type.as_ref(),
-        "KonfigurationAblehungErhalten",
-    );
-
-    let state = process.state().await.expect("state must rebuild");
-    if let KonfigurationState::Abgelehnt { reason, .. } = state {
-        assert_eq!(reason, "Messpunkt nicht bekannt");
-    } else {
-        panic!(
-            "state must be Abgelehnt after 19002; got {:?}",
-            state.label()
-        );
-    }
-}
-
-// ── ReceiveOrdrsp from New state → InvalidState ───────────────────────────────
-
-#[test]
-fn receive_ordrsp_from_new_state_returns_error() {
-    let state = KonfigurationState::New;
-    let result = GpkeKonfigurationWorkflow::handle(
-        &state,
-        KonfigurationCommand::ReceiveOrdrsp {
-            pid: Pruefidentifikator::new(19001).unwrap(),
-            accepted: true,
-            reason: None,
-            message_ref: MessageRef::new("ORDRSP-EARLY"),
-        },
-    );
-    assert!(result.is_err(), "ReceiveOrdrsp in New state must fail");
-}
-
-// ── TimeoutExpired in terminal state is a no-op ───────────────────────────────
-
-#[tokio::test]
-async fn timeout_in_terminal_state_is_noop() {
-    let process = spawn_process();
-
-    // Advance to Bestaetigt terminal state.
-    process
-        .run(beauftragung_cmd(), RunOptions::new())
-        .await
-        .expect("setup");
-    process
-        .run(
-            KonfigurationCommand::ReceiveOrdrsp {
-                pid: Pruefidentifikator::new(19001).unwrap(),
-                accepted: true,
-                reason: None,
-                message_ref: MessageRef::new("ORDRSP-NOOP"),
-            },
-            RunOptions::new(),
-        )
-        .await
-        .expect("accept");
-
-    // Timeout in a terminal state must produce zero events.
-    let envelopes = process
-        .run(
-            KonfigurationCommand::TimeoutExpired {
-                deadline_id: DeadlineId::new(),
-                label: "konfiguration-deadline".into(),
-            },
-            RunOptions::new(),
-        )
-        .await
-        .expect("timeout in terminal state must succeed");
-
-    assert!(
-        envelopes.is_empty(),
-        "no events must be emitted for a timeout in a terminal state"
     );
 }
 
@@ -429,13 +269,23 @@ fn send_antwort_abmeldung_accepted_no_cross_domain_outbox() {
     )
     .expect("SendAntwort must succeed for Abmeldung");
 
+    let types: Vec<&str> = output
+        .outbox
+        .iter()
+        .map(|o| o.message_type.as_ref())
+        .collect();
     assert_eq!(
-        output.outbox.len(),
-        1,
-        "PID 55004 accepted must enqueue only UTILMD 55005 (no MSCONS/ORDERS)"
+        types,
+        ["UTILMD", "ProcessCompleted"],
+        "PID 55004 accepted enqueues the UTILMD 55005 and its completion — no MSCONS/ORDERS"
     );
-    assert_eq!(output.outbox[0].message_type.as_ref(), "UTILMD");
     assert_eq!(output.outbox[0].payload["pid"].as_u64().unwrap(), 55005);
+    // The NB's marktd ends the Abmeldender's assignment on it.
+    let completed = &output.outbox[1].payload;
+    assert_eq!(completed["pid"], 55005);
+    assert_eq!(completed["old_supplier"], "4012345000023");
+    assert_eq!(completed["process_date"], "20261001");
+    assert_eq!(completed["antwortcode"], "A51");
 }
 
 /// The NB's answer code for a Lieferbeginn — `A51` out of `E_0623`.

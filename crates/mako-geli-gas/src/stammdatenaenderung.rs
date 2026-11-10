@@ -100,6 +100,11 @@ pub const STAMMDATEN_PAIRS: &[(u32, u32, bool)] = &[
     (44160, 44161, false), // NB → LF (weitergeleitet)
 ];
 
+/// The Stammdatenänderung PIDs a gMSB receives: the NB's 44113 („an MSB mit
+/// Prüfidentifikator 44113", UTILMD AHB Gas 1.2 Kap. 5.10.1, S. 97), answered
+/// 44115.
+pub const MSB_EMPFANGENE_PIDS: &[u32] = &[44_113];
+
 /// G8–G10 Anfrage-family PIDs — the full set routed to this workflow (requests
 /// plus their Antwort/Ablehnung PIDs). The request PIDs we answer as data owner
 /// are in [`ANFRAGE_ANTWORT_PAIRS`]; the remaining Antwort/Ablehnung PIDs are the
@@ -951,7 +956,14 @@ impl CommandPayload for GasStammdatenCommand {}
 
 /// Build the `ProcessCompleted` outbox payload that drives the marktd apply
 /// (only on Zustimmung of a MaLo change).
-fn apply_outbox(data: &GasStammdatenData, patch: &serde_json::Value) -> PendingOutbox {
+///
+/// The Antwortcode and the Codeliste it was drawn from ride beside the patch.
+fn apply_outbox(
+    data: &GasStammdatenData,
+    patch: &serde_json::Value,
+    antwort_code: &str,
+    codeliste: &str,
+) -> PendingOutbox {
     PendingOutbox::new(
         "ProcessCompleted",
         "",
@@ -961,6 +973,10 @@ fn apply_outbox(data: &GasStammdatenData, patch: &serde_json::Value) -> PendingO
             "objekt":           "MARKTLOKATION",
             "aenderungsdatum":  data.aenderungsdatum,
             "stammdaten_patch": patch,
+            "accepted":         true,
+            "outcome":          "accepted",
+            "antwortcode":      antwort_code,
+            "codeliste":        codeliste,
         }),
     )
 }
@@ -1433,7 +1449,7 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                 // Apply to marktd only on Zustimmung (the patch captured at
                 // ingest). Ablehnung → no apply.
                 if zustimmung && data.patch.as_object().is_some_and(|o| !o.is_empty()) {
-                    outbox.push(apply_outbox(data, &data.patch));
+                    outbox.push(apply_outbox(data, &data.patch, &antwort_code, codeliste));
                 }
                 Ok(WorkflowOutput::with_outbox(
                     vec![GasStammdatenEvent::AntwortGesendet {

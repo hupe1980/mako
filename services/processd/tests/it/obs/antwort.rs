@@ -118,6 +118,11 @@ async fn a_refused_anmeldung_keeps_the_code_the_netzbetreiber_sent() {
     .expect("completed");
 
     let answered = obs.repo.get(process, TENANT).await.unwrap().expect("row");
+    assert_eq!(
+        answered.state,
+        processd::obs::domain::ProcessState::Rejected,
+        "an Ablehnung completes the process without doing what it set out to do"
+    );
     assert_eq!(answered.antwort_code.as_deref(), Some("A02"));
     assert_eq!(answered.antwort_codeliste.as_deref(), Some("E_0622"));
     assert_eq!(
@@ -246,4 +251,160 @@ async fn the_code_the_workflow_states_is_the_code_the_read_model_keeps() {
     assert_eq!(row.antwort_code.as_deref(), Some("A02"));
     assert_eq!(row.antwort_codeliste.as_deref(), Some("E_0622"));
     assert!(row.bedeutung().is_some());
+    assert_eq!(
+        row.state,
+        processd::obs::domain::ProcessState::Rejected,
+        "the verdict the workflow states is the state the read model keeps"
+    );
+}
+
+/// Project the `ProcessCompleted` a workflow queued, as makod's ERP worker
+/// delivers it, and read the row back.
+async fn project_completion(
+    pool: &sqlx::PgPool,
+    workflow: &str,
+    pid: u32,
+    payload: serde_json::Value,
+) -> processd::obs::domain::ProcessProjection {
+    let obs = state(pool);
+    let process = Uuid::new_v4();
+    let mut ce = event(
+        mako_events::mako::PROCESS_COMPLETED,
+        process,
+        pid,
+        datetime!(2026-11-02 10:00 UTC),
+        payload,
+    );
+    ce["makoworkflow"] = serde_json::json!(workflow);
+    project(&obs, &ce).await.expect("completed");
+    obs.repo.get(process, TENANT).await.unwrap().expect("row")
+}
+
+/// The MSBA's ORDRSP 19016 refusing a Gerätewechselabsicht with `E17` ends
+/// the process, and its code reaches the read model with the Codeliste the
+/// ORDRSP names — worded by the BDEW, not by a code alone.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_wim_19016_e17_reaches_the_read_model_with_its_wording() {
+    use mako_engine::types::{DeviceId, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow as _;
+    use mako_wim::geraeteubernahme::{
+        GeraeteubernahmeCommand, GeraeteubernahmeState, WimGeraeteubernahmeWorkflow,
+    };
+
+    let Some((pool, _pg)) = pg_pool().await else {
+        return;
+    };
+    // Anzeige on Mon 2026-03-02 for Wed 2026-03-04 — inside the
+    // Mindestvorlaufzeit, so the 19016 `E17` goes out at once.
+    let out = WimGeraeteubernahmeWorkflow::handle(
+        &GeraeteubernahmeState::default(),
+        GeraeteubernahmeCommand::ReceiveOrders {
+            pid: Pruefidentifikator::new(17_009).unwrap(),
+            sender: MarktpartnerCode::new("9900000000001"),
+            receiver: MarktpartnerCode::new(TENANT),
+            melo_id: MeLo::new("DE0000000001234567890000000000001"),
+            device_id: DeviceId::new("1ESY1161234567"),
+            document_date: "20260302".to_owned(),
+            termin: Some("20260304".to_owned()),
+            message_ref: MessageRef::new("ORD-1"),
+            orders_nummer: "ORD-DOC-1".to_owned(),
+            validation_passed: true,
+            validation_errors: vec![],
+            sparte: mako_engine::types::Sparte::Strom,
+            received_at: datetime!(2026-03-02 09:00 UTC),
+        },
+    )
+    .expect("the 17009 is answered");
+    let completed = out
+        .outbox
+        .iter()
+        .find(|o| o.message_type.as_ref() == "ProcessCompleted")
+        .expect("the refusal queues its completion");
+    let row = project_completion(
+        &pool,
+        "wim-geraeteubernahme",
+        19_016,
+        completed.payload.clone(),
+    )
+    .await;
+    assert_eq!(row.antwort_code.as_deref(), Some("E17"));
+    assert_eq!(row.antwort_codeliste.as_deref(), Some("S_0066"));
+    assert_eq!(
+        row.bedeutung(),
+        mako_pruefung::codes::lies("S_0066", "E17").map(|c| c.bedeutung)
+    );
+    assert!(row.bedeutung().is_some());
+    assert_eq!(row.state, processd::obs::domain::ProcessState::Rejected);
+}
+
+/// The NB's own Ablehnung 55003 states its code too: the reason it gave
+/// reaches its own read model, not only the LF's.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_nbs_55003_reaches_the_read_model_with_its_wording() {
+    use mako_engine::types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow as _;
+    use mako_gpke::{
+        GpkeSupplierChangeWorkflow as W, LfAntwort, SupplierChangeCommand, SupplierChangeState,
+    };
+
+    let Some((pool, _pg)) = pg_pool().await else {
+        return;
+    };
+    let received = W::handle(
+        &SupplierChangeState::default(),
+        SupplierChangeCommand::ReceiveUtilmd {
+            pid: Pruefidentifikator::new(55_001).unwrap(),
+            sender: MarktpartnerCode::new("9911111111111"),
+            receiver: MarktpartnerCode::new(TENANT),
+            location_id: MaLo::new("51238696012"),
+            document_date: "20261020".to_owned(),
+            process_date: "20261201".to_owned(),
+            bilanzierungsgebiet: None,
+            bilanzierungsmethode: None,
+            fallgruppe: None,
+            transaktionsgrund: Some("E01".to_owned()),
+            transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
+            veraeusserungsform: None,
+            tranchengroesse_prozent: None,
+            vorgangsnummer: None,
+            produktpaket_id: Some("1".to_owned()),
+            kunde_name: None,
+            kunde_namensformat: None,
+            message_ref: MessageRef::new("ANM-1"),
+            validation_passed: true,
+            validation_errors: vec![],
+        },
+    )
+    .expect("the 55001 is received");
+    let pending = received
+        .events
+        .iter()
+        .fold(SupplierChangeState::default(), W::apply);
+    let answered = W::handle(
+        &pending,
+        SupplierChangeCommand::SendAntwort {
+            antwort: LfAntwort::ablehnung("A02", "E_0622"),
+            obligations: vec![],
+            lfa_lieferende: None,
+        },
+    )
+    .expect("the 55003 is queued");
+    let completed = answered
+        .outbox
+        .iter()
+        .find(|o| o.message_type.as_ref() == "ProcessCompleted")
+        .expect("the 55003 queues its completion");
+    let row = project_completion(
+        &pool,
+        "gpke-supplier-change",
+        55_003,
+        completed.payload.clone(),
+    )
+    .await;
+    assert_eq!(row.antwort_code.as_deref(), Some("A02"));
+    assert_eq!(row.antwort_codeliste.as_deref(), Some("E_0622"));
+    assert!(row.bedeutung().is_some());
+    assert_eq!(row.state, processd::obs::domain::ProcessState::Rejected);
 }

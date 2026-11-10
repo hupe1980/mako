@@ -46,6 +46,10 @@ let report = msg.validate_against(&Release::new("S2.1"))?;   // UTILMD Strom 2.1
 // A valid report still carries warnings — always inspect severity.
 if report.is_valid() { /* … */ }
 
+// What mako sends must also be free of Formatbedingung (`FMT-`) warnings,
+// which a receiver answers with APERAK Z35: a sender asks `is_sendable()`.
+if report.is_sendable() { /* … */ }
+
 // `iter_issues()` walks every issue; `errors()`, `criticals()`, `warnings()`
 // and `infos()` take one bucket. `severity` and `rule_id` are **fields** on
 // `edifact_rs::ValidationIssue`, not methods.

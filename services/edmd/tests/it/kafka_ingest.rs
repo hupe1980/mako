@@ -73,6 +73,7 @@ async fn produced_batches_are_stored_and_poison_pills_committed_past() {
     });
     let anomalous = serde_json::json!({
         "malo_id": "51238696012",
+        "sparte": "STROM",
         "intervals": [interval(t + time::Duration::minutes(45), "-4")],
     });
 

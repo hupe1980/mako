@@ -25,11 +25,13 @@ pub(crate) struct CreateReadingOrderRequest {
     pub ausfuehrt_bis: Option<time::Date>,
     pub auftrag_position_id: Option<uuid::Uuid>,
     pub insrpt_process_id: Option<String>,
-    /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`.
+    /// `STROM` · `GAS` · `WAERME` · `WASSER` — required.
     ///
     /// Decides the unit of the Zählerstand this order will report, so it is part
     /// of the order rather than of the completion: the person reading the meter
-    /// should not be the one deciding what commodity it measures.
+    /// should not be the one deciding what commodity it measures. Kept optional
+    /// in the type so an order without one is answered with a refusal naming
+    /// the field rather than a deserialisation error.
     #[serde(default)]
     pub sparte: Option<String>,
     /// OBIS register to be read, when it is known.
@@ -106,7 +108,13 @@ pub(crate) async fn create_reading_order(
     // this order will report, and a gas reading filed as electricity is a
     // register value in the wrong dimension.
     let sparte = match req.sparte.as_deref() {
-        None => crate::domain::Sparte::Strom,
+        None => {
+            return ApiError::unprocessable_with(
+                "sparte is required: it decides the unit of the Zählerstand",
+                serde_json::json!({ "expected": crate::domain::Sparte::CODES }),
+            )
+            .into_response();
+        }
         Some(raw) => match crate::domain::parse_sparte(raw) {
             Some(s) => s,
             None => {
@@ -298,12 +306,19 @@ pub(crate) async fn complete_reading_order(
     };
 
     let malo_id: String = row.try_get("malo_id").unwrap_or_default();
-    let sparte = row
+    // The column is `NOT NULL` under a `CHECK`, so a row without a Sparte
+    // this service reads is a broken row, not an electricity order.
+    let Some(sparte) = row
         .try_get::<String, _>("sparte")
         .ok()
         .as_deref()
         .and_then(crate::domain::parse_sparte)
-        .unwrap_or(crate::domain::Sparte::Strom);
+    else {
+        return ApiError::internal(anyhow::anyhow!(
+            "reading order {id} carries no readable sparte"
+        ))
+        .into_response();
+    };
     let obis_code: Option<String> = row.try_get("obis_code").unwrap_or(None);
 
     // The register value in the unit the register counts — the same rule the
@@ -373,6 +388,7 @@ pub(crate) async fn complete_reading_order(
             source: IngestionSource::Manual,
             sender_mp_id: None,
             push_session: None,
+            ablesung_herkunft: None,
         };
         if let Err(e) = state
             .repo

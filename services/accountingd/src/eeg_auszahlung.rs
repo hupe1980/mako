@@ -158,6 +158,9 @@ pub struct Beleg {
     pub ketten_folge: i64,
     pub bank_iban: Option<String>,
     pub zahlungsempfaenger: Option<String>,
+    /// The part of a § 52 EEG 2023 Pflichtzahlung einsd set off against this
+    /// receipt's claim (§ 52 Abs. 6 Satz 2), in ct; 0 where none was.
+    pub sect52_aufgerechnet_ct: i64,
 }
 
 /// What recording a receipt did.
@@ -287,6 +290,7 @@ pub async fn erfasse(
         anspruch_ct: r.get("anspruch_ct"),
         ketten_folge: r.get("ketten_folge"),
     });
+    let wird_aktuell = aktuell.is_none_or(|a| beleg.ketten_folge > a.ketten_folge);
     let delta = gutschrift_delta(beleg.anspruch_ct, beleg.ketten_folge, aktuell);
     sqlx::query(
         "INSERT INTO eeg_belege
@@ -331,10 +335,69 @@ pub async fn erfasse(
             .await
             .map_err(anyhow::Error::from)?;
     }
+    if wird_aktuell && beleg.sect52_aufgerechnet_ct > 0 {
+        erfasse_sect52_aufrechnung(conn, tenant, beleg, heute).await?;
+    }
     Ok(Erfasst {
         neu: true,
         gutschrift_delta_ct: delta,
     })
+}
+
+/// Record the § 52 Abs. 6 Satz 2 EEG 2023 Aufrechnung a receipt states, under
+/// the chain lock [`erfasse`] holds.
+///
+/// The receipt states the whole set-off for its period, so what is recorded is
+/// the difference to the § 52 Aufrechnungen already on file for the chain: a
+/// correction that sets off more adds the difference, one that sets off less
+/// adds nothing. An Aufrechnung counts as paid (§ 13 Abs. 1 Satz 2 EnFG), so
+/// [`zahle`] pays only what is left of the claim.
+async fn erfasse_sect52_aufrechnung(
+    conn: &mut PgConnection,
+    tenant: &str,
+    beleg: &Beleg,
+    heute: Date,
+) -> anyhow::Result<()> {
+    let token = crate::enfg::Gegenforderung::Eeg52Pflichtzahlung.token();
+    let erfasst: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(amount_ct), 0)::bigint FROM eeg_aufrechnungen
+          WHERE tenant = $1 AND tr_id = $2 AND billing_year = $3 AND billing_month = $4
+            AND gegenforderung = $5",
+    )
+    .bind(tenant)
+    .bind(&beleg.tr_id)
+    .bind(beleg.billing_year)
+    .bind(beleg.billing_month)
+    .bind(token)
+    .fetch_one(&mut *conn)
+    .await?;
+    let neu = beleg.sect52_aufgerechnet_ct.saturating_sub(erfasst);
+    if neu <= 0 {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO eeg_aufrechnungen
+             (tenant, tr_id, malo_id, billing_year, billing_month, amount_ct,
+              gegenforderung, erklaert_am, vermerk, erfasst_von)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'einsd')
+         ON CONFLICT (tenant, tr_id, billing_year, billing_month, gegenforderung, erklaert_am)
+         DO UPDATE SET amount_ct = eeg_aufrechnungen.amount_ct + EXCLUDED.amount_ct",
+    )
+    .bind(tenant)
+    .bind(&beleg.tr_id)
+    .bind(&beleg.malo_id)
+    .bind(beleg.billing_year)
+    .bind(beleg.billing_month)
+    .bind(neu)
+    .bind(token)
+    .bind(heute)
+    .bind(format!(
+        "§ 52 Abs. 6 Satz 2 EEG 2023 — einsd-Beleg {}",
+        beleg.receipt_id
+    ))
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }
 
 /// One row of `eeg_ketten`: a chain's current receipt and what was paid for it.

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "accountingd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "agentd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "agentplane",
  "anyhow",
@@ -384,9 +384,9 @@ dependencies = [
 
 [[package]]
 name = "arc-swap"
-version = "1.9.4"
+version = "1.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db4c94f57a570fce5d381be3289b3f79aef6332d72948fe82ab5772e423ccf92"
+checksum = "84a22b5d51209f6de83d37a0b33d320acb8da88823e42a94c075140708f032a5"
 dependencies = [
  "rustversion",
 ]
@@ -870,9 +870,9 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws-config"
-version = "1.13.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "939e256cfe0ed68e96d32f194339d88210d5c10685cff0787400158f852c6819"
+checksum = "515fb9175dcf49db2eaa95b7913326d95469172e4ef4bec8b7888b8304c6e655"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -893,8 +893,8 @@ dependencies = [
  "fastrand",
  "hex",
  "http",
- "p256 0.13.2",
- "rand 0.8.8",
+ "p256 0.14.0",
+ "rand 0.10.3",
  "sha1 0.10.7",
  "sha2 0.10.9",
  "time",
@@ -942,9 +942,9 @@ dependencies = [
 
 [[package]]
 name = "aws-runtime"
-version = "1.10.2"
+version = "1.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a0cc2144962cc5e358467b16e3d82981b1d424a7c3d34602be0036103814a1a"
+checksum = "f78d86ab4bb091d41e9d045810a6a46149ee3af579d510a4c23031e8872a4654"
 dependencies = [
  "aws-credential-types",
  "aws-sigv4",
@@ -968,9 +968,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-bedrockruntime"
-version = "1.153.0"
+version = "1.154.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89b8aeb4b1b6d5f9d377264cff21b4e4d773e66ee3c5582b4099a8fbc702bdb3"
+checksum = "fe9c71410c1af9d24a806551c2742fa44beb95ed98990c83e3357ab6b796e6ff"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -996,9 +996,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-signin"
-version = "1.33.0"
+version = "1.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5408bd883345aa24f02fb31ee6fcc6338607dde9c1b680cb8825838767a965a4"
+checksum = "b912987654c28db0d47b88655e58607e2645d0604321a27e41a1df5450365379"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1021,9 +1021,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sso"
-version = "1.119.0"
+version = "1.120.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c414f25ec4aa9dc18f5cc8f55e18848bb509fcda4ce7c77bee6072e95806bc9"
+checksum = "0b6cbbbd3906e5e5c0898ec30a06d867ced79ff6f9080efcabb2f25fad76f8e3"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1046,9 +1046,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.121.0"
+version = "1.122.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc638bb4355e6514334dcc3228cd4622f5ee54d704bd6a9010a5a91d7856d9d9"
+checksum = "965a652b21ed2d64b9e172e0cde9468b3998f6697636aaac8d0b096b9b93a70a"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1062,18 +1062,16 @@ dependencies = [
  "aws-smithy-schema",
  "aws-smithy-types",
  "aws-types",
- "bytes",
  "fastrand",
- "http",
  "regex-lite",
  "tracing",
 ]
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.124.0"
+version = "1.125.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f8a0dd8fbde04ba58ad722113c7addb11bf94cf549b1ea0eb9ea427fb87198a"
+checksum = "89a20505b0fd7a2175475a00591df8ec7f6448b833cf7b2e1d2801b9ab69eb83"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1097,9 +1095,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sigv4"
-version = "1.6.4"
+version = "1.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f385da9b7757ed4c8214797ad663ff534fb622006143530aa80e21f8e06ff85c"
+checksum = "57a4393e6addc3380632887b0998d06ad5f099ab5c478be0a3eeedecf8604161"
 dependencies = [
  "aws-credential-types",
  "aws-smithy-eventstream",
@@ -1221,9 +1219,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime"
-version = "1.16.2"
+version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cb80fb19c084da5fca9d797845735e184445e5b958599440d67529bf6ef1b64"
+checksum = "5bc688673e282f42d3152dcd9cacc1a9a75734d7cd39d02e58989276fc750f3c"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
@@ -1244,9 +1242,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime-api"
-version = "1.20.0"
+version = "1.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d06a8615310f03c73ea8eea607ee1a9cb17b7ebe055b9152feda1d86831c215c"
+checksum = "0467a2414e84b1b01e37452896fb3562b93926e81c619eba6ecf27ce9e682a0e"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api-macros",
@@ -1283,9 +1281,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types"
-version = "1.9.3"
+version = "1.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c3a040d8b963838a01d7d239b0118357388d0ab881857bb5fc2dd780bb87957"
+checksum = "aff4bf014c512840b2bba80a20417b723cbd6a0a65c02e2d81f50b4268aedfc7"
 dependencies = [
  "base64-simd",
  "bytes",
@@ -1503,7 +1501,7 @@ dependencies = [
 
 [[package]]
 name = "billingd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2495,9 +2493,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.4"
+version = "1.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f97d3416d5337d15c4b0d78c8c91df922ca143f57ec20e2d1c188333047ef04"
+checksum = "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
 dependencies = [
  "cfg-if",
 ]
@@ -3757,7 +3755,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "edifact-rs",
  "rust_decimal",
@@ -3871,7 +3869,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "criterion",
  "edifact-rs",
@@ -3913,7 +3911,7 @@ dependencies = [
 
 [[package]]
 name = "edmd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -3962,7 +3960,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "billing",
  "grid-billing",
@@ -3977,7 +3975,7 @@ dependencies = [
 
 [[package]]
 name = "einsd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4130,7 +4128,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "axum",
  "base64ct",
@@ -4152,7 +4150,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -5026,7 +5024,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "billing",
  "mako-markt",
@@ -6024,7 +6022,7 @@ dependencies = [
 
 [[package]]
 name = "invoic-checker"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "billing",
  "mako-fristen",
@@ -6038,7 +6036,7 @@ dependencies = [
 
 [[package]]
 name = "invoicd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6151,9 +6149,9 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
 name = "jiff"
-version = "0.2.41"
+version = "0.2.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcefdcefac59ac8f8401852e3427d55610481fc41e6625c39bac62d2d771623a"
+checksum = "fefca06093eeaed707a905795e68206da0edca4edef23d2a3997a3ddbee462aa"
 dependencies = [
  "jiff-core",
  "jiff-static",
@@ -6178,9 +6176,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.41"
+version = "0.2.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "203edf9b0ce4083ec8fbf4adc823eac89768ea994b4953fc0dab1b90083234dd"
+checksum = "41d3213549742662eea1a18e6c5af9be5dfbabeb7611ab71356a54928ec398f0"
 dependencies = [
  "jiff-core",
  "proc-macro2",
@@ -6831,7 +6829,7 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "asx-rs",
  "thiserror 2.0.21",
@@ -6839,7 +6837,7 @@ dependencies = [
 
 [[package]]
 name = "mako-emob"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -6855,7 +6853,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "criterion",
  "mako-events",
@@ -6876,11 +6874,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.31.0"
+version = "0.32.0"
 
 [[package]]
 name = "mako-fristen"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "time",
  "time-tz",
@@ -6888,7 +6886,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "dvgw-edi",
  "mako-engine",
@@ -6904,7 +6902,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6920,7 +6918,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6936,7 +6934,7 @@ dependencies = [
 
 [[package]]
 name = "mako-invoic"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "mako-engine",
  "rubo4e",
@@ -6948,7 +6946,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -6966,7 +6964,7 @@ dependencies = [
 
 [[package]]
 name = "mako-markt"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -6985,7 +6983,7 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "mako-fristen",
  "rubo4e",
@@ -6997,7 +6995,7 @@ dependencies = [
 
 [[package]]
 name = "mako-pruefung"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "edi-energy",
  "mako-fristen",
@@ -7012,7 +7010,7 @@ dependencies = [
 
 [[package]]
 name = "mako-redispatch"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -7024,7 +7022,7 @@ dependencies = [
 
 [[package]]
 name = "mako-service"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7070,7 +7068,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7087,7 +7085,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -7143,7 +7141,7 @@ dependencies = [
 
 [[package]]
 name = "makotest-native"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "edi-energy",
  "edifact-rs",
@@ -7157,7 +7155,7 @@ dependencies = [
 
 [[package]]
 name = "marktd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7166,6 +7164,7 @@ dependencies = [
  "mako-engine",
  "mako-events",
  "mako-fristen",
+ "mako-geli-gas",
  "mako-gpke",
  "mako-markt",
  "mako-service",
@@ -7442,7 +7441,7 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 
 [[package]]
 name = "netzbilanzd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8173,7 +8172,7 @@ dependencies = [
 
 [[package]]
 name = "outputd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8183,7 +8182,6 @@ dependencies = [
  "lopdf",
  "mako-fristen",
  "mako-service",
- "reqwest 0.13.5",
  "roxmltree 0.21.2",
  "rust_decimal",
  "secrecy",
@@ -8839,7 +8837,7 @@ dependencies = [
 
 [[package]]
 name = "portald"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9030,7 +9028,7 @@ dependencies = [
 
 [[package]]
 name = "processd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9088,7 +9086,7 @@ dependencies = [
 
 [[package]]
 name = "productd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9606,7 +9604,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -13349,7 +13347,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vertragd"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",

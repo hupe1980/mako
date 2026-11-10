@@ -102,7 +102,11 @@ pub async fn find_auto_renewal_due(
 /// # Errors
 ///
 /// Propagates storage errors.
-pub async fn mark_auto_renewal_notified(pool: &PgPool, id: Uuid, vertragsende: Date) -> Result<()> {
+pub async fn mark_auto_renewal_notified(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    vertragsende: Date,
+) -> Result<()> {
     sqlx::query(
         "UPDATE versorgungsvertraege
          SET autoerneuerung_notif_fuer = $2, updated_at = now()
@@ -110,7 +114,7 @@ pub async fn mark_auto_renewal_notified(pool: &PgPool, id: Uuid, vertragsende: D
     )
     .bind(id)
     .bind(vertragsende)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -265,7 +269,11 @@ pub async fn find_expiring_vertraege(
 /// # Errors
 ///
 /// Propagates storage errors.
-pub async fn mark_ablauf_notified(pool: &PgPool, id: Uuid, faellig_am: Date) -> Result<()> {
+pub async fn mark_ablauf_notified(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    faellig_am: Date,
+) -> Result<()> {
     sqlx::query(
         "UPDATE versorgungsvertraege
          SET ablauf_notif_fuer = $2, updated_at = now()
@@ -273,7 +281,7 @@ pub async fn mark_ablauf_notified(pool: &PgPool, id: Uuid, faellig_am: Date) -> 
     )
     .bind(id)
     .bind(faellig_am)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }

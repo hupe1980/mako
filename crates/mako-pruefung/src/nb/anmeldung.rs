@@ -11,7 +11,7 @@
 //!
 //! | Anwendungsfall | Tree | „andere Anmeldung in Bearbeitung" | Fristüberschreitung |
 //! |---|---|---|---|
-//! | Strom, verbrauchende / ruhende MaLo | `E_0622` Prüfschritte 15–70 | `A06` | `A07` |
+//! | Strom, verbrauchende / ruhende MaLo | `E_0622` Prüfschritte 15–70 (16–28 ruhende) | `A06` | `A07` |
 //! | Strom, erzeugende MaLo / Tranche | `E_0622` Prüfschritte 220–830 | `A45` | `A34`/`A28`/`A29`/`A30`/`A32`/`A35`/`A44` |
 //! | Gas | `E_3005` / `G_0011` | `ZC5` | `E17` |
 //!
@@ -89,7 +89,7 @@ use time::{Date, Duration, OffsetDateTime};
 
 use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_markt::domain::Sparte;
-use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
+use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord, ZuordnungsStatus};
 
 use crate::codes::{
     self, AntwortCode, EBD_ANMELDUNG_DIREKT_ABLEHNBAR, EBD_ANMELDUNG_DIREKT_ABLEHNBAR_GAS,
@@ -98,8 +98,8 @@ use crate::codes::{
 
 use super::config::NetzCheckConfig;
 use super::types::{
-    AnmeldungAnfrage, ErzeugungsAnmeldung, Geschaeftsvorfall, MaloGridRecord, Messtyp,
-    NbEntscheidung, RejectReason, Veraeusserungsform,
+    AnmeldungAnfrage, ErzeugungsAnmeldung, Geschaeftsvorfall, MaloGridRecord, Marktlokationsart,
+    Messtyp, NbEntscheidung, RejectReason, Veraeusserungsform,
 };
 
 // ── Regulatory constants ──────────────────────────────────────────────────────
@@ -133,7 +133,7 @@ pub const EEG_VERKUERZTER_WECHSEL_WT: u32 = 5;
 /// same element carries the Geschäftsvorfall (`ZW0`/`ZW1`/`ZW2`) and the
 /// Prüfidentifikator is itself the Anwendungsfall „Anmeldung erzeugende
 /// Marktlokation"; the caller maps either onto
-/// [`Marktlokationsart::Erzeugend`](super::types::Marktlokationsart::Erzeugend).
+/// [`Marktlokationsart::Erzeugend`].
 pub const EEG_ERZEUGENDE_MARKTLOKATION_CODE: &str = "ZW3";
 
 // ── Code resolution ───────────────────────────────────────────────────────────
@@ -280,6 +280,22 @@ pub fn evaluate(
         };
     };
 
+    // Supply record present. „Nimmt die Marktlokation an der
+    // Marktkommunikation teil?" and „Liegt bereits eine in Arbeit befindliche
+    // Anmeldung vor?" (E_0622 Prüfschritte 30 and 70, 270 erzeugend; G_0011
+    // A16 and ZC5) are answered from it, and marktd records the Anmeldung
+    // before this runs — a MaLo it does not know answers neither.
+    if versorgung.is_none() {
+        return NbEntscheidung::Escalate {
+            reason: format!(
+                "No supply record for MaLo {} in marktd — whether it takes part in the \
+                 market communication and whether another Anmeldung is pending cannot be \
+                 answered (E_0622 Prüfschritte 30 and 70).",
+                anfrage.malo_id
+            ),
+        };
+    }
+
     let today = mako_fristen::berlin_date(now);
 
     match (anfrage.sparte, anfrage.marktlokationsart) {
@@ -319,6 +335,16 @@ fn e_0622_verbrauchend(
         );
     }
 
+    // ── 16–28: Ruhende Marktlokation ─────────────────────────────────────────
+    //
+    // Prüfschritt 16 asks whether the Ergänzung names a „Ruhende
+    // Marktlokation" — the `ZAP` the caller maps onto `Ruhend`.
+    if anfrage.marktlokationsart == Marktlokationsart::Ruhend
+        && let Some(entscheidung) = ruhende_marktlokation(anfrage)
+    {
+        return entscheidung;
+    }
+
     // ── 30: Nimmt die Marktlokation an der Marktkommunikation teil? ──────────
     //
     // The EBD's own Hinweis enumerates the set: „Marktlokationen, die
@@ -339,6 +365,11 @@ fn e_0622_verbrauchend(
                 anfrage.malo_id, vs.lieferstatus
             ),
         );
+    }
+
+    // ── 50: Handelt es sich um eine Anmeldung für eine Neuanlage? ────────────
+    if let Some(offen) = neuanlage_offen(anfrage, versorgung, 50) {
+        return offen;
     }
 
     // ── 60: Sind alle zwingend notwendigen Anforderungen des LF erfüllt? ─────
@@ -378,6 +409,11 @@ fn e_0622_erzeugend(
     today: Date,
     config: NetzCheckConfig,
 ) -> NbEntscheidung {
+    // ── 220: Handelt es sich um einen „Einzug in Neuanlage"? ─────────────────
+    if let Some(offen) = neuanlage_offen(anfrage, versorgung, 220) {
+        return offen;
+    }
+
     // The date branch (300–830) is the whole point of this arm and it needs
     // facts the common projection does not carry. Escalating names what is
     // missing; guessing picks one of six published Fristen at random.
@@ -690,6 +726,151 @@ fn nicht_eeg_detail(anfrage: &AnmeldungAnfrage, today: Date, fall: &str) -> Stri
 
 // ── Shared Prüfschritte ───────────────────────────────────────────────────────
 
+/// `E_0622` Prüfschritte 50 / 220 — „Handelt es sich um eine Anmeldung für
+/// eine Neuanlage?" resp. „… um einen ‚Einzug in Neuanlage'?", whose Hinweis
+/// defines one: „Marktlokationen, bei denen der NB den Identifikator schon
+/// vergeben hat, deren Inbetriebnahme aber noch in der Zukunft liegt" (EBD 4.3
+/// Kap. 6.6.1, S. 74).
+///
+/// No store records a Marktlokation's Inbetriebnahme, so „ja" (`A04` / `A21`)
+/// is never stated here. „Nein" is: a Marktlokation that has been supplied —
+/// a running Zuordnung, a supply state other than `Unbeliefert`, an agreed
+/// Lieferende or a begun Ersatz-/Grundversorgung — is in operation. One that
+/// has never been supplied in `marktd`'s record is exactly the case the step
+/// asks about, so the walk escalates there.
+fn neuanlage_offen(
+    anfrage: &AnmeldungAnfrage,
+    versorgung: Option<&VersorgungsStatusRecord>,
+    pruefschritt: u16,
+) -> Option<NbEntscheidung> {
+    let in_betrieb = versorgung.is_some_and(|vs| {
+        vs.lieferstatus != LieferStatus::Unbeliefert
+            || vs
+                .zuordnungen
+                .iter()
+                .any(|z| z.status == ZuordnungsStatus::Aktiv)
+            || vs.lieferende.is_some()
+            || vs.eog_seit.is_some()
+    });
+    (!in_betrieb).then(|| NbEntscheidung::Escalate {
+        reason: format!(
+            "MaLo {} has never been supplied in marktd's record, so whether its \
+             Inbetriebnahme still lies ahead — an Anmeldung für eine Neuanlage, „Falscher \
+             Prozess“ — cannot be answered (E_0622 Prüfschritt {pruefschritt}, EBD 4.3 \
+             Kap. 6.6.1, S. 74).",
+            anfrage.malo_id
+        ),
+    })
+}
+
+/// `E_0622` Prüfschritte 18–28 — an Anmeldung of a ruhende Marktlokation
+/// (EBD 4.3 Kap. 6.6.1, S. 72 f.). `None` when the walk continues at 30.
+fn ruhende_marktlokation(anfrage: &AnmeldungAnfrage) -> Option<NbEntscheidung> {
+    let r = &anfrage.ruhend;
+    let offen = |pruefschritt: u16, frage: &str| {
+        Some(NbEntscheidung::Escalate {
+            reason: format!(
+                "Anmeldung ruhende Marktlokation {}: {frage} is not recorded (E_0622 \
+                 Prüfschritt {pruefschritt}, EBD 4.3 Kap. 6.6.1).",
+                anfrage.malo_id
+            ),
+        })
+    };
+    // 18 — „Handelt es sich bei der ‚ruhenden Marktlokation' (SG5 LOC+Z22) im
+    // System des Empfängers um eine verbrauchende Marktlokation?"
+    match r.ruhende_ist_verbrauchend {
+        None => {
+            return offen(
+                18,
+                "whether the ruhende Marktlokation is a verbrauchende one",
+            );
+        }
+        Some(false) => {
+            return Some(strom(
+                "A09",
+                18,
+                "Bei der angemeldeten ruhenden Marktlokation handelt es sich nicht um eine \
+                 verbrauchende Marktlokation."
+                    .to_owned(),
+            ));
+        }
+        Some(true) => {}
+    }
+    // 19 — Neubildung einer Kundenanlage? „ja" → 20, „nein" → 25.
+    let Some(neubildung) = r.neubildung_kundenanlage else {
+        return offen(19, "whether the Anmeldung forms a new Kundenanlage");
+    };
+    // 20 / 27 — the virtueller Summenzähler, asked of the Kundenanlage to be
+    // formed (20) or of the existing one (27); „nein" → 30.
+    let summenzaehler_schritt = if neubildung {
+        20
+    } else {
+        // 25 — „Handelt es sich bei der … Marktlokation (im SG5 LOC+Z16) um
+        // eine Marktlokation ‚Kundenanlage'?"
+        match r.z16_ist_kundenanlage {
+            None => return offen(25, "whether the Marktlokation of LOC+Z16 is a Kundenanlage"),
+            Some(false) => {
+                return Some(strom(
+                    "A08",
+                    25,
+                    "Bei der in der Anmeldung genannten Marktlokation (SG5 LOC+Z16) handelt es \
+                     sich nicht um eine Kundenanlage."
+                        .to_owned(),
+                ));
+            }
+            Some(true) => {}
+        }
+        // 26 — behind the same Netzlokation(en)?
+        match r.gleiche_netzlokationen {
+            None => {
+                return offen(
+                    26,
+                    "whether the ruhende Marktlokation lies behind the Kundenanlage's \
+                     Netzlokation(en)",
+                );
+            }
+            Some(false) => {
+                return Some(strom(
+                    "A37",
+                    26,
+                    "Die zu integrierende Marktlokation befindet sich nicht hinter der/den \
+                     gleichen Netzlokation(en) wie die Marktlokation der Kundenanlage."
+                        .to_owned(),
+                ));
+            }
+            Some(true) => {}
+        }
+        27
+    };
+    match r.virtueller_summenzaehler {
+        None => offen(
+            summenzaehler_schritt,
+            "whether the Kundenanlage's Energiemengen are determined by a virtueller \
+             Summenzähler",
+        ),
+        Some(false) => None,
+        // 22 / 28 — „Ist die ‚ruhende Marktlokation' (SG5 LOC+Z22) messtechnisch
+        // mittels iMS erfasst?"
+        Some(true) => {
+            let (schritt, code) = if neubildung { (22, "A47") } else { (28, "A46") };
+            match r.ruhende_ims {
+                None => offen(
+                    schritt,
+                    "whether the ruhende Marktlokation is measured by an iMS",
+                ),
+                Some(false) => Some(strom(
+                    code,
+                    schritt,
+                    "Die Marktlokation entspricht nicht den Anforderungen, da Messtechnische \
+                     Einordnung nicht iMS."
+                        .to_owned(),
+                )),
+                Some(true) => None,
+            }
+        }
+    }
+}
+
 /// Outcome of the „zwingend notwendige Anforderungen" Prüfschritt.
 enum Anforderung {
     /// The message asserts a Bilanzierungsgebiet the grid record cannot confirm.
@@ -947,14 +1128,26 @@ fn gas_date_rule(
             }
         }
         // No readable Transaktionsgrund: never auto-reject a backdated
-        // Anmeldung that may be a lawful move-in (§ 20 EnWG) — escalate.
-        None => (d < today).then(|| NbEntscheidung::Escalate {
+        // Anmeldung that may be a lawful move-in (§ 20 EnWG) — escalate. A
+        // date inside the Wechsel lead is the same question: lawful for an
+        // Ein-/Auszug, too close for a Wechsel, and only the Grund says which.
+        None if d < today => Some(NbEntscheidung::Escalate {
             reason: format!(
                 "Backdated Gas Anmeldung ({d}, receipt {today}) without a readable SG4 STS \
                  Transaktionsgrund — cannot distinguish a lawful retroactive Ein-/Auszug \
                  (6-week window) from an impermissible retroactive Wechsel. Operator review \
                  required.",
             ),
+        }),
+        None => (d < add_werktage(today, GAS_WECHSEL_VORLAUF_WT, cal)).then(|| {
+            NbEntscheidung::Escalate {
+                reason: format!(
+                    "Gas Anmeldung zum {d} (receipt {today}) without a readable SG4 STS \
+                     Transaktionsgrund — inside the {GAS_WECHSEL_VORLAUF_WT}-WT lead a \
+                     Wechsel (E03) is refused E17 and an Ein-/Auszug is not. Operator \
+                     review required.",
+                ),
+            }
         }),
     }
 }
@@ -989,6 +1182,7 @@ mod tests {
             marktlokationsart: Marktlokationsart::Verbrauchend,
             erzeugung: None,
             abmeldeanfrage: crate::nb::Abmeldeanfrage::NichtErforderlich,
+            ruhend: crate::nb::types::RuhendeAnmeldung::default(),
         }
     }
 
@@ -1086,7 +1280,7 @@ mod tests {
     fn strom_accept_full_werktag_between() {
         // ÜT Wed 07-08 → D Fri 07-10: Thu 07-09 lies between. Accept.
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = run(&anfrage, &vs, NOW);
         assert!(result.is_accept(), "expected Accept, got {result:?}");
     }
@@ -1096,7 +1290,7 @@ mod tests {
     #[test]
     fn the_bestaetigung_states_a51_from_e0623() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = run(&anfrage, &vs, NOW);
         assert_eq!(result.antwortcode(), Some("A51"));
         assert_eq!(result.ebd(), Some("E_0623"));
@@ -1106,7 +1300,7 @@ mod tests {
     fn strom_reject_next_day() {
         // ÜT Wed → D Thu: no Werktag strictly between → A07.
         let anfrage = make_anfrage(55001, d(2026, Month::July, 9));
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = run(&anfrage, &vs, NOW);
         assert_eq!(result.antwortcode(), Some("A07"), "got {result:?}");
         assert_eq!(result.ebd(), Some("E_0622"));
@@ -1118,14 +1312,14 @@ mod tests {
         // (GPKE Teil 2 Kap. 2.1.2 Nr. 1).
         let mut anfrage = make_anfrage(55001, d(2026, Month::July, 7));
         anfrage.transaktionsgrund = Some("E01".to_owned());
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         assert_eq!(run(&anfrage, &vs, NOW).antwortcode(), Some("A07"));
     }
 
     #[test]
     fn strom_reject_today() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 8));
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         assert_eq!(run(&anfrage, &vs, NOW).antwortcode(), Some("A07"));
     }
 
@@ -1133,7 +1327,7 @@ mod tests {
     fn strom_weekend_pushes_earliest_start() {
         // ÜT Fri 07-10 → D Mon 07-13: only Sat/Sun between → A07.
         let anfrage = make_anfrage(55001, d(2026, Month::July, 13));
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         assert_eq!(run(&anfrage, &vs, NOW_FRIDAY).antwortcode(), Some("A07"));
 
         // D Tue 07-14: Mon 07-13 lies between → Accept.
@@ -1145,7 +1339,7 @@ mod tests {
     fn strom_rule_is_messtyp_independent() {
         let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         anfrage.messtyp = Messtyp::Rlm;
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         assert!(run(&anfrage, &vs, NOW).is_accept());
     }
 
@@ -1166,11 +1360,110 @@ mod tests {
     /// tree's Prüfschritte 16–28 exist to check.
     #[test]
     fn a_ruhende_malo_is_not_rejected_a02() {
-        let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
-        anfrage.marktlokationsart = Marktlokationsart::Ruhend;
+        let mut anfrage = ruhende_anfrage();
+        anfrage.ruhend.virtueller_summenzaehler = Some(false);
         let vs = make_versorgung(LieferStatus::Ruhend, None, None);
         let result = run(&anfrage, &vs, NOW);
         assert!(result.is_accept(), "expected Accept, got {result:?}");
+    }
+
+    /// An Anmeldung of a ruhende Marktlokation into an existing Kundenanlage
+    /// with every fact of Prüfschritte 18–28 stated as passing.
+    fn ruhende_anfrage() -> AnmeldungAnfrage {
+        let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
+        anfrage.marktlokationsart = Marktlokationsart::Ruhend;
+        anfrage.ruhend = crate::nb::types::RuhendeAnmeldung {
+            ruhende_ist_verbrauchend: Some(true),
+            neubildung_kundenanlage: Some(false),
+            virtueller_summenzaehler: Some(true),
+            ruhende_ims: Some(true),
+            z16_ist_kundenanlage: Some(true),
+            gleiche_netzlokationen: Some(true),
+        };
+        anfrage
+    }
+
+    /// `E_0622` Prüfschritte 18–28 (EBD 4.3 Kap. 6.6.1, S. 72 f.): each
+    /// „nein" refuses with its own code, and each unrecorded fact the walk
+    /// reaches escalates naming its step.
+    #[test]
+    fn the_ruhende_steps_are_walked() {
+        let vs = make_versorgung(LieferStatus::Ruhend, None, None);
+        assert!(run(&ruhende_anfrage(), &vs, NOW).is_accept());
+
+        let refused = |f: fn(&mut AnmeldungAnfrage), code: &str, schritt: u16| {
+            let mut a = ruhende_anfrage();
+            f(&mut a);
+            let r = run(&a, &vs, NOW);
+            assert_eq!(r.antwortcode(), Some(code), "{r:?}");
+            assert!(matches!(&r, NbEntscheidung::Reject(rr) if rr.pruefschritt == schritt));
+        };
+        refused(
+            |a| a.ruhend.ruhende_ist_verbrauchend = Some(false),
+            "A09",
+            18,
+        );
+        refused(|a| a.ruhend.z16_ist_kundenanlage = Some(false), "A08", 25);
+        refused(|a| a.ruhend.gleiche_netzlokationen = Some(false), "A37", 26);
+        refused(|a| a.ruhend.ruhende_ims = Some(false), "A46", 28);
+        refused(
+            |a| {
+                a.ruhend.neubildung_kundenanlage = Some(true);
+                a.ruhend.ruhende_ims = Some(false);
+            },
+            "A47",
+            22,
+        );
+
+        for (f, schritt) in [
+            (
+                (|a: &mut AnmeldungAnfrage| a.ruhend.ruhende_ist_verbrauchend = None)
+                    as fn(&mut AnmeldungAnfrage),
+                "18",
+            ),
+            (|a| a.ruhend.neubildung_kundenanlage = None, "19"),
+            (|a| a.ruhend.z16_ist_kundenanlage = None, "25"),
+            (|a| a.ruhend.gleiche_netzlokationen = None, "26"),
+            (|a| a.ruhend.virtueller_summenzaehler = None, "27"),
+            (|a| a.ruhend.ruhende_ims = None, "28"),
+        ] {
+            let mut a = ruhende_anfrage();
+            f(&mut a);
+            match run(&a, &vs, NOW) {
+                NbEntscheidung::Escalate { reason } => {
+                    assert!(
+                        reason.contains(&format!("Prüfschritt {schritt}")),
+                        "{reason}"
+                    );
+                }
+                other => panic!("Prüfschritt {schritt} unrecorded must escalate: {other:?}"),
+            }
+        }
+    }
+
+    /// `E_0622` Prüfschritte 50 / 220: a Marktlokation never supplied in the
+    /// record may be a Neuanlage whose Inbetriebnahme lies ahead, which the
+    /// tree refuses as „Falscher Prozess" — no store records it, so the walk
+    /// escalates rather than confirm (EBD 4.3 Kap. 6.6.1, S. 74).
+    #[test]
+    fn a_never_supplied_malo_escalates_at_the_neuanlage_step() {
+        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let r = run(&make_anfrage(55001, d(2026, Month::July, 10)), &vs, NOW);
+        assert!(
+            matches!(&r, NbEntscheidung::Escalate { reason } if reason.contains("Prüfschritt 50")),
+            "{r:?}"
+        );
+        let mut erz = make_anfrage(55077, d(2026, Month::September, 1));
+        erz.marktlokationsart = Marktlokationsart::Erzeugend;
+        let r = run(&erz, &vs, NOW);
+        assert!(
+            matches!(&r, NbEntscheidung::Escalate { reason } if reason.contains("Prüfschritt 220")),
+            "{r:?}"
+        );
+        // Once supplied, it is in operation.
+        let mut ended = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        ended.lieferende = Some(d(2026, Month::June, 30));
+        assert!(run(&make_anfrage(55001, d(2026, Month::July, 10)), &ended, NOW).is_accept());
     }
 
     // ── Prüfschritt 70 / 270 — andere Anmeldung in Bearbeitung ───────────────
@@ -1220,7 +1513,7 @@ mod tests {
     #[test]
     fn reject_unknown_lf_a05() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), false, NOW, &cfg());
         assert_eq!(result.antwortcode(), Some("A05"), "got {result:?}");
     }
@@ -1233,7 +1526,7 @@ mod tests {
     fn an_erzeugende_anmeldung_without_facts_escalates() {
         let mut anfrage = make_anfrage(55_077, d(2026, Month::September, 1));
         anfrage.marktlokationsart = Marktlokationsart::Erzeugend;
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         assert!(run(&anfrage, &vs, NOW).is_escalate());
     }
 
@@ -1247,7 +1540,7 @@ mod tests {
             Veraeusserungsform::SonstigeDirektvermarktung,
             Veraeusserungsform::Marktpraemie,
         );
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = run(&anfrage, &vs, NOW);
         assert!(result.is_accept(), "got {result:?}");
         assert_eq!(result.antwortcode(), Some("A58"));
@@ -1261,7 +1554,7 @@ mod tests {
             Veraeusserungsform::SonstigeDirektvermarktung,
             Veraeusserungsform::Marktpraemie,
         );
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = run(&anfrage, &vs, NOW);
         assert_eq!(result.antwortcode(), Some("A27"), "got {result:?}");
     }
@@ -1275,7 +1568,7 @@ mod tests {
             Veraeusserungsform::SonstigeDirektvermarktung,
             Veraeusserungsform::Marktpraemie,
         );
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = run(&anfrage, &vs, NOW);
         assert_eq!(result.antwortcode(), Some("A28"), "got {result:?}");
     }
@@ -1291,7 +1584,7 @@ mod tests {
             Veraeusserungsform::Marktpraemie,
         );
         anfrage.erzeugung.as_mut().unwrap().ausfallverguetung = true;
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         assert!(run(&anfrage, &vs, NOW).is_accept());
     }
 
@@ -1305,7 +1598,7 @@ mod tests {
             Veraeusserungsform::Marktpraemie,
         );
         anfrage.erzeugung.as_mut().unwrap().ausfallverguetung = true;
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         // Receipt 2026-07-30 is inside the 5-WT window before 2026-08-01.
         let late = datetime!(2026-07-30 10:00 UTC);
         let result = run(&anfrage, &vs, late);
@@ -1315,7 +1608,7 @@ mod tests {
     /// GV 2 has its own codes for the same two questions.
     #[test]
     fn gv2_uses_a31_and_a32() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let mid = make_erz_anfrage(
             d(2026, Month::September, 15),
             Geschaeftsvorfall::Zwei,
@@ -1337,7 +1630,7 @@ mod tests {
     /// the one-month Vorlauffrist and answered `A44` when it is too late.
     #[test]
     fn gv3_has_no_monatserster_refusal_and_answers_a44() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let ok = make_erz_anfrage(
             d(2026, Month::September, 15),
             Geschaeftsvorfall::Drei,
@@ -1359,7 +1652,7 @@ mod tests {
     /// keeps the ordinary Werktag rule, and its refusal is `A34` in GV 1.
     #[test]
     fn a_nicht_eeg_malo_keeps_the_werktag_rule() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let mut anfrage = make_erz_anfrage(
             d(2026, Month::July, 10),
             Geschaeftsvorfall::Eins,
@@ -1378,7 +1671,7 @@ mod tests {
     /// untermonatlichen Wechsel that GPKE Teil 2 Kap. 2.1.1 permits.
     #[test]
     fn an_unknown_bestehende_veraeusserungsform_escalates_in_gv1_and_gv2() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         for gv in [Geschaeftsvorfall::Eins, Geschaeftsvorfall::Zwei] {
             let mut anfrage = make_erz_anfrage(
                 d(2026, Month::September, 15),
@@ -1400,7 +1693,7 @@ mod tests {
     /// decides without the register.
     #[test]
     fn gv3_decides_without_the_bestehende_veraeusserungsform() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let mut anfrage = make_erz_anfrage(
             d(2026, Month::September, 15),
             Geschaeftsvorfall::Drei,
@@ -1426,7 +1719,7 @@ mod tests {
             Veraeusserungsform::Marktpraemie,
             Veraeusserungsform::Marktpraemie,
         );
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = run(&anfrage, &vs, NOW);
         assert!(result.is_escalate(), "got {result:?}");
     }
@@ -1435,7 +1728,7 @@ mod tests {
 
     #[test]
     fn gas_wechsel_needs_ten_werktage() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let anfrage = make_gas_anfrage(Some("E03"), d(2026, Month::July, 15));
         let result = run(&anfrage, &vs, NOW);
         assert_eq!(result.antwortcode(), Some("E17"), "got {result:?}");
@@ -1446,7 +1739,7 @@ mod tests {
 
     #[test]
     fn gas_slp_einzug_may_be_backdated_six_weeks() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let anfrage = make_gas_anfrage(Some("E01"), d(2026, Month::June, 15));
         assert!(run(&anfrage, &vs, NOW).is_accept());
 
@@ -1456,7 +1749,7 @@ mod tests {
 
     #[test]
     fn gas_rlm_may_not_be_backdated() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let mut anfrage = make_gas_anfrage(Some("E01"), d(2026, Month::June, 15));
         anfrage.messtyp = Messtyp::Rlm;
         assert_eq!(run(&anfrage, &vs, NOW).antwortcode(), Some("E17"));
@@ -1464,7 +1757,7 @@ mod tests {
 
     #[test]
     fn gas_backdated_without_transaktionsgrund_escalates() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let anfrage = make_gas_anfrage(None, d(2026, Month::June, 15));
         assert!(run(&anfrage, &vs, NOW).is_escalate());
     }
@@ -1489,14 +1782,14 @@ mod tests {
 
         let mut grid = make_grid();
         grid.bilanzierungsgebiet = Some("11YB-OTHER-----2".to_owned());
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&grid), true, NOW, &cfg());
         assert_eq!(result.antwortcode(), Some("E13"), "not A05");
     }
 
     #[test]
     fn the_gas_bestaetigung_states_e15() {
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let anfrage = make_gas_anfrage(Some("E03"), d(2026, Month::August, 1));
         let result = run(&anfrage, &vs, NOW);
         assert_eq!(result.antwortcode(), Some("E15"));
@@ -1509,7 +1802,7 @@ mod tests {
     #[test]
     fn missing_grid_record_escalates() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
-        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = evaluate(&anfrage, Some(&vs), None, true, NOW, &cfg());
         assert!(result.is_escalate());
     }

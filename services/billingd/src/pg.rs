@@ -33,6 +33,10 @@ pub struct BillingRecordRow {
     /// Why this record has no EN 16931 model, when the reason is the invoice
     /// itself rather than a missing step. `None` on every ordinary record.
     pub en16931_blocked: Option<String>,
+    /// `RECHNUNG` or `GEBUEHRENBESCHEID` ([`crate::gebuehrenbescheid`]).
+    pub dokumentart: String,
+    /// The view outputd's `GEBUEHRENBESCHEID` kind renders; a Bescheid's only.
+    pub bescheid_json: Option<serde_json::Value>,
     /// Whether the Leistungsempfänger is a Unternehmer receiving for his
     /// Unternehmen (§ 14 Abs. 2 Satz 2 Nr. 1 UStG), as the contract said when
     /// the invoice was billed. `None` = not recorded.
@@ -91,6 +95,12 @@ pub struct NewBillingRecord<'a> {
     pub rechnung_json: &'a serde_json::Value,
     pub total_netto_eur: Decimal,
     pub total_brutto_eur: Decimal,
+    /// The document's Strom- and Energiesteuer lines
+    /// ([`crate::steuerzeilen::aus_rechnung`]), written by the statement that
+    /// writes the record. A consolidated document carries none — its lines
+    /// are its children's. [`insert_correction_record`] does not read them: a
+    /// Storno's lines are its original's, negated.
+    pub steuerzeilen: &'a [crate::steuerzeilen::Steuerzeile],
 }
 
 /// Why a record could not be written.
@@ -189,8 +199,10 @@ pub async fn insert_billing_record(
     executor: impl sqlx::PgExecutor<'_>,
     rec: &NewBillingRecord<'_>,
 ) -> Result<Uuid, InsertError> {
+    let z = SteuerzeilenSpalten::from(rec.steuerzeilen);
     let row = sqlx::query(
-        r"INSERT INTO billing_records
+        r"WITH rec AS (
+          INSERT INTO billing_records
               (tenant, malo_id, lf_mp_id, product_code, category, rechnungsnummer,
                period_from, period_to, rechnung_json, total_netto_eur, total_brutto_eur)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -212,6 +224,8 @@ pub async fn insert_billing_record(
               -- a value; NULL is the honest state until they do.
               en16931_json    = NULL,
               en16931_blocked = NULL,
+              dokumentart     = 'RECHNUNG',
+              bescheid_json   = NULL,
               risk_score      = NULL,
               risk_band       = NULL,
               risk_findings   = NULL,
@@ -219,7 +233,22 @@ pub async fn insert_billing_record(
               released_at     = NULL,
               updated_at      = now()
           WHERE billing_records.outcome = 'generated'
-          RETURNING id",
+          RETURNING id),
+          -- A replaced draft's lines describe the calculation being replaced.
+          -- Sibling statements share one snapshot, so this sees only those.
+          dropped AS (
+            DELETE FROM steuerzeilen WHERE billing_record_id IN (SELECT id FROM rec)),
+          lines AS (
+            INSERT INTO steuerzeilen
+                (billing_record_id, nr, tenant, steuer, art, rechtsgrundlage, menge, einheit,
+                 satz_ct, betrag_eur, period_from, period_to)
+            SELECT rec.id, z.nr, $1, z.steuer, z.art, z.rechtsgrundlage, z.menge, z.einheit,
+                   z.satz_ct, z.betrag_eur, $7, $8
+            FROM rec,
+                 unnest($12::text[], $13::text[], $14::text[], $15::numeric[], $16::text[],
+                        $17::numeric[], $18::numeric[]) WITH ORDINALITY
+                   AS z(steuer, art, rechtsgrundlage, menge, einheit, satz_ct, betrag_eur, nr))
+          SELECT id FROM rec",
     )
     .bind(rec.tenant)
     .bind(rec.malo_id)
@@ -232,6 +261,13 @@ pub async fn insert_billing_record(
     .bind(rec.rechnung_json)
     .bind(rec.total_netto_eur)
     .bind(rec.total_brutto_eur)
+    .bind(&z.steuer)
+    .bind(&z.art)
+    .bind(&z.rechtsgrundlage)
+    .bind(&z.menge)
+    .bind(&z.einheit)
+    .bind(&z.satz_ct)
+    .bind(&z.betrag_eur)
     .fetch_optional(executor)
     .await
     .map_err(|e| {
@@ -258,6 +294,71 @@ pub async fn insert_billing_record(
             period_to: rec.period_to,
         }),
     }
+}
+
+/// [`crate::steuerzeilen::Steuerzeile`]s as the column arrays one `unnest`
+/// inserts.
+struct SteuerzeilenSpalten {
+    steuer: Vec<&'static str>,
+    art: Vec<&'static str>,
+    rechtsgrundlage: Vec<String>,
+    menge: Vec<Decimal>,
+    einheit: Vec<String>,
+    satz_ct: Vec<Decimal>,
+    betrag_eur: Vec<Decimal>,
+}
+
+impl From<&[crate::steuerzeilen::Steuerzeile]> for SteuerzeilenSpalten {
+    fn from(zeilen: &[crate::steuerzeilen::Steuerzeile]) -> Self {
+        Self {
+            steuer: zeilen.iter().map(|z| z.steuer.as_str()).collect(),
+            art: zeilen.iter().map(|z| z.art.as_str()).collect(),
+            rechtsgrundlage: zeilen.iter().map(|z| z.rechtsgrundlage.clone()).collect(),
+            menge: zeilen.iter().map(|z| z.menge).collect(),
+            einheit: zeilen.iter().map(|z| z.einheit.clone()).collect(),
+            satz_ct: zeilen.iter().map(|z| z.satz_ct).collect(),
+            betrag_eur: zeilen.iter().map(|z| z.betrag_eur).collect(),
+        }
+    }
+}
+
+/// A stored tax line, as a declaration reads it.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct SteuerzeileRow {
+    pub billing_record_id: Uuid,
+    pub steuer: String,
+    pub art: String,
+    pub rechtsgrundlage: String,
+    pub menge: Decimal,
+    pub einheit: String,
+    pub satz_ct: Decimal,
+    pub betrag_eur: Decimal,
+    pub period_from: Date,
+    pub period_to: Date,
+}
+
+/// The tax lines stored for one record, tenant-scoped.
+///
+/// # Errors
+///
+/// A failed query.
+pub async fn steuerzeilen_of(
+    pool: &PgPool,
+    tenant: &str,
+    record_id: Uuid,
+) -> anyhow::Result<Vec<SteuerzeileRow>> {
+    sqlx::query_as::<_, SteuerzeileRow>(
+        r"SELECT billing_record_id, steuer, art, rechtsgrundlage, menge, einheit,
+                 satz_ct, betrag_eur, period_from, period_to
+          FROM steuerzeilen
+          WHERE tenant = $1 AND billing_record_id = $2
+          ORDER BY nr",
+    )
+    .bind(tenant)
+    .bind(record_id)
+    .fetch_all(pool)
+    .await
+    .context("steuerzeilen_of")
 }
 
 /// The live original occupying a period, if there is one.
@@ -444,6 +545,31 @@ pub async fn attach_empfaenger_unternehmer(
     Ok(())
 }
 
+/// Make a record a Gebührenbescheid, in the caller's transaction: its view,
+/// and no EN 16931 model — a Bescheid is no invoice.
+pub async fn attach_gebuehrenbescheid(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    view: &serde_json::Value,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE billing_records \
+         SET dokumentart = 'GEBUEHRENBESCHEID', bescheid_json = $2, en16931_json = NULL, \
+             en16931_blocked = $3, updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(view)
+    .bind(
+        "a Gebührenbescheid over a public-law Gebühr is no invoice and has no EN 16931 \
+         representation; it renders as outputd's GEBUEHRENBESCHEID",
+    )
+    .execute(executor)
+    .await
+    .context("attach_gebuehrenbescheid")?;
+    Ok(())
+}
+
 /// Record *why* this invoice has no EN 16931 model.
 ///
 /// The counterpart to [`attach_en16931`] for an invoice the standard cannot
@@ -554,6 +680,30 @@ pub async fn insert_correction_record(
         }
     })?;
 
+    let correction_id: Uuid = row
+        .try_get("id")
+        .map_err(|e| InsertError::Other(anyhow::Error::new(e)))?;
+
+    // The Storno's tax lines are its original's, negated: what the original
+    // declared taxed, the Storno takes back, line by line and ground by ground.
+    sqlx::query(
+        r"INSERT INTO steuerzeilen
+              (billing_record_id, nr, tenant, steuer, art, rechtsgrundlage, menge, einheit,
+               satz_ct, betrag_eur, period_from, period_to)
+          SELECT $1, nr, tenant, steuer, art, rechtsgrundlage, -menge, einheit,
+                 satz_ct, -betrag_eur, period_from, period_to
+          FROM steuerzeilen
+          WHERE billing_record_id = $2 AND tenant = $3",
+    )
+    .bind(correction_id)
+    .bind(original_record_id)
+    .bind(rec.tenant)
+    .execute(&mut *executor)
+    .await
+    .map_err(|e| {
+        InsertError::Other(anyhow::Error::new(e).context("negate the original's tax lines"))
+    })?;
+
     sqlx::query(
         "UPDATE billing_records SET outcome = 'cancelled', updated_at = now() \
          WHERE id = $1 AND tenant = $2",
@@ -564,8 +714,7 @@ pub async fn insert_correction_record(
     .await
     .map_err(|e| InsertError::Other(anyhow::Error::new(e).context("cancel corrected original")))?;
 
-    row.try_get("id")
-        .map_err(|e| InsertError::Other(anyhow::Error::new(e)))
+    Ok(correction_id)
 }
 
 /// Insert a consolidated document (`category = SAMMEL`) for a Rahmenvertrag or
@@ -602,6 +751,7 @@ pub async fn insert_sammelrechnung_record(
             rechnung_json,
             total_netto_eur,
             total_brutto_eur,
+            steuerzeilen: &[],
         },
     )
     .await

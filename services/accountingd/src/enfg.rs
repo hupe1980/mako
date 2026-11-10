@@ -84,6 +84,11 @@ pub enum Quelle {
     Auszahlung,
     /// A claim extinguished by Aufrechnung (§ 13 Abs. 1 Satz 2 EnFG).
     Aufrechnung,
+    /// What a plant operator paid back of an overpayment, served as a
+    /// negative amount: § 13 Abs. 1 Satz 1 Nr. 1 EnFG reimburses the payments
+    /// „abzüglich der Rückzahlungen nach § 26 Absatz 1 Satz 3" EEG 2023, which
+    /// has „zu hohe … Abschläge … zu erstatten".
+    Rueckzahlung,
 }
 
 /// One `eeg_payout_orders` row, as read.
@@ -133,6 +138,9 @@ pub struct GeleisteteZahlung {
     pub erklaert_am: Option<String>,
     /// For a payout: its ISO 20022 EndToEndId.
     pub end_to_end_ref: Option<String>,
+    /// For a Rückzahlung: the day it was received, `YYYY-MM-DD`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eingegangen_am: Option<String>,
 }
 
 /// The payments made out of `payouts` and `aufrechnungen` — the settled payouts
@@ -156,6 +164,7 @@ pub fn geleistete_zahlungen(
             gegenforderung: None,
             erklaert_am: None,
             end_to_end_ref: Some(p.end_to_end_ref),
+            eingegangen_am: None,
         })
         .collect();
     out.extend(aufrechnungen.into_iter().map(|a| GeleisteteZahlung {
@@ -169,6 +178,7 @@ pub fn geleistete_zahlungen(
         gegenforderung: Some(a.gegenforderung),
         erklaert_am: Some(a.erklaert_am.to_string()),
         end_to_end_ref: None,
+        eingegangen_am: None,
     }));
     out.sort_by(|a, b| (&a.tr_id, a.id).cmp(&(&b.tr_id, b.id)));
     out
@@ -344,7 +354,8 @@ pub async fn record_aufrechnung(
 }
 
 /// The payments made for `tenant`'s plants in one billing month: settled
-/// payouts and recorded Aufrechnungen.
+/// payouts and recorded Aufrechnungen, less what operators paid back of the
+/// month (each Rückzahlung a negative amount).
 ///
 /// # Errors
 ///
@@ -406,5 +417,34 @@ pub async fn zahlungen_im_monat(
             erklaert_am: r.get("erklaert_am"),
         });
     }
-    Ok(geleistete_zahlungen(payouts, aufrechnungen))
+    let mut out = geleistete_zahlungen(payouts, aufrechnungen);
+    for r in sqlx::query(
+        "SELECT rueckzahlung_id, tr_id, malo_id, billing_year, billing_month, amount_ct,
+                eingegangen_am
+           FROM eeg_rueckzahlungen
+          WHERE tenant = $1 AND billing_year = $2 AND billing_month = $3",
+    )
+    .bind(tenant)
+    .bind(year)
+    .bind(month)
+    .fetch_all(pool)
+    .await?
+    {
+        let eingegangen_am: Date = r.get("eingegangen_am");
+        out.push(GeleisteteZahlung {
+            quelle: Quelle::Rueckzahlung,
+            id: r.get("rueckzahlung_id"),
+            tr_id: r.get("tr_id"),
+            malo_id: r.get("malo_id"),
+            billing_year: r.get("billing_year"),
+            billing_month: r.get("billing_month"),
+            amount_ct: r.get::<i64, _>("amount_ct").saturating_neg(),
+            gegenforderung: None,
+            erklaert_am: None,
+            end_to_end_ref: None,
+            eingegangen_am: Some(eingegangen_am.to_string()),
+        });
+    }
+    out.sort_by(|a, b| (&a.tr_id, a.id).cmp(&(&b.tr_id, b.id)));
+    Ok(out)
 }

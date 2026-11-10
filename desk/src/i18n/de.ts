@@ -829,6 +829,7 @@ export const de = {
       SEPA_STORNO: "SEPA-Storno",
       MAHNGEBUEHR: "Mahngebühr",
       VERZUGSZINSEN: "Verzugszinsen",
+      VERZUGSPAUSCHALE: "Verzugspauschale",
       EEG_GUTSCHRIFT: "EEG-Gutschrift",
       EEG_MARKTPRAEMIE: "EEG-Marktprämie",
       EEG_AUSZAHLUNG: "EEG-Auszahlung",

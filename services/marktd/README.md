@@ -34,7 +34,7 @@ Startup refuses a missing `[oidc]` or `webhook.inbound_secret` unless
 
 | Area | Routes |
 |---|---|
-| Marktlokation | `/api/v1/malos` (+ `/{id}`, `/lastprofil`, `/grid`, `/bilanzierung`, `/lokationen`, `/buendel`), `/api/v1/versorgung/{malo_id}` (+ `/history`) |
+| Marktlokation | `/api/v1/malos` (+ `/{id}`, `/lastprofil`, `/bundesland`, `/grid`, `/bilanzierung`, `/lokationen`, `/buendel`), `/api/v1/versorgung/{malo_id}` (+ `/history`) |
 | Messlokation & devices | `/api/v1/melos/{id}` (+ `/msb`, `/zaehler`, `/sharing-eligibility`), `/api/v1/zaehler/{id}/…`, `/geraete/{id}`, `/steuerbare-ressourcen/{sr_id}`, `/technische-ressourcen/{tr_id}`, `/lokationszuordnungen` |
 | Counterparties & registries | `/api/v1/partners`, `/nb-contracts`, `/grundversorger/{nb_mp_id}`, `/energiemix/{nb_mp_id}`, `/nelos`, `/tranchen`, `/mabis-zp`, `/bilanzierungsgebiete/{eic}/mabis-zp`, `/netzzugang/antraege`, `/msb-rahmenvertraege` (+ `/check`), `/correlations` |
 | ESA | `/api/v1/esa/einwilligungen`, `/framework`, `/preise`, `/messprodukte`, `/subscriptions/{bestellung_ref}`, `/consent-check` |

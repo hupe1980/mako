@@ -1,42 +1,36 @@
-//! Durable outbound tasks — everything `vertragd` owes another service.
+//! Durable outbound calls — everything `vertragd` owes another service.
 //!
 //! A Lieferbeginn is an obligation: the customer has a contract and the NB is
 //! waiting for the UTILMD. Dispatching it from a detached `tokio::spawn` meant a
 //! restart between the contract insert and the `processd` call dropped the
 //! registration in silence, leaving the component in `ANGELEGT` with nothing to
-//! retry it — and the same held for the Schlussablesung, the tariff assignment
-//! and the billing account.
+//! retry it — and the same held for the Schlussablesung and the billing account.
 //!
-//! So the *intent* is written in the same transaction as the contract change
-//! ([`enqueue`]), and [`OutboundWorker`] performs it afterwards with exponential
-//! backoff and a dead-letter. A crash at any point loses nothing; it only
-//! delays.
+//! So each obligation is a [`Task`], written as a `mako_service::outbox`
+//! command in the same transaction as the contract change ([`enqueue`]). One
+//! [`workers`] drain per peer delivers it under the shared retry and
+//! dead-letter policy, and [`follow_up`] records what the peer answered in the
+//! transaction that marks the delivery done. A crash at any point loses
+//! nothing; it only delays.
 //!
 //! ```text
 //! handler ─┬─ contract write ──┐
-//!          └─ enqueue task  ───┴─ COMMIT ─→ worker ─→ processd / edmd / productd / accountingd
+//!          └─ enqueue command ─┴─ COMMIT ─→ outbox worker ─→ processd / edmd / accountingd
 //! ```
 
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use mako_service::http::Upstream;
+use mako_service::outbox::{Command, CommandMethod, Delivered, OutboxWorker};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row as _};
+use sqlx::PgPool;
 use time::Date;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use mako_markt::utilmd_stammdaten::{Kunde, NetznutzungZahler, Netznutzungsvertrag};
 
 use crate::config::VertragdConfig;
 use crate::domain::Lieferbeginnanlass;
-
-/// How many times a task is attempted before it is dead-lettered.
-const MAX_ATTEMPTS: i32 = 8;
-/// Base of the exponential backoff, in seconds: 30s, 1m, 2m, … capped at 1h.
-const BACKOFF_BASE_SECS: u64 = 30;
-const BACKOFF_CAP_SECS: u64 = 3600;
 
 /// What the worker has to do. The variant decides the target service, the HTTP
 /// shape and the follow-up write, so callers name the obligation rather than
@@ -57,10 +51,7 @@ pub enum TaskKind {
 }
 
 impl TaskKind {
-    /// Every variant, in the order the schema lists them.
-    ///
-    /// `kind` is a `CHECK`-constrained column and this enum is what writes it;
-    /// `schema_enum_guard` holds the two together.
+    /// Every variant.
     pub const ALL: &'static [Self] = &[
         Self::Lieferbeginn,
         Self::Lieferende,
@@ -80,7 +71,9 @@ impl TaskKind {
         }
     }
 
-    fn from_db(s: &str) -> Option<Self> {
+    /// The variant `as_db` names.
+    #[must_use]
+    pub fn from_db(s: &str) -> Option<Self> {
         Some(match s {
             "LIEFERBEGINN" => Self::Lieferbeginn,
             "LIEFERENDE" => Self::Lieferende,
@@ -420,19 +413,17 @@ pub fn lieferende(
 /// step of one — a `processd` outage must not suppress the reading the
 /// Schlussrechnung is built from.
 ///
-/// **The dedupe key carries `geplant_am`**, as the schema comment on
-/// `outbound_tasks.dedupe_key` has always said it should: a reading order is
-/// keyed by what makes it distinct, and the date it is planned for is that.
-/// Keyed on the component alone, a Kündigung withdrawn and re-issued to a
-/// different Lieferende enqueued a task whose key already existed, so
-/// `ON CONFLICT DO NOTHING` dropped it: `edmd` kept the reading order for the
-/// withdrawn date, the Schlussablesung happened on the wrong day, and nothing
-/// anywhere reported a failure.
+/// **The dedupe key carries `geplant_am`**: a reading order is keyed by what
+/// makes it distinct, and the date it is planned for is that. Keyed on the
+/// component alone, a Kündigung withdrawn and re-issued to a different
+/// Lieferende would collide with the first order and be dropped: `edmd` would
+/// keep the order for the withdrawn date and the Schlussablesung happen on the
+/// wrong day, with nothing reporting a failure.
 ///
 /// A *same-date* re-enqueue still collapses, which is correct — that is a
 /// replay of one order, not a second one.
 #[must_use]
-pub fn ablesung(komp_id: Uuid, malo_id: &str, ende: bool, geplant_am: Date) -> Task {
+pub fn ablesung(komp_id: Uuid, malo_id: &str, sparte: &str, ende: bool, geplant_am: Date) -> Task {
     let (kind, anlass) = if ende {
         (TaskKind::AblesungEnde, "LIEFERENDE")
     } else {
@@ -443,6 +434,9 @@ pub fn ablesung(komp_id: Uuid, malo_id: &str, ende: bool, geplant_am: Date) -> T
         komp_id: Some(komp_id),
         payload: serde_json::json!({
             "malo_id": malo_id,
+            // The component's Sparte: `edmd` refuses an order without one,
+            // because it decides the unit the Zählerstand is filed in.
+            "sparte": sparte,
             "anlass": anlass,
             "auftraggeber_rolle": "LF",
             "geplant_am": geplant_am.to_string(),
@@ -465,32 +459,125 @@ pub fn abrechnungskonto(komp_id: Uuid, malo_id: &str, lf_mp_id: &str) -> Task {
 
 // ── Enqueue ───────────────────────────────────────────────────────────────────
 
+/// The outbox upstream names, one worker each.
+pub const UPSTREAMS: [&str; 3] = ["processd", "edmd", "accountingd"];
+
+/// The outbox key of `task` for `tenant`: `{tenant}/{dedupe_key}`.
+///
+/// The dedupe key is what makes the enqueue exactly-once. A repeatable action
+/// varies it by what makes it distinct (`ABLESUNG_BEGINN:{komp}:{datum}`); a
+/// one-shot one does not (`LIEFERBEGINN:{komp}`), so an idempotent re-POST of
+/// the same `erp_contract_id` cannot enqueue a second UTILMD.
+#[must_use]
+pub fn key(tenant: &str, task: &Task) -> String {
+    format!("{tenant}/{}", task.dedupe_key)
+}
+
+/// The outbox command that performs `task`.
+///
+/// # Errors
+///
+/// Refuses a `processd` task without a `body` (processd refuses every key its
+/// request type does not declare, `endpoint` among them), and an
+/// Abrechnungskonto whose identifiers are not alphanumeric — both address the
+/// URL.
+pub fn command(tenant: &str, task: &Task) -> Result<Command> {
+    let (upstream, method, path, body) = match task.kind {
+        TaskKind::Lieferbeginn | TaskKind::Lieferende => {
+            let fallback = if task.kind == TaskKind::Lieferbeginn {
+                "start-supply"
+            } else {
+                "end-supply"
+            };
+            let endpoint = task
+                .payload
+                .get("endpoint")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(fallback);
+            (
+                "processd",
+                CommandMethod::Post,
+                format!("/api/v1/{endpoint}"),
+                call_body(&task.payload)?.clone(),
+            )
+        }
+        TaskKind::AblesungBeginn | TaskKind::AblesungEnde => (
+            "edmd",
+            CommandMethod::Post,
+            "/api/v1/reading-orders".to_owned(),
+            task.payload.clone(),
+        ),
+        TaskKind::Abrechnungskonto => {
+            // `PUT /api/v1/accounts/{malo_id}?lf_mp_id=…`: both identifiers are
+            // addressing, not body fields. `UpdateAccountRequest` denies
+            // unknown fields, so sending them would be a 422.
+            let malo_id = task
+                .payload
+                .get("malo_id")
+                .and_then(serde_json::Value::as_str)
+                .context("Abrechnungskonto task carries no malo_id")?;
+            let lf_mp_id = task
+                .payload
+                .get("lf_mp_id")
+                .and_then(serde_json::Value::as_str)
+                .context("Abrechnungskonto task carries no lf_mp_id")?;
+            anyhow::ensure!(
+                malo_id.chars().all(|c| c.is_ascii_alphanumeric())
+                    && lf_mp_id.chars().all(|c| c.is_ascii_alphanumeric()),
+                "Abrechnungskonto identifiers must be alphanumeric \
+                 (malo_id={malo_id}, lf_mp_id={lf_mp_id})",
+            );
+            (
+                "accountingd",
+                CommandMethod::Put,
+                format!("/api/v1/accounts/{malo_id}?lf_mp_id={lf_mp_id}"),
+                serde_json::json!({}),
+            )
+        }
+    };
+    Ok(Command {
+        upstream: upstream.to_owned(),
+        label: task.kind.as_db().to_owned(),
+        method,
+        path,
+        body,
+        key: key(tenant, task),
+        settled_statuses: Vec::new(),
+    })
+}
+
 /// Persist a task in the caller's transaction. `false` when an identical task
 /// was already enqueued — the exactly-once guarantee, in the database rather
 /// than in a caller's memory.
 ///
 /// # Errors
 ///
-/// Propagates storage errors.
-pub async fn enqueue(
-    executor: impl sqlx::PgExecutor<'_>,
-    tenant: &str,
-    task: &Task,
-) -> Result<bool> {
-    enqueue_inner(executor, tenant, task).await
+/// Propagates storage errors and [`command`]'s refusals.
+pub async fn enqueue(conn: &mut sqlx::PgConnection, tenant: &str, task: &Task) -> Result<bool> {
+    let cmd = command(tenant, task)?;
+    let known: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM event_outbox WHERE event_id = $1)")
+            .bind(&cmd.key)
+            .fetch_one(&mut *conn)
+            .await?;
+    if known {
+        return Ok(false);
+    }
+    mako_service::outbox::enqueue_command(conn, &cmd).await?;
+    Ok(true)
 }
 
-/// Enqueue a task that **supersedes** any not-yet-performed task of the same
+/// Enqueue a task that **supersedes** any not-yet-delivered task of the same
 /// kind for the same component.
 ///
 /// For a date-keyed task (the reading orders), varying the key is only half the
 /// fix: a Kündigung re-issued to a new Lieferende would otherwise leave the
-/// order for the withdrawn date sitting in the queue, and `edmd` would receive
-/// both. A task that has not been dispatched has been seen by nobody, so the
-/// obsolete one is deleted rather than delivered and then countermanded.
+/// order for the withdrawn date in the outbox, and `edmd` would receive both. A
+/// command that has not been delivered has been seen by nobody, so the obsolete
+/// one is deleted rather than delivered and then countermanded.
 ///
-/// A task already `completed_at` (the order is with `edmd`) or `dead_lettered_at`
-/// (the operator's queue) is left alone: those are records of something that
+/// One already delivered (the order is with `edmd`) or dead-lettered (the
+/// operator's queue) is left alone: those are records of something that
 /// happened, and cancelling *those* is `edmd`'s business, not a DELETE here.
 ///
 /// # Errors
@@ -502,53 +589,80 @@ pub async fn enqueue_superseding(
     task: &Task,
 ) -> Result<bool> {
     let Some(komp_id) = task.komp_id else {
-        return enqueue_inner(&mut *conn, tenant, task).await;
+        return enqueue(conn, tenant, task).await;
     };
     sqlx::query(
-        "DELETE FROM outbound_tasks
-          WHERE tenant = $1 AND kind = $2 AND komp_id = $3 AND dedupe_key <> $4
-            AND completed_at IS NULL AND dead_lettered_at IS NULL",
+        "DELETE FROM event_outbox
+          WHERE kind = 'command' AND starts_with(event_id, $1) AND event_id <> $2
+            AND delivered_at IS NULL AND dead_lettered_at IS NULL",
     )
-    .bind(tenant)
-    .bind(task.kind.as_db())
-    .bind(komp_id)
-    .bind(&task.dedupe_key)
+    .bind(format!("{tenant}/{}:{komp_id}", task.kind.as_db()))
+    .bind(key(tenant, task))
     .execute(&mut *conn)
     .await?;
-    enqueue_inner(&mut *conn, tenant, task).await
+    enqueue(conn, tenant, task).await
 }
 
-async fn enqueue_inner(
-    executor: impl sqlx::PgExecutor<'_>,
-    tenant: &str,
-    task: &Task,
-) -> Result<bool> {
-    let n = sqlx::query(
-        "INSERT INTO outbound_tasks (tenant, kind, komp_id, payload, dedupe_key)
-         VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (tenant, dedupe_key) DO NOTHING",
-    )
-    .bind(tenant)
-    .bind(task.kind.as_db())
-    .bind(task.komp_id)
-    .bind(&task.payload)
-    .bind(&task.dedupe_key)
-    .execute(executor)
-    .await?
-    .rows_affected();
-    Ok(n > 0)
-}
-
-/// Tasks that exhausted their retries — the operator's work queue.
+/// Park the commands of `kinds` not yet delivered for the components of
+/// contract `vertrag_id`, so the worker does not perform them: dead-lettered
+/// with `grund`, their key released (`…:{grund}:{id}`) so an obligation
+/// re-issued with the same key queues again.
+///
+/// `only_future_lieferende` narrows it to components whose `lieferende` is
+/// still ahead — what a withdrawn Kündigung scheduled.
 ///
 /// # Errors
 ///
 /// Propagates storage errors.
-pub async fn list_dead_lettered(pool: &PgPool, tenant: &str, limit: i64) -> Result<Vec<DeadTask>> {
-    Ok(sqlx::query_as::<_, DeadTask>(
-        "SELECT id, kind, komp_id, payload, attempts, last_error, dead_lettered_at
-           FROM outbound_tasks
-          WHERE tenant = $1 AND dead_lettered_at IS NOT NULL
+pub async fn park(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    vertrag_id: Uuid,
+    kinds: &[TaskKind],
+    only_future_lieferende: bool,
+    grund: &str,
+) -> Result<u64> {
+    let kinds: Vec<&str> = kinds.iter().map(|k| k.as_db()).collect();
+    Ok(sqlx::query(
+        r"UPDATE event_outbox o
+             SET dead_lettered_at = now(),
+                 last_error = $5,
+                 event_id = o.event_id || ':' || $5 || ':' || o.id
+           WHERE o.kind = 'command' AND o.ce_type = ANY($3)
+             AND o.delivered_at IS NULL AND o.dead_lettered_at IS NULL
+             AND EXISTS (
+                 SELECT 1 FROM vertragskomponenten k
+                  WHERE k.vertrag_id = $1 AND k.tenant = $2
+                    AND (NOT $4 OR (k.lieferende IS NOT NULL AND k.lieferende > heute()))
+                    AND starts_with(o.event_id, $2 || '/' || o.ce_type || ':' || k.id::text)
+             )",
+    )
+    .bind(vertrag_id)
+    .bind(tenant)
+    .bind(&kinds)
+    .bind(only_future_lieferende)
+    .bind(grund)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected())
+}
+
+/// This tenant's commands that exhausted their retries — the operator's work
+/// queue.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn list_dead_lettered(
+    pool: &PgPool,
+    tenant: &str,
+    limit: i64,
+) -> Result<Vec<mako_service::outbox::DeadLetter>> {
+    Ok(sqlx::query_as(
+        "SELECT id, event_id, kind, upstream, ce_type, attempts, last_error, dead_lettered_at
+           FROM event_outbox
+          WHERE kind = 'command' AND starts_with(event_id, $1 || '/')
+            AND dead_lettered_at IS NOT NULL
           ORDER BY dead_lettered_at DESC
           LIMIT $2",
     )
@@ -558,285 +672,147 @@ pub async fn list_dead_lettered(pool: &PgPool, tenant: &str, limit: i64) -> Resu
     .await?)
 }
 
-/// A task the worker gave up on.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct DeadTask {
-    pub id: Uuid,
-    pub kind: String,
-    pub komp_id: Option<Uuid>,
-    pub payload: serde_json::Value,
-    pub attempts: i32,
-    pub last_error: Option<String>,
-    #[serde(with = "time::serde::rfc3339::option")]
-    pub dead_lettered_at: Option<time::OffsetDateTime>,
-}
-
-/// Put a dead-lettered task back in the queue after the operator fixed the
-/// cause. `false` when no such dead task exists.
+/// Put one of this tenant's dead-lettered commands back in the queue after the
+/// operator fixed the cause. `false` when no such dead letter exists.
 ///
 /// # Errors
 ///
 /// Propagates storage errors.
 pub async fn retry_dead_lettered(pool: &PgPool, tenant: &str, id: Uuid) -> Result<bool> {
-    let n = sqlx::query(
-        "UPDATE outbound_tasks
-            SET dead_lettered_at = NULL, attempts = 0,
-                next_attempt_at = now(), last_error = NULL
-          WHERE id = $1 AND tenant = $2 AND dead_lettered_at IS NOT NULL",
+    let dead: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM event_outbox
+                         WHERE id = $1 AND kind = 'command'
+                           AND starts_with(event_id, $2 || '/')
+                           AND dead_lettered_at IS NOT NULL)",
     )
     .bind(id)
     .bind(tenant)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(n > 0)
+    .fetch_one(pool)
+    .await?;
+    if !dead {
+        return Ok(false);
+    }
+    Ok(mako_service::outbox::requeue(pool, id).await?)
 }
 
-// ── Worker ────────────────────────────────────────────────────────────────────
+// ── Delivery ──────────────────────────────────────────────────────────────────
 
-/// Drains [`outbound_tasks`](self) — one at a time, oldest due first.
-pub struct OutboundWorker {
-    pool: PgPool,
-    cfg: Arc<VertragdConfig>,
-    http: reqwest::Client,
+/// One outbox worker per peer, each recording its deliveries with
+/// [`follow_up`].
+#[must_use]
+pub fn workers(pool: &PgPool, cfg: &VertragdConfig) -> Vec<OutboxWorker> {
+    let secret = |k: Option<&String>| k.map(|k| secrecy::SecretString::from(k.clone()));
+    [
+        (
+            "processd",
+            &cfg.processd_url,
+            secret(cfg.processd_api_key.as_ref()),
+        ),
+        ("edmd", &cfg.edmd_url, secret(cfg.edmd_api_key.as_ref())),
+        (
+            "accountingd",
+            &cfg.accountingd_url,
+            secret(cfg.accountingd_api_key.as_ref()),
+        ),
+    ]
+    .into_iter()
+    .map(|(name, url, key)| {
+        OutboxWorker::commands(pool.clone(), name, url.clone(), key).on_delivered(Arc::new(
+            |conn, delivered| Box::pin(follow_up(conn, delivered)),
+        ))
+    })
+    .collect()
 }
 
-impl OutboundWorker {
-    #[must_use]
-    pub fn new(pool: PgPool, cfg: Arc<VertragdConfig>, http: reqwest::Client) -> Self {
-        Self { pool, cfg, http }
-    }
-
-    /// Run until cancelled.
-    pub async fn run(self, shutdown: CancellationToken) {
-        let mut idle = tokio::time::interval(std::time::Duration::from_secs(5));
-        idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            tokio::select! {
-                () = shutdown.cancelled() => {
-                    tracing::info!("vertragd: outbound worker stopping");
-                    return;
-                }
-                _ = idle.tick() => {}
-            }
-            // Drain the backlog in one wake-up rather than one task per tick;
-            // a burst of contract creations otherwise took minutes to register.
-            for _ in 0..64 {
-                match self.step().await {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(e) => {
-                        tracing::error!(error = %e, "vertragd: outbound worker step failed");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Claim and perform one task. `false` when the queue is empty.
-    ///
-    /// # Errors
-    ///
-    /// Storage errors while claiming or recording the task.
-    pub async fn step(&self) -> Result<bool> {
-        // Claim under FOR UPDATE SKIP LOCKED so several replicas can drain the
-        // same queue without performing a task twice.
-        let mut tx = self.pool.begin().await?;
-        let Some(row) = sqlx::query(
-            "SELECT id, tenant, kind, komp_id, payload, attempts
-               FROM outbound_tasks
-              WHERE completed_at IS NULL AND dead_lettered_at IS NULL
-                AND next_attempt_at <= now()
-              ORDER BY next_attempt_at
-              LIMIT 1
-              FOR UPDATE SKIP LOCKED",
-        )
-        .fetch_optional(&mut *tx)
-        .await?
-        else {
-            tx.commit().await?;
-            return Ok(false);
-        };
-
-        let id: Uuid = row.try_get("id")?;
-        let kind_db: String = row.try_get("kind")?;
-        let komp_id: Option<Uuid> = row.try_get("komp_id")?;
-        let payload: serde_json::Value = row.try_get("payload")?;
-        let attempts: i32 = row.try_get("attempts")?;
-        let Some(kind) = TaskKind::from_db(&kind_db) else {
-            // An unknown kind can only come from a downgrade; parking it is
-            // better than retrying it for ever.
-            sqlx::query(
-                "UPDATE outbound_tasks
-                    SET dead_lettered_at = now(), last_error = 'unknown task kind'
-                  WHERE id = $1",
-            )
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            return Ok(true);
-        };
-
-        match self.perform(kind, komp_id, &payload).await {
-            Ok(follow_up) => {
-                // The call reached its peer: the task is complete whatever the
-                // local follow-up does next. Completing it only after the
-                // follow-up would let a failing write retry a delivered call —
-                // a second UTILMD 55001 at the NB, a second reading order at
-                // edmd. The follow-up runs in a savepoint of this transaction,
-                // and a failure there is recorded on the completed task.
-                sqlx::query(
-                    "UPDATE outbound_tasks
-                        SET completed_at = now(), attempts = attempts + 1, last_error = NULL
-                      WHERE id = $1",
-                )
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
-                let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
-                match follow_up.apply(&mut savepoint).await {
-                    Ok(()) => savepoint.commit().await?,
-                    Err(e) => {
-                        savepoint.rollback().await?;
-                        let detail = format!("delivered; follow-up failed: {e:#}");
-                        tracing::error!(
-                            task = %kind_db, %id, ?komp_id, error = %detail,
-                            "vertragd: outbound call delivered but its follow-up write failed — \
-                             not retried, recorded on the task"
-                        );
-                        sqlx::query("UPDATE outbound_tasks SET last_error = $2 WHERE id = $1")
-                            .bind(id)
-                            .bind(&detail)
-                            .execute(&mut *tx)
-                            .await?;
-                    }
-                }
-            }
-            Err(e) => {
-                // A refusal is the same refusal on every retry, so it stops the
-                // task now and leaves the callee's answer on it for the operator.
-                let attempts = if is_refusal(&e) {
-                    MAX_ATTEMPTS
-                } else {
-                    attempts + 1
-                };
-                let detail = format!("{e:#}");
-                if attempts >= MAX_ATTEMPTS {
-                    tracing::error!(
-                        task = %kind_db, %id, ?komp_id, attempts, error = %detail,
-                        "vertragd: outbound task dead-lettered — the obligation is now the operator's"
-                    );
-                } else {
-                    tracing::warn!(
-                        task = %kind_db, %id, attempts, retry_in_s = backoff_secs(attempts),
-                        error = %detail, "vertragd: outbound task failed — retrying"
-                    );
-                }
-                record_failure(&mut tx, id, attempts, &detail).await?;
-            }
-        }
-        tx.commit().await?;
-        Ok(true)
-    }
-}
-
-/// Book a failed attempt: schedule the next one, or give up.
+/// The local write that records a delivered call, in the transaction that
+/// marks the delivery done.
 ///
-/// Separate from the worker so the SQL — an interval computed from a bind
-/// parameter, and the boundary at which a task stops being retried — is
-/// exercised by a test rather than only in production.
+/// The call reached its peer: the delivery is complete whatever this write
+/// does. So the write runs in a savepoint, and a failure is recorded on the
+/// delivered row rather than returned — returning it would roll the delivered
+/// mark back and send the NB a second UTILMD 55001, `edmd` a second reading
+/// order.
 ///
 /// # Errors
 ///
-/// Propagates storage errors.
-pub async fn record_failure(
+/// Storage errors outside the savepoint (opening it, recording the failure).
+pub async fn follow_up(
     conn: &mut sqlx::PgConnection,
-    id: Uuid,
-    attempts: i32,
-    detail: &str,
-) -> Result<()> {
-    if attempts >= MAX_ATTEMPTS {
-        sqlx::query(
-            "UPDATE outbound_tasks
-                SET dead_lettered_at = now(), attempts = $2, last_error = $3
-              WHERE id = $1",
-        )
-        .bind(id)
-        .bind(attempts)
-        .bind(detail)
-        .execute(&mut *conn)
-        .await?;
-        return Ok(());
-    }
-    sqlx::query(
-        "UPDATE outbound_tasks
-            SET attempts = $2, last_error = $3,
-                next_attempt_at = now() + make_interval(secs => $4)
-          WHERE id = $1",
-    )
-    .bind(id)
-    .bind(attempts)
-    .bind(detail)
-    .bind(f64::from(
-        u32::try_from(backoff_secs(attempts)).unwrap_or(u32::MAX),
-    ))
-    .execute(&mut *conn)
-    .await?;
-    Ok(())
-}
-
-/// The local write that records a delivered call.
-///
-/// Returned by [`OutboundWorker::perform`] rather than written there, so it
-/// runs after the task is marked complete: a failure here must not make the
-/// worker repeat a call the peer already received.
-enum FollowUp {
-    /// Nothing to record.
-    Nothing,
-    /// The Anmeldung reached `processd`: the component is `ANGEMELDET`.
-    Angemeldet {
-        komp_id: Uuid,
-        process_id: Option<String>,
-    },
-    /// The reading order reached `edmd`: keep the trail from a Schlussrechnung
-    /// back to the reading it was built on.
-    AbleseAuftrag { komp_id: Uuid, order_id: Uuid },
-}
-
-impl FollowUp {
-    async fn apply(self, conn: &mut sqlx::PgConnection) -> Result<()> {
-        match self {
-            Self::Nothing => Ok(()),
-            Self::Angemeldet {
-                komp_id,
-                process_id,
-            } => {
-                crate::pg::update_komponente_status(
-                    &mut *conn,
-                    komp_id,
-                    "ANGEMELDET",
-                    process_id.as_deref(),
-                    None,
-                    None,
-                    None,
-                )
-                .await
+    delivered: &Delivered,
+) -> Result<(), sqlx::Error> {
+    let mut savepoint = sqlx::Acquire::begin(&mut *conn).await?;
+    match apply_follow_up(&mut savepoint, delivered).await {
+        Ok(()) => savepoint.commit().await,
+        Err(e) => {
+            savepoint.rollback().await?;
+            let detail = format!("delivered; follow-up failed: {e:#}");
+            tracing::error!(
+                task = %delivered.ce_type, key = ?delivered.subject, error = %detail,
+                "vertragd: outbound call delivered but its follow-up write failed — \
+                 not retried, recorded on the delivery"
+            );
+            if let Some(key) = &delivered.subject {
+                sqlx::query("UPDATE event_outbox SET last_error = $2 WHERE event_id = $1")
+                    .bind(key)
+                    .bind(&detail)
+                    .execute(&mut *conn)
+                    .await?;
             }
-            Self::AbleseAuftrag { komp_id, order_id } => {
-                sqlx::query(
-                    "UPDATE vertragskomponenten
-                        SET ablese_auftrag_id = $2, updated_at = now()
-                      WHERE id = $1 AND ablese_auftrag_id IS NULL",
-                )
-                .bind(komp_id)
-                .bind(order_id)
-                .execute(&mut *conn)
-                .await?;
-                Ok(())
-            }
+            Ok(())
         }
+    }
+}
+
+/// The component a command's key names: `{tenant}/{KIND}:{komp}[:…]`.
+fn komp_of(key: &str) -> Option<Uuid> {
+    let (_, rest) = key.split_once('/')?;
+    rest.split(':').nth(1)?.parse().ok()
+}
+
+async fn apply_follow_up(conn: &mut sqlx::PgConnection, delivered: &Delivered) -> Result<()> {
+    let Some(komp_id) = delivered.subject.as_deref().and_then(komp_of) else {
+        return Ok(());
+    };
+    let reply = delivered.reply.as_ref();
+    match TaskKind::from_db(&delivered.ce_type) {
+        // The Anmeldung reached `processd`: the component is `ANGEMELDET`.
+        Some(TaskKind::Lieferbeginn) => {
+            let process_id = reply
+                .and_then(|b| b.get("process_id"))
+                .and_then(serde_json::Value::as_str);
+            crate::pg::update_komponente_status(
+                &mut *conn,
+                komp_id,
+                "ANGEMELDET",
+                process_id,
+                None,
+                None,
+                None,
+            )
+            .await
+        }
+        // The reading order reached `edmd`: keep the trail from a
+        // Schlussrechnung back to the reading it was built on.
+        Some(TaskKind::AblesungBeginn | TaskKind::AblesungEnde) => {
+            let Some(order_id) = reply
+                .and_then(|b| b.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(|s| s.parse::<Uuid>().ok())
+            else {
+                return Ok(());
+            };
+            sqlx::query(
+                "UPDATE vertragskomponenten
+                    SET ablese_auftrag_id = $2, updated_at = now()
+                  WHERE id = $1 AND ablese_auftrag_id IS NULL",
+            )
+            .bind(komp_id)
+            .bind(order_id)
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -850,192 +826,25 @@ fn call_body(payload: &serde_json::Value) -> Result<&serde_json::Value> {
         .ok_or_else(|| anyhow::anyhow!("processd task payload has no `body`"))
 }
 
-impl OutboundWorker {
-    /// Perform one task's call, returning the follow-up write that records it.
-    async fn perform(
-        &self,
-        kind: TaskKind,
-        komp_id: Option<Uuid>,
-        payload: &serde_json::Value,
-    ) -> Result<FollowUp> {
-        match kind {
-            TaskKind::Lieferbeginn => {
-                let endpoint = payload
-                    .get("endpoint")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("start-supply");
-                let processd = self.upstream(
-                    "processd",
-                    &self.cfg.processd_url,
-                    self.cfg.processd_api_key.as_deref(),
-                );
-                let body = self
-                    .post_json(&processd, endpoint, call_body(payload)?)
-                    .await?;
-                let process_id = body
-                    .get("process_id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
-                Ok(
-                    komp_id.map_or(FollowUp::Nothing, |komp_id| FollowUp::Angemeldet {
-                        komp_id,
-                        process_id,
-                    }),
-                )
-            }
-            TaskKind::Lieferende => {
-                let endpoint = payload
-                    .get("endpoint")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("end-supply");
-                let processd = self.upstream(
-                    "processd",
-                    &self.cfg.processd_url,
-                    self.cfg.processd_api_key.as_deref(),
-                );
-                self.post_json(&processd, endpoint, call_body(payload)?)
-                    .await?;
-                Ok(FollowUp::Nothing)
-            }
-            TaskKind::AblesungBeginn | TaskKind::AblesungEnde => {
-                let edmd =
-                    self.upstream("edmd", &self.cfg.edmd_url, self.cfg.edmd_api_key.as_deref());
-                let body = self.post_json(&edmd, "reading-orders", payload).await?;
-                // edmd's POST is not idempotent: the dedupe key stops a second
-                // *enqueue*, and completing the task before its follow-up stops
-                // a second *call*.
-                Ok(
-                    match (
-                        komp_id,
-                        body.get("id")
-                            .and_then(serde_json::Value::as_str)
-                            .and_then(|s| s.parse::<Uuid>().ok()),
-                    ) {
-                        (Some(komp_id), Some(order_id)) => {
-                            FollowUp::AbleseAuftrag { komp_id, order_id }
-                        }
-                        _ => FollowUp::Nothing,
-                    },
-                )
-            }
-            TaskKind::Abrechnungskonto => {
-                let accountingd = self.upstream(
-                    "accountingd",
-                    &self.cfg.accountingd_url,
-                    self.cfg.accountingd_api_key.as_deref(),
-                );
-                // `PUT /api/v1/accounts/{malo_id}?lf_mp_id=…`: both identifiers
-                // are addressing, not body fields. `UpdateAccountRequest` denies
-                // unknown fields, so sending them would be a 422.
-                let malo_id = payload
-                    .get("malo_id")
-                    .and_then(serde_json::Value::as_str)
-                    .context("Abrechnungskonto task carries no malo_id")?;
-                let lf_mp_id = payload
-                    .get("lf_mp_id")
-                    .and_then(serde_json::Value::as_str)
-                    .context("Abrechnungskonto task carries no lf_mp_id")?;
-                anyhow::ensure!(
-                    malo_id.chars().all(|c| c.is_ascii_alphanumeric())
-                        && lf_mp_id.chars().all(|c| c.is_ascii_alphanumeric()),
-                    "Abrechnungskonto identifiers must be alphanumeric \
-                     (malo_id={malo_id}, lf_mp_id={lf_mp_id})",
-                );
-                let path = format!("accounts/{malo_id}?lf_mp_id={lf_mp_id}");
-                self.put_no_content(&accountingd, &path, &serde_json::json!({}))
-                    .await?;
-                Ok(FollowUp::Nothing)
-            }
-        }
-    }
-
-    /// Address a peer, sharing this worker's HTTP client.
-    fn upstream(&self, name: &'static str, base: &str, key: Option<&str>) -> Upstream {
-        Upstream::new(
-            name,
-            base,
-            key.map(|k| secrecy::SecretString::from(k.to_owned())),
-            self.http.clone(),
-        )
-    }
-
-    /// POST a task's payload to `/api/v1/{path}` on `up`.
-    ///
-    /// A `404` is a failure here, not absence: the task named an endpoint the
-    /// peer does not serve, and acknowledging it would drop the obligation the
-    /// task exists to discharge.
-    async fn post_json(
-        &self,
-        up: &Upstream,
-        path: &str,
-        body: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        let path = format!("/api/v1/{path}");
-        up.json(up.post(&path).json(body))
-            .await
-            .context("outbound task dispatch")?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{} answered 404 for POST {path} — the obligation stays open rather \
-                     than being acknowledged against an endpoint that does not exist",
-                    up.name(),
-                )
-            })
-    }
-
-    /// PUT a task's payload to `/api/v1/{path}` on `up`, reading no body.
-    ///
-    /// `accountingd` answers its upsert `204 No Content`, which is a success
-    /// with nothing to parse — reading it as JSON turned every created account
-    /// into eight retries and a dead-letter. Same rule as [`Self::post_json`]
-    /// otherwise: a `404` is a failure, not absence.
-    async fn put_no_content(
-        &self,
-        up: &Upstream,
-        path: &str,
-        body: &serde_json::Value,
-    ) -> Result<()> {
-        let path = format!("/api/v1/{path}");
-        up.send(up.put(&path).json(body))
-            .await
-            .context("outbound task dispatch")?
-            .map(drop)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{} answered 404 for PUT {path} — the obligation stays open rather \
-                     than being acknowledged against an endpoint that does not exist",
-                    up.name(),
-                )
-            })
-    }
-}
-
-/// Whether the callee refused the request itself: a 4xx other than 408 and
-/// 429, which a retry with the same body cannot change.
-fn is_refusal(e: &anyhow::Error) -> bool {
-    e.chain()
-        .filter_map(|c| c.downcast_ref::<mako_service::http::UpstreamError>())
-        .filter_map(mako_service::http::UpstreamError::status)
-        .any(|s| {
-            s.is_client_error()
-                && s != reqwest::StatusCode::REQUEST_TIMEOUT
-                && s != reqwest::StatusCode::TOO_MANY_REQUESTS
-        })
-}
-
-/// Exponential backoff, capped so a long outage does not push the next attempt
-/// past the point where the obligation still matters.
-fn backoff_secs(attempts: i32) -> u64 {
-    let exp = u32::try_from(attempts.max(1) - 1).unwrap_or(0).min(16);
-    BACKOFF_BASE_SECS
-        .saturating_mul(1u64 << exp)
-        .min(BACKOFF_CAP_SECS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use time::macros::date;
+
+    /// A gas contract's Schlussablesung is ordered as gas: `edmd` files the
+    /// Zählerstand in the unit the order's Sparte names.
+    #[test]
+    fn a_gas_schlussablesung_carries_gas() {
+        let task = ablesung(
+            Uuid::new_v4(),
+            "51238696012",
+            "GAS",
+            true,
+            date!(2026 - 07 - 01),
+        );
+        assert_eq!(task.payload["sparte"], "GAS");
+        assert_eq!(task.payload["anlass"], "LIEFERENDE");
+    }
 
     fn kunde() -> Kunde {
         crate::domain::utilmd_kunde(
@@ -1344,10 +1153,11 @@ mod tests {
     }
 
     #[test]
-    fn the_backoff_grows_and_then_stops_growing() {
-        assert_eq!(backoff_secs(1), 30);
-        assert_eq!(backoff_secs(2), 60);
-        assert_eq!(backoff_secs(3), 120);
-        assert_eq!(backoff_secs(30), BACKOFF_CAP_SECS);
+    fn a_key_names_its_component() {
+        let komp = Uuid::new_v4();
+        let task = ablesung(komp, "51238696012", "STROM", true, date!(2026 - 07 - 01));
+        assert_eq!(komp_of(&key("9800000000016", &task)), Some(komp));
+        let konto = abrechnungskonto(komp, "51238696012", "9800000000016");
+        assert_eq!(komp_of(&key("9800000000016", &konto)), None);
     }
 }

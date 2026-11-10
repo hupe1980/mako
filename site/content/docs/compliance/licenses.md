@@ -11,6 +11,15 @@ every package's licence from `desk/package-lock.json` and refuses one the list
 does not allow. Every identifier beyond the plain permissive ones carries its
 reason and the transitive package that introduced it as a comment beside it.
 
+## Data
+
+One third-party dataset ships in the tree: `services/marktd/data/plz_bundesland.tsv`,
+the Postleitzahl → Bundesland table `marktd` derives a Marktlokation's Land
+from. It is folded from the GeoNames postal code file for Germany
+(<https://download.geonames.org/export/zip/DE.zip>), licensed Creative Commons
+Attribution 4.0 by GeoNames (<https://www.geonames.org>); the file header and
+every `GET /api/v1/malos/{id}/bundesland` answer carry the attribution.
+
 ## Review Process
 
 When a new licence needs to be allowed:

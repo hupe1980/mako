@@ -67,7 +67,8 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
         },
         "konzessionsabgabe": {
           "satz_ct_per_kwh": "0.11",
-          "klasse": "Sondervertragskunde"
+          "klasse": "Sondervertragskunde",
+          "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" }
         },
         "netzebene": "Niederspannung",
         "artikel_ids": {

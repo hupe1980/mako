@@ -70,28 +70,15 @@ const UNCHECKED: &[(&str, &str)] = &[
          constant and has no caller either, so neither leg is wired",
     ),
     (
-        "wim.verpflichtungsanfrage",
-        "the 8.–5. WT window is anchored on the *vorläufig bestätigte* Zuordnungsende, \
-         which mako records on the Bestätigung rather than on the 55168 being judged",
-    ),
-    (
         "wim.gmsb-uebernahme-anstoss",
         "has no PID: the Anstoß is a gMSB-internal act, so there is no inbound message to \
          judge and the window binds mako only where it plays gMSB",
     ),
     (
-        "wim.mitteilung-gesamtvorgang",
-        "IFTSTA 21009 — needs the bestätigter Zuordnungsbeginn from the MSB-Wechsel Vorgang, \
-         which `mako-wim` carries but the IFTSTA leg is parsed without",
-    ),
-    (
-        "wim.scheitern-gesamtvorgang",
-        "IFTSTA 21013, same anchor as `wim.mitteilung-gesamtvorgang`",
-    ),
-    (
         "wim.scheitern-aenderung-technik",
-        "has no PID: the 3-WT window binds mako's own outbound Scheitern-Meldung, so it is a \
-         send-side deadline rather than an inbound check",
+        "has no PID: the 3-WT window binds the MSB's own Scheitern-Meldung, and \
+         `wim-technik-aenderung`'s MSB side sends neither the ORDRSP that confirms an \
+         Änderungstermin nor a Durchführungs-IFTSTA, so nothing anchors or discharges it",
     ),
     (
         "wim.vorabinformation-ersteinbau-ims.an-lf-und-nb",
@@ -100,8 +87,9 @@ const UNCHECKED: &[(&str, &str)] = &[
     ),
     (
         "wim.angebot-rechnungsabwicklung",
-        "QUOTES 15002 — anchored on the ÜT of the NB's LF-Zuordnungsmitteilung, which is a \
-         different Vorgang than the Angebot being judged",
+        "QUOTES 15002 — binds the MSB, 3 WT after the ÜT of the NB's LF-Zuordnungsmitteilung, \
+         which the receiving LF never sees; mako sends 15002 only as the answer to a REQOTE \
+         35002, and no MSB process opens on the LF-Zuordnungsmitteilung to hold the window",
     ),
     (
         "wim.preisblatt-lf",
@@ -110,12 +98,13 @@ const UNCHECKED: &[(&str, &str)] = &[
     ),
     (
         "wim.preisblatt-nb.initial",
-        "PRICAT 27002, anchored on the day EDIFACT communication was established — a \
-         deployment fact mako does not record",
+        "PRICAT 27002 — mako neither issues nor validates Preisblätter; the row documents \
+         the window an operator's own price process must respect",
     ),
     (
         "wim.preisblatt-nb.aenderung",
-        "PRICAT 27002, anchored on the Inkrafttreten of the operator's own price change",
+        "PRICAT 27002 — mako neither issues nor validates Preisblätter; the row documents \
+         the window an operator's own price process must respect",
     ),
 ];
 

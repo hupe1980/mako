@@ -20,6 +20,7 @@ just dev vertragd      # dev/config/vertragd.toml against the dev PostgreSQL
 | **Database** | PostgreSQL (`migrations/0001_schema.sql`) |
 | **Statutory rules** | pure functions in `src/domain.rs`, chosen by `vertragsart` (`GRUNDVERSORGUNG` / `ERSATZVERSORGUNG` / `SONDERVERTRAG`) and `haushaltskunde` (§ 3 Nr. 57 EnWG) |
 | **Product assignment** | half-open `[gueltig_von, gueltig_bis)` slices, no overlap (`kp_no_overlap`, GiST); `GET /api/v1/malo/{malo_id}/produkte` is what `billingd` bills from |
+| **§ 14a module state** | Modul 1/2/3 per component as valid-time slices (`ks_no_overlap`); `GET`/`POST /api/v1/malo/{malo_id}/sect14a`, read by `billingd` to select the reductions it bills |
 | **Market side** | Anmeldung and Kündigung reach the market through `processd`; inbound `de.mako.*` and `de.tarif.angebot.angenommen` arrive at `POST /api/v1/events` / `/webhooks/angebot` (HMAC) |
 | **MCP** | 20 read-only tools + 4 prompts at `/mcp` |
 

@@ -323,11 +323,15 @@ impl MockNb {
 
         let expected_pid: u64 = if accepted { 55005 } else { 55006 };
         assert_eq!(
-            outbox.len(),
-            1,
-            "Lieferende Antwort must enqueue exactly one UTILMD (PID {expected_pid}); \
-             no MSCONS obligations for 55004"
+            outbox
+                .iter()
+                .map(|o| o.message_type.as_ref())
+                .collect::<Vec<_>>(),
+            ["UTILMD", "ProcessCompleted"],
+            "Lieferende Antwort enqueues one UTILMD (PID {expected_pid}) and the completion \
+             the NB's marktd ends the supply on; no MSCONS obligations for 55004"
         );
+        assert_eq!(outbox[1].payload["pid"].as_u64(), Some(expected_pid));
 
         let utilmd = &outbox[0];
         assert_eq!(utilmd.message_type.as_ref(), "UTILMD");

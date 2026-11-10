@@ -31,7 +31,7 @@ use super::{COMMAND_REGISTRY, CommandError, CommandsApiState, DispatchError, val
 tokio::task_local! {
     /// The outbox the door built, set by its pre-send check while a rehearsal
     /// runs. Present only inside [`rehearse`].
-    static PROBE: RefCell<Option<Vec<PendingOutbox>>>;
+    static PROBE: RefCell<Option<(mako_engine::version::FormatVersion, Vec<PendingOutbox>)>>;
 }
 
 /// The commands a rehearsal can run: each door renders its UTILMD and holds it
@@ -62,9 +62,12 @@ pub(super) fn active() -> bool {
 
 /// Inside a rehearsal, take the door's outbox and return `true` — the door
 /// stops there. Outside one, `false`: the door goes on to its check.
-pub(super) fn halt(outbox: &[PendingOutbox]) -> bool {
+pub(super) fn halt(
+    format_version: &mako_engine::version::FormatVersion,
+    outbox: &[PendingOutbox],
+) -> bool {
     PROBE
-        .try_with(|cell| *cell.borrow_mut() = Some(outbox.to_vec()))
+        .try_with(|cell| *cell.borrow_mut() = Some((format_version.clone(), outbox.to_vec())))
         .is_ok()
 }
 
@@ -332,21 +335,23 @@ pub async fn rehearse(
         nachrichten,
     };
     match (outcome, outbox) {
-        (Err(DispatchError::Geprobt), Some(outbox)) => {
+        (Err(DispatchError::Geprobt), Some((fv, outbox))) => {
             let nachrichten = outbox
                 .iter()
                 .filter(|p| &*p.message_type == "UTILMD")
-                .filter_map(|p| nachricht(state, p))
+                .filter_map(|p| nachricht(state, &fv, p))
                 .collect();
-            Ok(match super::eog_stammdaten::gate_verdict(state, &outbox) {
-                Ok(()) => probe(Urteil::Besteht, None, None, nachrichten),
-                Err(e) => probe(
-                    Urteil::Abgelehnt,
-                    Some(Stufe::Pruefung),
-                    Some(crate::api::mcp_server::dispatch_error_to_string(e)),
-                    nachrichten,
-                ),
-            })
+            Ok(
+                match super::eog_stammdaten::gate_verdict(state, &fv, &outbox) {
+                    Ok(()) => probe(Urteil::Besteht, None, None, nachrichten),
+                    Err(e) => probe(
+                        Urteil::Abgelehnt,
+                        Some(Stufe::Pruefung),
+                        Some(crate::api::mcp_server::dispatch_error_to_string(e)),
+                        nachrichten,
+                    ),
+                },
+            )
         }
         (Err(DispatchError::Engine(e)), _) => Err(ProbeRefusal::Engine(e.to_string())),
         (Err(e), _) => Ok(probe(
@@ -369,11 +374,19 @@ pub async fn rehearse(
 
 /// The rendered message of `pending`, annotated against its own profile;
 /// `None` when it does not render — the verdict then carries why.
-fn nachricht(state: &CommandsApiState, pending: &PendingOutbox) -> Option<ProbeNachricht> {
+fn nachricht(
+    state: &CommandsApiState,
+    format_version: &mako_engine::version::FormatVersion,
+    pending: &PendingOutbox,
+) -> Option<ProbeNachricht> {
     use edi_energy::EdiEnergyMessage as _;
 
-    let check =
-        crate::orchestrator::edifact_renderer::utilmd_gate_check(pending, state.tenant_id).ok()?;
+    let check = crate::orchestrator::edifact_renderer::utilmd_gate_check(
+        pending,
+        state.tenant_id,
+        format_version,
+    )
+    .ok()?;
     let parsed = edi_energy::parse(&check.bytes).ok()?;
     // The message, `UNH` … `UNT`: the profile names no envelope segment, and
     // a finding's position counts from `UNH` = 1.

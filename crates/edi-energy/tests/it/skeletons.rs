@@ -10,6 +10,7 @@
 //! omits) surfaces here as a finding on a skeleton, per Anwendungsfall.
 
 use edi_energy::profile::SkeletonParties;
+use edi_energy::profile::validate::bars_sending;
 use edi_energy::{Platform, Pruefidentifikator};
 
 #[test]
@@ -23,10 +24,7 @@ fn every_anwendungsfall_has_a_conformant_skeleton() {
             let segs = profile.skeleton(af, &SkeletonParties::default());
             let pid = af.pid.and_then(|p| Pruefidentifikator::new(p).ok());
             let issues = profile.validate(&segs, pid);
-            let errors: Vec<_> = issues
-                .iter()
-                .filter(|i| i.severity == edifact_rs::ValidationSeverity::Error)
-                .collect();
+            let errors: Vec<_> = issues.iter().filter(|i| bars_sending(i)).collect();
             checked += 1;
             let errors: Vec<_> = errors
                 .into_iter()
@@ -77,6 +75,54 @@ fn every_anwendungsfall_has_a_conformant_skeleton() {
              longer fails on it — delete the row"
         );
     }
+}
+
+/// The sweep above holds a skeleton to what a sender may send, and that is
+/// stricter than validity: a Formatbedingung finding is a warning, which a
+/// receiver answers with „Z35 Format nicht eingehalten" (APERAK AHB 1.1
+/// Kap. 2.1.2.1, S. 12). A 55001 skeleton whose Marktlokations-ID carries a
+/// wrong check digit stays valid and is still not sendable.
+#[cfg(feature = "utilmd")]
+#[test]
+fn a_formatbedingung_finding_keeps_a_skeleton_from_being_sent() {
+    let profile = edi_energy::ReleaseRegistry::global()
+        .profiles_for(edi_energy::MessageType::Utilmd)
+        .find(|p| p.release().as_str() == "S2.1")
+        .expect("UTILMD S2.1 is shipped");
+    let af = profile.anwendungsfall(55001).expect("55001");
+    let segs = profile.skeleton(af, &SkeletonParties::default());
+    let wire = String::from_utf8(edifact_rs::segments_to_bytes(&segs).unwrap()).unwrap();
+    let malo = wire
+        .split('\'')
+        .find_map(|s| s.strip_prefix("LOC+Z16+"))
+        .expect("the skeleton names its Marktlokation")
+        .to_owned();
+    let mut wrong = malo.clone();
+    let last = wrong.pop().and_then(|c| c.to_digit(10)).expect("a digit");
+    wrong.push(char::from_digit((last + 1) % 10, 10).expect("a digit"));
+    let tampered = wire.replace(&format!("LOC+Z16+{malo}'"), &format!("LOC+Z16+{wrong}'"));
+    let segs: Vec<edifact_rs::OwnedSegment> = edifact_rs::from_bytes(tampered.as_bytes())
+        .map(|s| s.map(edifact_rs::Segment::into_owned))
+        .collect::<Result<_, _>>()
+        .expect("the tampered skeleton parses");
+    let issues = profile.validate(&segs, Pruefidentifikator::new(55001).ok());
+    assert!(
+        issues
+            .iter()
+            .all(|i| i.severity != edifact_rs::ValidationSeverity::Error),
+        "the tampered skeleton is still valid: {issues:#?}"
+    );
+    let refusals: Vec<_> = issues
+        .iter()
+        .filter(|i| bars_sending(i))
+        .filter_map(|i| i.rule_id())
+        .collect();
+    assert!(
+        refusals
+            .iter()
+            .any(|r| r.starts_with("FMT-55001-") && r.ends_with("-950")),
+        "a wrong check digit bars sending under [950]: {refusals:?}\n{tampered}"
+    );
 }
 
 /// The one thing the generator cannot place, and why.

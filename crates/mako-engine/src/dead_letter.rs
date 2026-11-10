@@ -468,6 +468,96 @@ impl std::fmt::Display for DeadLetterReason {
     }
 }
 
+// ── Dead-letter notice ───────────────────────────────────────────────────────
+
+/// The outbox `message_type` announcing a dead letter; the ERP worker
+/// delivers it as `de.mako.dead-letter.recorded`.
+pub const DEAD_LETTER_RECORDED: &str = "DeadLetterRecorded";
+
+/// The [`DEAD_LETTER_RECORDED`] notice for the dead letter `dead_letter_id`,
+/// recorded at `rejected_at` for `reason` — to be written in the same
+/// transaction as the record, so a record never exists without its notice.
+///
+/// `None` for an [`DeadLetterReason::OutboxExhausted`] whose undelivered
+/// message is itself a notice: announcing that would enqueue a further notice
+/// for the same consumer that just refused one, without end. The record is
+/// still written.
+///
+/// The notice stands under a process id of its own, derived from
+/// `dead_letter_id`, so the CloudEvent subject names the record.
+#[must_use]
+pub fn dead_letter_notice(
+    tenant_id: crate::ids::TenantId,
+    dead_letter_id: uuid::Uuid,
+    rejected_at: &str,
+    reason: &DeadLetterReason,
+) -> Option<crate::outbox::OutboxMessage> {
+    use crate::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
+    let mut payload = serde_json::json!({
+        "dead_letter_id": dead_letter_id.to_string(),
+        "reason": reason.label(),
+        "detail": reason.to_string(),
+        "rejected_at": rejected_at,
+    });
+    let mut recipient = String::new();
+    if let DeadLetterReason::OutboxExhausted {
+        message_id,
+        message_type,
+        recipient: an,
+        ..
+    } = reason
+    {
+        if &**message_type == DEAD_LETTER_RECORDED {
+            return None;
+        }
+        payload["message_type"] = serde_json::json!(message_type);
+        payload["undelivered_message_id"] = serde_json::json!(message_id.to_string());
+        payload["receiver"] = serde_json::json!(an);
+        recipient.clone_from(an);
+    }
+    if let Some(ctx) = reason.audit_context() {
+        let fields = [
+            ("pid", ctx.pid.map(|p| serde_json::json!(p.as_u32()))),
+            (
+                "message_ref",
+                ctx.message_ref.as_ref().map(|v| serde_json::json!(v)),
+            ),
+            (
+                "message_type",
+                ctx.message_type.as_ref().map(|v| serde_json::json!(v)),
+            ),
+            (
+                "sender",
+                ctx.sender_eic.as_ref().map(|v| serde_json::json!(v)),
+            ),
+            (
+                "receiver",
+                ctx.receiver_eic.as_ref().map(|v| serde_json::json!(v)),
+            ),
+        ];
+        for (key, value) in fields {
+            if let Some(value) = value {
+                payload[key] = value;
+            }
+        }
+    }
+    if let DeadLetterReason::NotDispatchable { workflow_name, .. } = reason {
+        payload["workflow_name"] = serde_json::json!(workflow_name);
+    }
+    let process_id = ProcessId::from_uuid(dead_letter_id);
+    Some(crate::outbox::OutboxMessage::new(
+        StreamId::for_process(tenant_id, &process_id),
+        process_id,
+        tenant_id,
+        CorrelationId::from_uuid(dead_letter_id),
+        ConversationId::from_uuid(dead_letter_id),
+        EventId::from_uuid(dead_letter_id),
+        DEAD_LETTER_RECORDED,
+        recipient,
+        payload,
+    ))
+}
+
 // ── DeadLetterSink trait ──────────────────────────────────────────────────────
 
 /// Receives messages that cannot be routed or processed.

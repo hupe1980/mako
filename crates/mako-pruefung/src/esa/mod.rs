@@ -32,8 +32,9 @@ pub mod wertebestellung;
 // types are re-exported here so an ESA caller reaches them where the rest of
 // the relationship lives.
 pub use crate::rechnung::{
-    Befund, Ebene, NichtZahlungsavisAntwort, PositionsFakten, RechnungsAntwort, RechnungsFakten,
-    Steuersatzpruefung, StornoAntwort, StornoFakten, UrsprungsAntwort, Zeitraum,
+    Befund, Ebene, NichtZahlungsavisAntwort, OffenerPruefschritt, PositionsFakten,
+    RechnungsAntwort, RechnungsFakten, Steuersatzpruefung, StornoAntwort, StornoFakten,
+    UrsprungsAntwort, Zeitraum,
 };
 pub use rechnung::{
     pruefe_nicht_zahlungsavis, pruefe_rechnung, pruefe_rechnung_erneut, pruefe_stornorechnung,

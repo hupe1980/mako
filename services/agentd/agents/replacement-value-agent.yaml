@@ -32,7 +32,7 @@ spec:
 
       ## TRIGGERED BY
       - `de.messwert.reading.quality.warning` — quality grade F or gap detected
-      - `de.mako.process.completed` — billing period needs quality check
+      - `de.mako.process.completed` — billing period needs quality check. One type for both answers: `data.accepted: false` / `data.outcome: "rejected"` is the counterparty's Ablehnung — the process ended and did not happen
 
       ## WHAT § 60 Abs. 1 MsbG ACTUALLY SAYS
 

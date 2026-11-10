@@ -214,7 +214,6 @@ fn parse_req(
 
 /// `PUT /api/v1/nb-contracts/:id`
 pub async fn put_nb_contract(
-    Extension(repo): Extension<NbContractRepoExt>,
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(tenant): Extension<Tenant>,
@@ -239,7 +238,12 @@ pub async fn put_nb_contract(
     let sparte = rec.sparte.to_string();
     let evt_malo_id = rec.malo_id.to_string();
 
-    match repo.upsert(rec).await {
+    // The contract and its CloudEvent commit together.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    match crate::pg::PgNbContractRepository::upsert_tx(&mut tx, rec).await {
         Ok(version) => {
             // Emit de.markt.nb-contract.updated so ERP subscribers can rebuild
             // Vertrag caches without polling.
@@ -258,9 +262,12 @@ pub async fn put_nb_contract(
                 marktsparte: Some(sparte),
                 ..Default::default()
             });
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
-                tracing::error!(error = %e, "nb_contract: durable enqueue failed");
-                return ApiError::internal(e).into_response();
+            let ctx = format!("nb_contract: durable enqueue for contract {}", evt.subject);
+            if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+                return ApiError::internal(anyhow::Error::from(e).context(ctx)).into_response();
+            }
+            if let Err(e) = tx.commit().await {
+                return ApiError::internal(anyhow::Error::from(e).context(ctx)).into_response();
             }
             Json(serde_json::json!({ "version": version })).into_response()
         }

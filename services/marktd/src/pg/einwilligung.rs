@@ -141,6 +141,12 @@ fn map_consent(row: &PgRow) -> Result<EinwilligungRecord, sqlx::Error> {
 impl PgEinwilligungRepository {
     /// Grant a consent, superseding any active consent for the same
     /// `(tenant, esa, Anschlussnutzer)`. Returns the new consent id.
+    ///
+    /// One transaction holds the grant, its `einwilligung.erteilt` event and
+    /// the end of each consent it replaces: a replaced consent is ended like a
+    /// Widerruf ([`crate::consent_lifecycle::end_consent`], `grund`
+    /// `einwilligung_ersetzt`), with an Abbestellung for each location the new
+    /// consent no longer covers.
     pub async fn grant(&self, rec: EinwilligungRecord) -> Result<Uuid, MdmError> {
         let mut tx = self
             .pool
@@ -150,17 +156,39 @@ impl PgEinwilligungRepository {
 
         // A new grant supersedes any active consent for the same triple —
         // revoke the old one first so the partial UNIQUE index stays satisfied.
-        sqlx::query(
+        let ersetzt = sqlx::query(
             "UPDATE esa_einwilligungen SET revoked_at = now(), updated_at = now() \
              WHERE tenant = $1 AND esa_mp_id = $2 AND anschlussnutzer_ref = $3 \
-               AND revoked_at IS NULL",
+               AND revoked_at IS NULL \
+             RETURNING *",
         )
         .bind(&rec.tenant)
         .bind(&rec.esa_mp_id)
         .bind(&rec.anschlussnutzer_ref)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .iter()
+        .map(map_consent)
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|e| MdmError::Internal(e.to_string()))?;
+        for old in &ersetzt {
+            let nicht_mehr_gedeckt: Vec<String> = old
+                .location_ids
+                .iter()
+                .filter(|l| !rec.location_ids.contains(l))
+                .cloned()
+                .collect();
+            crate::consent_lifecycle::end_consent(
+                &mut tx,
+                &rec.tenant,
+                old,
+                crate::consent_lifecycle::GRUND_ERSETZT,
+                &nicht_mehr_gedeckt,
+            )
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        }
 
         let id: Uuid = sqlx::query_scalar(
             "INSERT INTO esa_einwilligungen \
@@ -180,6 +208,21 @@ impl PgEinwilligungRepository {
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        let erteilt = mako_markt::cloudevents::MarktEvent::new(
+            &rec.tenant,
+            mako_events::markt::EINWILLIGUNG_ERTEILT,
+            id.to_string(),
+            serde_json::json!({
+                "einwilligung_id": id,
+                "esa_mp_id": rec.esa_mp_id,
+                "anschlussnutzer_ref": rec.anschlussnutzer_ref,
+                "location_ids": rec.location_ids,
+            }),
+        );
+        crate::outbox::enqueue(&mut *tx, &erteilt)
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         tx.commit()
             .await
@@ -233,28 +276,54 @@ impl PgEinwilligungRepository {
     }
 
     /// Revoke a consent (Art. 7(3)). Returns the revoked record when it existed
-    /// and was still active, so the caller can fire the 17008 Abbestellung.
+    /// and was still active.
+    ///
+    /// `revoked_at`, the `einwilligung.widerrufen` event and one Abbestellung
+    /// per covered location commit in one transaction: a `revoked_at` committed
+    /// alone answers the customer's retry with 404 while nothing ever stops the
+    /// deliveries.
     pub async fn revoke(
         &self,
         tenant: &str,
         id: Uuid,
     ) -> Result<Option<EinwilligungRecord>, MdmError> {
-        // Atomic: flip revoked_at only when still active, and return the row so
-        // the caller can fire the 17008 Abbestellung exactly once.
-        sqlx::query(
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        // Flip revoked_at only when still active, so the Abbestellung is owed
+        // exactly once.
+        let Some(rec) = sqlx::query(
             "UPDATE esa_einwilligungen SET revoked_at = now(), updated_at = now() \
              WHERE tenant = $1 AND id = $2 AND revoked_at IS NULL \
              RETURNING *",
         )
         .bind(tenant)
         .bind(id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?
         .as_ref()
         .map(map_consent)
         .transpose()
-        .map_err(|e| MdmError::Internal(e.to_string()))
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+        crate::consent_lifecycle::end_consent(
+            &mut tx,
+            tenant,
+            &rec,
+            crate::consent_lifecycle::GRUND_WIDERRUFEN,
+            &rec.location_ids,
+        )
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Ok(Some(rec))
     }
 
     /// Close out every consent whose **`valid_to` has passed**, returning the

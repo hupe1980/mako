@@ -207,10 +207,15 @@ pub fn wim_ersteinbau_registry() -> AdapterRegistry<mako_wim::ersteinbau::WimErs
                     melo_id: mako_engine::types::MeLo::new(
                         super::iftsta_location(i).unwrap_or_default(),
                     ),
-                    // `SG15 DTM+2380` — the planned Umstellungszeitpunkt the
+                    // `SG15 DTM+76` — the planned Umstellungszeitpunkt the
                     // 3-Monats-Vorlauffrist of Kap. 3.5.2 Nr. 1 is measured
-                    // against.
-                    umstellungszeitpunkt: super::iftsta_zuordnungsbeginn(i).unwrap_or_default(),
+                    // against (`102` `CCYYMMDD`, IFTSTA AHB 2.1 Kap. 6.7).
+                    umstellungszeitpunkt: i
+                        .dtm()
+                        .iter()
+                        .find(|d| d.qualifier == "76")
+                        .and_then(|d| d.value.clone())
+                        .unwrap_or_default(),
                     message_ref: MessageRef::new(msg.message_ref()),
                     validation_passed,
                     validation_errors,
@@ -1305,13 +1310,31 @@ pub fn wim_technik_aenderung_registry() -> AdapterRegistry<WimTechnikAenderungWo
                     .and_then(|s| s.component_str(1, 0))
                     .filter(|l| !l.is_empty())
                     .map(str::to_owned);
+                let kopf = super::msb_eingang::orders_kopf(o);
+                let beauftragung = o
+                    .segments()
+                    .iter()
+                    .find(|s| s.tag == "BGM")
+                    .and_then(|s| s.component_str(0, 0))
+                    .unwrap_or("")
+                    .to_owned();
+                let ausfuehrungsdatum = o
+                    .segments()
+                    .iter()
+                    .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("203"))
+                    .and_then(|s| s.component_str(0, 1))
+                    .map(str::to_owned);
                 return Ok(TechnikAenderungCommand::ReceiveAuftrag {
                     orders_pid,
-                    sender: mako_engine::types::MarktpartnerCode::new(
-                        o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
-                    ),
+                    sender: mako_engine::types::MarktpartnerCode::new(kopf.sender),
                     location_id,
                     message_ref: MessageRef::new(msg.message_ref()),
+                    kopf: mako_wim::technik_aenderung::AuftragKopf {
+                        empfaenger: kopf.empfaenger,
+                        dokumentennummer: kopf.dokumentennummer,
+                        beauftragung,
+                        ausfuehrungsdatum,
+                    },
                     validation_passed,
                     validation_errors,
                 });
@@ -1348,10 +1371,25 @@ pub fn wim_technik_aenderung_registry() -> AdapterRegistry<WimTechnikAenderungWo
                         .map(|code| format!("ORDRSP response code: {code}"))
                 });
 
+            // `SG2 AJT` — DE 4465 the code, DE 1082 the tree it names
+            // (ORDRSP AHB 1.1b Kap. 4.12, S. 52–53).
+            let ajt = o.segments().iter().find(|s| s.tag == "AJT");
+            let antwort = ajt
+                .and_then(|s| s.component_str(0, 0))
+                .filter(|c| !c.is_empty())
+                .map(|code| {
+                    mako_engine::envelope::Antwortcode::new(
+                        code,
+                        ajt.and_then(|s| s.component_str(1, 0))
+                            .filter(|l| !l.is_empty()),
+                    )
+                });
+
             Ok(TechnikAenderungCommand::ReceiveOrdrsp {
                 ordrsp_pid,
                 reason,
                 message_ref: MessageRef::new(msg.message_ref()),
+                antwort,
             })
         },
     ));
@@ -1493,10 +1531,25 @@ pub fn wim_rechnungsabwicklung_registry()
                         validation_errors,
                     })
                 }
-                AnyMessage::Ordrsp(_) => Ok(RechnungsabwicklungCommand::ReceiveAntwort {
-                    pid,
-                    message_ref: MessageRef::new(msg.message_ref()),
-                }),
+                AnyMessage::Ordrsp(o) => {
+                    // `SG2 AJT` — DE 4465 the code, DE 1082 its list.
+                    let ajt = o.segments().iter().find(|s| s.tag == "AJT");
+                    let antwort = ajt
+                        .and_then(|s| s.component_str(0, 0))
+                        .filter(|c| !c.is_empty())
+                        .map(|code| {
+                            mako_engine::envelope::Antwortcode::new(
+                                code,
+                                ajt.and_then(|s| s.component_str(1, 0))
+                                    .filter(|l| !l.is_empty()),
+                            )
+                        });
+                    Ok(RechnungsabwicklungCommand::ReceiveAntwort {
+                        pid,
+                        message_ref: MessageRef::new(msg.message_ref()),
+                        antwort,
+                    })
+                }
                 // IFTSTA 21032 — the LF refuses the Angebot. Which tree its
                 // code belongs to follows the *sequence*, and both sequences
                 // end in this PID: `E_0205` when the MSB offered unprompted,

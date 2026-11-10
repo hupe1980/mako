@@ -191,7 +191,12 @@ pub async fn put_partner(
     let is_lf = record.marktrolle == Some(rubo4e::current::Marktrolle::Lf);
     let lf_mp_id = gln_str.clone();
 
-    match state.partner_repo.upsert(record).await {
+    // The partner and its CloudEvent commit together.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
+    match crate::pg::PgPartnerRepository::upsert_tx(&mut tx, record).await {
         Ok(version) => {
             let evt = MarktEvent::new(
                 &state.tenant,
@@ -202,9 +207,19 @@ pub async fn put_partner(
             .with_extensions(EventExtensions {
                 ..Default::default()
             });
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
-                tracing::error!(error = %e, "partner: durable enqueue failed");
-                return ApiError::internal(e).into_response();
+            if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+                return ApiError::internal(
+                    anyhow::Error::from(e)
+                        .context(format!("partner: durable enqueue for partner {lf_mp_id}")),
+                )
+                .into_response();
+            }
+            if let Err(e) = tx.commit().await {
+                return ApiError::internal(
+                    anyhow::Error::from(e)
+                        .context(format!("partner: commit for partner {lf_mp_id}")),
+                )
+                .into_response();
             }
 
             // Phase 2: when a new LF partner is registered, auto-dispatch the

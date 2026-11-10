@@ -18,6 +18,7 @@ the Mahnung.
 |---|---|---|
 | **Mahnung** | dunning letter, computed by [accountingd](@/docs/services/accountingd.md) | Textform (§ 126b BGB: a readable declaration on a durable medium naming sender and recipient; no signature) |
 | **Preisanpassung** | the price-change notice of § 41 Abs. 5 EnWG | Textform |
+| **Gebührenbescheid** | a public-law Gebühr from billingd, issued beside the supply invoice (§ 157 Abs. 1 AO content) | letter, no carrier |
 | **Invoice** | from billingd | **ZUGFeRD**: a PDF/A-3 carrying the EN 16931 invoice XML; **XRechnung** is the German CIUS. The document declares which in **BT-24**, and outputd stamps the carrier from that |
 
 Port: `:9880`
@@ -53,7 +54,7 @@ What "about" means depends on the kind:
 | Kind | Field | Why |
 |---|---|---|
 | `INVOICE` | `model` — the EN 16931 semantic model | outputd projects the page view from it, so the projection the publish gate proves templates against is the one production feeds them |
-| `MAHNUNG`, `PREISANPASSUNG` | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
+| `MAHNUNG`, `PREISANPASSUNG`, `GEBUEHRENBESCHEID` | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
 
 `POST /api/v1/documents/issue/{kind}` takes the same body plus `subject_ref`,
 `recipient` and `channels`.
@@ -161,17 +162,23 @@ all-or-nothing — street, postcode and town — and an absent address suppresse
 `POST /deliveries/{id}/status`) are different states; a reported bounce turns
 even a `DELIVERED` row `FAILED` and clears `delivered_at`.
 
-### The worker
+### Delivery
 
-One loop drains `PENDING` rows with doubling backoff from 60 s to 6 h up to
-`max_attempts` (default 8, about half a day); the claim is `FOR UPDATE SKIP
-LOCKED`, so replicas are safe. At the ceiling a delivery becomes `FAILED` and is
-logged at `error`.
+Issuing a document commits, in the same transaction, the publication of a
+`PORTAL` delivery (recorded `DELIVERED`) and one `event_outbox` command per
+pushed channel, keyed `de.output.delivery/<delivery_id>` — the Standard Webhooks
+`webhook-id`, so a retry is the same message. A relay worker per configured
+channel delivers them under the shared outbox policy (8 attempts, 30 s × 4ⁿ
+capped at 2 h); the relay's receipt is written as the evidence in the
+transaction that marks the command delivered. A delivery's `attempts` and
+`next_attempt_at` are read off its command. One the outbox gave up on becomes
+`FAILED` with the last error and is logged at `error`. With
+`[delivery] enabled = false` nothing is set going and rows stay `PENDING`.
 
-A `POST` delivery without `postal_relay_url` is **not on that clock**: in the
-pull model the print service reads `GET /api/v1/spool`, fetches the bytes and
-reports back, so the worker never claims those rows and they stay `PENDING` in
-the spool until collected. Setting `postal_relay_url` switches them to push.
+A `POST` delivery without `postal_relay_url` is **not pushed**: in the pull
+model the print service reads `GET /api/v1/spool`, fetches the bytes and reports
+back, so the row stays `PENDING` in the spool until collected. Setting
+`postal_relay_url` switches new letters to push.
 
 ## Errors
 
@@ -306,8 +313,8 @@ then:
 4. reads the **page** text and requires the invoice number (§ 14 Abs. 4 Nr. 4
    UStG), both party names (Nr. 1) and the USt-IdNr. (BT-31) *or* Steuernummer
    (BT-32) (Nr. 2) — so `#let render(invoice) = []` fails;
-5. refuses more than 8 pages on the specimen (3 for a Mahnung or
-   Preisanpassung).
+5. refuses more than 8 pages on the specimen (3 for a Mahnung, Preisanpassung
+   or Gebührenbescheid).
 
 The specimen is a real `en16931::Invoice`, rendered through
 `DocumentView::of` and `facturx::cii_payload` (`en16931_formats::write_unchecked`
@@ -317,9 +324,9 @@ stamps. A failing template answers `422` with diagnostics.
 `document_templates.proof` records `RENDERED_PDFA` or `RENDERED_TEXTFORM`, and a
 `CHECK` ties each kind to its proof.
 
-`POST /api/v1/templates/preview` runs the same render for `INVOICE` and
-`MAHNUNG` and stores nothing; `PREISANPASSUNG` answers `422 NO_SPECIMEN` and is
-checked by publishing.
+`POST /api/v1/templates/preview` runs the same render for `INVOICE`, `MAHNUNG`
+and `GEBUEHRENBESCHEID` and stores nothing; `PREISANPASSUNG` answers
+`422 NO_SPECIMEN` and is checked by publishing.
 
 ### Renders are reproducible
 
@@ -345,6 +352,7 @@ mutable pointer per `(tenant, kind)`.
 | `INVOICE` | ZUGFeRD PDF/A-3 carrier | `a-3b` | `RENDERED_PDFA` |
 | `MAHNUNG` | Textform (§ 126b BGB) | — | `RENDERED_TEXTFORM` |
 | `PREISANPASSUNG` | § 41 Abs. 5 EnWG notice, Textform | — | `RENDERED_TEXTFORM` |
+| `GEBUEHRENBESCHEID` | Bescheid over a public-law Gebühr | — | `RENDERED_TEXTFORM` |
 
 A **Mahnung** is proven against the Stufe-3 specimen and must show the § 126b
 declarant, the Gesamtforderung, the Zahlungsfrist and the § 41f Sperrtermin;
@@ -354,7 +362,14 @@ open Posten, § 288 BGB Verzugszinsen, Mahngebühr, Sperrandrohung). A
 Sonderkündigungsrecht in the same notice (§ 41 Abs. 5 Satz 1 and 4 EnWG); the
 gate renders a mixed specimen (one price up, one down) and requires the
 declarant, the Wirksamkeit, both changed prices and the Kündigungsrecht date.
-The views live with the renderer; `accountingd` and `vertragd` conform to them.
+A **Gebührenbescheid** states what § 157 Abs. 1 AO attaches to a Bescheid: the
+levy „nach Art und Betrag", „wer die Steuer schuldet", and a Belehrung „welcher
+Rechtsbehelf zulässig ist und binnen welcher Frist und bei welcher Behörde er
+einzulegen ist"; the gate renders a two-Gebühren specimen and requires the
+issuing body, the Schuldner, each Gebühr's Art and Betrag, the sum and the
+Rechtsbehelf, Frist and Behörde.
+The views live with the renderer; `accountingd`, `vertragd` and `billingd`
+conform to them.
 
 Publishing returns the hash, proof, page count and any Typst warnings;
 identical source stores nothing new. Publishing and rolling out are separate
@@ -410,7 +425,6 @@ audience = "outputd"
 # startup refusal.
 [delivery]
 enabled             = true          # default
-max_attempts        = 8             # default; with the doubling backoff, ~half a day
 from_address        = "rechnung@stadtwerke-musterstadt.example"
 email_relay_url     = "https://mail-relay.internal/api/v1/send"
 email_relay_api_key = "env:OUTPUTD_MAIL_RELAY_KEY"
@@ -426,6 +440,7 @@ erp_api_key         = "env:OUTPUTD_ERP_KEY"
 INVOICE        = "Ihre Rechnung"
 MAHNUNG        = "Zahlungserinnerung"
 PREISANPASSUNG = "Änderung Ihrer Preise"
+GEBUEHRENBESCHEID = "Gebührenbescheid"
 ```
 
 Callers configure the counterpart: `outputd_url` plus an optional

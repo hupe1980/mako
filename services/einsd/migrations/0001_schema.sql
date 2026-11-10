@@ -40,6 +40,10 @@ CREATE OR REPLACE FUNCTION heute() RETURNS date
     LANGUAGE sql STABLE
     AS $$ SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$;
 
+-- btree_gist lets a GiST exclusion constraint mix equality on a plant with
+-- overlap on its validity period (`eeg_stromsteuerbefreiungen`).
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 CREATE TABLE einspeiser (
     einspeiser_id      TEXT        NOT NULL,
     tenant             TEXT        NOT NULL,
@@ -164,6 +168,10 @@ CREATE TABLE eeg_anlagen (
     -- with a bilaterally agreed rate.
     zuschlagswert_ct           NUMERIC(8, 4),
     zuschlag_datum             DATE,
+    -- The Gebotstermin of the Zuschlag: § 100 Abs. 37 EEG 2023 keeps a plant
+    -- awarded in a Gebotstermin after 31.12.2022 and before 24.02.2025 on the
+    -- Fassung of 24.02.2025 and out of § 51b for good.
+    gebotstermin               DATE,
     -- §39n EEG 2023: Innovationsausschreibung pays a fixed market premium.
     ist_innovationsausschreibung BOOLEAN NOT NULL DEFAULT false,
     -- §22b EEG 2023: a Bürgerenergiegesellschaft (§3 Nr. 15) is exempt from
@@ -623,6 +631,37 @@ CREATE TABLE settlement_period_accruals (
 COMMENT ON TABLE settlement_period_accruals IS
     'What each billing period contributed to the plant-level cumulative counters. '
     'Makes the §44b/§51a/KWKG accrual idempotent across re-settles of the same period.';
+
+-- ── § 52 EEG 2023 — the Pflichtzahlung each month adds, and its Aufrechnung ──
+--
+-- `settlement_receipts.pflichtzahlung_eur` is the running claim since the breach
+-- began, so a month owes only what it adds to the claim the last settled month
+-- stated. One row per plant × period records that increment and how it was
+-- met: set off against the month's § 19 Abs. 1 claim (§ 52 Abs. 6 Satz 2, under
+-- `[policy] sect52_aufrechnung = "aufrechnen"`) or left as a separate claim due
+-- on the 15th of the following month (Satz 1). A negative increment is the
+-- Abs. 3 Satz 1 Nr. 1 reduction reaching back to the beginning: owed back.
+
+CREATE TABLE eeg_sect52_monate (
+    tr_id                  TEXT           NOT NULL,
+    tenant                 TEXT           NOT NULL,
+    billing_year           SMALLINT       NOT NULL,
+    billing_month          SMALLINT       NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
+    -- The running claim the receipt states for this month.
+    anspruch_kumuliert_eur NUMERIC(14, 2) NOT NULL CHECK (anspruch_kumuliert_eur >= 0),
+    -- What this month adds to the last settled month's running claim.
+    monat_eur              NUMERIC(14, 2) NOT NULL,
+    -- Set off against this month's § 19 Abs. 1 claim.
+    aufgerechnet_eur       NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (aufgerechnet_eur >= 0),
+    -- Owed by the operator apart from the payout.
+    rest_eur               NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (rest_eur >= 0),
+    updated_at             TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    PRIMARY KEY (tr_id, tenant, billing_year, billing_month),
+    CONSTRAINT fk_s52m_anlage FOREIGN KEY (tr_id, tenant)
+        REFERENCES eeg_anlagen (tr_id, tenant) ON DELETE CASCADE,
+    CONSTRAINT s52m_aufgeteilt CHECK (
+        aufgerechnet_eur + rest_eur = GREATEST(monat_eur, 0))
+);
 
 -- ── Settlement state audit log ────────────────────────────────────────────────
 
@@ -1146,7 +1185,15 @@ CREATE TABLE eeg_stromsteuerbefreiungen (
         REFERENCES eeg_anlagen (tr_id, tenant) ON DELETE CASCADE,
     CONSTRAINT sst_positive CHECK (befreiung_ct_kwh > 0),
     CONSTRAINT sst_max_vollsatz CHECK (befreiung_ct_kwh <= 2.05),
-    CONSTRAINT sst_period_forward CHECK (effective_until IS NULL OR effective_until >= effective_from)
+    CONSTRAINT sst_period_forward CHECK (effective_until IS NULL OR effective_until >= effective_from),
+    -- One figure per plant and day: § 53c cuts the AW by „die Höhe der pro
+    -- Kilowattstunde gewährten Stromsteuerbefreiung", and two rows in force at
+    -- once would leave the settlement to pick one. A correction closes the row
+    -- it supersedes (`record_stromsteuerbefreiung`).
+    CONSTRAINT sst_ein_beginn UNIQUE (tr_id, tenant, effective_from),
+    CONSTRAINT sst_keine_ueberlappung EXCLUDE USING gist (
+        tr_id WITH =, tenant WITH =,
+        daterange(effective_from, effective_until, '[]') WITH &&)
 );
 
 COMMENT ON TABLE eeg_stromsteuerbefreiungen IS
@@ -1263,7 +1310,9 @@ CREATE TABLE enfg_ledger (
     posten          TEXT        NOT NULL CHECK (posten IN (
                         'EEG_19_ABS1', 'EEG_50', 'KWKG_STROM', 'SECT14_EEG52')),
     tr_id           TEXT        NOT NULL,
-    quelle          TEXT        NOT NULL CHECK (quelle IN ('AUSZAHLUNG', 'AUFRECHNUNG')),
+    -- A RUECKZAHLUNG row is negative: § 13 Abs. 1 Satz 1 Nr. 1 EnFG reimburses
+    -- the payments „abzüglich der Rückzahlungen nach § 26 Absatz 1 Satz 3" EEG.
+    quelle          TEXT        NOT NULL CHECK (quelle IN ('AUSZAHLUNG', 'AUFRECHNUNG', 'RUECKZAHLUNG')),
     -- accountingd's payout_id or aufrechnung_id.
     quelle_id       TEXT        NOT NULL,
     receipt_id      UUID        NOT NULL REFERENCES settlement_receipts (id),

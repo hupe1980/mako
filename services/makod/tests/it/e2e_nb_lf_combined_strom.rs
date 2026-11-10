@@ -185,12 +185,11 @@ fn gated(
         .validate_on_date(mako_fristen::heute())
         .expect("the AHB validation runs");
     assert!(
-        report.is_valid(),
+        report.is_sendable(),
         "the rendered {} violates its AHB profile: {:#?}\n{}",
         om.message_type,
         report
-            .errors()
-            .iter()
+            .sending_refusals()
             .map(|e| &e.message)
             .collect::<Vec<_>>(),
         String::from_utf8_lossy(&wire.bytes).replace('\'', "'\n"),
@@ -428,6 +427,21 @@ async fn a_55013_payload_without_its_ergaenzung_does_not_render() {
         .expect("a UTILMD");
     assert_eq!(om.payload["transaktionsgrund_ergaenzung"], "ZW7");
     gated(om, &c.registry);
+}
+
+/// The NB's 55013 as `gpke.eog.anmelden` writes it from marktd's record.
+pub(crate) async fn rendered_55013() -> mako_engine::outbox::OutboxMessage {
+    let c = combined().await;
+    dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
+        .await
+        .expect("gpke.eog.anmelden spawns");
+    let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+    OutboxStore::pending(&*c.store, 100, now)
+        .await
+        .expect("pending outbox")
+        .into_iter()
+        .find(|om| &*om.message_type == "UTILMD" && om.payload["pid"] == 55013)
+        .expect("the 55013 is written")
 }
 
 /// The LF's 55014 as `gpke.eog.bestaetigen` writes it on a combined

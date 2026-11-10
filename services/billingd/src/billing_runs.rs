@@ -299,6 +299,7 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
         billed += c.billed;
         skipped += c.skipped;
         errors += c.errors;
+        // committed apart: the run summary; each invoice committed with its own event.
         if let Err(e) = pg::record_billing_run(
             pool,
             &cfg.tenant,
@@ -394,8 +395,43 @@ async fn bill_one(
     )
     .await
     .map_err(|e| anyhow::anyhow!("dispatch: {e}"))?;
-    let invoice = billed.invoice;
     let summary = handlers::LegSummary::of(&legs);
+    // A public-law Gebühr is issued as a Bescheid beside the supply invoice, in
+    // the same run.
+    let mut belege = crate::gebuehrenbescheid::trennen(billed.invoice);
+    crate::gebuehrenbescheid::eine_lauf_id(&mut belege);
+    let bescheid = match belege.gebuehr.take() {
+        Some(mut g) => {
+            g.context.rechnungsnummer =
+                pg::allocate_rechnungsnummer(pool, &cfg.tenant, series::BESCHEID, from.year())
+                    .await?;
+            let view =
+                crate::gebuehrenbescheid::view(&g, cfg).map_err(|e| anyhow::anyhow!("{e}"))?;
+            Some((g, view))
+        }
+        None => None,
+    };
+    let Some(invoice) = belege.lieferung else {
+        let (g, view) =
+            bescheid.ok_or_else(|| anyhow::anyhow!("a billed period yielded no document"))?;
+        let mut tx = pool.begin().await?;
+        let id = crate::gebuehrenbescheid::speichern(
+            &mut tx,
+            cfg,
+            &g,
+            &view,
+            &summary.product_code,
+            &summary.category,
+            false,
+        )
+        .await?;
+        tx.commit().await?;
+        tracing::info!(malo_id = %cand.malo_id, %from, %to, record_id = %id, "billing-run: Gebührenbescheid created");
+        if cfg.billing_runs.versand {
+            versenden(pool, deps, &cand.malo_id, &[id]).await;
+        }
+        return Ok(());
+    };
 
     // Same deterministic risk gate as the on-demand endpoint — scored read-only
     // before the outbox tx, because a HELD band withholds the dispatch enqueue.
@@ -437,6 +473,7 @@ async fn bill_one(
             rechnung_json: &invoice.to_rechnung_json(),
             total_netto_eur: invoice.netto_eur,
             total_brutto_eur: invoice.brutto_eur,
+            steuerzeilen: &crate::steuerzeilen::aus_rechnung(&invoice),
         },
     )
     .await?;
@@ -460,6 +497,21 @@ async fn bill_one(
     }
     crate::einvoice::store(&mut tx, record_id, &invoice, cfg, &cand.malo_id).await?;
     handlers::persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
+    let bescheid_id = match &bescheid {
+        Some((g, view)) => Some(
+            crate::gebuehrenbescheid::speichern(
+                &mut tx,
+                cfg,
+                g,
+                view,
+                &summary.product_code,
+                &summary.category,
+                held,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     tx.commit().await?;
 
     tracing::info!(malo_id = %cand.malo_id, %from, %to, %record_id, "billing-run: invoice created");
@@ -474,29 +526,31 @@ async fn bill_one(
     // A held invoice is never sent: the risk gate withheld its issuance, so no
     // receivable stands behind it.
     if cfg.billing_runs.versand && !held {
-        match handlers::record_with_model(pool, cfg, record_id).await {
-            Ok((row, model)) => {
-                if let Err(e) =
-                    handlers::issue_and_deliver(pool, deps, record_id, &row, &model).await
-                {
-                    // Not an error for the run: the invoice is billed and will
-                    // not be re-issued. What has not happened is the sending,
-                    // which `POST /api/v1/billing/{id}/versenden` repeats
-                    // idempotently.
-                    tracing::error!(
-                        malo_id = %cand.malo_id, %record_id, error = %e,
-                        "billing-run: the invoice was billed but NOT sent to the customer — \
-                         POST /api/v1/billing/{{id}}/versenden retries it (§ 40c Abs. 2 EnWG \
-                         puts it in their hands within three or six weeks)"
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::error!(%record_id, error = %e, "billing-run: could not re-read the record to send it");
-            }
-        }
+        let ids: Vec<uuid::Uuid> = std::iter::once(record_id).chain(bescheid_id).collect();
+        versenden(pool, deps, &cand.malo_id, &ids).await;
     }
     Ok(())
+}
+
+/// Send each issued document of one billed period to the customer — the
+/// invoice and, beside it, its Gebührenbescheid — on the same channels and
+/// through the same outputd delivery path and retry.
+///
+/// Not an error for the run when one fails: the document is billed and will
+/// not be re-issued. What has not happened is the sending, which
+/// `POST /api/v1/billing/{id}/versenden` repeats idempotently. A Bescheid
+/// matters as much as the invoice here: its Rechtsbehelfsfrist runs from its
+/// Bekanntgabe, so one never sent starts nothing.
+pub async fn versenden(pool: &PgPool, deps: &Arc<BillingDeps>, malo_id: &str, ids: &[uuid::Uuid]) {
+    for &record_id in ids {
+        if let Err(e) = handlers::deliver_record(pool, deps, record_id).await {
+            tracing::error!(
+                %malo_id, %record_id, error = %e,
+                "billing-run: the document was billed but NOT sent to the customer — \
+                 POST /api/v1/billing/{{id}}/versenden retries it"
+            );
+        }
+    }
 }
 
 /// § 40b Abs. 3 EnWG: deliver the previous month's consumption/cost info for
@@ -548,6 +602,7 @@ async fn deliver_abrechnungsinfo(
     }
 
     let (year, month) = (from.year() as i16, u8::from(from.month()) as i16);
+    // committed apart: a claim, released on every path that does not enqueue.
     match pg::claim_abrechnungsinfo(pool, &cfg.tenant, &cand.malo_id, year, month).await {
         Ok(true) => {}
         Ok(false) => return, // already delivered this month

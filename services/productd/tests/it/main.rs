@@ -2,6 +2,7 @@
 //! file in this directory. A crate links its dependency graph once per test
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
+mod angebot_acceptance;
 mod angebot_conformance;
 mod angebot_pricing;
 mod authorization_guard;

@@ -369,7 +369,7 @@ pub(super) async fn dispatch_wim_antwort(
     // The default Zustimmung depends on which process is being answered, and
     // only the process knows its PID — so resolve it inside the closure
     // against the loaded state rather than guessing here.
-    dispatch_to_process_with_state::<WimDeviceChangeWorkflow, _>(
+    let outcome = dispatch_to_process_with_state::<WimDeviceChangeWorkflow, _>(
         state,
         melo_id.as_str(),
         mako_wim::WORKFLOW_NAME,
@@ -391,7 +391,133 @@ pub(super) async fn dispatch_wim_antwort(
             })
         },
     )
+    .await?;
+    if bestaetigt {
+        record_informationsempfaenger(state, melo_id.as_str()).await;
+    }
+    Ok(outcome)
+}
+
+/// After a confirmed Beginn Messstellenbetrieb (55042 / 44042), record whom a
+/// 21013 informs beside the MSBN: the MSBA (WiM Teil 1 Kap. 2.3.2 Nr. 17) and
+/// the LF (Nr. 18), as marktd holds them on the confirmed Zuordnungsbeginn.
+///
+/// Best effort by design: the Bestätigung is already sent, and a party not
+/// recorded here is escalated by name when the 21013 falls due, not dropped.
+async fn record_informationsempfaenger(state: &CommandsApiState, melo_id: &str) {
+    use mako_wim::DeviceChangeState as S;
+    let Ok(S::AntwortGesendet(data)) =
+        current_state::<WimDeviceChangeWorkflow>(state, melo_id, mako_wim::WORKFLOW_NAME).await
+    else {
+        return;
+    };
+    if !matches!(data.pruefidentifikator.as_u32(), 55_042 | 44_042) {
+        return;
+    }
+    let Some(stichtag) = data
+        .bestaetigter_zuordnungsbeginn
+        .as_deref()
+        .and_then(parse_yyyymmdd)
+    else {
+        return;
+    };
+    let empfaenger =
+        informationsempfaenger(state.marktd_client.as_deref(), melo_id, stichtag).await;
+    if let Err(e) = dispatch_to_process::<WimDeviceChangeWorkflow, _>(
+        state,
+        melo_id,
+        mako_wim::WORKFLOW_NAME,
+        || DeviceChangeCommand::RecordInformationsempfaenger { empfaenger },
+    )
     .await
+    {
+        tracing::error!(
+            melo_id,
+            error = ?e,
+            "the MSBA and LF of a confirmed MSB-Wechsel were not recorded — a 21013 escalates both"
+        );
+    }
+}
+
+/// The MSBA and the LF a 21013 informs (WiM Teil 1 Kap. 2.3.2 Nr. 17 / 18):
+/// the MSB marktd assigns the Messlokation on `stichtag`, and the LF of the
+/// one Marktlokation marktd links it to that day. Each is `None` — and logged
+/// with why — when marktd cannot name it.
+pub(super) async fn informationsempfaenger(
+    marktd: Option<&mako_markt::marktd_client::MarktdClient>,
+    melo_id: &str,
+    stichtag: time::Date,
+) -> mako_wim::geraetewechsel::Informationsempfaenger {
+    use mako_markt::domain::Lokationstyp;
+    let mut empfaenger = mako_wim::geraetewechsel::Informationsempfaenger::default();
+    let Some(marktd) = marktd else {
+        tracing::warn!(
+            melo_id,
+            "no [marktd] client — the MSBA and LF of a 21013 are unresolved"
+        );
+        return empfaenger;
+    };
+    match marktd.get_melo_msb_at(melo_id, stichtag).await {
+        Ok(Some(msba)) => empfaenger.msba = Some(MarktpartnerCode::new(msba)),
+        Ok(None) => {
+            tracing::warn!(melo_id, %stichtag, "marktd assigns the Messlokation no MSB — no MSBA for a 21013")
+        }
+        Err(e) => tracing::warn!(melo_id, error = %e, "marktd: the MSBA of a 21013 is unresolved"),
+    }
+    let tag = stichtag.to_string();
+    let malos: Vec<String> = match marktd.get_lokationen(melo_id, "melo", Some(&tag)).await {
+        Ok(edges) => {
+            let mut m: Vec<String> = edges
+                .into_iter()
+                .filter_map(|e| match (e.von_typ, e.nach_typ) {
+                    (Lokationstyp::Malo, Lokationstyp::Melo) if e.nach_id == melo_id => {
+                        Some(e.von_id)
+                    }
+                    (Lokationstyp::Melo, Lokationstyp::Malo) if e.von_id == melo_id => {
+                        Some(e.nach_id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            m.sort();
+            m.dedup();
+            m
+        }
+        Err(e) => {
+            tracing::warn!(melo_id, error = %e, "marktd: the Marktlokation of a 21013 is unresolved");
+            return empfaenger;
+        }
+    };
+    let [malo] = malos.as_slice() else {
+        tracing::warn!(
+            melo_id,
+            ?malos,
+            "marktd links the Messlokation to no single Marktlokation — no LF for a 21013"
+        );
+        return empfaenger;
+    };
+    match marktd.get_versorgung(malo).await {
+        Ok(Some(v)) => empfaenger.lf = v.lf_mp_id().map(MarktpartnerCode::new),
+        Ok(None) => {}
+        Err(e) => tracing::warn!(malo, error = %e, "marktd: the LF of a 21013 is unresolved"),
+    }
+    if empfaenger.lf.is_none() {
+        tracing::warn!(
+            malo,
+            "marktd names no LF of the Marktlokation — a 21013 escalates it"
+        );
+    }
+    empfaenger
+}
+
+/// `YYYYMMDD` → a date.
+fn parse_yyyymmdd(raw: &str) -> Option<time::Date> {
+    let d: String = raw.chars().filter(char::is_ascii_digit).collect();
+    if d.len() != 8 {
+        return None;
+    }
+    let month = time::Month::try_from(d[4..6].parse::<u8>().ok()?).ok()?;
+    time::Date::from_calendar_date(d[..4].parse().ok()?, month, d[6..8].parse().ok()?).ok()
 }
 
 /// The unconditional Zustimmung code for whichever MSB-Wechsel process this
@@ -1189,4 +1315,93 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_antwort(
         },
     )
     .await
+}
+
+#[cfg(test)]
+mod informationsempfaenger_tests {
+    use super::informationsempfaenger;
+
+    const MELO: &str = "DE0004096999000000000000000000009";
+    const MALO: &str = "51238696012";
+    const MSBA: &str = "9900000000010";
+    const LF: &str = "9900000000027";
+
+    /// A stand-in marktd: the Messlokation's MSB, its one Marktlokation and
+    /// that Marktlokation's LF — each omitted when `None`, which marktd
+    /// answers with an empty list or a 404.
+    async fn marktd(
+        msb: Option<&'static str>,
+        lf: Option<&'static str>,
+    ) -> mako_markt::marktd_client::MarktdClient {
+        use axum::{Json, Router, http::StatusCode, routing::get};
+        let app = Router::new()
+            .route(
+                "/api/v1/melos/{melo}/msb",
+                get(move || async move {
+                    match msb {
+                        Some(m) => Ok(Json(serde_json::json!({ "msb_mp_id": m }))),
+                        None => Err(StatusCode::NOT_FOUND),
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/melos/{id}/lokationen",
+                get(|| async {
+                    Json(serde_json::json!([{
+                        "id": uuid::Uuid::nil(), "tenant": "t",
+                        "von_id": MALO, "von_typ": "MALO",
+                        "nach_id": MELO, "nach_typ": "MELO",
+                        "valid_from": null, "valid_to": null, "data": {},
+                    }]))
+                }),
+            )
+            .route(
+                "/api/v1/versorgung/{malo}",
+                get(move || async move {
+                    let zuordnungen = lf.map_or_else(Vec::new, |lf| {
+                        vec![serde_json::json!({
+                            "lf_mp_id": lf, "prozent": "100", "tranche_id": null,
+                            "status": "Aktiv", "zuordnungsbeginn": "2026-01-01",
+                            "zuordnungsende": null, "process_id": null,
+                        })]
+                    });
+                    Json(serde_json::json!({
+                        "malo_id": MALO, "lieferstatus": "Beliefert",
+                        "zuordnungen": zuordnungen, "msb_mp_id": null,
+                        "nb_mp_id": "9900357000004", "last_process_id": null,
+                        "updated_at": "2026-11-01T00:00:00Z", "version": 1,
+                    }))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind stand-in marktd");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+        mako_markt::marktd_client::MarktdClient::new(
+            format!("http://{addr}"),
+            secrecy::SecretString::from("test"),
+            reqwest::Client::new(),
+        )
+    }
+
+    /// The MSBA is the Messlokation's MSB on the confirmed Zuordnungsbeginn and
+    /// the LF the one of its Marktlokation (WiM Teil 1 Kap. 2.3.2 Nr. 17 / 18).
+    #[tokio::test]
+    async fn the_msba_and_lf_come_from_marktd() {
+        let m = marktd(Some(MSBA), Some(LF)).await;
+        let e = informationsempfaenger(Some(&m), MELO, time::macros::date!(2026 - 12 - 01)).await;
+        assert_eq!(e.msba.as_ref().map(|c| c.as_str()), Some(MSBA));
+        assert_eq!(e.lf.as_ref().map(|c| c.as_str()), Some(LF));
+    }
+
+    /// What marktd cannot name stays `None`, so the lapse escalates it.
+    #[tokio::test]
+    async fn an_unknown_party_stays_unresolved() {
+        let m = marktd(None, None).await;
+        let e = informationsempfaenger(Some(&m), MELO, time::macros::date!(2026 - 12 - 01)).await;
+        assert!(e.msba.is_none() && e.lf.is_none(), "{e:?}");
+        let ohne = informationsempfaenger(None, MELO, time::macros::date!(2026 - 12 - 01)).await;
+        assert!(ohne.msba.is_none() && ohne.lf.is_none());
+    }
 }

@@ -23,6 +23,20 @@ const SELECT_COLS: &str = "contract_id, malo_id, nb_mp_id, sparte, netzebene, \
 impl PgNbContractRepository {
     /// Upsert a NB contract record.  Returns the new version number.
     pub async fn upsert(&self, rec: NbContractRecord) -> Result<i64, MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::upsert_tx(&mut conn, rec).await
+    }
+
+    /// [`Self::upsert`] on the caller's transaction, so the row and the
+    /// CloudEvent announcing it commit together.
+    pub async fn upsert_tx(
+        conn: &mut sqlx::PgConnection,
+        rec: NbContractRecord,
+    ) -> Result<i64, MdmError> {
         // Scoped like every other read here: `contract_id` comes from the
         // request path and is unique across the whole table, so the version a
         // tenant-less read returns is another tenant's.
@@ -31,7 +45,7 @@ impl PgNbContractRepository {
         )
         .bind(&rec.contract_id)
         .bind(&rec.tenant)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -85,7 +99,7 @@ impl PgNbContractRepository {
         .bind(&rec.data)
         .bind(&rec.vertragsart)
         .bind(&rec.vertragsstatus)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(super::write_error)?
         // No row means the conflicting `contract_id` belongs to another

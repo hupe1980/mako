@@ -248,6 +248,8 @@ impl SyncEngine {
         // because that is all the wire carries. A resubmission for the same
         // period is a new version rather than a replacement of the previous row.
         let version = truncate_to_seconds(OffsetDateTime::now_utc());
+        // committed apart: the run row the work reports on, `pending` until the
+        // filing has an outcome.
         let run_id = pg::insert_run(
             &self.pool,
             pg::InsertRunParams {
@@ -308,6 +310,8 @@ impl SyncEngine {
                 let has_substituted = series.iter().any(|t| t.series.has_substituted_values());
 
                 // Update run with aggregation result
+                // committed apart: the aggregation figures; the status stays `pending`
+                // until the filing has an outcome.
                 pg::update_run_aggregated(
                     &self.pool,
                     run_id,
@@ -385,6 +389,8 @@ impl SyncEngine {
                             // runs' `submission_series` rows.
                             Filed::AlreadyWithBiko => (None, None),
                         };
+                        // committed apart: the filing went out and each territory is recorded in
+                        // `submission_series`; an acked run announces nothing.
                         pg::mark_acked(&self.pool, run_id, message_ref, process_id)
                             .await
                             .context("failed to mark run as acked")?;
@@ -392,6 +398,7 @@ impl SyncEngine {
                         // negative Prüfmitteilung, so the obligation closes here
                         // — otherwise it stays open on /korrekturbedarf forever.
                         if let Some(corrected) = corrects_run_id {
+                            // committed apart: closes the obligation the filing above discharged.
                             match pg::close_korrekturbedarf(&self.pool, corrected, run_id).await {
                                 Ok(n) => info!(
                                     run_id = %run_id, corrects_run_id = %corrected, closed = n,

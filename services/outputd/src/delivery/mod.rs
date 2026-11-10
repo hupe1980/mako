@@ -17,9 +17,10 @@
 //!
 //! # The shape
 //!
-//! One [`store`] write per document (append-only, bytes included), one
-//! delivery row per channel, and a [`worker`] that drains the pending ones with
-//! backoff:
+//! One [`store`] write per document (append-only, bytes included) and one
+//! delivery row per channel, committed together with a `mako_service::outbox`
+//! command per pushed channel; the [`worker`] module runs the outbox workers
+//! that deliver them:
 //!
 //! | Channel | How it is delivered | Evidence |
 //! |---|---|---|
@@ -39,5 +40,5 @@ pub mod channel;
 pub mod store;
 pub mod worker;
 
-pub use channel::{Channel, DeliveryOutcome};
+pub use channel::Channel;
 pub use store::{DeliveryRow, DocumentRow, IssuedDocument, NewDocument};

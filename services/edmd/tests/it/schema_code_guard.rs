@@ -257,6 +257,22 @@ fn typ2_surveillance_is_keyed_per_subscription() {
     }
 }
 
+/// The cached billing period's origin `CHECK` lists exactly the origins edmd
+/// knows, in both directions: one it can write that the schema refuses fails
+/// every cache write, one the schema admits that it cannot read is a row it
+/// would recompute forever.
+#[test]
+fn ablesung_herkunft_check_matches_the_origin_codes() {
+    let ddl = ddl_of(&migration(), "meter_billing_periods");
+    let listed: std::collections::BTreeSet<String> =
+        check_list(&ddl, "ablesung_herkunft").into_iter().collect();
+    let known: std::collections::BTreeSet<String> = edmd::domain::AblesungHerkunft::CODES
+        .iter()
+        .map(|c| (*c).to_owned())
+        .collect();
+    assert_eq!(listed, known);
+}
+
 /// An ESA may order value delivery from the MSB (WiM Strom Teil 2 Kap. 4 · §60
 /// Abs. 1 MsbG), so a reading order can be raised on its behalf — the
 /// `auftraggeber_rolle` CHECK must admit `ESA` alongside LF/MSB/NB.

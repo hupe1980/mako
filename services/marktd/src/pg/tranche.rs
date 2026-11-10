@@ -183,6 +183,21 @@ impl PgTrancheRepository {
         tenant: &str,
         patch: &TrancheStammdatenPatch,
     ) -> Result<bool, MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::patch_stammdaten_tx(&mut conn, tranche_id, tenant, patch).await
+    }
+
+    /// [`Self::patch_stammdaten`] on the caller's transaction.
+    pub async fn patch_stammdaten_tx(
+        conn: &mut sqlx::PgConnection,
+        tranche_id: &str,
+        tenant: &str,
+        patch: &TrancheStammdatenPatch,
+    ) -> Result<bool, MdmError> {
         if patch.is_empty() {
             return Ok(false);
         }
@@ -200,7 +215,7 @@ impl PgTrancheRepository {
         .bind(&patch.bilanzierungsgebiet)
         .bind(&patch.netzebene)
         .bind(&patch.energierichtung)
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?
         .rows_affected();

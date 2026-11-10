@@ -275,6 +275,11 @@ impl Chart {
     /// SKR 2650 — Zinserträge. **Not** the same account as Mahngebühren:
     /// § 275 HGB puts *Zinsen und ähnliche Erträge* in their own P&L line.
     pub const ZINSERTRAG: &'static str = "Ertrag:Zinsertraege";
+    /// The § 288 Abs. 5 BGB Pauschale, net of its Satz-3 Anrechnung. Its own
+    /// account: § 275 Abs. 2 HGB shows Umsatzerlöse (Nr. 1) and sonstige
+    /// Zinsen und ähnliche Erträge (Nr. 11) as separate lines, and the
+    /// Pauschale is neither — not consideration for a supply and not interest.
+    pub const VERZUGSPAUSCHALEN: &'static str = "Ertrag:Verzugspauschalen";
     /// EEG feed-in expense (Aufwand) — the contra for EEG Gutschrift / Marktprämie.
     pub const EEG_AUFWAND: &'static str = "Aufwand:EEG-Einspeiseverguetung";
     /// Refund payable — the contra when a Jahresabschluss books a customer refund.
@@ -287,11 +292,12 @@ impl Chart {
     pub const KONTOKORRENT: &'static str = "Kontokorrent";
 
     /// Every GL account with its kind, opened at boot.
-    pub const GL: [(&'static str, AccountKind); 7] = [
+    pub const GL: [(&'static str, AccountKind); 8] = [
         (Self::BANK, AccountKind::Asset),
         (Self::ERLOESE, AccountKind::Income),
         (Self::MAHNERLOESE, AccountKind::Income),
         (Self::ZINSERTRAG, AccountKind::Income),
+        (Self::VERZUGSPAUSCHALEN, AccountKind::Income),
         (Self::EEG_AUFWAND, AccountKind::Expense),
         (Self::ERSTATTUNG, AccountKind::Liability),
         (Self::ANZAHLUNGEN, AccountKind::Liability),
@@ -316,6 +322,7 @@ impl Chart {
             "ABSCHLAG" | "ABSCHLAG_VERRECHNUNG" => Self::ANZAHLUNGEN,
             "MAHNGEBUEHR" => Self::MAHNERLOESE,
             "VERZUGSZINSEN" => Self::ZINSERTRAG,
+            "VERZUGSPAUSCHALE" => Self::VERZUGSPAUSCHALEN,
             "EEG_GUTSCHRIFT" | "EEG_MARKTPRAEMIE" => Self::EEG_AUFWAND,
             "JAHRESABSCHLUSS" => Self::ERSTATTUNG,
             "RECHNUNG" | "STORNO" | "GUTSCHRIFT" | "KORREKTUR" => Self::ERLOESE,
@@ -347,6 +354,7 @@ pub const ENTRY_TYPES: &[&str] = &[
     "SEPA_STORNO",
     "MAHNGEBUEHR",
     "VERZUGSZINSEN",
+    "VERZUGSPAUSCHALE",
     "EEG_GUTSCHRIFT",
     "EEG_MARKTPRAEMIE",
     "EEG_AUSZAHLUNG",

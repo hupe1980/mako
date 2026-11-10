@@ -231,11 +231,18 @@ async fn process_invoic(
     };
     let checked_at = OffsetDateTime::now_utc();
 
-    let verdict = Verdict::of(
-        &report,
-        state.auto_dispute_threshold_raw,
-        &incoming.rechnung,
-    );
+    // A walk that reached a Prüfschritt no record answers has decided
+    // nothing: the invoice is held for a person, whatever the plausibility
+    // check says — neither a Zahlungsavis nor a refusal is sent on it.
+    let verdict = if walk_offen(markt_antwort.as_ref(), storno_antwort.as_ref()) {
+        Verdict::OFFEN
+    } else {
+        Verdict::of(
+            &report,
+            state.auto_dispute_threshold_raw,
+            &incoming.rechnung,
+        )
+    };
     info!(
         %process_id, pid,
         outcome = verdict.label,
@@ -298,13 +305,30 @@ async fn process_invoic(
     // message is withheld. Sending one anyway answers a message the MSB is not
     // waiting on, and now that REMADVs actually reach the wire that is a
     // message the counterparty has to reconcile away.
+    // ── An open walk: held, nothing sent, nothing announced ──────────────────
+    //
+    // No answer is dispatched and no `de.invoic.receipt.*` event enqueued —
+    // `settled` is what the ERP books a payment on. The receipt stays
+    // undispatched, so it is listed by `GET /api/v1/overdue-remadv` until a
+    // person states the missing facts and answers.
+    if verdict.label == Verdict::OFFEN.label {
+        warn!(
+            %process_id, pid,
+            offen = ?offene_pruefschritte(markt_antwort.as_ref(), storno_antwort.as_ref()),
+            "invoicd: the Entscheidungsbaum left Prüfschritte unanswered — invoice held, \
+             no REMADV sent"
+        );
+        return StatusCode::NO_CONTENT;
+    }
+
     if let Some(mako_pruefung::esa::StornoAntwort::KeineAntwort { grund }) = storno_antwort {
         info!(
             %process_id, pid, grund,
             "invoicd: Stornorechnung needs no answer (E_0267 Prüfschritt 80) —              receipt recorded, no REMADV sent"
         );
-        emit_receipt_event(
+        return conclude_receipt(
             state,
+            None,
             &PaymentEventCtx {
                 process_id,
                 pid,
@@ -316,7 +340,6 @@ async fn process_invoic(
             },
         )
         .await;
-        return StatusCode::NO_CONTENT;
     }
 
     let (command, payload) = if verdict.dispute {
@@ -383,12 +406,13 @@ async fn process_invoic(
             serde_json::json!({ "invoice_ref": incoming.invoice_ref }),
         )
     };
-    let dispatched = dispatch(state, process_id, route, command, payload).await;
+    let dispatched_at = dispatch(state, process_id, route, command, payload).await;
 
     // Accepted or disputed: the ERP hears about every checked invoice. A
     // dispute is the outcome an accounts-payable team most needs.
-    emit_receipt_event(
+    conclude_receipt(
         state,
+        dispatched_at,
         &PaymentEventCtx {
             process_id,
             pid,
@@ -400,11 +424,10 @@ async fn process_invoic(
             // wants the date, not an offset it has to normalise first.
             pay_by: incoming.rechnung.faelligkeitsdatum_date(),
             findings_count: report.findings.len(),
-            dispatched,
+            dispatched: dispatched_at.is_some(),
         },
     )
-    .await;
-    StatusCode::NO_CONTENT
+    .await
 }
 
 /// Read the event payload into [`Incoming`], or say why it cannot be processed.
@@ -626,19 +649,20 @@ async fn run_check(
             // An invoice that names **no** order at all is Prüfschritt 40 by
             // itself: the reference is Muss, and its absence is exactly the
             // „auf keiner Bestellung basiert" the code is for.
+            // A marktd outage answers Prüfschritt 40 neither way: refusing
+            // would state to the market that the MSB billed against no order,
+            // passing would accept on evidence mako does not have. The
+            // invoice is not checked until marktd answers.
             fakten.bestellung_bekannt = match inc.bestellung_ref.as_deref() {
                 Some(r) => state
                     .marktd
                     .esa_messprodukt_of_bestellung(r)
                     .await
-                    .unwrap_or_else(|e| {
-                        // A marktd outage must not refuse a correct invoice:
-                        // the ESA would be stating to the market that the MSB
-                        // billed against no order, on evidence it does not have.
-                        warn!(error = %e, bestellung_ref = r,
-                              "invoicd: order lookup failed — E_0264 Prüfschritt 40 passed");
-                        Some(r.to_owned())
-                    })
+                    .map_err(|e| ReferenceDataUnavailable {
+                        upstream: "marktd",
+                        what: format!("the ESA order {r} (E_0264 Prüfschritt 40)"),
+                        detail: e.to_string(),
+                    })?
                     .is_some(),
                 None => false,
             };
@@ -1020,7 +1044,36 @@ struct Verdict {
     label: &'static str,
 }
 
+/// Whether a walked Entscheidungsbaum stopped at a Prüfschritt no record
+/// answers — the invoice's answer is then a person's to give.
+fn walk_offen(
+    markt_antwort: Option<&mako_pruefung::esa::RechnungsAntwort>,
+    storno_antwort: Option<&mako_pruefung::esa::StornoAntwort>,
+) -> bool {
+    !offene_pruefschritte(markt_antwort, storno_antwort).is_empty()
+}
+
+/// The Prüfschritte a walk left open, by number.
+fn offene_pruefschritte(
+    markt_antwort: Option<&mako_pruefung::esa::RechnungsAntwort>,
+    storno_antwort: Option<&mako_pruefung::esa::StornoAntwort>,
+) -> Vec<u16> {
+    let mut offen: Vec<u16> = markt_antwort
+        .map(|a| a.offen.iter().map(|o| o.pruefschritt).collect())
+        .unwrap_or_default();
+    if let Some(mako_pruefung::esa::StornoAntwort::Offen(o)) = storno_antwort {
+        offen.push(o.pruefschritt);
+    }
+    offen
+}
+
 impl Verdict {
+    /// A walk left a Prüfschritt open: nothing is sent and nothing settled.
+    const OFFEN: Self = Self {
+        dispute: false,
+        label: "Offen",
+    };
+
     fn of(report: &CheckReport, threshold_raw: i64, rechnung: &Rechnung) -> Self {
         let dispute = match report.outcome {
             CheckOutcome::Ok => false,
@@ -1060,8 +1113,8 @@ impl Verdict {
     }
 }
 
-/// Send the answer command and mark the receipt dispatched. Returns whether it
-/// went out.
+/// Send the answer command. Returns when it went out, for
+/// [`conclude_receipt`] to stamp as `dispatched_at`.
 ///
 /// A failure leaves `dispatched_at NULL`, which is what
 /// `GET /api/v1/overdue-remadv` and the `invoicd_overdue_remadv_total` gauge
@@ -1073,14 +1126,14 @@ async fn dispatch(
     route: &PidRoute,
     command: &str,
     payload: serde_json::Value,
-) -> bool {
+) -> Option<OffsetDateTime> {
     // The payload is recorded before the attempt: a re-dispatch sends exactly
     // it, and a market answer nobody could reproduce is not sent.
     if let Err(err) =
         pg::receipts::store_antwort(&state.pool, &state.tenant, process_id, &payload).await
     {
         warn!(%err, %process_id, "invoicd: answer not recorded — not sent; the receipt stays undispatched");
-        return false;
+        return None;
     }
     let key = Uuid::new_v5(&process_id, route.salt).to_string();
     let cmd = ForwardCommand {
@@ -1091,25 +1144,13 @@ async fn dispatch(
         payload,
     };
     match state.makod.post_command(&key, &cmd).await {
-        Ok(_) => {
-            if let Err(err) = pg::receipts::mark_dispatched(
-                &state.pool,
-                &state.tenant,
-                process_id,
-                OffsetDateTime::now_utc(),
-            )
-            .await
-            {
-                warn!(%err, %process_id, "invoicd: answer sent but receipt not marked dispatched");
-            }
-            true
-        }
+        Ok(_) => Some(OffsetDateTime::now_utc()),
         Err(err) => {
             warn!(
                 %err, %process_id, pid = route.pid, command,
                 "invoicd: answer dispatch failed — receipt stays undispatched for re-dispatch"
             );
-            false
+            None
         }
     }
 }
@@ -1156,7 +1197,7 @@ async fn dead_letter(
 
 // ── ERP notification ──────────────────────────────────────────────────────────
 
-/// Context for [`emit_receipt_event`].
+/// Context for [`conclude_receipt`].
 pub struct PaymentEventCtx<'a> {
     pub process_id: Uuid,
     pub pid: u32,
@@ -1169,107 +1210,53 @@ pub struct PaymentEventCtx<'a> {
     pub dispatched: bool,
 }
 
-/// Notify the ERP about a checked invoice.
-///
-/// Delivery is **durable at-least-once**. This is the first attempt, made
-/// inline; on any failure the row stays selectable by the outbox worker
-/// (`erp_notified_at IS NULL`), which retries it with backoff until the attempt
-/// cap. A `4xx` is dead-lettered immediately — the ERP rejected these exact
-/// bytes, and burning the full 2.5 h backoff window will not change that.
+/// Conclude a checked invoice: stamp the answer's dispatch and enqueue the
+/// `de.invoic.receipt.*` event for the ERP, in one transaction
+/// ([`pg::receipts::conclude`]). The outbox worker delivers the event with
+/// retry; nothing is enqueued without an ERP webhook.
 ///
 /// The market answer is always dispatched before this runs: an ERP webhook
-/// never delays a regulatory obligation.
-pub async fn emit_receipt_event(state: &HandlerState, ctx: &PaymentEventCtx<'_>) {
-    let Some(url) = &state.erp_webhook_url else {
-        return;
-    };
-
-    let ce = mako_service::CloudEvent::new(
-        mako_service::source("invoicd", &state.tenant),
-        ce_type_for(ctx.outcome),
-        ctx.process_id.to_string(),
-        serde_json::json!({
-            "process_id":     ctx.process_id.to_string(),
-            "pid":            ctx.pid,
-            "sender_mp_id":   ctx.sender_mp_id,
-            "outcome":        ctx.outcome,
-            "pay_by":         ctx.pay_by.map(|d| d.to_string()),
-            "findings_count": ctx.findings_count,
-            "dispatched":     ctx.dispatched,
-        }),
-    );
-
-    let secret = state
-        .erp_hmac_secret
-        .as_ref()
-        .map(|s| s.expose_secret().as_bytes());
-    match mako_service::post_ce_with_retry(&state.http_client, url, &ce, secret).await {
-        Ok(()) => {
-            debug!(process_id = %ctx.process_id, "invoicd: ERP receipt event delivered");
-            // Losing this stamp is the one outcome the outbox worker cannot
-            // repair: the row stays selectable, so the worker will POST the
-            // same receipt to the ERP a second time. `emit_receipt_event`
-            // returns `()` to a caller that has already dispatched the market
-            // answer and must not be failed by an ERP courtesy notification, so
-            // the disposition is to make the duplicate findable rather than to
-            // propagate it.
-            if let Err(e) = pg::receipts::mark_erp_notified(
-                &state.pool,
-                &state.tenant,
-                ctx.process_id,
-                OffsetDateTime::now_utc(),
-            )
-            .await
-            {
-                error!(
-                    error = %e, process_id = %ctx.process_id,
-                    "invoicd: ERP receipt event delivered but erp_notified_at was not stamped — \
-                     the outbox worker will send the ERP this receipt again"
-                );
-            }
-        }
-        Err(e) if e.is_permanent() => {
-            warn!(
-                process_id = %ctx.process_id, erp_url = %url, error = %e,
-                "invoicd: ERP webhook rejected the event — dead-lettering (check ERP webhook config)"
+/// never delays a regulatory obligation. A failure to conclude answers `500`,
+/// so makod redelivers the invoice; the answer command's idempotency key is
+/// stable, and the receipt upsert keeps what was recorded.
+pub async fn conclude_receipt(
+    state: &HandlerState,
+    dispatched_at: Option<OffsetDateTime>,
+    ctx: &PaymentEventCtx<'_>,
+) -> StatusCode {
+    let ce = state.erp_webhook_url.as_ref().map(|_| {
+        mako_service::CloudEvent::new(
+            mako_service::source("invoicd", &state.tenant),
+            ce_type_for(ctx.outcome),
+            ctx.process_id.to_string(),
+            serde_json::json!({
+                "process_id":     ctx.process_id.to_string(),
+                "pid":            ctx.pid,
+                "sender_mp_id":   ctx.sender_mp_id,
+                "outcome":        ctx.outcome,
+                "pay_by":         ctx.pay_by.map(|d| d.to_string()),
+                "findings_count": ctx.findings_count,
+                "dispatched":     ctx.dispatched,
+            }),
+        )
+    });
+    match pg::receipts::conclude(
+        &state.pool,
+        &state.tenant,
+        ctx.process_id,
+        dispatched_at,
+        ce.as_ref(),
+    )
+    .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(err) => {
+            error!(
+                %err, process_id = %ctx.process_id,
+                "invoicd: the receipt's conclusion did not commit — answering 500 so makod \
+                 redelivers the invoice"
             );
-            // Left to the outbox worker, and verified rather than assumed: the
-            // worker is spawned under exactly the condition that lets this
-            // function run at all (`cfg.erp.webhook_url` is `Some`, see
-            // `server::build` — it feeds both `HandlerState::erp_webhook_url`
-            // and `erp_outbox::spawn`), and it claims on
-            // `erp_notified_at IS NULL`, which this row still satisfies. Its own
-            // 4xx branch dead-letters it, so the loss costs one extra POST, not
-            // an unbounded retry. Logged anyway, because "the next component
-            // will handle it" is exactly the assumption that should leave a
-            // trace when it turns out to be wrong.
-            if let Err(db) =
-                pg::receipts::dead_letter_erp(&state.pool, &state.tenant, ctx.process_id).await
-            {
-                warn!(
-                    error = %db, process_id = %ctx.process_id,
-                    "invoicd: could not dead-letter the rejected ERP notification inline — \
-                     leaving it to the outbox worker, which will retry once and dead-letter it"
-                );
-            }
-        }
-        Err(e) => {
-            warn!(
-                process_id = %ctx.process_id, erp_url = %url, error = %e,
-                "invoicd: ERP webhook delivery failed — the outbox worker will retry"
-            );
-            // Same reasoning: only the 30 s back-off is at stake, and the
-            // worker's next tick re-attempts the row regardless.
-            if let Err(db) =
-                pg::receipts::record_erp_failure(&state.pool, &state.tenant, ctx.process_id, 0)
-                    .await
-            {
-                warn!(
-                    error = %db, process_id = %ctx.process_id,
-                    "invoicd: could not schedule the ERP retry back-off — the outbox worker \
-                     picks the receipt up on its next tick instead"
-                );
-            }
+            StatusCode::INTERNAL_SERVER_ERROR
         }
     }
 }
@@ -1420,7 +1407,9 @@ fn abweichungsgrund(
         }
         return Some(mako_invoic::RemadvAntwort {
             ebd: a.tree.to_owned(),
-            remadv_pid: a.remadv_pid(),
+            // `None` while the walk is open, which the caller holds before
+            // building an answer at all.
+            remadv_pid: a.remadv_pid()?,
             befunde: a
                 .befunde
                 .iter()
@@ -1832,6 +1821,30 @@ mod tests {
         server.abort();
     }
 
+    /// `E_0264` Prüfschritt 40 asks whether the invoice bills against an order
+    /// this ESA placed. A marktd outage answers it neither way: the invoice is
+    /// not checked until the order lookup answers.
+    #[tokio::test]
+    async fn an_unreachable_order_lookup_answers_no_pruefschritt() {
+        let (state, server) = marktd_broken_under("/api/v1/esa/subscriptions").await;
+        let route = route_for(31009).expect("routed");
+        let invoice = Incoming {
+            bestellung_ref: Some("ORD-1".to_owned()),
+            rechnungstyp: Some(RECHNUNGSTYP_ESA.to_owned()),
+            ..an_invoice()
+        };
+        let Err(err) = run_check(&state, route, &invoice, Uuid::nil()).await else {
+            panic!("an unanswered order lookup cannot pass Prüfschritt 40");
+        };
+        assert_eq!(err.upstream, "marktd");
+        assert!(
+            err.what.contains("Prüfschritt 40"),
+            "the operator is told which reference datum was missing, got {:?}",
+            err.what
+        );
+        server.abort();
+    }
+
     /// `Ok` is accepted and `Dispute` is not, whatever the threshold.
     #[test]
     fn the_unambiguous_outcomes_ignore_the_threshold() {
@@ -1907,12 +1920,13 @@ mod tests {
         );
     }
 
-    /// Every `outcome` this service writes, from both places that write one.
+    /// Every `outcome` this service writes, from the three places that write
+    /// one.
     ///
-    /// `Verdict::of` produces four of them; `resolve_dispute`'s SQL sets
-    /// `Resolved`.
+    /// `Verdict::of` produces four of them, `Verdict::OFFEN` the held
+    /// invoice's, and `resolve_dispute`'s SQL sets `Resolved`.
     fn written_outcomes() -> BTreeSet<&'static str> {
-        let mut out = BTreeSet::from(["Resolved"]);
+        let mut out = BTreeSet::from(["Resolved", Verdict::OFFEN.label]);
         for outcome in [CheckOutcome::Ok, CheckOutcome::Warn, CheckOutcome::Dispute] {
             for rechnung in [plain(), storno()] {
                 for threshold in [0i64, 1] {
@@ -2056,17 +2070,21 @@ mod tests {
         use mako_pruefung::codes::MsbRechnungsgegenstand as G;
         use mako_pruefung::esa;
 
+        let maerz = esa::Zeitraum {
+            von: time::macros::date!(2026 - 03 - 01),
+            bis: time::macros::date!(2026 - 03 - 31),
+        };
         let walk = esa::pruefe_rechnung(
             &esa::RechnungsFakten {
                 einwaende_entkraeftet: None,
                 ustg_konform: Some(true),
                 rechnungsdatum: time::macros::date!(2026 - 04 - 01),
                 eingangsdatum: time::macros::date!(2026 - 04 - 01),
-                leistungszeitraum: None,
+                leistungszeitraum: Some(maerz),
                 bestellung_bekannt: true,
                 rechnungsnummer_bereits_verwendet: false,
                 faelliger_betrag_nicht_negativ: true,
-                zahlungsziel: None,
+                zahlungsziel: Some(time::macros::date!(2026 - 05 - 15)),
                 preisblatt_version_gueltig: None,
                 zeitraum_bereits_abgerechnet_in: None,
                 sonstiger_kopffehler: None,
@@ -2077,7 +2095,7 @@ mod tests {
                     leistung_erbracht: Some(true),
                     preis_wie_angebot: Some(false),
                     steuersatz_korrekt: Some(true),
-                    zeitraum: None,
+                    zeitraum: Some(maerz),
                     bereits_abgerechnet_in: None,
                     rechenfehler: false,
                     sonstiger_fehler: None,
@@ -2106,6 +2124,46 @@ mod tests {
         assert_eq!(grund.befunde[0].ebene, "position");
     }
 
+    /// A walk that stopped at an unanswered Prüfschritt is held: no
+    /// Zahlungsavis, no Abweisung, and no `settled` event for the ERP to book
+    /// a payment on — even beside a refusal the walk did reach.
+    #[test]
+    fn an_open_walk_is_neither_paid_nor_refused() {
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        use mako_pruefung::codes::MsbRechnungsgegenstand as G;
+        use mako_pruefung::esa::{Ebene, OffenerPruefschritt, RechnungsAntwort};
+        let offen = RechnungsAntwort {
+            tree: "E_0264",
+            befunde: Vec::new(),
+            offen: vec![OffenerPruefschritt {
+                ebene: Ebene::Kopf,
+                pruefschritt: 10,
+                detail: "§ 14 Abs. 4 UStG nicht beurteilt".to_owned(),
+            }],
+        };
+        assert!(!offen.ist_zustimmung());
+        assert!(walk_offen(Some(&offen), None));
+        assert_eq!(Verdict::OFFEN.label, "Offen");
+        const { assert!(!Verdict::OFFEN.dispute) };
+        assert!(
+            abweichungsgrund(
+                31_009,
+                R::Esa,
+                G::Messstellenbetrieb,
+                Some(&offen),
+                None,
+                &[]
+            )
+            .is_none()
+        );
+        let storno = mako_pruefung::esa::StornoAntwort::Offen(OffenerPruefschritt {
+            ebene: Ebene::Kopf,
+            pruefschritt: 17,
+            detail: String::new(),
+        });
+        assert!(walk_offen(None, Some(&storno)));
+    }
+
     /// A clean ESA invoice produces no Abweichungsgrund at all — the answer is
     /// the Zahlungsavis 33001, which carries no `AJT`.
     #[test]
@@ -2115,6 +2173,7 @@ mod tests {
         let clean = mako_pruefung::esa::RechnungsAntwort {
             tree: "E_0264",
             befunde: Vec::new(),
+            offen: Vec::new(),
         };
         assert!(clean.ist_zustimmung());
         assert!(
@@ -2448,6 +2507,7 @@ mod tests {
         let walked = mako_pruefung::rechnung::RechnungsAntwort {
             tree: mako_pruefung::codes::EBD_ESA_RECHNUNG,
             befunde: vec![],
+            offen: vec![],
         };
         for rolle in [Rolle::Lieferant, Rolle::Netzbetreiber, Rolle::Esa] {
             assert_eq!(

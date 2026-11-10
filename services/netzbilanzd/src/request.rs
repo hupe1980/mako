@@ -176,7 +176,7 @@ pub struct NneRequest {
     /// Jahresverbrauch — so the stated group can be held against the statute
     /// rather than believed; `grenzpreis` carries the § 2 Abs. 4 / Abs. 5 Nr. 2
     /// Grenzpreisvergleich, below which no Konzessionsabgabe may be charged at
-    /// all. The § 2 Abs. 5 Nr. 1 Gas Grenzmenge needs neither: it is read off
+    /// all — required for a Sondervertragskunde charged one, refused without. The § 2 Abs. 5 Nr. 1 Gas Grenzmenge needs neither: it is read off
     /// `jahresarbeit_kwh`.
     #[serde(default)]
     pub konzessionsabgabe: Option<Konzessionsabgabe>,

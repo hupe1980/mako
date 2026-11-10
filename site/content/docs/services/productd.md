@@ -90,7 +90,7 @@ graph LR
 | `GET` | `/api/v1/angebote/{id}/comparison` | Prices the scenarios and persists the BO4E `Angebot` to `angebote.bo4e` |
 | `POST` | `/api/v1/angebote/{id}/versenden` | ANGELEGT → VERSANDT; an unknown id is `404`, another status `409` |
 | `PUT` | `/api/v1/angebote/{id}` | Edit before sending — `gueltig_bis`, `lieferbeginn`, `laufzeit_monate`, `positionen`, `varianten`, `notizen`. **`ANGELEGT` only**: once VERSANDT the customer holds the document |
-| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | ANGELEGT **or** VERSANDT → ANGENOMMEN / ABGELEHNT. Unknown id `404`, already decided `409`; acceptance of an unpriced Angebot (no `bo4e`) `422` |
+| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | ANGELEGT **or** VERSANDT → ANGENOMMEN / ABGELEHNT. Unknown id `404`, already decided `409`; acceptance of an unpriced Angebot (no `bo4e`) `422`. An acceptance enqueues `de.tarif.angebot.angenommen` in its own transaction (`erp_dispatch: queued`); the Angebot names its `rahmenvertrag_id` once `vertragd` has answered the delivery |
 | `POST` | `/api/v1/angebote/expire` | Sweeps ANGELEGT and VERSANDT Angebote past `gueltig_bis` to ABGELAUFEN |
 | `GET` | `/health/live` · `/health/ready` · `/metrics` | From the `mako_service` runner |
 
@@ -627,7 +627,9 @@ url = "postgresql://productd:secret@db:5432/productd"
 issuer   = "https://idp.example/realms/mako"
 audience = "productd"
 
-# de.tarif.* notifications to the ERP; HMAC-signed when the secret is set.
+# de.tarif.* notifications to the ERP (vertragd for an accepted Angebot),
+# persisted in event_outbox with the write they announce and delivered with
+# retry; HMAC-signed when the secret is set.
 # erp_webhook_url = "https://erp.internal/hooks/tarif"
 # erp_hmac_secret = "env:PRODUCTD_ERP_HMAC"
 

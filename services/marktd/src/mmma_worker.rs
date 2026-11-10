@@ -214,17 +214,11 @@ fn parse_strom_prices(body: &str, year: i32, month: u8) -> Result<Vec<(Decimal, 
 /// A `Date` rather than a year and a month number: the month every price is
 /// written under is then the one the caller validated, and there is no number
 /// left to read as a month that is not one.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-)]
 pub async fn run_import_cycle(
     price_month: time::Date,
     http: &reqwest::Client,
     gas_url: &str,
     strom_url: &str,
-    gas_repo: &PgMmmaPreisGasRepository,
-    strom_repo: &PgMmmPreisStromRepository,
     tenant: &str,
     event_tx: &EventSink<'_>,
 ) -> Vec<ImportResult> {
@@ -278,25 +272,24 @@ pub async fn run_import_cycle(
                     });
                 }
                 Ok(prices) => {
-                    let mut ok = true;
-                    for (marktgebiet, mehr, minder) in &prices {
-                        if let Err(e) = gas_repo
-                            .upsert_gas(price_month, marktgebiet, *mehr, *minder, "the-api")
-                            .await
-                        {
-                            warn!(year, month, error = %e, "MMMA import: Gas DB upsert failed");
-                            ok = false;
+                    // The prices and their import event commit together: the
+                    // month's prices existing is what stops the next cycle,
+                    // so prices committed without their event are never
+                    // announced.
+                    let imported = async {
+                        let mut tx = event_tx.pool.begin().await?;
+                        for (marktgebiet, mehr, minder) in &prices {
+                            PgMmmaPreisGasRepository::upsert_gas_on(
+                                &mut tx,
+                                price_month,
+                                marktgebiet,
+                                *mehr,
+                                *minder,
+                                "the-api",
+                            )
+                            .await?;
                         }
-                    }
-                    if ok {
-                        info!(
-                            year,
-                            month,
-                            count = prices.len(),
-                            "MMMA import: Gas prices imported"
-                        );
-                        emit_event(
-                            event_tx,
+                        let evt = import_event(
                             tenant,
                             mako_events::markt::MMMA_IMPORT_SUCCESS,
                             serde_json::json!({
@@ -305,23 +298,37 @@ pub async fn run_import_cycle(
                                 "count": prices.len(),
                                 "source": "the-api",
                             }),
-                        )
-                        .await;
-                        results.push(ImportResult {
-                            commodity: "gas",
-                            year,
-                            month,
-                            success: true,
-                            error: None,
-                        });
-                    } else {
-                        results.push(ImportResult {
-                            commodity: "gas",
-                            year,
-                            month,
-                            success: false,
-                            error: Some("DB upsert failed".into()),
-                        });
+                        );
+                        crate::outbox::enqueue(&mut *tx, &evt).await?;
+                        tx.commit().await
+                    }
+                    .await;
+                    match imported {
+                        Ok(()) => {
+                            info!(
+                                year,
+                                month,
+                                count = prices.len(),
+                                "MMMA import: Gas prices imported"
+                            );
+                            results.push(ImportResult {
+                                commodity: "gas",
+                                year,
+                                month,
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        Err(e) => {
+                            warn!(year, month, error = %e, "MMMA import: Gas DB upsert failed");
+                            results.push(ImportResult {
+                                commodity: "gas",
+                                year,
+                                month,
+                                success: false,
+                                error: Some("DB upsert failed".into()),
+                            });
+                        }
                     }
                 }
             },
@@ -375,25 +382,19 @@ pub async fn run_import_cycle(
                     });
                 }
                 Ok(prices) => {
-                    let mut ok = true;
-                    for (mehr, minder) in &prices {
-                        if let Err(e) = strom_repo
-                            .upsert_strom(price_month, *mehr, *minder, "bdew-csv")
-                            .await
-                        {
-                            warn!(year, month, error = %e, "MMM import: Strom DB upsert failed");
-                            ok = false;
+                    let imported = async {
+                        let mut tx = event_tx.pool.begin().await?;
+                        for (mehr, minder) in &prices {
+                            PgMmmPreisStromRepository::upsert_strom_on(
+                                &mut tx,
+                                price_month,
+                                *mehr,
+                                *minder,
+                                "bdew-csv",
+                            )
+                            .await?;
                         }
-                    }
-                    if ok {
-                        info!(
-                            year,
-                            month,
-                            count = prices.len(),
-                            "MMM import: Strom prices imported"
-                        );
-                        emit_event(
-                            event_tx,
+                        let evt = import_event(
                             tenant,
                             mako_events::markt::MMMA_IMPORT_SUCCESS,
                             serde_json::json!({
@@ -402,23 +403,37 @@ pub async fn run_import_cycle(
                                 "count": prices.len(),
                                 "source": "bdew-csv",
                             }),
-                        )
-                        .await;
-                        results.push(ImportResult {
-                            commodity: "strom",
-                            year,
-                            month,
-                            success: true,
-                            error: None,
-                        });
-                    } else {
-                        results.push(ImportResult {
-                            commodity: "strom",
-                            year,
-                            month,
-                            success: false,
-                            error: Some("DB upsert failed".into()),
-                        });
+                        );
+                        crate::outbox::enqueue(&mut *tx, &evt).await?;
+                        tx.commit().await
+                    }
+                    .await;
+                    match imported {
+                        Ok(()) => {
+                            info!(
+                                year,
+                                month,
+                                count = prices.len(),
+                                "MMM import: Strom prices imported"
+                            );
+                            results.push(ImportResult {
+                                commodity: "strom",
+                                year,
+                                month,
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        Err(e) => {
+                            warn!(year, month, error = %e, "MMM import: Strom DB upsert failed");
+                            results.push(ImportResult {
+                                commodity: "strom",
+                                year,
+                                month,
+                                success: false,
+                                error: Some("DB upsert failed".into()),
+                            });
+                        }
                     }
                 }
             },
@@ -428,7 +443,8 @@ pub async fn run_import_cycle(
     results
 }
 
-async fn emit_event(sink: &EventSink<'_>, tenant: &str, event_type: &str, data: serde_json::Value) {
+/// An import event, its Sparte taken from the commodity it names.
+fn import_event(tenant: &str, event_type: &str, data: serde_json::Value) -> MarktEvent {
     // Every import event names its commodity; that *is* the Sparte, so a
     // subscriber that only settles Strom is not woken by the THE Gas import.
     let sparte = match data.get("commodity").and_then(serde_json::Value::as_str) {
@@ -436,15 +452,27 @@ async fn emit_event(sink: &EventSink<'_>, tenant: &str, event_type: &str, data: 
         Some("strom") => Some("STROM".to_owned()),
         _ => None,
     };
-    let evt = MarktEvent::new(tenant, event_type, "marktd/mmma-worker".to_owned(), data)
-        .with_extensions(mako_markt::cloudevents::EventExtensions {
+    MarktEvent::new(tenant, event_type, "marktd/mmma-worker".to_owned(), data).with_extensions(
+        mako_markt::cloudevents::EventExtensions {
             marktsparte: sparte,
             ..Default::default()
-        });
+        },
+    )
+}
+
+/// Persist a failed import's event. It announces no write of its own, so it
+/// commits alone.
+async fn emit_event(sink: &EventSink<'_>, tenant: &str, event_type: &str, data: serde_json::Value) {
+    let evt = import_event(tenant, event_type, data);
+    let enqueued = async {
+        let mut tx = sink.pool.begin().await?;
+        crate::outbox::enqueue(&mut *tx, &evt).await?;
+        tx.commit().await
+    }
+    .await;
     // Background worker: no HTTP request to fail, so an enqueue failure is
-    // logged at error level (the event is not silently dropped). Correctness of
-    // the fan-out still holds — nothing is fanned out unless it is durable.
-    if let Err(e) = crate::outbox::enqueue(sink.pool, &evt).await {
+    // logged at error level.
+    if let Err(e) = enqueued {
         tracing::error!(error = %e, event_type, "mmma-worker: durable enqueue failed");
     }
 }
@@ -532,8 +560,6 @@ pub fn spawn_mmma_worker(
                 &http,
                 if gas_missing { &cfg.gas_url } else { "" },
                 if strom_missing { &cfg.strom_url } else { "" },
-                &gas_repo,
-                &strom_repo,
                 &tenant,
                 &EventSink { pool: &pool },
             )

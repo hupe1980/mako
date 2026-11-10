@@ -95,7 +95,7 @@ use mako_engine::{
 
 /// `ZW7` „Gemessene Marktlokation" — the `SG4 STS+7` DE 9013 Ergänzung of a
 /// Bestätigung that names the Messlokationen behind the Marktlokation.
-const GEMESSENE_MALO: &str = "ZW7";
+pub(crate) const GEMESSENE_MALO: &str = "ZW7";
 
 /// `ZW6` „Pauschale Marktlokation".
 ///
@@ -144,10 +144,6 @@ pub const UTILMD_PIDS: &[u32] = &[
 /// that sits until its registered deadline and then transitions to
 /// `Rejected` without anything having gone wrong — worse than not accepting the
 /// message, because it manufactures a false rejection.
-///
-/// `55557` (Änderung MSB-Abrechnungsdaten, GPKE Teil 4) stays registered so the
-/// router still resolves it, but has no Antwort mapping and therefore no
-/// receiving implementation yet.
 pub const UTILMD_ANFRAGE_PIDS: &[u32] = &[55001, 55004, 55077];
 
 /// IFTSTA GPKE Prüfidentifikatoren — PIDs 21024–21028, 21033, 21035.
@@ -432,6 +428,31 @@ pub enum SupplierChangeState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for SupplierChangeState {
+    /// Occupied while the Anfrage is still owed the Netzbetreiber's answer.
+    ///
+    /// The answer is the last step of the Vorgang this process holds: the NB's
+    /// Zuordnung (Prozessschritt 5) or Ablehnung (6) of an Anmeldung, „spätester
+    /// ÜZ ist 11:00 Uhr des 1. WT nach dem ÜT von Nr. 1" (BK6-24-174 GPKE Teil 2
+    /// Kap. 2.1.2, S. 21–22), and the Beendigung (2) or Ablehnung (3) of an
+    /// Abmeldung by 06:00 Uhr (Kap. 2.5.1.2, S. 55). Everything after it is a
+    /// Use-Case of its own (ref Abrechnungsdaten, Beendigung der Zuordnung des
+    /// LFA). So `AntwortGesendet`, `Active` and `Rejected` are settled: a second
+    /// Anmeldung on the MaLo, and the later Lieferende 55004 that reuses this
+    /// workflow name on it, open a process of their own instead of being fed to
+    /// an answered one that refuses them.
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // A lapsed window leaves the answer owed.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
+            Self::Initiated(_) | Self::ValidationPassed(_) => true,
+            Self::New | Self::AntwortGesendet { .. } | Self::Active(_) | Self::Rejected { .. } => {
+                false
+            }
+        }
+    }
+}
+
 impl SupplierChangeState {
     /// Stable string label for the current variant.
     ///
@@ -711,6 +732,16 @@ impl CommandPayload for SupplierChangeCommand {}
 /// Lieferende as `lfa_lieferende`: the days up to the Zuordnungsbeginn are
 /// supplied by nobody, and marktd announces them as the § 38 Abs. 1 EnWG gap.
 pub const ANMELDUNG_ANTWORT_PIDS: &[u32] = &[55_002, 55_003, 55_078, 55_080];
+
+/// The answers to an Abmeldung — Bestätigung 55005, Ablehnung 55006 — each of
+/// which queues a `ProcessCompleted` beside its UTILMD, naming the Lieferant
+/// that sent the Abmeldung as `old_supplier`.
+///
+/// On the 55005 the NB's supply projection (marktd) ends that Lieferant's
+/// assignment at the Lieferende the Abmeldung asked for and announces the § 38
+/// Abs. 1 EnWG gap when no successor covers the days after it; the Ablehnung
+/// moves nothing and carries the code a reader of the process wants.
+pub const ABMELDUNG_ANTWORT_PIDS: &[u32] = &[55_005, 55_006];
 
 /// Derive the outbound UTILMD response PID from the inbound ANFRAGE PID.
 ///
@@ -1212,6 +1243,25 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         data.new_supplier.as_str(),
                         payload,
                     ));
+                    if ABMELDUNG_ANTWORT_PIDS.contains(&rpid.as_u32()) {
+                        // The Lieferant that sent the Abmeldung is the one
+                        // whose assignment ends at `process_date`.
+                        outbox.push(PendingOutbox::new(
+                            "ProcessCompleted",
+                            "",
+                            serde_json::json!({
+                                "pid":           rpid.as_u32(),
+                                "malo_id":       data.location_id.as_str(),
+                                "old_supplier":  data.new_supplier.as_str(),
+                                "grid_operator": data.grid_operator.as_str(),
+                                "process_date":  data.process_date,
+                                "accepted":      accepted,
+                                "outcome":       if accepted { "accepted" } else { "rejected" },
+                                "antwortcode":   antwort.antwort_code,
+                                "codeliste":     antwort.ebd,
+                            }),
+                        ));
+                    }
                     if ANMELDUNG_ANTWORT_PIDS.contains(&rpid.as_u32()) {
                         // `accepted`/`outcome` are the verdict: the event type
                         // says only that the process is terminal.
@@ -1488,5 +1538,53 @@ mod tests {
             reason: None,
         };
         assert_eq!(unsent.verlauf(), None, "no PID, no UTILMD queued");
+    }
+
+    /// The MaLo is held only while the NB's answer is owed (GPKE Teil 2
+    /// Kap. 2.1.2 Prozessschritt 5/6, Kap. 2.5.1.2 Prozessschritt 2/3).
+    #[test]
+    fn the_malo_is_occupied_only_while_the_answer_is_owed() {
+        use mako_engine::workflow::OccupiesBusinessKey as _;
+        let data = InitiatedData {
+            location_id: MaLo::new("51238696012"),
+            new_supplier: MarktpartnerCode::new("9900000000003"),
+            grid_operator: MarktpartnerCode::new("9900357000004"),
+            document_date: "20261001".to_owned(),
+            process_date: "20261101".to_owned(),
+            transaktionsgrund: None,
+            pruefidentifikator: Pruefidentifikator::const_new(55_001),
+            transaktionsgrund_ergaenzung: None,
+            produktpaket_id: None,
+            vorgangsnummer: "V1".to_owned(),
+            message_ref: MessageRef::new("M1"),
+        };
+        for (state, occupied) in [
+            (SupplierChangeState::Initiated(data.clone()), true),
+            (SupplierChangeState::ValidationPassed(data.clone()), true),
+            (
+                SupplierChangeState::FristAbgelaufen {
+                    label: "x".to_owned(),
+                    offen: Box::new(SupplierChangeState::ValidationPassed(data.clone())),
+                },
+                true,
+            ),
+            (SupplierChangeState::New, false),
+            (
+                SupplierChangeState::AntwortGesendet {
+                    data: data.clone(),
+                    response_pid: Some(Pruefidentifikator::const_new(55_002)),
+                },
+                false,
+            ),
+            (SupplierChangeState::Active(data), false),
+            (
+                SupplierChangeState::Rejected {
+                    reason: "x".to_owned(),
+                },
+                false,
+            ),
+        ] {
+            assert_eq!(state.occupies_business_key(), occupied, "{}", state.label());
+        }
     }
 }

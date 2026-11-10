@@ -548,6 +548,12 @@ pub struct BillingdConfig {
     #[serde(default)]
     pub e_rechnung: ERechnungConfig,
 
+    /// `[gebuehrenbescheid]` — what a Bescheid over a public-law Gebühr states
+    /// beside the levy. Required as soon as a period carries one: a period with
+    /// an Abwassergebühr is refused without it.
+    #[serde(default)]
+    pub gebuehrenbescheid: Option<GebuehrenbescheidConfig>,
+
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:BILLINGD_MCP_API_KEY"`.
     #[serde(default)]
@@ -711,6 +717,22 @@ impl mako_service::ServiceConfig for BillingdConfig {
     fn bind_addr(&self) -> String {
         self.http.addr.clone()
     }
+}
+
+/// `[gebuehrenbescheid]` — the Rechtsbehelfsbelehrung and the Fälligkeit a
+/// Bescheid over a public-law Gebühr states (§ 157 Abs. 1 Satz 3 AO names the
+/// Rechtsbehelf, its Frist and the Behörde).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GebuehrenbescheidConfig {
+    /// The Rechtsbehelf the Bescheid admits — `"Widerspruch"`, `"Klage"`.
+    pub rechtsbehelf: String,
+    /// Within which period it is lodged — `"innerhalb eines Monats nach Bekanntgabe"`.
+    pub frist: String,
+    /// With which Behörde, name and address as one line.
+    pub behoerde: String,
+    /// Days from the Bescheid's date to its Fälligkeit, as the Satzung fixes it.
+    pub zahlungsfrist_tage: u16,
 }
 
 /// `[seller]` — the supplier's own identity as it appears on every document.

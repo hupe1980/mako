@@ -6,6 +6,7 @@
 //! | [`vertraege`] | Rahmenvertrag, Versorgungsvertrag, Vertragskomponente, Kündigung, Tarifwechsel |
 //! | [`lifecycle`] | The queries the daily workers run: renewal, expiry, price-change notice, stuck dispatches |
 //! | [`aggregator`] | § 41e EnWG Aggregatorverträge |
+//! | [`sect14a`] | The § 14a EnWG module state of a supply component, valid-time |
 //! | [`gdpr`] | DSGVO Art. 15 export and Art. 17 pseudonymisation |
 
 pub mod aggregator;
@@ -14,6 +15,7 @@ pub mod kunden;
 pub mod lifecycle;
 pub mod messstellenvertrag;
 pub mod produkte;
+pub mod sect14a;
 pub mod vertraege;
 
 use serde::{Deserialize, Serialize};
@@ -47,6 +49,9 @@ pub use messstellenvertrag::{
 pub use produkte::{
     AnzupassenderPreis, Initiator, MaloProduktSlice, ProduktSlice, malo_slices,
     offene_preisanpassungen, unangekuendigt_wirksame,
+};
+pub use sect14a::{
+    Sect14aError, Sect14aInput, Sect14aModul, Sect14aSlice, malo_sect14a, record_sect14a,
 };
 pub use vertraege::{
     BillingCandidateRow, CreateKomponenteInput, CreateRahmenvertragInput,
@@ -228,6 +233,23 @@ impl VertragskomponenteRow {
 }
 
 // ── Shared idempotency helper ────────────────────────────────────────────────
+
+/// Whether an inbound event was already processed.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn event_received(
+    executor: impl sqlx::PgExecutor<'_>,
+    event_id: &str,
+) -> anyhow::Result<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM received_events WHERE event_id = $1)")
+            .bind(event_id)
+            .fetch_one(executor)
+            .await?,
+    )
+}
 
 /// Record an inbound CloudEvent; `false` when it was already seen.
 ///

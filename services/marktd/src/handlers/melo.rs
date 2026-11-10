@@ -191,9 +191,15 @@ pub async fn put_melo(
         Err(e) => return e.into_response(),
     };
 
+    // The MeLo, its graph edge and its CloudEvent commit together.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return ApiError::internal(e).into_response(),
+    };
     match state
         .melo_repo
-        .upsert(
+        .upsert_in(
+            &mut tx,
             &melo_id,
             malo_id.as_ref(),
             &melo,
@@ -218,9 +224,18 @@ pub async fn put_melo(
                 marktmaloid: req.malo_id.clone(),
                 ..Default::default()
             });
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
-                tracing::error!(error = %e, "melo: durable enqueue failed");
-                return ApiError::internal(e).into_response();
+            if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+                return ApiError::internal(
+                    anyhow::Error::from(e)
+                        .context(format!("melo: durable enqueue for MeLo {melo_id}")),
+                )
+                .into_response();
+            }
+            if let Err(e) = tx.commit().await {
+                return ApiError::internal(
+                    anyhow::Error::from(e).context(format!("melo: commit for MeLo {melo_id}")),
+                )
+                .into_response();
             }
 
             let status = if exists {

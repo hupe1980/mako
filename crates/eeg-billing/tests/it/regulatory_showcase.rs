@@ -3916,14 +3916,14 @@ fn sect51b_does_not_reach_periods_before_its_state_aid_approval() {
         })
     };
 
-    // The day before the approval: the ordinary Marktprämie is owed.
+    // The month before the approval: the ordinary Marktprämie is owed.
     // max(0, 13.50 − 1.00) = 12.50 ct × 5000 kWh = 625 EUR.
-    let before = settle(Some(date!(2025 - 09 - 17)));
+    let before = settle(Some(date!(2025 - 08 - 01)));
     assert_eq!(before.status, SettlementStatus::Calculated);
     assert_eq!(before.settlement_eur, Some(d("625.00000")));
     assert!(!before.positions[0].legal_basis.contains("51b"));
 
-    // From the approval day on, § 51b zeroes it.
+    // A period starting on the approval day: § 51b zeroes it.
     let after = settle(Some(date!(2025 - 09 - 18)));
     assert_eq!(after.settlement_eur, Some(d("0.00000")));
     assert!(after.positions[0].legal_basis.contains("51b"));
@@ -3931,6 +3931,10 @@ fn sect51b_does_not_reach_periods_before_its_state_aid_approval() {
     // An unknown period is not a licence to apply it.
     let undated = settle(None);
     assert_eq!(undated.settlement_eur, Some(d("625.00000")));
+
+    // A period the approval falls inside is refused, not settled either way.
+    let geteilt = settle(Some(date!(2025 - 09 - 01)));
+    assert_eq!(geteilt.status, SettlementStatus::GenehmigungImZeitraum);
 }
 
 // ── §23b — Post-EEG 10 ct/kWh cap boundary ────────────────────────────────────
@@ -4429,7 +4433,12 @@ fn sect39i_caps_an_auction_plant_at_its_award_years_share() {
                 dec!(0.0),
                 dec!(0.28),
                 dec!(500),
-                Some(gebotstermin),
+                Some(eeg_billing::Zuschlag39 {
+                    gebotstermin,
+                    erteilt_am: gebotstermin
+                        .replace_month(time::Month::December)
+                        .expect("date"),
+                }),
             )),
             ..SettleInput::default()
         })
@@ -4564,6 +4573,7 @@ fn wind_offshore_market_premium_settlement() {
             zuschlag_id: Some("BNetzA-OFF-2024-001".to_owned()),
             award_ct: Some(d("8.40")),
             award_date: Some(date!(2024 - 05 - 01)),
+            gebotstermin: Some(date!(2024 - 03 - 01)),
             award_expired: false,
             innovation_auction: false,
             is_buergerenergie: false,
@@ -4788,7 +4798,10 @@ fn a_missing_claim_survives_an_einspeisemanagement_position() {
             d("0"),
             d("0.60"),
             d("500"),
-            Some(date!(2023 - 04 - 01)),
+            Some(eeg_billing::Zuschlag39 {
+                gebotstermin: date!(2023 - 04 - 01),
+                erteilt_am: date!(2023 - 06 - 01),
+            }),
         )),
         ..SettleInput::default()
     });
@@ -5423,4 +5436,203 @@ fn no_vintage_is_inferred_for_a_2027_commissioning_year() {
     );
     assert_eq!(eeg_billing::EegGesetz::from_inbetriebnahme_year(2027), None);
     assert!(eeg_billing::EegGesetz::from_db_year(2027).is_err());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// § 101 Abs. 2 / § 100 Abs. 37 EEG 2023 — the Fassung of 24.02.2025
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A tendered biogas plant settles a period after the § 51b approval at a spot
+/// price of 2 ct/kWh. Outside the § 100 Abs. 37 cohort § 51b zeroes the AW;
+/// a plant awarded in a Gebotstermin after 31.12.2022 and before 24.02.2025
+/// keeps it, because Satz 2 makes § 51b „nicht auf Anlagen nach Satz 1"
+/// applicable — however late the period.
+#[test]
+fn a_sect100_abs37_plant_never_gets_sect51b() {
+    use eeg_billing::scheme::AusschreibungMetadata;
+    let settle = |gebotstermin| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::MarketPremium {
+                direktverm_aw_ct: d("18.00"),
+                wind_korrekturfaktor: None,
+                wind_standort: None,
+            },
+            tariff_source: TariffSource::Auction(AusschreibungMetadata {
+                award_ct: Some(d("18.00")),
+                gebotstermin: Some(gebotstermin),
+                is_biogas_sect51b: true,
+                ..AusschreibungMetadata::default()
+            }),
+            einspeisemenge_kwh: Some(d("10000")),
+            marktwert_ct_kwh: Some(d("2.00")),
+            leistung_kwp: Some(d("500")),
+            inbetriebnahme: Some(date!(2025 - 01 - 01)),
+            billing_date: Some(date!(2025 - 11 - 01)),
+            erzeugungsart: Some(eeg_billing::ErzeugungsArt::Biogas),
+            eeg_gesetz: EegGesetz::Eeg2023,
+            ..SettleInput::default()
+        })
+    };
+    // Gebotstermin 01.10.2025: § 51b applies, the AW is zero.
+    assert_eq!(
+        settle(date!(2025 - 10 - 01)).settlement_eur,
+        Some(Decimal::ZERO)
+    );
+    // Gebotstermin 01.10.2024: the cohort, § 51b never — (18 − 2) ct × 10 000 kWh.
+    assert_eq!(
+        settle(date!(2024 - 10 - 01)).settlement_eur,
+        Some(d("1600.00"))
+    );
+}
+
+/// § 101 Abs. 2 Satz 2: until the Commission's approval of 18.09.2025, § 44b
+/// Abs. 1 Satz 3 applies „in der am 24. Februar 2025 geltenden Fassung", which
+/// exempts only § 44 plants from the 45 %-Quote; from it the current Fassung
+/// also exempts a tendered plant (Nr. 2). September 2025 holds both and is
+/// refused; a § 100 Abs. 37 plant stays on the old Fassung.
+#[test]
+fn the_sect44b_quote_follows_the_fassung_of_24_februar_2025_until_approval() {
+    use eeg_billing::version::{
+        SECT44B_ABS1_S3_GENEHMIGT_AB as AB, Sect101Abs2Fassung as F, sect44b_quote_anwendbar,
+        sect101_abs2_fassung,
+    };
+    let juni = sect101_abs2_fassung(AB, date!(2025 - 06 - 01), date!(2025 - 06 - 30), None);
+    assert_eq!(juni, Ok(F::Vom24Februar2025), "before the approval");
+    assert!(sect44b_quote_anwendbar(
+        true,
+        d("500"),
+        false,
+        true,
+        F::Vom24Februar2025
+    ));
+    assert!(
+        !sect44b_quote_anwendbar(true, d("120"), true, false, F::Vom24Februar2025),
+        "§ 44 plant"
+    );
+    let (von, bis) = (date!(2026 - 03 - 01), date!(2026 - 03 - 31));
+    assert_eq!(
+        sect101_abs2_fassung(AB, von, bis, None),
+        Ok(F::Geltend),
+        "approved 18.09.2025"
+    );
+    assert!(!sect44b_quote_anwendbar(
+        true,
+        d("500"),
+        false,
+        true,
+        F::Geltend
+    ));
+    assert!(
+        sect101_abs2_fassung(AB, date!(2025 - 09 - 01), date!(2025 - 09 - 30), None).is_err(),
+        "September 2025 holds both Fassungen"
+    );
+    assert_eq!(
+        eeg_billing::version::SECT50A_GENEHMIGT_AB,
+        AB,
+        "one decision"
+    );
+
+    let ab = Some(date!(2026 - 01 - 01));
+    assert_eq!(sect101_abs2_fassung(ab, von, bis, None), Ok(F::Geltend));
+    assert_eq!(
+        sect101_abs2_fassung(ab, von, bis, Some(date!(2024 - 04 - 01))),
+        Ok(F::Vom24Februar2025),
+        "§ 100 Abs. 37 keeps the cohort on the old Fassung"
+    );
+    let mitten = Some(date!(2026 - 03 - 15));
+    assert!(
+        sect101_abs2_fassung(mitten, von, bis, None).is_err(),
+        "a straddled period is refused"
+    );
+}
+
+/// § 50a Abs. 1 Satz 1: 65 Euro pro Kilowatt und Jahr in the Fassung of
+/// 24.02.2025, 100 in the current one.
+#[test]
+fn the_sect50a_rate_follows_the_fassung() {
+    use eeg_billing::version::{Sect101Abs2Fassung as F, sect50a_zuschlag_eur_kw_jahr};
+    assert_eq!(sect50a_zuschlag_eur_kw_jahr(F::Vom24Februar2025), d("65"));
+    assert_eq!(sect50a_zuschlag_eur_kw_jahr(F::Geltend), d("100"));
+}
+
+/// § 100 Abs. 37 Satz 1 keys on the Gebotstermin: after 31.12.2022 and before
+/// 24.02.2025, both ends excluded.
+#[test]
+fn the_sect100_abs37_cohort_is_bounded_by_its_two_dates() {
+    use eeg_billing::version::sect100_abs37_kohorte as k;
+    assert!(!k(Some(date!(2022 - 12 - 31))));
+    assert!(k(Some(date!(2023 - 01 - 01))));
+    assert!(k(Some(date!(2025 - 02 - 01))));
+    assert!(!k(Some(date!(2025 - 02 - 24))));
+    assert!(!k(None));
+}
+
+/// § 51b applies from the approval of 18.09.2025 and names no earlier version
+/// to fall back on (§ 101 Abs. 2 Satz 1). A month containing that day is
+/// therefore refused like § 44b and § 50a — never settled as if § 51b did not
+/// yet apply to any of it. A § 100 Abs. 37 plant never gets § 51b.
+#[test]
+fn a_month_containing_the_sect51b_approval_is_refused() {
+    use eeg_billing::version::sect51b_im_zeitraum as z;
+    assert_eq!(
+        z(date!(2025 - 08 - 01), date!(2025 - 08 - 31), None),
+        Ok(false)
+    );
+    assert!(z(date!(2025 - 09 - 01), date!(2025 - 09 - 30), None).is_err());
+    assert_eq!(
+        z(date!(2025 - 10 - 01), date!(2025 - 10 - 31), None),
+        Ok(true)
+    );
+    assert_eq!(
+        z(
+            date!(2025 - 09 - 01),
+            date!(2025 - 09 - 30),
+            Some(date!(2024 - 10 - 01))
+        ),
+        Ok(false),
+        "§ 100 Abs. 37 Satz 2"
+    );
+}
+
+/// The engine itself refuses a § 51b plant's month containing the approval of
+/// 18.09.2025: a direct call for September 2025 answers
+/// `GenehmigungImZeitraum` and settles nothing, while August settles with § 51
+/// and October with § 51b.
+#[test]
+fn the_engine_refuses_a_sect51b_month_containing_the_approval() {
+    use eeg_billing::scheme::AusschreibungMetadata;
+    let settle = |billing_date| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::MarketPremium {
+                direktverm_aw_ct: d("18.00"),
+                wind_korrekturfaktor: None,
+                wind_standort: None,
+            },
+            tariff_source: TariffSource::Auction(AusschreibungMetadata {
+                award_ct: Some(d("18.00")),
+                gebotstermin: Some(date!(2025 - 10 - 01)),
+                is_biogas_sect51b: true,
+                ..AusschreibungMetadata::default()
+            }),
+            einspeisemenge_kwh: Some(d("10000")),
+            marktwert_ct_kwh: Some(d("2.00")),
+            leistung_kwp: Some(d("500")),
+            inbetriebnahme: Some(date!(2025 - 01 - 01)),
+            billing_date: Some(billing_date),
+            erzeugungsart: Some(eeg_billing::ErzeugungsArt::Biogas),
+            eeg_gesetz: EegGesetz::Eeg2023,
+            ..SettleInput::default()
+        })
+    };
+    let sept = settle(date!(2025 - 09 - 01));
+    assert_eq!(sept.status, SettlementStatus::GenehmigungImZeitraum);
+    assert_eq!(sept.settlement_eur, None);
+    assert_eq!(
+        settle(date!(2025 - 08 - 01)).settlement_eur,
+        Some(d("1600.00"))
+    );
+    assert_eq!(
+        settle(date!(2025 - 10 - 01)).settlement_eur,
+        Some(Decimal::ZERO)
+    );
 }

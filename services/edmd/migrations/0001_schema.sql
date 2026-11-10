@@ -68,7 +68,7 @@ CREATE TABLE meter_billing_periods (
     period_to            DATE          NOT NULL,
     messtyp              TEXT          NOT NULL DEFAULT 'SLP'
                              CHECK (messtyp IN ('SLP','RLM','IMSYS')),
-    sparte               TEXT          NOT NULL DEFAULT 'STROM'
+    sparte               TEXT          NOT NULL
                              CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
     arbeitsmenge_kwh     NUMERIC(18,5) NOT NULL,
     arbeitsmenge_ht_kwh  NUMERIC(18,5),
@@ -97,6 +97,11 @@ CREATE TABLE meter_billing_periods (
                                  'MEASURED','ESTIMATED','SUBSTITUTED','CALCULATED',
                                  'CORRECTED','PRELIMINARY','FAULTY','UNKNOWN'
                              )),
+    -- Who obtained the period's readings (MSCONS `STS+Z33`/`Z83`), when every
+    -- billable reading states the same origin; NULL when they state none or
+    -- differ. A separate axis from `quality`. AblesungHerkunft::CODES.
+    ablesung_herkunft    TEXT
+                             CHECK (ablesung_herkunft IN ('KUNDENSELBSTABLESUNG')),
     tenant               TEXT          NOT NULL,
     computed_at          TIMESTAMPTZ   NOT NULL DEFAULT now(),
     CONSTRAINT mbp_period_forward CHECK (period_to >= period_from)
@@ -241,8 +246,9 @@ CREATE TABLE ablese_auftraege (
     -- into the Zählerstandsgang store, and that delivery has to name a Sparte:
     -- it decides the register's unit (kWh or m3) and the balancing day.
     -- Inferring it from which of the two Zählerstand columns was filled cannot
-    -- distinguish Strom from Wärme, or Gas from Wasser.
-    sparte             TEXT        NOT NULL DEFAULT 'STROM'
+    -- distinguish Strom from Wärme, or Gas from Wasser. No default: an order
+    -- that names none is refused, never filed as electricity.
+    sparte             TEXT        NOT NULL
                            CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
     -- OBIS register the reading was taken from, when the caller knows it. NULL
     -- is the unlabelled register — the right answer for a single-register SLP
@@ -499,6 +505,25 @@ CREATE TABLE substitute_value_log (
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),
     tenant          TEXT          NOT NULL,
     CONSTRAINT svl_interval_forward CHECK (dtm_to > dtm_from)
+);
+
+-- The Bundesland of a Marktlokation, as `marktd` derives it from the PLZ of
+-- the MaLo's address (`GET /api/v1/malos/{id}/bundesland`). Filled when
+-- `marktd` announces the MaLo (`de.markt.malo.updated`), so an Ersatzwert
+-- reads its day class's Land here instead of calling `marktd`; a refusal from
+-- `marktd` (no PLZ, a PLZ across a Land border) removes the row.
+CREATE TABLE malo_bundesland (
+    tenant          TEXT          NOT NULL,
+    malo_id         TEXT          NOT NULL,
+    bundesland      TEXT          NOT NULL
+                        CHECK (bundesland IN (
+                            'BW','BY','BE','BB','HB','HH','HE','MV',
+                            'NI','NW','RP','SL','SN','ST','SH','TH'
+                        )),
+    postleitzahl    TEXT          NOT NULL,
+    quelle          TEXT          NOT NULL,
+    abgerufen_am    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, malo_id)
 );
 
 CREATE INDEX svl_malo_dtm ON substitute_value_log (malo_id, dtm_from, dtm_to);

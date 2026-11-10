@@ -283,6 +283,9 @@ pub enum EogEvent {
         bilanzkreis: Option<String>,
         /// Rejection reason / EBD code (A02/A04/A05) when rejected.
         reason: Option<String>,
+        /// The answer's `SG4 STS+E01` code and Codeliste (`E_0615`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antwort: Option<mako_engine::envelope::Antwortcode>,
     },
     /// NB (initiator): answer window expired — Zuordnung executed anyway
     /// with the E/G's pre-deposited default Bilanzkreis (GPKE Teil 2
@@ -401,6 +404,14 @@ impl EventPayload for EogEvent {
                 pid: None,
                 message_ref: None,
             }),
+        }
+    }
+
+    /// The E/G's answer to the NB's 55013, with the `E_0615` code it named.
+    fn antwort(&self) -> Option<mako_engine::envelope::Antwortcode> {
+        match self {
+            Self::AntwortErhalten { antwort, .. } => antwort.clone(),
+            _ => None,
         }
     }
 }
@@ -621,6 +632,8 @@ pub enum EogCommand {
         bilanzkreis: Option<String>,
         /// Rejection reason / EBD code (when rejected).
         reason: Option<String>,
+        /// The answer's `SG4 STS+E01` code and Codeliste, when it carries one.
+        antwort: Option<mako_engine::envelope::Antwortcode>,
     },
     /// LF/E-G (responder): inbound UTILMD 55013 received from the AS4 layer.
     ReceiveAnmeldung {
@@ -968,6 +981,7 @@ impl Workflow for GpkeEogWorkflow {
                 versorgungsart,
                 bilanzkreis,
                 reason,
+                antwort,
             } => {
                 let data = match state {
                     EogState::Angemeldet(d) => d,
@@ -982,12 +996,18 @@ impl Workflow for GpkeEogWorkflow {
                 }
                 let mut outbox = Vec::new();
                 if accepted {
-                    outbox.push(process_completed_outbox(
+                    // The E/G's code rides beside the verdict.
+                    let mut completed = process_completed_outbox(
                         data,
                         versorgungsart,
                         bilanzkreis.as_deref(),
                         false,
-                    ));
+                    );
+                    if let Some(a) = &antwort {
+                        completed.payload["antwortcode"] = serde_json::json!(a.code);
+                        completed.payload["codeliste"] = serde_json::json!(a.codeliste);
+                    }
+                    outbox.push(completed);
                 }
                 Ok(WorkflowOutput::with_outbox(
                     vec![EogEvent::AntwortErhalten {
@@ -996,6 +1016,7 @@ impl Workflow for GpkeEogWorkflow {
                         versorgungsart,
                         bilanzkreis,
                         reason,
+                        antwort,
                     }],
                     outbox,
                 ))
@@ -1223,13 +1244,17 @@ impl Workflow for GpkeEogWorkflow {
                 )];
                 if accepted {
                     // The E/G's own marktd records the fallback supply from
-                    // this event (it is now the supplier of record).
-                    outbox.push(process_completed_outbox(
+                    // this event (it is now the supplier of record), and the
+                    // code it answered with rides beside the verdict.
+                    let mut completed = process_completed_outbox(
                         data,
                         versorgungsart,
                         bilanzkreis.as_deref(),
                         false,
-                    ));
+                    );
+                    completed.payload["antwortcode"] = serde_json::json!(EOG_ZUSTIMMUNG);
+                    completed.payload["codeliste"] = serde_json::json!(EBD_ANMELDUNG_EOG);
+                    outbox.push(completed);
                 }
                 Ok(WorkflowOutput::with_outbox(
                     vec![EogEvent::AntwortGesendet {
@@ -1372,6 +1397,7 @@ mod tests {
             versorgungsart: None,
             bilanzkreis: None,
             reason: Some("A02".to_owned()),
+            antwort: None,
         };
         assert_eq!(
             antwort.verlauf(),
@@ -1407,10 +1433,21 @@ mod tests {
                 versorgungsart: Some(Versorgungsart::Ersatzversorgung),
                 bilanzkreis: Some("11XGRUNDV-BK---9".to_owned()),
                 reason: None,
+                antwort: Some(mako_engine::envelope::Antwortcode::new(
+                    "A09",
+                    Some("E_0615"),
+                )),
             },
         )
         .unwrap();
-        // ProcessCompleted drives marktd's Ersatzversorgung transition.
+        // ProcessCompleted drives marktd's Ersatzversorgung transition, and
+        // carries the E/G's code beside the verdict.
+        assert_eq!(out.outbox[0].payload["antwortcode"], "A09");
+        assert_eq!(out.outbox[0].payload["codeliste"], "E_0615");
+        assert_eq!(
+            out.events[0].antwort().map(|a| a.code),
+            Some("A09".to_owned())
+        );
         assert_eq!(out.outbox.len(), 1);
         assert_eq!(out.outbox[0].message_type.as_ref(), "ProcessCompleted");
         let payload = &out.outbox[0].payload;
@@ -1441,6 +1478,7 @@ mod tests {
                 versorgungsart: Some(Versorgungsart::Grundversorgung),
                 bilanzkreis: Some("11XGRUNDV-BK---9".to_owned()),
                 reason: None,
+                antwort: None,
             },
         )
         .unwrap();
@@ -1459,6 +1497,7 @@ mod tests {
                 versorgungsart: None,
                 bilanzkreis: None,
                 reason: Some("A02".to_owned()),
+                antwort: None,
             },
         )
         .unwrap();
@@ -1858,6 +1897,7 @@ mod tests {
                 versorgungsart: Some(Versorgungsart::Ersatzversorgung),
                 bilanzkreis: None,
                 reason: None,
+                antwort: None,
             },
         )
         .unwrap();

@@ -150,3 +150,61 @@ fn every_emitted_outbox_type_has_a_worker() {
          ERP adapter handles: {erp:?}"
     );
 }
+
+/// Whether `line` is a comment, which names a type without writing it.
+fn is_comment(line: &str) -> bool {
+    line.trim_start().starts_with("//")
+}
+
+/// The production text of `src`: comment lines dropped, and everything from
+/// the first `#[cfg(test)]` on cut, so a test fixture is not a writer.
+fn production_text(src: &str) -> String {
+    let end = src.find("#[cfg(test)]").unwrap_or(src.len());
+    src[..end]
+        .lines()
+        .filter(|l| !is_comment(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every mapped ERP `message_type` has a writer.
+///
+/// The ERP adapter's map is read by a worker that only ever sees what some
+/// producer enqueued. A type it maps that nothing writes is a CloudEvent with
+/// a subscriber and no emitter: the consumer waits for a state — a rejected
+/// APERAK, a failed process — that can never be projected, and nothing says
+/// so. A writer is the type's literal in production code of `crates/` or of
+/// makod outside the map itself: a `PendingOutbox::new("…"`, or an
+/// `OutboxMessage` built by makod or the engine.
+#[test]
+fn every_mapped_message_type_has_a_writer() {
+    let root = workspace_root();
+    let map = root.join("services/makod/src/core/erp_adapter.rs");
+    let mapped = handled_in(&map, "Some(match msg_type {");
+    assert!(
+        mapped.len() >= 6,
+        "only {} ERP arms parsed — the scan is broken: {mapped:?}",
+        mapped.len()
+    );
+
+    let mut files = Vec::new();
+    rust_sources(&root.join("crates"), &mut files);
+    rust_sources(&root.join("services/makod/src"), &mut files);
+    let text: String = files
+        .iter()
+        .filter(|f| **f != map && !f.components().any(|c| c.as_os_str() == "tests"))
+        .filter_map(|f| std::fs::read_to_string(f).ok())
+        .map(|src| production_text(&src))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let unwritten: Vec<&String> = mapped
+        .iter()
+        .filter(|t| !text.contains(&format!("\"{t}\"")))
+        .collect();
+    assert!(
+        unwritten.is_empty(),
+        "these message types are mapped to an ERP CloudEvent but no production \
+         code writes them, so their subscribers never see one: {unwritten:?}"
+    );
+}

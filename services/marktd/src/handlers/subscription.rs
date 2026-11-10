@@ -329,6 +329,8 @@ pub async fn test_subscription(
     let webhook_id = format!("test-delivery/{}", uuid::Uuid::new_v4());
     let mut req = http
         .post(&sub.webhook_url)
+        // durable: none owed — a test delivery is answered to the operator who
+        // asked for it, and nothing depends on it arriving.
         .header("Content-Type", "application/cloudevents+json")
         .header(mako_service::webhook::ID_HEADER, &webhook_id)
         .body(body.clone());

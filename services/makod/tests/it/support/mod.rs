@@ -283,22 +283,55 @@ pub async fn stub_marktd(
 ) -> mako_markt::marktd_client::MarktdClient {
     use axum::{extract::Path, response::IntoResponse, routing::get};
     let record = std::sync::Arc::new(record);
-    let app = axum::Router::new().route(
-        "/api/v1/malos/{id}/utilmd-stammdaten",
-        get(move |Path(id): Path<String>| {
-            let record = std::sync::Arc::clone(&record);
-            async move {
-                match record.as_ref() {
-                    Some(r) => {
-                        let mut r = r.clone();
-                        r.malo_id = id;
-                        axum::Json(r).into_response()
+    let lokationen = std::sync::Arc::clone(&record);
+    let app = axum::Router::new()
+        .route(
+            "/api/v1/malos/{id}/utilmd-stammdaten",
+            get(move |Path(id): Path<String>| {
+                let record = std::sync::Arc::clone(&record);
+                async move {
+                    match record.as_ref() {
+                        // A Zählpunktbezeichnung names no Marktlokation.
+                        Some(_) if id.starts_with("DE") => {
+                            axum::http::StatusCode::NOT_FOUND.into_response()
+                        }
+                        Some(r) => {
+                            let mut r = r.clone();
+                            r.malo_id = id;
+                            axum::Json(r).into_response()
+                        }
+                        None => axum::http::StatusCode::NOT_FOUND.into_response(),
                     }
-                    None => axum::http::StatusCode::NOT_FOUND.into_response(),
                 }
-            }
-        }),
-    );
+            }),
+        )
+        // Every Messlokation is assigned to the record's Marktlokation.
+        .route(
+            "/api/v1/melos/{id}/lokationen",
+            get(move |Path(id): Path<String>| {
+                let record = std::sync::Arc::clone(&lokationen);
+                async move {
+                    let edges: Vec<serde_json::Value> = record
+                        .as_ref()
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "id": "00000000-0000-4000-8000-000000000001",
+                                "tenant": "t",
+                                "von_id": r.malo_id,
+                                "von_typ": "MALO",
+                                "nach_id": id,
+                                "nach_typ": "MELO",
+                                "valid_from": null,
+                                "valid_to": null,
+                                "data": {},
+                            })
+                        })
+                        .collect();
+                    axum::Json(edges).into_response()
+                }
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind stand-in marktd");

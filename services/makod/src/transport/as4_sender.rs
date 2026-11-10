@@ -46,8 +46,9 @@
 //! regulated network — does send the JSON, with a `warn!`.
 //!
 //! Every rendered message additionally passes a pre-send conformance gate: it is
-//! parsed back and validated against its own release profile, and a failure is
-//! permanent for the same reason.
+//! parsed back and validated against its own release profile — an error or a
+//! Formatbedingung finding refuses it — and a failure is permanent for the same
+//! reason.
 //!
 //! [`RenderError::InsufficientPayload`]: crate::edifact_renderer::RenderError::InsufficientPayload
 
@@ -240,6 +241,8 @@ impl As4Sender for WebhookEdifactSender {
 
             let mut builder = http_client
                 .post(webhook_url.as_ref())
+                // durable: runs inside the engine outbox worker, which retries the message
+                // until this returns Ok.
                 .header("Content-Type", "application/cloudevents+json")
                 .header("X-Idempotency-Key", msg_owned.message_id.to_string());
 
@@ -557,11 +560,11 @@ impl As4Sender for BdewAs4Sender {
                                      {message_id_str} ({message_type}): {e}"
                                 )));
                             }
-                            Ok(report) if !report.is_valid() => {
+                            Ok(report) if !report.is_sendable() => {
                                 return Err(EngineError::Serialization(format!(
                                     "loopback gate: rendered EDIFACT violates its AHB \
                                      profile for {message_id_str} ({message_type}): {:?}",
-                                    report.errors()
+                                    report.sending_refusals().collect::<Vec<_>>()
                                 )));
                             }
                             Ok(_) => {}
@@ -624,10 +627,8 @@ impl As4Sender for BdewAs4Sender {
                             ))
                         })?;
 
-                        let pid_opt = parsed_msg
-                            .detect_pruefidentifikator()
-                            .ok()
-                            .map(|p| p.as_u32());
+                        let pid_opt = crate::edifact_api::routing_pid(&parsed_msg)
+                            .map(mako_engine::ids::Pid::as_u32);
                         let workflow_opt = pid_opt
                             .and_then(|p| loopback_state.resolve_workflow(p, &loopback_recipient));
 
@@ -822,11 +823,11 @@ impl As4Sender for BdewAs4Sender {
                              {message_id_str} ({message_type}): {e}"
                         )));
                     }
-                    Ok(report) if !report.is_valid() => {
+                    Ok(report) if !report.is_sendable() => {
                         return Err(EngineError::Serialization(format!(
                             "pre-send gate: rendered EDIFACT violates its AHB \
                              profile for {message_id_str} ({message_type}): {:?}",
-                            report.errors()
+                            report.sending_refusals().collect::<Vec<_>>()
                         )));
                     }
                     Ok(_) => {}

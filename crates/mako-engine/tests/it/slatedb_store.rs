@@ -497,7 +497,7 @@ async fn inbox_concurrent_accept_exactly_one_winner() {
 #[tokio::test]
 async fn dead_letter_persists_and_lists() {
     let store = open().await;
-    let sink = store.as_dead_letter_sink();
+    let sink = store.as_dead_letter_sink(mako_engine::ids::TenantId::new());
 
     sink.reject(&DeadLetterReason::UnknownPid {
         pid: mako_engine::ids::Pid::new(55001),
@@ -518,13 +518,65 @@ async fn dead_letter_persists_and_lists() {
     );
 }
 
+/// Every dead letter is announced: the record and one `DeadLetterRecorded`
+/// notice are written together, so the ERP sees what the queue holds. A notice
+/// that itself exhausts its delivery budget is recorded without another, or
+/// a refusing consumer would be handed notices without end.
+#[tokio::test]
+async fn every_dead_letter_writes_one_notice() {
+    use mako_engine::outbox::OutboxStore as _;
+    let store = open().await;
+    let tenant = mako_engine::ids::TenantId::new();
+    let sink = store.as_dead_letter_sink(tenant);
+    let later = time::OffsetDateTime::now_utc() + time::Duration::minutes(1);
+
+    sink.reject(&DeadLetterReason::NotDispatchable {
+        workflow_name: "wim-geraeteubernahme".into(),
+        pid: mako_engine::ids::Pid::new(19016),
+        reason: "pid_not_in_dispatch_table".into(),
+        context: mako_engine::dead_letter::AuditContext::now()
+            .with_pid(mako_engine::ids::Pid::new(19016))
+            .with_message_ref("UNH-19016"),
+    })
+    .await
+    .expect("reject must persist");
+
+    let pending = store.pending(10, later).await.expect("pending");
+    let [notice] = pending.as_slice() else {
+        panic!("one notice per dead letter, got {}", pending.len());
+    };
+    assert_eq!(
+        &*notice.message_type,
+        mako_engine::dead_letter::DEAD_LETTER_RECORDED
+    );
+    assert_eq!(notice.tenant_id, tenant);
+    assert_eq!(notice.payload["reason"], "not_dispatchable");
+    assert_eq!(notice.payload["pid"], 19016);
+    assert_eq!(notice.payload["message_ref"], "UNH-19016");
+    assert_eq!(notice.payload["workflow_name"], "wim-geraeteubernahme");
+    assert_eq!(store.list_dead_letters(10).await.expect("list").len(), 1);
+
+    // The notice's own give-up is recorded and announces nothing further.
+    sink.reject(&DeadLetterReason::OutboxExhausted {
+        message_id: notice.message_id,
+        message_type: notice.message_type.to_string(),
+        recipient: String::new(),
+        last_error: "ERP unreachable".into(),
+        attempts: 5,
+    })
+    .await
+    .expect("reject must persist");
+    assert_eq!(store.pending(10, later).await.expect("pending").len(), 1);
+    assert_eq!(store.list_dead_letters(10).await.expect("list").len(), 2);
+}
+
 /// Multiple `reject()` calls produce multiple records; `list_dead_letters(limit)`
 /// returns them in reverse-chronological order (most-recent first) and
 /// respects the `limit` cap.
 #[tokio::test]
 async fn dead_letter_list_recent_order_and_limit() {
     let store = open().await;
-    let sink = store.as_dead_letter_sink();
+    let sink = store.as_dead_letter_sink(mako_engine::ids::TenantId::new());
 
     let reasons = [
         DeadLetterReason::UnknownPid {
@@ -572,7 +624,7 @@ async fn dead_letter_list_recent_order_and_limit() {
 #[tokio::test]
 async fn dead_letter_key_space_is_isolated() {
     let store = open().await;
-    let sink = store.as_dead_letter_sink();
+    let sink = store.as_dead_letter_sink(mako_engine::ids::TenantId::new());
 
     // Populate other key spaces.
     let stream = StreamId::new("test/dl-isolation");
@@ -770,7 +822,7 @@ async fn concurrent_append_conflict_retry_succeeds() {
 #[tokio::test]
 async fn a_returned_dead_letter_is_durable_through_a_rejection_burst() {
     let store = open().await;
-    let sink = store.as_dead_letter_sink();
+    let sink = store.as_dead_letter_sink(mako_engine::ids::TenantId::new());
     // Concurrent, as a rejection storm is: the writes share WAL flushes.
     let mut burst = tokio::task::JoinSet::new();
     for _ in 0..600 {
@@ -795,7 +847,7 @@ async fn a_returned_dead_letter_is_durable_through_a_rejection_burst() {
 #[tokio::test]
 async fn a_dead_letter_on_a_closed_store_is_an_error() {
     let store = open().await;
-    let sink = store.as_dead_letter_sink();
+    let sink = store.as_dead_letter_sink(mako_engine::ids::TenantId::new());
     store.close().await.expect("close");
     let r = sink
         .reject(&DeadLetterReason::ProcessingError {

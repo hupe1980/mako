@@ -862,12 +862,12 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                     )?;
                     events.push(GeraeteubernahmeEvent::ValidationPassed { message_ref });
                     events.push(antwort);
+                    let mut outbox =
+                        vec![aperak(&empfaenger, &absender, &orders_ref, sparte, None)];
+                    outbox.extend(ordrsp.into_iter().map(|o| o.caused_by(2)));
                     return Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,
-                        vec![
-                            aperak(&empfaenger, &absender, &orders_ref, sparte, None),
-                            ordrsp.caused_by(2),
-                        ],
+                        outbox,
                         vec![],
                     ));
                 }
@@ -903,7 +903,7 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                 };
                 let (antwort, ordrsp) =
                     ordrsp_antwort(data, &antwort_code, bemerkung.as_deref(), None, &angaben)?;
-                Ok(WorkflowOutput::with_outbox(vec![antwort], vec![ordrsp]))
+                Ok(WorkflowOutput::with_outbox(vec![antwort], ordrsp))
             }
 
             GeraeteubernahmeCommand::ConfirmTransfer { device_id } => {
@@ -926,8 +926,9 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
     }
 }
 
-/// The ORDRSP answering `data`'s ORDERS with `antwort_code`, and the event that
-/// records it.
+/// The ORDRSP answering `data`'s ORDERS with `antwort_code`, the event that
+/// records it, and — on a refusal, which ends the process — the
+/// `ProcessCompleted` carrying the code and its Codeliste.
 ///
 /// The code must be published by the tree [`ordrsp_ebd`] names for the ORDERS
 /// and Sparte; [`ordrsp_antwort_pid`] picks the PID from it, and `SG2 AJT`
@@ -942,7 +943,7 @@ fn ordrsp_antwort(
     bemerkung: Option<&str>,
     begruendung: Option<String>,
     angaben: &AntwortAngaben,
-) -> Result<(GeraeteubernahmeEvent, PendingOutbox), WorkflowError> {
+) -> Result<(GeraeteubernahmeEvent, Vec<PendingOutbox>), WorkflowError> {
     let orders_pid = data.pid.as_u32();
     let tree = ordrsp_ebd(orders_pid, data.sparte).ok_or_else(|| {
         WorkflowError::rejected(format!(
@@ -992,16 +993,39 @@ fn ordrsp_antwort(
     }
     angaben_payload(&mut payload, data, antwort_pid, code.code, angaben)?;
 
+    let abgelehnt = ist_ablehnung(antwort_pid);
+    let mut outbox = vec![PendingOutbox::new("ORDRSP", data.msbn.as_str(), payload).caused_by(0)];
+    // A refusal ends the process here, and the code is the verdict a reader
+    // of the process wants beside it — worded within the Codeliste the
+    // ORDRSP names, never by a code alone.
+    if abgelehnt {
+        outbox.push(
+            PendingOutbox::new(
+                "ProcessCompleted",
+                "",
+                serde_json::json!({
+                    "pid":         antwort_pid,
+                    "melo_id":     data.melo_id.as_str(),
+                    "msbn_mp_id":  data.msbn.as_str(),
+                    "accepted":    false,
+                    "outcome":     "rejected",
+                    "antwortcode": code.code,
+                    "codeliste":   codeliste,
+                }),
+            )
+            .caused_by(0),
+        );
+    }
     Ok((
         GeraeteubernahmeEvent::AntwortGesendet {
             pruefidentifikator: Pruefidentifikator::new(antwort_pid)
                 .map_err(WorkflowError::rejected)?,
             antwort_code: code.code.to_owned(),
             antwort_ebd: tree.to_owned(),
-            abgelehnt: ist_ablehnung(antwort_pid),
+            abgelehnt,
             begruendung,
         },
-        PendingOutbox::new("ORDRSP", data.msbn.as_str(), payload).caused_by(0),
+        outbox,
     ))
 }
 
@@ -1475,6 +1499,16 @@ mod tests {
                 }
                 let payload = &ordrsp[0].payload;
                 assert_eq!(payload["pid"], 19_016, "{payload}");
+                // The refusal ends the process, and its completion carries the
+                // code with the Codeliste the ORDRSP names.
+                let completed = out
+                    .outbox
+                    .iter()
+                    .find(|o| &*o.message_type == "ProcessCompleted")
+                    .expect("a refusal queues its completion");
+                assert_eq!(completed.payload["antwortcode"], "E17");
+                assert_eq!(completed.payload["codeliste"], codeliste);
+                assert_eq!(completed.payload["accepted"], false);
                 assert_eq!(payload["antwort_code"], "E17", "{payload}");
                 assert_eq!(payload["antwort_codeliste"], codeliste, "{payload}");
                 assert_eq!(payload["order_reference"], "ORD-DOC-1", "{payload}");

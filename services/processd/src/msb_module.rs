@@ -393,12 +393,24 @@ async fn evaluate(
 ) -> anyhow::Result<MsbDecisionOutcome> {
     use mako_pruefung::msb;
 
-    // 55168 has no executable Prüfschritt: WiM Teil 1 Kap. 2.4.2 Nr. 4 leaves
-    // the answer to the gMSB's own commercial judgement („nach eigenem
-    // Ermessen"), so inventing a rule here would put an unfounded Zustimmung
-    // or Ablehnung on the market. It goes to the operator with its 1-Werktag
-    // window attached.
+    // 55168 is decided only on its Frist: sent outside the 8.–5. WT before
+    // the vorläufig bestätigte Zuordnungsende its `SG4 DTM+76` names (WiM
+    // Teil 1 Kap. 2.4.2 Nr. 3), it is refused `E17`. Otherwise Nr. 4 leaves the
+    // answer to the gMSB's own commercial judgement („nach eigenem Ermessen"),
+    // so inventing a rule here would put an unfounded Zustimmung or Ablehnung
+    // on the market. It goes to the operator with its 1-Werktag window
+    // attached.
     if matches!(payload.pid, 55_168 | 44_168) {
+        if let Some(zuordnungsende) = payload.prozessdatum
+            && let Some(frist) = mako_pruefung::msb::pruefe_verpflichtungsanfrage_frist(
+                sparte_of(payload.pid),
+                payload.uebertragungstag(),
+                zuordnungsende,
+                mako_fristen::HolidayCalendar::BdewMaKo,
+            )
+        {
+            return Ok(frist.into());
+        }
         return Ok(MsbDecisionOutcome::Escalate {
             reason: format!(
                 "Verpflichtungsanfrage zur Messlokation {}: der gMSB entscheidet nach eigenem \
@@ -1664,6 +1676,41 @@ mod tests {
             assert_eq!(asked[0]["msb_mp_id"], "9900357000004");
             assert_eq!(asked[0]["datum"], "2026-04-01", "the Zuordnungsbeginn");
         }
+    }
+
+    /// A Verpflichtungsanfrage sent after the 5. WT before the Zuordnungsende
+    /// its `DTM+76` names is refused `E17`; one in time still goes to the
+    /// operator, whose Ermessen the answer is (WiM Teil 1 Kap. 2.4.2 Nr. 3/4).
+    #[tokio::test]
+    async fn a_late_verpflichtungsanfrage_is_refused_e17() {
+        let marktd = stub_marktd(Stub::default()).await;
+        let anfrage = |time: &str| {
+            MsbWechselPayload::parse(&ev(
+                55_168,
+                serde_json::json!({
+                    "malo_id": "51238696012",
+                    "melo_id": "DE0001234567890123456789012345678",
+                    "process_date": "2026-12-14",
+                }),
+                time,
+            ))
+            .expect("parses")
+        };
+        // Mo 14.12.2026: the 5. WT before it is Mo 07.12.
+        let late = evaluate(&msb_cfg(), &anfrage("2026-12-08T09:00:00Z"), &marktd)
+            .await
+            .expect("no marktd call");
+        let MsbDecisionOutcome::Reject { antwortcode, .. } = late else {
+            panic!("a late Verpflichtungsanfrage is refused, got {late:?}")
+        };
+        assert_eq!(antwortcode, "E17");
+        let in_time = evaluate(&msb_cfg(), &anfrage("2026-12-07T09:00:00Z"), &marktd)
+            .await
+            .expect("no marktd call");
+        assert!(
+            matches!(in_time, MsbDecisionOutcome::Escalate { .. }),
+            "{in_time:?}"
+        );
     }
 
     /// An order that names no NB has no contract to look up: the Vertragslage

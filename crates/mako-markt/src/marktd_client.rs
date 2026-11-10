@@ -90,6 +90,19 @@ impl From<reqwest::Error> for MarktdClientError {
 
 // ── Subscription request body ─────────────────────────────────────────────────
 
+/// The answer of `GET /api/v1/malos/{malo_id}/bundesland`.
+///
+/// A response body from another service: unknown fields are ignored.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct MaloBundesland {
+    /// ISO 3166-2:DE code without the `DE-` prefix (`BY`, `NW`, …).
+    pub bundesland: String,
+    /// The Postleitzahl the Land was derived from.
+    pub postleitzahl: String,
+    /// The source and its attribution.
+    pub quelle: String,
+}
+
 /// Request body for `PUT /api/v1/subscriptions/{subscriber_id}`.
 #[derive(Debug, Serialize)]
 pub struct SubscriptionRequest<'a> {
@@ -2124,6 +2137,44 @@ impl MarktdClient {
         resp.error_for_status_ref()
             .map_err(|e| MarktdClientError::Http(e.to_string()))?;
         Ok(true)
+    }
+
+    /// `GET /api/v1/malos/{malo_id}/bundesland` — the Land marktd derives from
+    /// the Postleitzahl of the Marktlokation's address.
+    ///
+    /// `Ok(Ok(_))` names the Land; `Ok(Err(reason))` is marktd's refusal to
+    /// name one (no such Marktlokation, no Postleitzahl, a Postleitzahl across
+    /// a Land border), with its text.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on network errors and any other status,
+    /// [`MarktdClientError::Deserialization`] on a body that is not the answer.
+    pub async fn get_malo_bundesland(
+        &self,
+        malo_id: &str,
+    ) -> Result<Result<MaloBundesland, String>, MarktdClientError> {
+        let url = format!("{}/api/v1/malos/{}/bundesland", self.base_url, malo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND
+            || status == reqwest::StatusCode::UNPROCESSABLE_ENTITY
+        {
+            let text = resp.text().await.unwrap_or_default();
+            return Ok(Err(format!("{status}: {text}")));
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map(Ok)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
     /// `PUT /api/v1/zaehler/{zaehler_id}/register`
