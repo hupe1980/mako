@@ -108,7 +108,7 @@ missing_docs = "warn"
 allow_attributes_without_reason = "deny"
 
 [workspace.package]
-version     = "0.33.0"
+version     = "0.33.1"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"

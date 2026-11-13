@@ -6,10 +6,10 @@
 //
 // On the stage of buehne.ts (the production build, every service answer
 // recorded in desk/fixtures/), the clock fixed, motion reduced, and the fonts
-// pinned to Liberation — which `playwright install --with-deps` puts on every
-// Linux runner — so a rendering depends on the code, not on the machine. The
-// baselines are Linux renderings: on another system `just desk-vergleich`
-// runs this script in Playwright's Linux image.
+// pinned to Liberation, so a rendering depends on the code, not on the
+// machine. The baselines are renderings of the pinned Playwright Linux image:
+// `just desk-vergleich` always runs this script there, CI included, because a
+// host browser's fonts and rasteriser differ from it.
 //
 // Two images agree when they have the same size and no more than
 // ANTEIL of their pixels differ by more than SCHWELLE in any channel —

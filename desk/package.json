@@ -1,6 +1,6 @@
 {
   "name": "mako-desk",
-  "version": "0.33.0",
+  "version": "0.33.1",
   "private": true,
   "description": "mako Desk — the operator's work surface. See site/content/docs/guide/desk/.",
   "type": "module",

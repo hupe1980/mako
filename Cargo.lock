@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "accountingd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "agentd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "agentplane",
  "anyhow",
@@ -272,9 +272,9 @@ checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
 name = "annotate-snippets"
-version = "0.12.17"
+version = "0.12.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a5b0a5ab8561c603f16c3b78c24a386b1f70e7fc1b1b1e8c15738828e4a176"
+checksum = "0258346f92c78dbc5b336b9a5b27c64447aa10643bc64e651db2edb145361564"
 dependencies = [
  "anstyle",
  "memchr",
@@ -361,7 +361,7 @@ dependencies = [
  "strum_macros 0.27.2",
  "thiserror 2.0.21",
  "uuid",
- "zstd 0.13.4",
+ "zstd 0.13.5",
 ]
 
 [[package]]
@@ -375,9 +375,9 @@ dependencies = [
 
 [[package]]
 name = "ar_archive_writer"
-version = "0.5.3"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73cd58deff2140a0a8eae87e417bd01db68a33e148aa93d1e8cd837e55e312b6"
+checksum = "523e5e187fff36fcb8d1d19ccf0ca4ca43ec3d158316057f66dc6f72716bc5ec"
 dependencies = [
  "object 0.39.1",
 ]
@@ -550,7 +550,7 @@ dependencies = [
  "arrow-select",
  "flatbuffers",
  "lz4_flex 0.13.1",
- "zstd 0.13.4",
+ "zstd 0.13.5",
 ]
 
 [[package]]
@@ -870,9 +870,9 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws-config"
-version = "1.13.1"
+version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "515fb9175dcf49db2eaa95b7913326d95469172e4ef4bec8b7888b8304c6e655"
+checksum = "16ec023cac0d0c0432e606a2d14f04eb70d09c71a739a406141e7be6b923ab95"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -942,9 +942,9 @@ dependencies = [
 
 [[package]]
 name = "aws-runtime"
-version = "1.10.3"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f78d86ab4bb091d41e9d045810a6a46149ee3af579d510a4c23031e8872a4654"
+checksum = "de8930c11353c72ae54aa24dc94d692df74d59814839cbaf8069d63dbcb4c519"
 dependencies = [
  "aws-credential-types",
  "aws-sigv4",
@@ -968,9 +968,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-bedrockruntime"
-version = "1.154.0"
+version = "1.155.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe9c71410c1af9d24a806551c2742fa44beb95ed98990c83e3357ab6b796e6ff"
+checksum = "e151d2174e5ba5659cf3f7dfeda87e3370c5c53fb13056d1a335879a8808e756"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -996,9 +996,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-signin"
-version = "1.34.0"
+version = "1.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b912987654c28db0d47b88655e58607e2645d0604321a27e41a1df5450365379"
+checksum = "9a97b7a1ffefc05b86d3c809da3368f8ee7bd015b4c0da133aa456ae6922eb40"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1021,9 +1021,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sso"
-version = "1.120.0"
+version = "1.121.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b6cbbbd3906e5e5c0898ec30a06d867ced79ff6f9080efcabb2f25fad76f8e3"
+checksum = "d8d414ba8f00c2b4b506893ded67827e63be88b5e6cce71b7c0ac8f96ce09bc5"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1046,9 +1046,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.122.0"
+version = "1.123.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "965a652b21ed2d64b9e172e0cde9468b3998f6697636aaac8d0b096b9b93a70a"
+checksum = "db26187b124bcc637641f7963d5200c5ec2409ea5b7730dd7e014ef4e0ab6f19"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1069,9 +1069,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.125.0"
+version = "1.126.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89a20505b0fd7a2175475a00591df8ec7f6448b833cf7b2e1d2801b9ab69eb83"
+checksum = "c667da7839295125cfe23280f798c07ba694a9fed191af804edb4bda09ac7f10"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1501,7 +1501,7 @@ dependencies = [
 
 [[package]]
 name = "billingd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1563,7 +1563,7 @@ version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56d87354e4229f54a44f7bf2435906a4656dba36026ab6eaca629a2c436a691c"
 dependencies = [
- "bit-vec 0.10.1",
+ "bit-vec 0.10.2",
 ]
 
 [[package]]
@@ -1574,9 +1574,9 @@ checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
 name = "bit-vec"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5727b15fa97d4f4fee0a3b7c3d550ed0269f54329207b86388de918604e31269"
+checksum = "72503af1e72be411d74ca45cd6b309878fcb35354e252fc2a3a8bda3a97082a0"
 dependencies = [
  "borsh",
  "serde",
@@ -2349,8 +2349,8 @@ dependencies = [
  "flate2",
  "liblzma",
  "memchr",
- "zstd 0.14.3",
- "zstd-safe 8.2.0",
+ "zstd 0.14.4",
+ "zstd-safe 8.3.0",
 ]
 
 [[package]]
@@ -2376,9 +2376,9 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
 name = "const-oid"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
 
 [[package]]
 name = "const-random"
@@ -2931,7 +2931,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
- "zstd 0.13.4",
+ "zstd 0.13.5",
 ]
 
 [[package]]
@@ -3052,7 +3052,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
- "zstd 0.13.4",
+ "zstd 0.13.5",
 ]
 
 [[package]]
@@ -3596,7 +3596,7 @@ version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a996a108feb8b427a6e12fcf6af4aa83409b79d72c15337d7741368131ee004"
 dependencies = [
- "const-oid 0.10.2",
+ "const-oid 0.10.3",
  "pem-rfc7468 1.0.0",
  "zeroize",
 ]
@@ -3685,7 +3685,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer 0.12.1",
- "const-oid 0.10.2",
+ "const-oid 0.10.3",
  "crypto-common 0.2.2",
  "ctutils",
 ]
@@ -3779,7 +3779,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "edifact-rs",
  "rust_decimal",
@@ -3893,7 +3893,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "criterion",
  "edifact-rs",
@@ -3935,7 +3935,7 @@ dependencies = [
 
 [[package]]
 name = "edmd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "arrow",
@@ -3984,7 +3984,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "billing",
  "grid-billing",
@@ -3999,7 +3999,7 @@ dependencies = [
 
 [[package]]
 name = "einsd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -4152,7 +4152,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "axum",
  "base64ct",
@@ -4174,7 +4174,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -4230,9 +4230,9 @@ dependencies = [
 
 [[package]]
 name = "errno"
-version = "0.3.14"
+version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -4723,7 +4723,7 @@ dependencies = [
  "serde",
  "tracing",
  "twox-hash",
- "zstd 0.13.4",
+ "zstd 0.13.5",
 ]
 
 [[package]]
@@ -5048,7 +5048,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "billing",
  "mako-markt",
@@ -5651,7 +5651,7 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
- "zstd 0.13.4",
+ "zstd 0.13.5",
 ]
 
 [[package]]
@@ -6046,7 +6046,7 @@ dependencies = [
 
 [[package]]
 name = "invoic-checker"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "billing",
  "energy-billing",
@@ -6061,7 +6061,7 @@ dependencies = [
 
 [[package]]
 name = "invoicd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -6174,9 +6174,9 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
 name = "jiff"
-version = "0.2.42"
+version = "0.2.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fefca06093eeaed707a905795e68206da0edca4edef23d2a3997a3ddbee462aa"
+checksum = "26699905cc795a23e3949585cc7ba3ee8ade090872a27e4316304a777297894a"
 dependencies = [
  "jiff-core",
  "jiff-static",
@@ -6192,18 +6192,18 @@ dependencies = [
 
 [[package]]
 name = "jiff-core"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77a24020db0ee88d1c681d677681bd31f9f4ea189a455425223d52ce4f1508aa"
+checksum = "ffe6854081f5ac0a3046a9b223729ccd7a20b1e0e8277e44dc0660eedf67dfe2"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "jiff-static"
-version = "0.2.42"
+version = "0.2.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41d3213549742662eea1a18e6c5af9be5dfbabeb7611ab71356a54928ec398f0"
+checksum = "4b4ff49b2887190c760b86207b55cdcaabbdecaf7a0660d68aa2ed6f652abf0a"
 dependencies = [
  "jiff-core",
  "proc-macro2",
@@ -6422,7 +6422,7 @@ dependencies = [
  "tokio-socks",
  "tokio-util",
  "tracing",
- "webpki-roots 1.0.11",
+ "webpki-roots 1.0.12",
  "zeroize",
 ]
 
@@ -6854,7 +6854,7 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "asx-rs",
  "thiserror 2.0.21",
@@ -6862,7 +6862,7 @@ dependencies = [
 
 [[package]]
 name = "mako-emob"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -6878,7 +6878,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "criterion",
  "mako-events",
@@ -6899,11 +6899,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.33.0"
+version = "0.33.1"
 
 [[package]]
 name = "mako-fristen"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "time",
  "time-tz",
@@ -6911,7 +6911,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "dvgw-edi",
  "mako-engine",
@@ -6928,7 +6928,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6944,7 +6944,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6960,7 +6960,7 @@ dependencies = [
 
 [[package]]
 name = "mako-invoic"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "mako-engine",
  "rubo4e",
@@ -6972,7 +6972,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -6990,7 +6990,7 @@ dependencies = [
 
 [[package]]
 name = "mako-markt"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -7009,7 +7009,7 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "mako-fristen",
  "rubo4e",
@@ -7021,7 +7021,7 @@ dependencies = [
 
 [[package]]
 name = "mako-pruefung"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "edi-energy",
  "mako-fristen",
@@ -7036,7 +7036,7 @@ dependencies = [
 
 [[package]]
 name = "mako-redispatch"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -7048,7 +7048,7 @@ dependencies = [
 
 [[package]]
 name = "mako-service"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -7094,7 +7094,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7111,7 +7111,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -7176,7 +7176,7 @@ dependencies = [
 
 [[package]]
 name = "makotest-native"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "edi-energy",
  "edifact-rs",
@@ -7190,7 +7190,7 @@ dependencies = [
 
 [[package]]
 name = "marktd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -7476,7 +7476,7 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 
 [[package]]
 name = "netzbilanzd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -8207,7 +8207,7 @@ dependencies = [
 
 [[package]]
 name = "outputd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -8385,7 +8385,7 @@ dependencies = [
  "thrift",
  "tokio",
  "twox-hash",
- "zstd 0.13.4",
+ "zstd 0.13.5",
 ]
 
 [[package]]
@@ -8872,7 +8872,7 @@ dependencies = [
 
 [[package]]
 name = "portald"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -9063,7 +9063,7 @@ dependencies = [
 
 [[package]]
 name = "processd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -9121,7 +9121,7 @@ dependencies = [
 
 [[package]]
 name = "productd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -9175,7 +9175,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8530004ccb15eae51c7e40009fbe317f341f804db54dc033eec1c50be28cfa0"
 dependencies = [
  "bit-set 0.11.1",
- "bit-vec 0.10.1",
+ "bit-vec 0.10.2",
  "bitflags",
  "chacha20",
  "core_detect",
@@ -9190,9 +9190,9 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.14.4"
+version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
+checksum = "3ef0b569d1d907ab3a28596aee62cf1f61dacb0529a4bedcd8e7460e2d5228b4"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -9200,12 +9200,12 @@ dependencies = [
 
 [[package]]
 name = "prost-derive"
-version = "0.14.4"
+version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
+checksum = "1ad9c5423459fa2f729b8d9235fab810aa29628b171467744fc86d21460ad70d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -9213,9 +9213,9 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
-version = "0.14.4"
+version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
+checksum = "f29a7c4c7a84cef41a53d338a2d10d4f1b043ea5c3dde26db22ee2c9c1b1c75b"
 dependencies = [
  "prost",
 ]
@@ -9639,7 +9639,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -9988,9 +9988,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.9.0"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d24a7e92f4bcaa36b97fa93c4fa7ca8f3e669eced949345b3462dba333c7f909"
+checksum = "b5949e504d5ab9944a168259afc0c39ac0230627b6ec5367ace194c59bcbe163"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -10023,9 +10023,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.9.0"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3140f24a766f80f9ec1607bde85680959a69b83d46fa9ce87dadab7e67ab029"
+checksum = "b98a686693ee91b665c6f89f182fca6e141c8a63dc113b11b38c1bf3491606b7"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -10235,9 +10235,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-pki-types"
-version = "1.15.1"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
+checksum = "102f35f7de7b06d8c61f1cff6592f5253e0dea431c74867aad5dfd70f44663fb"
 dependencies = [
  "web-time",
  "zeroize",
@@ -10272,9 +10272,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.16"
+version = "0.103.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
+checksum = "e3a0760a887c14823fca5a1c970b01d47c328c696c0c64829d1df50e8f853fd5"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -11225,7 +11225,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "webpki-roots 1.0.11",
+ "webpki-roots 1.0.12",
 ]
 
 [[package]]
@@ -13180,9 +13180,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
-version = "3.5.1"
+version = "3.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7be76686bdf7198002062423ca0d8cf9b75a27c8e1de804513b97e97b555d9d"
+checksum = "3ac5cecf619ca81f66a96482db09687c9f7465af65f4300a8c30cca05bd5a59d"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -13403,7 +13403,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vertragd"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -13643,9 +13643,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.11"
+version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
+checksum = "293198dcebfb821155b5092ab94b5a82ff180eddd7241df3bd6e66a4ffd1a585"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -13656,14 +13656,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.11",
+ "webpki-roots 1.0.12",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.11"
+version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
+checksum = "7265c9301c16a8711c992c2d8da90ee77ef54b1ed51482d6dfeb00dc756b1297"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -14330,9 +14330,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.5.0"
+version = "9.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0700e6c427aff64acdbf02e85fbfd946c2ee12319d1af013092f3a2178914ff8"
+checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
 dependencies = [
  "constant_time_eq 0.6.1",
  "crc32fast",
@@ -14374,45 +14374,45 @@ dependencies = [
 
 [[package]]
 name = "zstd"
-version = "0.13.4"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdb02c3132d251ab1606e9fc913a7da6c6ed08cc263df15edf082e1dc497d157"
+checksum = "50adf04cf3ec914b0b9905c9dde90c80fe74bfd701e331fc80a39c512c525278"
 dependencies = [
- "zstd-safe 7.4.0",
+ "zstd-safe 7.4.1",
 ]
 
 [[package]]
 name = "zstd"
-version = "0.14.3"
+version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db3ae9bf90af6e40197bef767eeefc46ad6397420fe873830bd85e5fbbfb3c70"
+checksum = "ad5020ab8f27bfc0024ad0a07aed6bf022a16208f479686fbed4fdd0c85eb0b3"
 dependencies = [
- "zstd-safe 8.2.0",
+ "zstd-safe 8.3.0",
 ]
 
 [[package]]
 name = "zstd-safe"
-version = "7.4.0"
+version = "7.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c8ea04668f5de8d8d51051714ba560c9536519cadcdb8829bba4fe2ad159b03"
+checksum = "498d94ad68720c89b4fbe41b9090850651e68cb2dd9210ce7ffbff3a94653819"
 dependencies = [
  "zstd-sys",
 ]
 
 [[package]]
 name = "zstd-safe"
-version = "8.2.0"
+version = "8.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ded520f16b29e1a9b771c722221b2b0a0398c2316d9bb3c42b458a5414d7434b"
+checksum = "5a9ea9cc2576c2fcc104e9cec04f46e3ede564f4fbc206831e4ef7e859a4140d"
 dependencies = [
  "zstd-sys",
 ]
 
 [[package]]
 name = "zstd-sys"
-version = "2.1.2+zstd.1.5.7"
+version = "2.1.3+zstd.1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "481ada9c543b2323cbb7bbdbb5249177fbf0188ed959ed2c15e4b22421c84ed3"
+checksum = "f729a06d0257428fd9d997ac8db7e1407bd0262ab016b085b36bc52957c0052d"
 dependencies = [
  "cc",
  "pkg-config",

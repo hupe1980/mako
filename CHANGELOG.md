@@ -9,6 +9,12 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.33.1] — unreleased
+
+### Fixed
+
+- `just desk-vergleich` always renders in the pinned Playwright image, CI included; a host browser's fonts and rasteriser differed from the baselines.
+
 ## [0.33.0] — 2026-11-13
 
 ### Added

@@ -781,9 +781,8 @@ desk-axe:
 desk-vergleich *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ "$(uname -s)" = "Linux" ]; then
-        cd desk && exec npm run vergleich -- {{ args }}
-    fi
+    # Always in the pinned Playwright image: the baselines are rendered there,
+    # and a host browser's fonts and rasteriser differ from it.
     version="$(node -p 'require("./desk/package.json").devDependencies.playwright')"
     docker run --rm -v "$PWD/desk:/repo/desk" -w /work "mcr.microsoft.com/playwright:v${version}-noble" bash -c '
         set -euo pipefail
